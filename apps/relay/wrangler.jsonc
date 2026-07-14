@@ -5,7 +5,7 @@
   "d1_databases": [{
     "binding": "DB",
     "database_name": "agentcall",
-    "database_id": "00000000-0000-0000-0000-000000000000",
+    "database_id": "f67097f0-2521-4c41-a9d4-1402682038aa",
     "migrations_dir": "migrations"
   }],
   "durable_objects": { "bindings": [{ "name": "HANDLE_DO", "class_name": "HandleDO" }] },
