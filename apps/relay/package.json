@@ -1,0 +1,19 @@
+{
+  "name": "@agentcall/relay",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "wrangler dev",
+    "deploy": "wrangler deploy",
+    "test": "vitest run",
+    "typecheck": "tsc -p tsconfig.json --noEmit"
+  },
+  "dependencies": { "hono": "^4.6.0", "@agentcall/shared": "workspace:*", "zod": "^4.0.0" },
+  "devDependencies": {
+    "wrangler": "^4.23.0",
+    "@cloudflare/vitest-pool-workers": "^0.8.0",
+    "@cloudflare/workers-types": "^4.20260601.0",
+    "typescript": "^5.6.0",
+    "vitest": "^3.0.0"
+  }
+}

@@ -1,0 +1,14 @@
+{
+  "name": "agentcall-relay",
+  "main": "src/index.ts",
+  "compatibility_date": "2026-06-01",
+  "d1_databases": [{
+    "binding": "DB",
+    "database_name": "agentcall",
+    "database_id": "00000000-0000-0000-0000-000000000000",
+    "migrations_dir": "migrations"
+  }],
+  "durable_objects": { "bindings": [{ "name": "HANDLE_DO", "class_name": "HandleDO" }] },
+  "migrations": [{ "tag": "v1", "new_sqlite_classes": ["HandleDO"] }],
+  "routes": [{ "pattern": "agentcall.benree.tech", "custom_domain": true }]
+}
