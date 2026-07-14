@@ -27,6 +27,18 @@ export interface SetupOpts {
   // Test seams — production callers should leave these as the defaults.
   hasBin?: (name: string) => boolean;
   resolveBin?: (name: string) => string | null;
+  installLaunchAgentFn?: typeof installLaunchAgent;
+}
+
+// Dirnames of the resolved bins, deduped and skipping any that failed to
+// resolve. Used to widen the LaunchAgent's PATH (see launchd.ts) so the
+// listener can find an agent/npx install that lives outside its base dirs.
+export function resolveExtraPathDirs(names: string[], resolveBin: (name: string) => string | null): string[] {
+  const dirs = names
+    .map((name) => resolveBin(name))
+    .filter((path): path is string => path !== null)
+    .map((path) => dirname(path));
+  return [...new Set(dirs)];
 }
 
 function defaultResolveBin(name: string): string | null {
@@ -121,7 +133,10 @@ export async function runSetup(opts: SetupOpts): Promise<void> {
   writeFileSync(paths.srtFile, JSON.stringify(srtSettings(paths), null, 2) + "\n");
   mkdirSync(paths.publicDir, { recursive: true });
 
-  if (!opts.skipLaunchd) installLaunchAgent(paths);
+  if (!opts.skipLaunchd) {
+    const extraPathDirs = resolveExtraPathDirs([agentKind, "npx"], resolveBinFn);
+    (opts.installLaunchAgentFn ?? installLaunchAgent)(paths, undefined, extraPathDirs);
+  }
 
   if (opts.snippet !== false) {
     appendSnippet(join(homedir(), ".claude", "CLAUDE.md"));

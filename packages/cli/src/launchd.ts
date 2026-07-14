@@ -15,7 +15,14 @@ function uid(): number {
   return process.getuid?.() ?? 501;
 }
 
-export function plistContent(nodeBin: string, cliScript: string, p: Paths): string {
+// Base search path launchd falls back to. extraPathDirs (from setup's bin
+// detection) and the node binary's own dir are prepended ahead of these so
+// the listener can find an agent/node install that lives outside them (e.g.
+// ~/.local/bin, nvm/fnm shims).
+const BASE_PATH_DIRS = ["/opt/homebrew/bin", "/usr/local/bin", "/usr/bin", "/bin"];
+
+export function plistContent(nodeBin: string, cliScript: string, p: Paths, extraPathDirs: string[] = []): string {
+  const pathDirs = [...new Set([...extraPathDirs, dirname(nodeBin), ...BASE_PATH_DIRS])];
   return `<?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0">
@@ -33,7 +40,7 @@ export function plistContent(nodeBin: string, cliScript: string, p: Paths): stri
   <key>StandardErrorPath</key><string>${p.listenerLog}</string>
   <key>EnvironmentVariables</key>
   <dict>
-    <key>PATH</key><string>/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin</string>
+    <key>PATH</key><string>${pathDirs.join(":")}</string>
     <key>HOME</key><string>${p.home}</string>
   </dict>
 </dict>
@@ -41,10 +48,10 @@ export function plistContent(nodeBin: string, cliScript: string, p: Paths): stri
 `;
 }
 
-export function installLaunchAgent(p: Paths, execCmd: ExecCmd = defaultExec): void {
+export function installLaunchAgent(p: Paths, execCmd: ExecCmd = defaultExec, extraPathDirs: string[] = []): void {
   const cliScript = fileURLToPath(new URL("../dist/index.js", import.meta.url));
   mkdirSync(dirname(p.plistFile), { recursive: true });
-  writeFileSync(p.plistFile, plistContent(process.execPath, cliScript, p));
+  writeFileSync(p.plistFile, plistContent(process.execPath, cliScript, p, extraPathDirs));
   try {
     execCmd(["launchctl", "bootout", `gui/${uid()}/${LAUNCH_LABEL}`]);
   } catch {

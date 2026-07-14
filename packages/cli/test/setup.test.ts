@@ -3,7 +3,7 @@ import { createServer, type Server } from "node:http";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
-import { runSetup } from "../src/setup.js";
+import { resolveExtraPathDirs, runSetup } from "../src/setup.js";
 import { getPaths } from "../src/paths.js";
 
 let server: Server;
@@ -100,5 +100,39 @@ describe("runSetup", () => {
     } finally {
       delete process.env.AGENTCALL_HOME;
     }
+  });
+
+  it("passes resolved agent/npx bin dirs as extraPathDirs to installLaunchAgent", async () => {
+    const home = mkdtempSync(join(tmpdir(), "agentcall-setup-"));
+    process.env.AGENTCALL_HOME = home;
+    try {
+      const relay = await fakeRelay();
+      let captured: string[] | undefined;
+      await runSetup({
+        handle: "ken4",
+        agent: "claude",
+        relay,
+        snippet: false,
+        resolveBin: (name) =>
+          name === "claude" || name === "npx" ? `/Users/x/.local/bin/${name}` : null,
+        installLaunchAgentFn: (_p, _execCmd, extraPathDirs) => {
+          captured = extraPathDirs;
+        },
+      });
+      expect(captured).toEqual(["/Users/x/.local/bin"]);
+    } finally {
+      delete process.env.AGENTCALL_HOME;
+    }
+  });
+});
+
+describe("resolveExtraPathDirs", () => {
+  it("returns unique dirnames of resolved bins, skipping unresolved ones", () => {
+    const resolveBin = (name: string) =>
+      name === "claude" ? "/Users/x/.local/bin/claude" : name === "npx" ? "/Users/x/.local/bin/npx" : null;
+    expect(resolveExtraPathDirs(["claude", "npx"], resolveBin)).toEqual(["/Users/x/.local/bin"]);
+  });
+  it("falls back to [] when nothing resolves", () => {
+    expect(resolveExtraPathDirs(["claude", "npx"], () => null)).toEqual([]);
   });
 });
