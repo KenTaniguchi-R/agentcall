@@ -7,7 +7,10 @@ import { resolveExtraPathDirs, runSetup } from "../src/setup.js";
 import { getPaths } from "../src/paths.js";
 
 let server: Server;
-afterEach(() => server?.close());
+afterEach(() => {
+  server?.close();
+  server409?.close();
+});
 
 function fakeRelay(): Promise<string> {
   return new Promise((resolve) => {
@@ -21,6 +24,21 @@ function fakeRelay(): Promise<string> {
       });
     });
     server.listen(0, "127.0.0.1", () => resolve(`http://127.0.0.1:${(server.address() as { port: number }).port}`));
+  });
+}
+
+// Simulates a relay that always 409s registration, as if the handle were
+// already taken there (which it would be, on a genuine re-run) — used to
+// prove a second runSetup call reuses the saved config instead of
+// re-registering.
+let server409: Server;
+function fakeRelay409(): Promise<string> {
+  return new Promise((resolve) => {
+    server409 = createServer((_req, res) => {
+      res.writeHead(409, { "content-type": "application/json" });
+      res.end(JSON.stringify({ error: "handle taken" }));
+    });
+    server409.listen(0, "127.0.0.1", () => resolve(`http://127.0.0.1:${(server409.address() as { port: number }).port}`));
   });
 }
 
@@ -42,6 +60,31 @@ describe("runSetup", () => {
       // protected implicitly rather than by being named in a denylist.
       expect(srt.filesystem.denyRead).toContain("~");
       expect(JSON.stringify(srt.filesystem.allowRead)).not.toContain(".ssh");
+    } finally {
+      delete process.env.AGENTCALL_HOME;
+    }
+  });
+
+  it("re-running setup with the same handle reuses the saved config instead of re-registering", async () => {
+    const home = mkdtempSync(join(tmpdir(), "agentcall-setup-"));
+    process.env.AGENTCALL_HOME = home;
+    try {
+      const relay = await fakeRelay();
+      await runSetup({ handle: "ken", agent: "claude", relay, snippet: false, skipLaunchd: true });
+      const p = getPaths(home);
+      const firstCfg = JSON.parse(readFileSync(p.configFile, "utf8"));
+
+      // Second run points at a relay that 409s every register call — if
+      // runSetup still tried to register, this run would throw. It must
+      // instead detect the existing config.json (same handle) and reuse it.
+      const badRelay = await fakeRelay409();
+      await runSetup({ handle: "ken", agent: "claude", relay: badRelay, snippet: false, skipLaunchd: true });
+
+      const secondCfg = JSON.parse(readFileSync(p.configFile, "utf8"));
+      expect(secondCfg).toEqual(firstCfg);
+      expect(secondCfg.token).toBe("tok-123");
+      expect(existsSync(p.srtFile)).toBe(true);
+      expect(existsSync(p.publicDir)).toBe(true);
     } finally {
       delete process.env.AGENTCALL_HOME;
     }

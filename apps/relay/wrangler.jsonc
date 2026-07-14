@@ -2,6 +2,10 @@
   "name": "agentcall-relay",
   "main": "src/index.ts",
   "compatibility_date": "2026-06-01",
+  // Prevents a future `wrangler deploy` from silently re-enabling the
+  // workers.dev bypass URL, which would let anyone reach the relay directly,
+  // skipping the custom-domain route below.
+  "workers_dev": false,
   "d1_databases": [{
     "binding": "DB",
     "database_name": "agentcall",

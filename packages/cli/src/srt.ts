@@ -64,7 +64,17 @@ import type { Paths } from "./paths.js";
 // directories the sandboxed process actually needs to *execute* its own
 // toolchain (node/npx/claude|codex) — distinct from the fixed dirs below,
 // which are what the agent's *work* needs (publicDir, claude state, tmp).
-export function srtSettings(p: Paths, extraReadDirs: string[] = []): object {
+// Network allowlist is agent-kind-specific: claude talks to Anthropic's API,
+// codex talks to OpenAI's. This used to be hardcoded to the claude list
+// regardless of which agent was being spawned, which meant a srt-wrapped
+// codex process could never reach api.openai.com — every codex call failed
+// closed with a network error before the model ever saw the prompt.
+const ALLOWED_DOMAINS: Record<"claude" | "codex", string[]> = {
+  claude: ["api.anthropic.com", "statsig.anthropic.com", "*.sentry.io", "claude.ai"],
+  codex: ["api.openai.com", "auth.openai.com", "chatgpt.com", "*.sentry.io"],
+};
+
+export function srtSettings(p: Paths, agentKind: "claude" | "codex", extraReadDirs: string[] = []): object {
   return {
     filesystem: {
       denyRead: ["~"],
@@ -83,7 +93,7 @@ export function srtSettings(p: Paths, extraReadDirs: string[] = []): object {
       ],
     },
     network: {
-      allowedDomains: ["api.anthropic.com", "statsig.anthropic.com", "*.sentry.io", "claude.ai"],
+      allowedDomains: ALLOWED_DOMAINS[agentKind],
       deniedDomains: [],
     },
   };
@@ -231,5 +241,5 @@ export function toolchainReadDirs(
 // setup doesn't leave a stale allowlist that denies the sandboxed process
 // its own binary.
 export function writeSrtSettings(p: Paths, agentKind: "claude" | "codex"): void {
-  writeFileSync(p.srtFile, JSON.stringify(srtSettings(p, toolchainReadDirs(agentKind)), null, 2) + "\n");
+  writeFileSync(p.srtFile, JSON.stringify(srtSettings(p, agentKind, toolchainReadDirs(agentKind)), null, 2) + "\n");
 }

@@ -28,7 +28,7 @@ describe("buildSpawnSpec", () => {
     const s = buildSpawnSpec("claude", "PROMPT", p, () => "/abs/path/to/claude");
     expect(s.cmd).toBe("npx");
     expect(s.args).toEqual([
-      "-y", "@anthropic-ai/sandbox-runtime", "--settings", p.srtFile, "--",
+      "-y", "@anthropic-ai/sandbox-runtime@1.0.0", "--settings", p.srtFile, "--",
       "/abs/path/to/claude", "-p", "PROMPT", "--output-format", "json",
     ]);
     expect(s.cwd).toBe(p.publicDir);
@@ -37,7 +37,7 @@ describe("buildSpawnSpec", () => {
     const s = buildSpawnSpec("codex", "PROMPT", p, () => "/abs/path/to/codex");
     expect(s.cmd).toBe("npx");
     expect(s.args).toEqual([
-      "-y", "@anthropic-ai/sandbox-runtime", "--settings", p.srtFile, "--",
+      "-y", "@anthropic-ai/sandbox-runtime@1.0.0", "--settings", p.srtFile, "--",
       "/abs/path/to/codex", "exec", "--sandbox", "workspace-write", "--cd", p.publicDir, "--skip-git-repo-check", "--json", "PROMPT",
     ]);
     expect(s.cwd).toBe(p.publicDir);

@@ -68,9 +68,15 @@ agentcall call ken@agentcall.benree.tech "..." --json
 `agentcall call` prints spinner-style status to stderr (`ringing...`,
 `answered, agent working...`) and the reply text to stdout. Nonzero exit + an
 error message on stderr on failure (`unknown_handle`, `offline`, `busy`,
-`timeout`, `agent_error`, `unauthorized`, `rate_limited`, `message_too_large`).
+`timeout`, `agent_error`, `unauthorized`, `rate_limited`, `message_too_large`,
+`protocol_error`).
 `agentcall status` prints `online`/`offline` and exits `0`/`2` (or `1` on a
 relay error).
+
+> **Codex support is experimental.** The `claude` path is the one that's
+> actually been live-tested end to end; `codex` support (network allowlist,
+> sandbox wrapping) is implemented and unit-tested but hasn't been verified
+> against a real call yet.
 
 ## How the callee side works
 
@@ -82,16 +88,19 @@ relay error).
 - Each call spawns a **fresh, sandboxed** agent process, one-shot, with cwd
   fixed to `~/AgentCall/public/`:
   - Claude: `sandbox-runtime` (Seatbelt) wraps `claude -p`, deny-by-default
-    reads (only `~/AgentCall/public`, `~/.claude`, `~/.claude.json`, and temp
-    dirs are readable/writable — the rest of your home directory, including
-    `~/.ssh`, `~/.aws`, `~/.gnupg`, is unreadable), network allowlisted to
-    `api.anthropic.com` and friends. `~/.claude/CLAUDE.md`, `hooks`,
-    `plugins`, `commands`, and `agents` are carved out of the write-allowlist
-    even though `~/.claude` itself is writable, since those are executable
-    configuration surfaces that would otherwise let a hostile prompt persist
-    beyond the call.
-  - Codex: `codex exec --sandbox workspace-write --cd ~/AgentCall/public`,
-    native Seatbelt, network off by default.
+    reads (only `~/AgentCall/public`, `~/.claude`, `~/.claude.json`, temp
+    dirs, and the toolchain's own install dirs — e.g. `~/.local` if that's
+    where node/npx/claude live — are readable/writable, auto-added by
+    `setup`/each call so the sandboxed process can execute its own toolchain;
+    the rest of your home directory, including `~/.ssh`, `~/.aws`,
+    `~/.gnupg`, is unreadable), network allowlisted to `api.anthropic.com`
+    and friends. `~/.claude/CLAUDE.md`, `hooks`, `plugins`, `commands`, and
+    `agents` are carved out of the write-allowlist even though `~/.claude`
+    itself is writable, since those are executable configuration surfaces
+    that would otherwise let a hostile prompt persist beyond the call.
+  - Codex: same `sandbox-runtime` wrapping for reads, plus its own
+    `codex exec --sandbox workspace-write --cd ~/AgentCall/public` for write
+    confinement; network allowlisted to `api.openai.com` and friends.
 - Every call — accepted or not — appends a JSONL line to
   `~/.agentcall/calls.log`: `{ts, call_id, from, message, status, duration_ms}`.
   That's your audit trail of who called and what happened.
@@ -121,6 +130,16 @@ relay error).
     blocking writes to it risks breaking `claude -p` outright). That means
     fields like `mcpServers` inside it are a residual persistence surface —
     accepted for v1, worth tightening later.
+  - The answering agent runs with read access to `~/.claude` and
+    `~/.claude.json` so the CLI can launch it. That means a caller's prompt
+    could induce the agent to read and echo back the callee's Claude Code
+    session history (`~/.claude/projects/*`, which can contain pasted
+    secrets and private code), any API keys embedded in `~/.claude.json`'s
+    `mcpServers` entries, and — on non-Keychain installs — the OAuth token in
+    `~/.claude/.credentials.json`. Only share your address with people you'd
+    trust to run a read-only command in your home directory. A future
+    version will isolate the answerer in its own `CLAUDE_CONFIG_DIR` to
+    close this.
 
 ## Development
 

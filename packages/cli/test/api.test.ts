@@ -23,6 +23,16 @@ describe("api client", () => {
     const relay = await serve(200, { token: "tok", address: "ken@agentcall.benree.tech" });
     expect(await registerHandle(relay, "ken", "claude")).toEqual({ token: "tok", address: "ken@agentcall.benree.tech" });
   });
+  it("rejects a malformed handle locally, without hitting the relay", async () => {
+    // Point at a port nothing is listening on: if validation didn't run
+    // before fetch, this would reject with code "network" instead.
+    await expect(registerHandle("http://127.0.0.1:1", "Not Valid!", "claude"))
+      .rejects.toMatchObject({ code: "invalid" });
+  });
+  it("rejects a reserved handle locally, without hitting the relay", async () => {
+    await expect(registerHandle("http://127.0.0.1:1", "admin", "claude"))
+      .rejects.toMatchObject({ code: "invalid" });
+  });
   it("maps 409 to handle_taken", async () => {
     const relay = await serve(409, { error: "handle taken" });
     await expect(registerHandle(relay, "ken", "claude")).rejects.toMatchObject({ code: "handle_taken" });

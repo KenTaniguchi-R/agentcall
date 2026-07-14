@@ -15,19 +15,19 @@ describe("srtSettings", () => {
     // --settings ... `): omitting deniedDomains makes srt refuse to start
     // ("network.deniedDomains: Required"), so every sandboxed agent spawn
     // would fail closed. This isn't documented in the README's example.
-    const settings = srtSettings(getPaths("/tmp/fakehome")) as any;
+    const settings = srtSettings(getPaths("/tmp/fakehome"), "claude") as any;
     expect(settings.network.deniedDomains).toEqual([]);
   });
 
   it("denies reads broadly and re-allows only the paths the agent needs", () => {
-    const settings = srtSettings(getPaths("/tmp/fakehome")) as any;
+    const settings = srtSettings(getPaths("/tmp/fakehome"), "claude") as any;
     expect(settings.filesystem.denyRead).toEqual(["~"]);
     expect(settings.filesystem.allowRead).toContain("~/.claude");
     expect(settings.filesystem.allowRead).toContain("~/.claude.json");
   });
 
   it("denies writes to executable claude config surfaces but not to ~/.claude.json", () => {
-    const settings = srtSettings(getPaths("/tmp/fakehome")) as any;
+    const settings = srtSettings(getPaths("/tmp/fakehome"), "claude") as any;
     expect(settings.filesystem.denyWrite).toEqual(
       expect.arrayContaining(["~/.claude/settings.json", "~/.claude/CLAUDE.md", "~/.claude/hooks",
         "~/.claude/plugins", "~/.claude/commands", "~/.claude/agents"]),
@@ -39,11 +39,29 @@ describe("srtSettings", () => {
   });
 
   it("merges extraReadDirs into allowRead without dropping the base deny/allow rules", () => {
-    const settings = srtSettings(getPaths("/tmp/fakehome"), ["/x/.local"]) as any;
+    const settings = srtSettings(getPaths("/tmp/fakehome"), "claude", ["/x/.local"]) as any;
     expect(settings.filesystem.allowRead).toContain("/x/.local");
     expect(settings.filesystem.allowRead).toContain("~/.claude");
     expect(settings.filesystem.denyRead).toEqual(["~"]);
     expect(settings.network.deniedDomains).toEqual([]);
+  });
+
+  it("allowlists Anthropic domains for claude", () => {
+    const settings = srtSettings(getPaths("/tmp/fakehome"), "claude") as any;
+    expect(settings.network.allowedDomains).toEqual([
+      "api.anthropic.com", "statsig.anthropic.com", "*.sentry.io", "claude.ai",
+    ]);
+  });
+
+  it("allowlists OpenAI domains for codex, not the claude allowlist", () => {
+    // Regression: allowedDomains used to be hardcoded to the claude list
+    // regardless of agentKind, so a srt-wrapped codex process could never
+    // reach api.openai.com and every codex call failed closed.
+    const settings = srtSettings(getPaths("/tmp/fakehome"), "codex") as any;
+    expect(settings.network.allowedDomains).toEqual([
+      "api.openai.com", "auth.openai.com", "chatgpt.com", "*.sentry.io",
+    ]);
+    expect(settings.network.allowedDomains).not.toContain("api.anthropic.com");
   });
 });
 

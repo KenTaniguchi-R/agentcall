@@ -31,7 +31,13 @@ export function buildSpawnSpec(
   if (kind === "claude") {
     return {
       cmd: "npx",
-      args: ["-y", "@anthropic-ai/sandbox-runtime", "--settings", p.srtFile, "--",
+      // Pinned, not `npx -y @anthropic-ai/sandbox-runtime` (latest): this is
+      // the security boundary between a hostile prompt and the rest of the
+      // machine, and its deny/allow behaviors (srt.ts's comments) were
+      // verified against this exact version. Letting it float on `latest`
+      // means a future release could silently change enforcement semantics
+      // out from under every existing srt.json.
+      args: ["-y", "@anthropic-ai/sandbox-runtime@1.0.0", "--settings", p.srtFile, "--",
         resolveBin(kind), "-p", prompt, "--output-format", "json"],
       cwd: p.publicDir,
     };
@@ -43,7 +49,9 @@ export function buildSpawnSpec(
   // handles write confinement inside publicDir.
   return {
     cmd: "npx",
-    args: ["-y", "@anthropic-ai/sandbox-runtime", "--settings", p.srtFile, "--",
+    // Pinned for the same reason as the claude spec above: srt's deny/allow
+    // behaviors were verified against this exact version.
+    args: ["-y", "@anthropic-ai/sandbox-runtime@1.0.0", "--settings", p.srtFile, "--",
       resolveBin(kind), "exec", "--sandbox", "workspace-write", "--cd", p.publicDir, "--skip-git-repo-check", "--json", prompt],
     cwd: p.publicDir,
   };

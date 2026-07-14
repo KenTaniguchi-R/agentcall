@@ -4,7 +4,7 @@ import { homedir } from "node:os";
 import { dirname, join } from "node:path";
 import { createInterface } from "node:readline";
 import { getPaths, type Paths } from "./paths.js";
-import { saveConfig, relayUrl, type Config } from "./config.js";
+import { loadConfig, saveConfig, relayUrl, type Config } from "./config.js";
 import { registerHandle } from "./api.js";
 import { srtSettings, toolchainReadDirs } from "./srt.js";
 import { appendSnippet } from "./snippet.js";
@@ -111,6 +111,18 @@ function warnIfOutsideLaunchdPath(name: string, resolveBin: (n: string) => strin
   }
 }
 
+// Derives the address a fresh registration would have produced, for reuse's
+// sake, without calling the relay: register's response is always
+// `${handle}@${host of relay}` (see apps/relay's RELAY_HOST), so a saved
+// config's handle + relay is enough to reconstruct it locally.
+function addressFromConfig(cfg: Config): string {
+  try {
+    return `${cfg.handle}@${new URL(cfg.relay).host}`;
+  } catch {
+    return `${cfg.handle}@${cfg.relay}`;
+  }
+}
+
 export async function runSetup(opts: SetupOpts): Promise<void> {
   const paths: Paths = getPaths();
   const hasBinFn = opts.hasBin ?? ((name) => (opts.resolveBin ?? defaultResolveBin)(name) !== null);
@@ -121,14 +133,37 @@ export async function runSetup(opts: SetupOpts): Promise<void> {
   warnIfOutsideLaunchdPath(agentKind, resolveBinFn);
   warnIfOutsideLaunchdPath("npx", resolveBinFn);
 
-  const handle = opts.handle ?? (await ask("Choose a handle (e.g. ken): ")).trim();
-  if (!handle) throw new Error("A handle is required.");
+  // Idempotency: a re-run against an already-registered handle used to
+  // always POST /v1/register, which the relay correctly 409s (the handle is
+  // taken — by this same install) — aborting setup even though a valid
+  // token already sits in config.json. If a usable config already exists
+  // for the handle we'd otherwise register, skip registration entirely and
+  // just re-do the local steps below, which are all idempotent anyway.
+  let existingCfg: Config | undefined;
+  try {
+    existingCfg = loadConfig(paths);
+  } catch {
+    existingCfg = undefined;
+  }
+  const canReuse = existingCfg !== undefined && (!opts.handle || opts.handle === existingCfg.handle);
 
-  const relay = (opts.relay ?? relayUrl()).replace(/\/+$/, "");
+  let cfg: Config;
+  let address: string;
+  if (canReuse && existingCfg) {
+    cfg = existingCfg;
+    address = addressFromConfig(cfg);
+    console.log(`Reusing existing registration for ${cfg.handle}`);
+  } else {
+    const handle = opts.handle ?? (await ask("Choose a handle (e.g. ken): ")).trim();
+    if (!handle) throw new Error("A handle is required.");
 
-  const { token, address } = await registerHandle(relay, handle, agentKind);
-  const cfg: Config = { handle, token, agent_kind: agentKind, relay };
-  saveConfig(paths, cfg);
+    const relay = (opts.relay ?? relayUrl()).replace(/\/+$/, "");
+
+    const { token, address: registeredAddress } = await registerHandle(relay, handle, agentKind);
+    cfg = { handle, token, agent_kind: agentKind, relay };
+    address = registeredAddress;
+    saveConfig(paths, cfg);
+  }
 
   // Seed srt.json with the current toolchain's read dirs (see srt.ts's
   // toolchainReadDirs) so the sandboxed agent can execute node/npx/itself
@@ -137,17 +172,22 @@ export async function runSetup(opts: SetupOpts): Promise<void> {
   // base allowlist rather than failing setup outright — runAgent rewrites
   // srt.json before every real spawn anyway, so this only affects the
   // file's content between `setup` and the first real call.
+  //
+  // Uses cfg.agent_kind (the registered/reused agent), not the freshly
+  // detected agentKind: on a reuse run those could disagree (e.g. both
+  // claude and codex are now on PATH) and cfg.agent_kind is what actually
+  // gets spawned (see listener.ts).
   let extraReadDirs: string[] = [];
   try {
-    extraReadDirs = toolchainReadDirs(agentKind);
+    extraReadDirs = toolchainReadDirs(cfg.agent_kind);
   } catch {
-    /* fall back to srtSettings(paths) below */
+    /* fall back to srtSettings(paths, cfg.agent_kind) below */
   }
-  writeFileSync(paths.srtFile, JSON.stringify(srtSettings(paths, extraReadDirs), null, 2) + "\n");
+  writeFileSync(paths.srtFile, JSON.stringify(srtSettings(paths, cfg.agent_kind, extraReadDirs), null, 2) + "\n");
   mkdirSync(paths.publicDir, { recursive: true });
 
   if (!opts.skipLaunchd) {
-    const extraPathDirs = resolveExtraPathDirs([agentKind, "npx"], resolveBinFn);
+    const extraPathDirs = resolveExtraPathDirs([cfg.agent_kind, "npx"], resolveBinFn);
     (opts.installLaunchAgentFn ?? installLaunchAgent)(paths, undefined, extraPathDirs);
   }
 
@@ -158,9 +198,9 @@ export async function runSetup(opts: SetupOpts): Promise<void> {
 
   console.log(
     `\nagentcall is set up.\n` +
-      `  Handle:  ${handle}\n` +
-      `  Agent:   ${agentKind}\n` +
-      `  Relay:   ${relay}\n` +
+      `  Handle:  ${cfg.handle}\n` +
+      `  Agent:   ${cfg.agent_kind}\n` +
+      `  Relay:   ${cfg.relay}\n` +
       `  Address: ${address}\n\n` +
       `Share your address so others can call your agent:\n` +
       `  agentcall call ${address} "hello"\n`,

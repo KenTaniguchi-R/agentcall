@@ -1,12 +1,30 @@
+import { HANDLE_RE, RESERVED_HANDLES } from "@agentcall/shared";
+
 export class ApiError extends Error {
   constructor(message: string, public code: "handle_taken" | "invalid" | "unknown_handle" | "network") {
     super(message);
   }
 }
 
+// Mirrors the relay's own validation (HANDLE_RE, RESERVED_HANDLES) so a bad
+// or reserved handle fails instantly with a clear message instead of a round
+// trip to get back a generic 400.
+export function assertValidHandle(handle: string): void {
+  if (!HANDLE_RE.test(handle)) {
+    throw new ApiError(
+      `"${handle}" isn't a valid handle: use lowercase letters, digits, and hyphens, 2-31 characters, starting with a letter or digit.`,
+      "invalid",
+    );
+  }
+  if ((RESERVED_HANDLES as readonly string[]).includes(handle)) {
+    throw new ApiError(`"${handle}" is a reserved handle and can't be registered.`, "invalid");
+  }
+}
+
 export async function registerHandle(
   relay: string, handle: string, agentKind: "claude" | "codex",
 ): Promise<{ token: string; address: string }> {
+  assertValidHandle(handle);
   let res: Response;
   try {
     res = await fetch(`${relay}/v1/register`, {
