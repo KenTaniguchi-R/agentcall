@@ -1,7 +1,13 @@
 import { DurableObject } from "cloudflare:workers";
+import {
+  CallerFrame, ListenerToRelayFrame, MAX_MESSAGE_BYTES, MAX_REPLY_BYTES,
+  RATE_LIMIT_PER_HOUR, RELAY_CALL_TIMEOUT_MS, safeParseFrame,
+  type ErrorCodeType,
+} from "@agentcall/shared";
 
-type CallerAttachment = { kind: "caller"; from: string; call_id?: string };
+type CallerAttachment = { kind: "caller"; from: string; call_id?: string; timeoutMs?: number };
 type ListenerAttachment = { kind: "listener" };
+type CallRecord = { call_id: string; from: string; deadline: number };
 
 export class HandleDO extends DurableObject {
   constructor(ctx: DurableObjectState, env: unknown) {
@@ -16,7 +22,11 @@ export class HandleDO extends DurableObject {
     }
     if (url.pathname === "/ws") {
       const role = url.searchParams.get("role");
+      if (role !== "listen" && role !== "call") {
+        return new Response("bad role", { status: 400 });
+      }
       const from = req.headers.get("X-Verified-From") ?? "";
+      const testTimeout = Number(url.searchParams.get("test_timeout_ms") || "") || undefined;
       const pair = new WebSocketPair();
       const client = pair[0];
       const server = pair[1];
@@ -26,10 +36,112 @@ export class HandleDO extends DurableObject {
         server.serializeAttachment({ kind: "listener" } satisfies ListenerAttachment);
       } else {
         this.ctx.acceptWebSocket(server, ["caller"]);
-        server.serializeAttachment({ kind: "caller", from } satisfies CallerAttachment);
+        server.serializeAttachment({ kind: "caller", from, timeoutMs: testTimeout } satisfies CallerAttachment);
       }
       return new Response(null, { status: 101, webSocket: client });
     }
     return new Response("not found", { status: 404 });
+  }
+
+  private send(ws: WebSocket, frame: unknown): void {
+    try { ws.send(JSON.stringify(frame)); } catch { /* socket gone */ }
+  }
+
+  private fail(ws: WebSocket, code: ErrorCodeType, detail?: string, close = true): void {
+    this.send(ws, { type: "call_error", code, detail });
+    if (close) { try { ws.close(1000, code); } catch { /* already closed */ } }
+  }
+
+  private callerFor(callId: string): WebSocket | undefined {
+    return this.ctx.getWebSockets("caller").find(
+      (w) => (w.deserializeAttachment() as CallerAttachment | null)?.call_id === callId,
+    );
+  }
+
+  override async webSocketMessage(ws: WebSocket, raw: string | ArrayBuffer): Promise<void> {
+    if (typeof raw !== "string") return;
+    const att = ws.deserializeAttachment() as CallerAttachment | ListenerAttachment | null;
+    if (!att) return;
+
+    if (att.kind === "caller") {
+      const frame = safeParseFrame(CallerFrame, raw);
+      if (!frame || att.call_id) return this.fail(ws, "protocol_error");
+      if (new TextEncoder().encode(frame.message).byteLength > MAX_MESSAGE_BYTES) {
+        return this.fail(ws, "message_too_large");
+      }
+      const now = Date.now();
+      const rlKey = `rl:${att.from}`;
+      const stamps = ((await this.ctx.storage.get<number[]>(rlKey)) ?? []).filter((t) => now - t < 3_600_000);
+      if (stamps.length >= RATE_LIMIT_PER_HOUR) return this.fail(ws, "rate_limited");
+      const listener = this.ctx.getWebSockets("listener")[0];
+      if (!listener) return this.fail(ws, "offline");
+
+      stamps.push(now);
+      await this.ctx.storage.put(rlKey, stamps);
+      const call_id = crypto.randomUUID();
+      const deadline = now + (att.timeoutMs ?? RELAY_CALL_TIMEOUT_MS);
+      ws.serializeAttachment({ ...att, call_id });
+      await this.ctx.storage.put<CallRecord>(`call:${call_id}`, { call_id, from: att.from, deadline });
+      await this.scheduleNextAlarm();
+      this.send(ws, { type: "call_status", state: "ringing" });
+      this.send(listener, {
+        type: "incoming_call", call_id, from: att.from,
+        message: frame.message, session_id: frame.session_id,
+      });
+      return;
+    }
+
+    // listener frames
+    const frame = safeParseFrame(ListenerToRelayFrame, raw);
+    if (!frame) return;
+    const record = await this.ctx.storage.get<CallRecord>(`call:${frame.call_id}`);
+    if (!record) return; // stale/unknown call
+    const caller = this.callerFor(frame.call_id);
+
+    if (frame.type === "call_answer") {
+      if (caller) this.send(caller, { type: "call_status", state: "answered" });
+      return;
+    }
+    if (frame.type === "call_result") {
+      const text = frame.text.length > MAX_REPLY_BYTES ? frame.text.slice(0, MAX_REPLY_BYTES) : frame.text;
+      if (caller) {
+        this.send(caller, { type: "call_reply", call_id: frame.call_id, text, session_id: frame.session_id });
+        try { caller.close(1000, "done"); } catch { /* closed */ }
+      }
+      await this.ctx.storage.delete(`call:${frame.call_id}`);
+      return;
+    }
+    if (frame.type === "call_failed") {
+      if (caller) this.fail(caller, frame.code, frame.detail);
+      await this.ctx.storage.delete(`call:${frame.call_id}`);
+    }
+  }
+
+  override async webSocketClose(ws: WebSocket): Promise<void> {
+    const att = ws.deserializeAttachment() as CallerAttachment | ListenerAttachment | null;
+    if (att?.kind === "caller" && att.call_id) {
+      await this.ctx.storage.delete(`call:${att.call_id}`);
+    }
+    // listener close: keep in-flight calls; a reconnected listener may still deliver results.
+  }
+
+  private async scheduleNextAlarm(): Promise<void> {
+    const calls = await this.ctx.storage.list<CallRecord>({ prefix: "call:" });
+    let min = Infinity;
+    for (const rec of calls.values()) min = Math.min(min, rec.deadline);
+    if (min !== Infinity) await this.ctx.storage.setAlarm(min);
+  }
+
+  override async alarm(): Promise<void> {
+    const now = Date.now();
+    const calls = await this.ctx.storage.list<CallRecord>({ prefix: "call:" });
+    for (const rec of calls.values()) {
+      if (rec.deadline <= now) {
+        const caller = this.callerFor(rec.call_id);
+        if (caller) this.fail(caller, "timeout");
+        await this.ctx.storage.delete(`call:${rec.call_id}`);
+      }
+    }
+    await this.scheduleNextAlarm();
   }
 }

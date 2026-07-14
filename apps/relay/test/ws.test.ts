@@ -41,4 +41,18 @@ describe("listener attach + status", () => {
     });
     expect(res.status).toBe(404);
   });
+
+  it("426s a websocket request without the Upgrade header", async () => {
+    const token = await registerHandle("frank");
+    const res = await SELF.fetch("https://relay.test/v1/ws?role=listen", { headers: wsAuth("frank", token) });
+    expect(res.status).toBe(426);
+  });
+
+  it("400s a bogus role", async () => {
+    const token = await registerHandle("gina");
+    const res = await SELF.fetch("https://relay.test/v1/ws?role=bogus", {
+      headers: { Upgrade: "websocket", ...wsAuth("gina", token) },
+    });
+    expect(res.status).toBe(400);
+  });
 });

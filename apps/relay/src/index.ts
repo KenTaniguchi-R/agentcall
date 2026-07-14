@@ -55,7 +55,7 @@ app.get("/v1/ws", async (c) => {
   }
 
   const stub = c.env.HANDLE_DO.get(c.env.HANDLE_DO.idFromName(target));
-  const fwd = new Request(`https://do/ws?role=${role}`, c.req.raw);
+  const fwd = new Request(`https://do/ws?role=${role}&test_timeout_ms=${c.req.query("test_timeout_ms") ?? ""}`, c.req.raw);
   fwd.headers.set("X-Verified-From", handle);
   return stub.fetch(fwd);
 });
