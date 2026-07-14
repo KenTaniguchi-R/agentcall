@@ -1,5 +1,5 @@
 {
-  "name": "@agentcall/relay",
+  "name": "@benree/agentcall-relay",
   "private": true,
   "type": "module",
   "scripts": {
@@ -8,7 +8,7 @@
     "test": "vitest run",
     "typecheck": "tsc -p tsconfig.json --noEmit"
   },
-  "dependencies": { "hono": "^4.6.0", "@agentcall/shared": "workspace:*", "zod": "^4.0.0" },
+  "dependencies": { "hono": "^4.6.0", "@benree/agentcall-shared": "workspace:*", "zod": "^4.0.0" },
   "devDependencies": {
     "wrangler": "^4.23.0",
     "@cloudflare/vitest-pool-workers": "^0.8.0",

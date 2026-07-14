@@ -1,6 +1,6 @@
 import { rmSync } from "node:fs";
 import { Command } from "commander";
-import { parseAddress } from "@agentcall/shared";
+import { parseAddress } from "@benree/agentcall-shared";
 import { getPaths } from "./paths.js";
 import { loadConfig, relayUrl } from "./config.js";
 import { callAgent, CallError } from "./callClient.js";

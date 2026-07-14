@@ -1,5 +1,5 @@
 import { spawn } from "node:child_process";
-import { AGENT_TIMEOUT_MS, MAX_REPLY_BYTES } from "@agentcall/shared";
+import { AGENT_TIMEOUT_MS, MAX_REPLY_BYTES } from "@benree/agentcall-shared";
 import { ensureDenyWriteTargetsExist, resolveAgentBin, writeSrtSettings } from "./srt.js";
 import type { Paths } from "./paths.js";
 

@@ -10,7 +10,7 @@ importers:
 
   apps/relay:
     dependencies:
-      '@agentcall/shared':
+      '@benree/agentcall-shared':
         specifier: workspace:*
         version: link:../../packages/shared
       hono:
@@ -38,7 +38,7 @@ importers:
 
   packages/cli:
     dependencies:
-      '@agentcall/shared':
+      '@benree/agentcall-shared':
         specifier: workspace:*
         version: link:../shared
       commander:

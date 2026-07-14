@@ -19,7 +19,7 @@ if [ "$NODE_MAJOR" -lt 20 ]; then
 fi
 
 echo "Installing agentcall..."
-npm install -g agentcall
+npm install -g @benree/agentcall
 
 if [ -t 0 ]; then
   exec agentcall setup "$@"

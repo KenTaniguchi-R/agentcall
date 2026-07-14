@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { RELAY_CALL_TIMEOUT_MS } from "@agentcall/shared";
+import { RELAY_CALL_TIMEOUT_MS } from "@benree/agentcall-shared";
 import { registerHandle, wsAuth, openWs, nextFrame, closed } from "./helpers.js";
 import { clampTimeoutMs, truncateUtf8Bytes } from "../src/do.js";
 

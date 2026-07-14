@@ -3,7 +3,7 @@ import { dirname } from "node:path";
 import WebSocket from "ws";
 import {
   AGENT_TIMEOUT_MS, RelayToListenerFrame, safeParseFrame,
-} from "@agentcall/shared";
+} from "@benree/agentcall-shared";
 import type { Config } from "./config.js";
 import type { Paths } from "./paths.js";
 import { buildPrompt } from "./prompt.js";

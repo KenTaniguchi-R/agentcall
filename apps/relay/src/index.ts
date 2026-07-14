@@ -1,5 +1,5 @@
 import { Hono } from "hono";
-import { RegisterRequest, RESERVED_HANDLES } from "@agentcall/shared";
+import { RegisterRequest, RESERVED_HANDLES } from "@benree/agentcall-shared";
 import { generateToken, sha256Hex, verifyHandleToken } from "./auth.js";
 import { INSTALL_SH } from "./install-sh.js";
 

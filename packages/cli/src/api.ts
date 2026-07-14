@@ -1,4 +1,4 @@
-import { HANDLE_RE, RESERVED_HANDLES } from "@agentcall/shared";
+import { HANDLE_RE, RESERVED_HANDLES } from "@benree/agentcall-shared";
 
 export class ApiError extends Error {
   constructor(message: string, public code: "handle_taken" | "invalid" | "unknown_handle" | "network") {

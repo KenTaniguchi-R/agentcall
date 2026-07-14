@@ -11,15 +11,15 @@ pnpm workspace, TypeScript everywhere, ESM (`"type": "module"`).
 ```
 agentcall/
 ├── apps/relay/          # CF Worker + Durable Object + D1 (Hono, wrangler)
-├── packages/shared/     # @agentcall/shared — zod protocol schemas, single source of truth
-└── packages/cli/        # agentcall — the npm CLI (setup/listen/call/status/uninstall)
+├── packages/shared/     # @benree/agentcall-shared — zod protocol schemas, single source of truth
+└── packages/cli/        # @benree/agentcall — the `agentcall` command (setup/listen/call/status/uninstall)
 ```
 
 **Protocol types live in `packages/shared`.** If you're changing a WS frame shape,
 adding a field, or touching anything both sides of a call agree on, change the zod
 schema in `packages/shared/src/protocol.ts` first, then update the relay and CLI to
 match. Don't duplicate frame shapes locally in `apps/relay` or `packages/cli` —
-import them from `@agentcall/shared`.
+import them from `@benree/agentcall-shared`.
 
 ## Test commands
 

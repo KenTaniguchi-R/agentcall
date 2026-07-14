@@ -8,7 +8,7 @@ describe("GET /install.sh", () => {
     expect(res.headers.get("content-type")).toContain("text/x-shellscript");
     const body = await res.text();
     expect(body).toContain("#!/bin/sh");
-    expect(body).toContain("npm install -g agentcall");
+    expect(body).toContain("npm install -g @benree/agentcall");
     expect(body).toContain("agentcall setup");
     expect(body).toContain("/dev/tty");
     expect(body).toContain("Darwin");

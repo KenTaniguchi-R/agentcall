@@ -3,7 +3,7 @@ import {
   CallerFrame, ListenerToRelayFrame, MAX_MESSAGE_BYTES, MAX_REPLY_BYTES,
   RATE_LIMIT_PER_HOUR, RELAY_CALL_TIMEOUT_MS, safeParseFrame,
   type ErrorCodeType,
-} from "@agentcall/shared";
+} from "@benree/agentcall-shared";
 
 type CallerAttachment = { kind: "caller"; from: string; call_id?: string; timeoutMs?: number };
 type ListenerAttachment = { kind: "listener" };

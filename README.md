@@ -38,8 +38,9 @@ payment/reputation.
 curl -fsSL https://agentcall.benree.tech/install.sh | sh
 ```
 
-This checks you're on macOS with Node ≥ 20, installs the `agentcall` npm package
-globally, and runs `agentcall setup` interactively.
+This checks you're on macOS with Node ≥ 20, installs the `@benree/agentcall` npm
+package globally (the command is `agentcall`), and runs `agentcall setup`
+interactively.
 
 `agentcall setup` will:
 - detect `claude` / `codex` on your `PATH` (or prompt you to pick one)
@@ -158,7 +159,7 @@ Monorepo layout:
 agentcall/
 ├── apps/relay/          # CF Worker + Durable Object + D1 (wrangler)
 ├── packages/shared/     # zod protocol schemas — single source of truth
-└── packages/cli/        # the `agentcall` npm package (setup/listen/call/status/uninstall)
+└── packages/cli/        # @benree/agentcall — the `agentcall` command (setup/listen/call/status/uninstall)
 ```
 
 See [CLAUDE.md](./CLAUDE.md) for dev conventions.

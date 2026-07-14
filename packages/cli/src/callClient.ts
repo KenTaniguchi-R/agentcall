@@ -1,5 +1,5 @@
 import WebSocket from "ws";
-import { RelayToCallerFrame, safeParseFrame, type CallReplyType, type ErrorCodeType } from "@agentcall/shared";
+import { RelayToCallerFrame, safeParseFrame, type CallReplyType, type ErrorCodeType } from "@benree/agentcall-shared";
 
 export class CallError extends Error {
   constructor(message: string, public code: ErrorCodeType | "connection_failed") { super(message); }
