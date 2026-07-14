@@ -104,10 +104,6 @@ export async function runSetup(opts: SetupOpts): Promise<void> {
   const resolveBinFn = opts.resolveBin ?? defaultResolveBin;
   const ask = opts.io?.ask ?? ttyAsk;
 
-  const agentKind = await detectAgentKind(opts, hasBinFn, ask);
-  warnIfOutsideLaunchdPath(agentKind, resolveBinFn);
-  warnIfOutsideLaunchdPath("npx", resolveBinFn);
-
   // Idempotency: a re-run against an already-registered handle used to
   // always POST /v1/register, which the relay correctly 409s (the handle is
   // taken — by this same install) — aborting setup even though a valid
@@ -121,6 +117,14 @@ export async function runSetup(opts: SetupOpts): Promise<void> {
     existingCfg = undefined;
   }
   const canReuse = existingCfg !== undefined && (!opts.handle || opts.handle === existingCfg.handle);
+
+  // On reuse the saved agent_kind is what actually gets spawned (see
+  // listener.ts), so skip detection entirely — it may prompt ("Which should
+  // agentcall use?") and its answer would be ignored anyway.
+  const agentKind =
+    canReuse && existingCfg ? existingCfg.agent_kind : await detectAgentKind(opts, hasBinFn, ask);
+  warnIfOutsideLaunchdPath(agentKind, resolveBinFn);
+  warnIfOutsideLaunchdPath("npx", resolveBinFn);
 
   let cfg: Config;
   let address: string;

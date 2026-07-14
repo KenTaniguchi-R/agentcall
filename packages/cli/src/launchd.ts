@@ -48,7 +48,14 @@ export function plistContent(nodeBin: string, cliScript: string, p: Paths, extra
 `;
 }
 
-export function installLaunchAgent(p: Paths, execCmd: ExecCmd = defaultExec, extraPathDirs: string[] = []): void {
+type SleepFn = () => void;
+const defaultSleep: SleepFn = () => {
+  execFileSync("/bin/sleep", ["0.3"]);
+};
+
+export function installLaunchAgent(
+  p: Paths, execCmd: ExecCmd = defaultExec, extraPathDirs: string[] = [], sleep: SleepFn = defaultSleep,
+): void {
   const cliScript = fileURLToPath(new URL("../dist/index.js", import.meta.url));
   mkdirSync(dirname(p.plistFile), { recursive: true });
   writeFileSync(p.plistFile, plistContent(process.execPath, cliScript, p, extraPathDirs));
@@ -57,7 +64,19 @@ export function installLaunchAgent(p: Paths, execCmd: ExecCmd = defaultExec, ext
   } catch {
     /* not loaded */
   }
-  execCmd(["launchctl", "bootstrap", `gui/${uid()}`, p.plistFile]);
+  // Bootout of a running (KeepAlive) listener returns before launchd
+  // finishes tearing it down, and a bootstrap issued during teardown fails
+  // with "Input/output error" — retry briefly to ride it out.
+  const BOOTSTRAP_ATTEMPTS = 5;
+  for (let attempt = 1; ; attempt++) {
+    try {
+      execCmd(["launchctl", "bootstrap", `gui/${uid()}`, p.plistFile]);
+      return;
+    } catch (e) {
+      if (attempt >= BOOTSTRAP_ATTEMPTS) throw e;
+      sleep();
+    }
+  }
 }
 
 export function uninstallLaunchAgent(p: Paths, execCmd: ExecCmd = defaultExec): void {

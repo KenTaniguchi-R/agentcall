@@ -90,6 +90,30 @@ describe("runSetup", () => {
     }
   });
 
+  // Regression: re-running setup used to run agent detection (and its
+  // "Which should agentcall use?" prompt) before the reuse check, then
+  // ignore the answer in favor of the saved config's agent_kind.
+  it("re-running setup with a saved config asks no questions at all", async () => {
+    const home = mkdtempSync(join(tmpdir(), "agentcall-setup-"));
+    process.env.AGENTCALL_HOME = home;
+    try {
+      const relay = await fakeRelay();
+      await runSetup({ handle: "ken", agent: "claude", relay, snippet: false, skipLaunchd: true });
+
+      const asked: string[] = [];
+      await runSetup({
+        relay,
+        snippet: false,
+        skipLaunchd: true,
+        hasBin: () => true, // both claude and codex on PATH — would normally prompt
+        io: { ask: async (q) => { asked.push(q); return "claude"; } },
+      });
+      expect(asked).toEqual([]);
+    } finally {
+      delete process.env.AGENTCALL_HOME;
+    }
+  });
+
   it("prompts for a missing handle via io.ask", async () => {
     const home = mkdtempSync(join(tmpdir(), "agentcall-setup-"));
     process.env.AGENTCALL_HOME = home;

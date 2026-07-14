@@ -59,6 +59,37 @@ describe("install/uninstall", () => {
     const xml = readFileSync(p.plistFile, "utf8");
     expect(xml).toContain("<string>/Users/x/.local/bin:");
   });
+  // Regression: bootout of a running (KeepAlive) listener returns before
+  // launchd finishes tearing it down, so an immediate bootstrap fails with
+  // "Input/output error" and setup dies — install must retry briefly.
+  it("retries bootstrap while launchd finishes tearing down the old instance", () => {
+    const p = getPaths(mkdtempSync(join(tmpdir(), "agentcall-ld-")));
+    let bootstraps = 0;
+    installLaunchAgent(
+      p,
+      (cmd) => {
+        if (cmd[1] === "bootstrap" && ++bootstraps < 3) throw new Error("Bootstrap failed: 5: Input/output error");
+      },
+      [],
+      () => {},
+    );
+    expect(bootstraps).toBe(3);
+  });
+
+  it("gives up with an error after repeated bootstrap failures", () => {
+    const p = getPaths(mkdtempSync(join(tmpdir(), "agentcall-ld-")));
+    expect(() =>
+      installLaunchAgent(
+        p,
+        (cmd) => {
+          if (cmd[1] === "bootstrap") throw new Error("Bootstrap failed: 5: Input/output error");
+        },
+        [],
+        () => {},
+      ),
+    ).toThrow(/Bootstrap failed/);
+  });
+
   it("uninstall removes the plist", () => {
     const p = getPaths(mkdtempSync(join(tmpdir(), "agentcall-ld-")));
     mkdirSync(join(p.home, "Library", "LaunchAgents"), { recursive: true });
