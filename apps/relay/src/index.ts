@@ -1,6 +1,7 @@
 import { Hono } from "hono";
 import { RegisterRequest, RESERVED_HANDLES } from "@agentcall/shared";
 import { generateToken, sha256Hex, verifyHandleToken } from "./auth.js";
+import { INSTALL_SH } from "./install-sh.js";
 
 export { HandleDO } from "./do.js";
 
@@ -12,6 +13,8 @@ const app = new Hono<{ Bindings: Env }>();
 async function handleExists(db: D1Database, handle: string): Promise<boolean> {
   return !!(await db.prepare("SELECT 1 FROM handles WHERE handle = ?").bind(handle).first());
 }
+
+app.get("/install.sh", (c) => c.text(INSTALL_SH, 200, { "content-type": "text/x-shellscript; charset=utf-8" }));
 
 app.post("/v1/register", async (c) => {
   const body = RegisterRequest.safeParse(await c.req.json().catch(() => null));
