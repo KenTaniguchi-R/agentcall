@@ -1,6 +1,9 @@
+import { readFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 import { buildPrompt } from "../src/prompt.js";
-import { buildSpawnSpec, parseClaudeJson, parseCodexJsonl, runAgent } from "../src/runner.js";
+import { buildSpawnSpec, parseClaudeJson, parseCodexJsonl, runAgent, truncateUtf8 } from "../src/runner.js";
 import { getPaths } from "../src/paths.js";
 
 const p = getPaths("/tmp/fakehome");
@@ -24,12 +27,14 @@ describe("buildSpawnSpec", () => {
     ]);
     expect(s.cwd).toBe(p.publicDir);
   });
-  it("uses codex native sandbox", () => {
+  it("wraps codex in srt too, so reads are protected even though codex's own sandbox only confines writes", () => {
     const s = buildSpawnSpec("codex", "PROMPT", p);
-    expect(s.cmd).toBe("codex");
+    expect(s.cmd).toBe("npx");
     expect(s.args).toEqual([
-      "exec", "--sandbox", "workspace-write", "--cd", p.publicDir, "--skip-git-repo-check", "--json", "PROMPT",
+      "-y", "@anthropic-ai/sandbox-runtime", "--settings", p.srtFile, "--",
+      "codex", "exec", "--sandbox", "workspace-write", "--cd", p.publicDir, "--skip-git-repo-check", "--json", "PROMPT",
     ]);
+    expect(s.cwd).toBe(p.publicDir);
   });
 });
 
@@ -40,6 +45,10 @@ describe("output parsing", () => {
   });
   it("throws on claude error output", () => {
     expect(() => parseClaudeJson("total garbage")).toThrow();
+  });
+  it("throws when claude reports is_error, instead of relaying the error text as an answer", () => {
+    const stdout = JSON.stringify({ type: "result", result: "Credit balance too low", session_id: "abc", is_error: true });
+    expect(() => parseClaudeJson(stdout)).toThrow();
   });
   it("parses codex jsonl, taking the last agent_message", () => {
     const lines = [
@@ -52,6 +61,20 @@ describe("output parsing", () => {
   });
   it("falls back to raw stdout for codex without json events", () => {
     expect(parseCodexJsonl("plain text answer\n")).toEqual({ text: "plain text answer", session_id: undefined });
+  });
+});
+
+describe("truncateUtf8", () => {
+  it("passes text through unchanged when under the byte limit", () => {
+    expect(truncateUtf8("hello", 100)).toBe("hello");
+  });
+  it("truncates on a full multi-byte boundary instead of splitting a character", () => {
+    const emoji = "\u{1F600}"; // 4 bytes in UTF-8
+    const text = "aaa" + emoji; // 3 + 4 = 7 bytes
+    // Cutting at 5 bytes lands mid-way through the emoji's 4-byte sequence.
+    const truncated = truncateUtf8(text, 5);
+    expect(truncated).toBe("aaa");
+    expect(Buffer.byteLength(truncated, "utf8")).toBeLessThanOrEqual(5);
   });
 });
 
@@ -75,4 +98,45 @@ describe("runAgent (with a fake agent binary)", () => {
       runAgent("claude", "x", p, 5000, { cmd: "node", args: ["-e", "process.exit(3)"], cwd: "/tmp" }),
     ).rejects.toMatchObject({ code: "agent_error" });
   });
+  it("kills the whole process group on timeout, so a grandchild holding stdout doesn't hang the promise", async () => {
+    const marker = join(tmpdir(), `agentcall-pgid-test-${Date.now()}-${Math.random()}.pid`);
+    // The outer process spawns a grandchild that inherits stdio (holding
+    // the pipe open) and stays alive on its own long timer, then the outer
+    // process also stays alive on its own long timer (so it won't exit on
+    // its own before our runAgent timeout fires). Old code only signaled
+    // the outer pid directly, leaving this grandchild running and the
+    // stdout pipe open; the fix spawns detached and signals the whole
+    // group via -pid.
+    const script = `
+      const cp = require("child_process");
+      const fs = require("fs");
+      const gc = cp.spawn(process.execPath, ["-e", "setTimeout(() => {}, 1e6)"], { stdio: "inherit" });
+      fs.writeFileSync(${JSON.stringify(marker)}, String(gc.pid));
+      setTimeout(() => {}, 1e6);
+    `;
+    const start = Date.now();
+    await expect(
+      runAgent("claude", "x", p, 500, { cmd: "node", args: ["-e", script], cwd: "/tmp" }),
+    ).rejects.toMatchObject({ code: "timeout" });
+    expect(Date.now() - start).toBeLessThan(5000);
+    const grandchildPid = Number(readFileSync(marker, "utf8"));
+    // Give the SIGTERM a moment to land, then confirm the grandchild (not
+    // just the direct child) was actually torn down, not merely detected
+    // as gone via a hung-forever `close` listener.
+    await new Promise((r) => setTimeout(r, 300));
+    expect(() => process.kill(grandchildPid, 0)).toThrow();
+  }, 15_000);
+  it("caps accumulated stdout and rejects agent_error instead of buffering unbounded output", async () => {
+    const script = `
+      process.stdout.write(Buffer.alloc(1024 * 1024, "x"));
+      setInterval(() => process.stdout.write(Buffer.alloc(1024 * 1024, "x")), 5);
+    `;
+    const start = Date.now();
+    await expect(
+      runAgent("claude", "x", p, 20_000, { cmd: "node", args: ["-e", script], cwd: "/tmp" }),
+    ).rejects.toMatchObject({ code: "agent_error" });
+    // Should be caught by the 10MB cap almost immediately, well before the
+    // 20s timeout — proves the cap tripped, not the timeout.
+    expect(Date.now() - start).toBeLessThan(10_000);
+  }, 15_000);
 });

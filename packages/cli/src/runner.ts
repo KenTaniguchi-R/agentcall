@@ -1,5 +1,6 @@
 import { spawn } from "node:child_process";
-import { MAX_REPLY_BYTES } from "@agentcall/shared";
+import { AGENT_TIMEOUT_MS, MAX_REPLY_BYTES } from "@agentcall/shared";
+import { ensureDenyWriteTargetsExist } from "./srt.js";
 import type { Paths } from "./paths.js";
 
 export type AgentKind = "claude" | "codex";
@@ -10,6 +11,14 @@ export class AgentRunError extends Error {
   constructor(message: string, public code: "timeout" | "agent_error") { super(message); }
 }
 
+// Cap on accumulated stdout while an agent is running, independent of the
+// final MAX_REPLY_BYTES truncation applied to the parsed reply text — this
+// bounds memory for a runaway/malicious process that never stops writing.
+const MAX_STDOUT_BYTES = 10 * 1024 * 1024;
+// Grace period between SIGTERM and SIGKILL when tearing down an agent's
+// process group (on timeout or stdout overflow).
+const KILL_GRACE_MS = 10_000;
+
 export function buildSpawnSpec(kind: AgentKind, prompt: string, p: Paths): SpawnSpec {
   if (kind === "claude") {
     return {
@@ -19,15 +28,22 @@ export function buildSpawnSpec(kind: AgentKind, prompt: string, p: Paths): Spawn
       cwd: p.publicDir,
     };
   }
+  // codex's own --sandbox only confines writes, not reads — without srt a
+  // malicious prompt could read ~/.agentcall/config.json (the relay token)
+  // or ~/.ssh and exfiltrate it via the reply. Wrap codex in srt too so both
+  // agent kinds get the same read protection; codex's native sandbox still
+  // handles write confinement inside publicDir.
   return {
-    cmd: "codex",
-    args: ["exec", "--sandbox", "workspace-write", "--cd", p.publicDir, "--skip-git-repo-check", "--json", prompt],
+    cmd: "npx",
+    args: ["-y", "@anthropic-ai/sandbox-runtime", "--settings", p.srtFile, "--",
+      "codex", "exec", "--sandbox", "workspace-write", "--cd", p.publicDir, "--skip-git-repo-check", "--json", prompt],
     cwd: p.publicDir,
   };
 }
 
 export function parseClaudeJson(stdout: string): AgentOutput {
   const parsed = JSON.parse(stdout.trim()) as { result?: string; session_id?: string; is_error?: boolean };
+  if (parsed.is_error) throw new Error(`claude reported an error: ${parsed.result ?? "unknown error"}`);
   if (typeof parsed.result !== "string") throw new Error("claude output missing result");
   return { text: parsed.result, session_id: parsed.session_id };
 }
@@ -54,30 +70,91 @@ export function parseCodexJsonl(stdout: string): AgentOutput {
   throw new Error("codex output had no agent_message");
 }
 
+// Truncates to at most maxBytes UTF-8 bytes without splitting a multi-byte
+// character. A raw string.slice() counts UTF-16 code units, not bytes, and
+// can cut a multi-byte character in half; decoding a byte-sliced Buffer
+// back to a string instead replaces any truncated trailing sequence with
+// U+FFFD, which we then strip.
+export function truncateUtf8(text: string, maxBytes: number): string {
+  const buf = Buffer.from(text, "utf8");
+  if (buf.byteLength <= maxBytes) return text;
+  return buf.subarray(0, maxBytes).toString("utf8").replace(/�+$/, "");
+}
+
 export function runAgent(
-  kind: AgentKind, prompt: string, p: Paths, timeoutMs: number, specOverride?: SpawnSpec,
+  kind: AgentKind, prompt: string, p: Paths, timeoutMs: number = AGENT_TIMEOUT_MS, specOverride?: SpawnSpec,
 ): Promise<AgentOutput> {
   const spec = specOverride ?? buildSpawnSpec(kind, prompt, p);
+  // Real spawn (no test override): make sure srt's denyWrite targets exist
+  // before the sandbox starts — see srt.ts, denyWrite silently no-ops for
+  // paths that aren't there yet. Skipped for specOverride so unit tests
+  // never touch the real ~/.claude.
+  if (!specOverride) ensureDenyWriteTargetsExist();
   return new Promise((resolve, reject) => {
-    const child = spawn(spec.cmd, spec.args, { cwd: spec.cwd, stdio: ["ignore", "pipe", "pipe"] });
+    // detached: true makes the child its own process group leader, so any
+    // grandchildren it forks (sandbox-exec, the actual claude/codex
+    // process, ...) share its process group unless they detach themselves.
+    // That lets us tear down the whole tree with one signal to -pid instead
+    // of leaving orphans that hold the stdout pipe open or keep running
+    // past the timeout.
+    const child = spawn(spec.cmd, spec.args, { cwd: spec.cwd, stdio: ["ignore", "pipe", "pipe"], detached: true });
     let stdout = "";
     let stderr = "";
+    let stdoutBytes = 0;
     let timedOut = false;
-    child.stdout.on("data", (d) => (stdout += d));
+    let overflowed = false;
+    let settled = false;
+    let killTimer: NodeJS.Timeout | undefined;
+
+    const killGroup = (signal: NodeJS.Signals) => {
+      if (child.pid === undefined) return;
+      try { process.kill(-child.pid, signal); } catch { /* group may already be gone */ }
+    };
+    const escalate = () => {
+      killGroup("SIGTERM");
+      killTimer = setTimeout(() => killGroup("SIGKILL"), KILL_GRACE_MS);
+      killTimer.unref();
+    };
+
+    child.stdout.on("data", (d: Buffer) => {
+      stdoutBytes += d.length;
+      if (stdoutBytes > MAX_STDOUT_BYTES) {
+        if (!overflowed) { overflowed = true; escalate(); }
+        return;
+      }
+      stdout += d;
+    });
     child.stderr.on("data", (d) => (stderr += d));
+
     const timer = setTimeout(() => {
       timedOut = true;
-      child.kill("SIGTERM");
-      setTimeout(() => child.kill("SIGKILL"), 10_000).unref();
+      escalate();
     }, timeoutMs);
-    child.on("error", (e) => { clearTimeout(timer); reject(new AgentRunError(String(e), "agent_error")); });
-    child.on("close", (code) => {
+
+    child.on("error", (e) => {
+      if (settled) return;
+      settled = true;
       clearTimeout(timer);
+      if (killTimer) clearTimeout(killTimer);
+      reject(new AgentRunError(String(e), "agent_error"));
+    });
+    // Settle on `exit`, not `close`: `close` waits for the stdio streams to
+    // finish, and a grandchild that inherited stdout can keep that pipe
+    // open long after the direct child we spawned has exited, hanging this
+    // promise forever. `exit` fires as soon as the process we spawned
+    // terminates, which is all we need — we still tear down the rest of
+    // the process group above so no grandchild is left running past this.
+    child.on("exit", (code) => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
+      if (killTimer) clearTimeout(killTimer);
       if (timedOut) return reject(new AgentRunError(`agent timed out after ${timeoutMs}ms`, "timeout"));
+      if (overflowed) return reject(new AgentRunError(`agent stdout exceeded ${MAX_STDOUT_BYTES} bytes`, "agent_error"));
       if (code !== 0) return reject(new AgentRunError(`agent exited ${code}: ${stderr.slice(0, 2000)}`, "agent_error"));
       try {
         const out = kind === "claude" ? parseClaudeJson(stdout) : parseCodexJsonl(stdout);
-        resolve({ ...out, text: out.text.slice(0, MAX_REPLY_BYTES) });
+        resolve({ ...out, text: truncateUtf8(out.text, MAX_REPLY_BYTES) });
       } catch (e) {
         reject(new AgentRunError(`could not parse agent output: ${String(e)}`, "agent_error"));
       }
