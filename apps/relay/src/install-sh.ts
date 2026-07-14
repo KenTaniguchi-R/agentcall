@@ -21,9 +21,18 @@ fi
 echo "Installing agentcall..."
 npm install -g @benree/agentcall
 
+AGENTCALL_BIN="$(npm prefix -g)/bin/agentcall"
+if ! command -v agentcall >/dev/null 2>&1; then
+  echo "" >&2
+  echo "Note: npm's global bin dir ($(npm prefix -g)/bin) is not on your PATH." >&2
+  echo "Add it to your shell profile to use 'agentcall' directly:" >&2
+  echo "  export PATH=\\"$(npm prefix -g)/bin:\\$PATH\\"" >&2
+  echo "" >&2
+fi
+
 if [ -t 0 ]; then
-  exec agentcall setup "$@"
+  exec "$AGENTCALL_BIN" setup "$@"
 else
-  exec agentcall setup "$@" < /dev/tty
+  exec "$AGENTCALL_BIN" setup "$@" < /dev/tty
 fi
 `;

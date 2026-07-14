@@ -9,7 +9,8 @@ describe("GET /install.sh", () => {
     const body = await res.text();
     expect(body).toContain("#!/bin/sh");
     expect(body).toContain("npm install -g @benree/agentcall");
-    expect(body).toContain("agentcall setup");
+    expect(body).toContain("npm prefix -g");
+    expect(body).toContain('"$AGENTCALL_BIN" setup');
     expect(body).toContain("/dev/tty");
     expect(body).toContain("Darwin");
   });
