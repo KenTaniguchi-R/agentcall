@@ -37,7 +37,7 @@ export function buildSpawnSpec(
       // verified against this exact version. Letting it float on `latest`
       // means a future release could silently change enforcement semantics
       // out from under every existing srt.json.
-      args: ["-y", "@anthropic-ai/sandbox-runtime@1.0.0", "--settings", p.srtFile, "--",
+      args: ["-y", "@anthropic-ai/sandbox-runtime@0.0.65", "--settings", p.srtFile, "--",
         resolveBin(kind), "-p", prompt, "--output-format", "json"],
       cwd: p.publicDir,
     };
@@ -51,7 +51,7 @@ export function buildSpawnSpec(
     cmd: "npx",
     // Pinned for the same reason as the claude spec above: srt's deny/allow
     // behaviors were verified against this exact version.
-    args: ["-y", "@anthropic-ai/sandbox-runtime@1.0.0", "--settings", p.srtFile, "--",
+    args: ["-y", "@anthropic-ai/sandbox-runtime@0.0.65", "--settings", p.srtFile, "--",
       resolveBin(kind), "exec", "--sandbox", "workspace-write", "--cd", p.publicDir, "--skip-git-repo-check", "--json", prompt],
     cwd: p.publicDir,
   };

@@ -9,7 +9,7 @@ import type { Paths } from "./paths.js";
 // `permissions` key.
 //
 // Two things below aren't from the README — they're from actually running
-// the installed @anthropic-ai/sandbox-runtime@1.0.0 against real settings
+// the installed @anthropic-ai/sandbox-runtime@0.0.65 against real settings
 // files (`npx -y @anthropic-ai/sandbox-runtime --settings <file> -- <cmd>`):
 //
 // 1. `network.deniedDomains` is REQUIRED by the package's own schema
