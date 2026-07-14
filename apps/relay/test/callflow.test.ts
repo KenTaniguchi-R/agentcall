@@ -1,5 +1,7 @@
 import { describe, expect, it } from "vitest";
+import { RELAY_CALL_TIMEOUT_MS } from "@agentcall/shared";
 import { registerHandle, wsAuth, openWs, nextFrame, closed } from "./helpers.js";
+import { clampTimeoutMs, truncateUtf8Bytes } from "../src/do.js";
 
 async function setupPair(callee: string, caller: string) {
   const calleeToken = await registerHandle(callee);
@@ -105,5 +107,48 @@ describe("call flow", () => {
     await nextFrame(caller); // ringing
     const incoming = await nextFrame(listener);
     expect(incoming.from).toBe("id-caller");
+  });
+
+  it("truncates an oversized CJK call_result to MAX_REPLY_BYTES on a code-point boundary", async () => {
+    const { callerToken, listener } = await setupPair("cjk-callee", "cjk-caller");
+    const caller = await openWs("/v1/ws?role=call&to=cjk-callee", wsAuth("cjk-caller", callerToken));
+    caller.send(JSON.stringify({ type: "call_request", to: "cjk-callee", message: "hi" }));
+    await nextFrame(caller); // ringing
+    const incoming = await nextFrame(listener);
+
+    const bigReply = "あ".repeat(200_000); // ~600KB UTF-8 (3 bytes/char)
+    listener.send(JSON.stringify({ type: "call_result", call_id: incoming.call_id, text: bigReply }));
+    const reply = await nextFrame(caller);
+    expect(reply.type).toBe("call_reply");
+    expect(new TextEncoder().encode(reply.text).byteLength).toBeLessThanOrEqual(256_000);
+    expect(reply.text.includes("�")).toBe(false);
+  });
+});
+
+describe("clampTimeoutMs", () => {
+  it("passes through a requested timeout shorter than the cap", () => {
+    expect(clampTimeoutMs(100)).toBe(100);
+  });
+
+  it("clamps a requested timeout longer than the cap down to RELAY_CALL_TIMEOUT_MS", () => {
+    expect(clampTimeoutMs(RELAY_CALL_TIMEOUT_MS * 10)).toBe(RELAY_CALL_TIMEOUT_MS);
+  });
+
+  it("defaults to RELAY_CALL_TIMEOUT_MS when no timeout is requested", () => {
+    expect(clampTimeoutMs(undefined)).toBe(RELAY_CALL_TIMEOUT_MS);
+  });
+});
+
+describe("truncateUtf8Bytes", () => {
+  it("returns text unchanged when already within the byte cap", () => {
+    expect(truncateUtf8Bytes("hello", 100)).toBe("hello");
+  });
+
+  it("truncates on a UTF-8 byte boundary without corrupting the string", () => {
+    const text = "あ".repeat(10); // 30 bytes (3 bytes/char)
+    const truncated = truncateUtf8Bytes(text, 20);
+    expect(new TextEncoder().encode(truncated).byteLength).toBeLessThanOrEqual(20);
+    expect(truncated.includes("�")).toBe(false);
+    expect(truncated).toBe("あ".repeat(6)); // 18 bytes fits, 7th char (21 bytes) doesn't
   });
 });

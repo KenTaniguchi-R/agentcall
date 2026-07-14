@@ -9,6 +9,28 @@ type CallerAttachment = { kind: "caller"; from: string; call_id?: string; timeou
 type ListenerAttachment = { kind: "listener" };
 type CallRecord = { call_id: string; from: string; deadline: number };
 
+/**
+ * Clamp a caller-requested (test-only) timeout so it can only SHORTEN the
+ * deadline, never extend it past RELAY_CALL_TIMEOUT_MS. Prevents a client
+ * from passing an oversized test_timeout_ms to dodge the real cap.
+ */
+export function clampTimeoutMs(requestedMs: number | undefined): number {
+  return Math.min(requestedMs ?? RELAY_CALL_TIMEOUT_MS, RELAY_CALL_TIMEOUT_MS);
+}
+
+/**
+ * Truncate text to at most maxBytes of UTF-8, cutting on a code-point
+ * boundary rather than a UTF-16 code-unit boundary — a naive
+ * `text.slice(0, maxBytes)` can split a multi-byte character (e.g. CJK)
+ * and either overshoot the byte cap or corrupt the string.
+ */
+export function truncateUtf8Bytes(text: string, maxBytes: number): string {
+  const bytes = new TextEncoder().encode(text);
+  if (bytes.byteLength <= maxBytes) return text;
+  const sliced = bytes.slice(0, maxBytes);
+  return new TextDecoder("utf-8", { fatal: false }).decode(sliced).replace(/�+$/, "");
+}
+
 export class HandleDO extends DurableObject {
   constructor(ctx: DurableObjectState, env: unknown) {
     super(ctx, env as never);
@@ -79,7 +101,7 @@ export class HandleDO extends DurableObject {
       stamps.push(now);
       await this.ctx.storage.put(rlKey, stamps);
       const call_id = crypto.randomUUID();
-      const deadline = now + (att.timeoutMs ?? RELAY_CALL_TIMEOUT_MS);
+      const deadline = now + clampTimeoutMs(att.timeoutMs);
       ws.serializeAttachment({ ...att, call_id });
       await this.ctx.storage.put<CallRecord>(`call:${call_id}`, { call_id, from: att.from, deadline });
       await this.scheduleNextAlarm();
@@ -103,7 +125,7 @@ export class HandleDO extends DurableObject {
       return;
     }
     if (frame.type === "call_result") {
-      const text = frame.text.length > MAX_REPLY_BYTES ? frame.text.slice(0, MAX_REPLY_BYTES) : frame.text;
+      const text = truncateUtf8Bytes(frame.text, MAX_REPLY_BYTES);
       if (caller) {
         this.send(caller, { type: "call_reply", call_id: frame.call_id, text, session_id: frame.session_id });
         try { caller.close(1000, "done"); } catch { /* closed */ }
