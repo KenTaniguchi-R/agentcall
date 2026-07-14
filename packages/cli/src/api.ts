@@ -21,32 +21,45 @@ export function assertValidHandle(handle: string): void {
   }
 }
 
+// Caps how long a relay HTTP call can sit with no response: without a
+// signal, Node's fetch waits ~5 minutes on a black-holed connection, which
+// looks identical to a hang from the user's side.
+const RELAY_TIMEOUT_MS = 10_000;
+
+async function relayFetch(relay: string, path: string, init: RequestInit, timeoutMs: number): Promise<Response> {
+  try {
+    return await fetch(`${relay}${path}`, { ...init, signal: AbortSignal.timeout(timeoutMs) });
+  } catch (e) {
+    if ((e as Error)?.name === "TimeoutError") {
+      throw new ApiError(`Relay ${relay} did not respond within ${timeoutMs / 1000}s.`, "network");
+    }
+    throw new ApiError(`Cannot reach relay ${relay}: ${String(e)}`, "network");
+  }
+}
+
 export async function registerHandle(
-  relay: string, handle: string, agentKind: "claude" | "codex",
+  relay: string, handle: string, agentKind: "claude" | "codex", opts: { timeoutMs?: number } = {},
 ): Promise<{ token: string; address: string }> {
   assertValidHandle(handle);
-  let res: Response;
-  try {
-    res = await fetch(`${relay}/v1/register`, {
+  const res = await relayFetch(
+    relay,
+    "/v1/register",
+    {
       method: "POST",
       headers: { "content-type": "application/json" },
       body: JSON.stringify({ handle, agent_kind: agentKind }),
-    });
-  } catch (e) {
-    throw new ApiError(`Cannot reach relay ${relay}: ${String(e)}`, "network");
-  }
+    },
+    opts.timeoutMs ?? RELAY_TIMEOUT_MS,
+  );
   if (res.status === 409) throw new ApiError(`Handle "${handle}" is already taken.`, "handle_taken");
   if (!res.ok) throw new ApiError(`Registration failed (${res.status}).`, "invalid");
   return (await res.json()) as { token: string; address: string };
 }
 
-export async function getStatus(relay: string, handle: string): Promise<{ online: boolean }> {
-  let res: Response;
-  try {
-    res = await fetch(`${relay}/v1/status/${handle}`);
-  } catch (e) {
-    throw new ApiError(`Cannot reach relay ${relay}: ${String(e)}`, "network");
-  }
+export async function getStatus(
+  relay: string, handle: string, opts: { timeoutMs?: number } = {},
+): Promise<{ online: boolean }> {
+  const res = await relayFetch(relay, `/v1/status/${handle}`, {}, opts.timeoutMs ?? RELAY_TIMEOUT_MS);
   if (res.status === 404) throw new ApiError(`No agent registered as "${handle}".`, "unknown_handle");
   if (!res.ok) throw new ApiError(`Status check failed (${res.status}).`, "network");
   return (await res.json()) as { online: boolean };

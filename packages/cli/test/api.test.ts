@@ -3,7 +3,23 @@ import { afterEach, describe, expect, it } from "vitest";
 import { registerHandle, getStatus } from "../src/api.js";
 
 let server: Server;
-afterEach(() => server?.close());
+afterEach(() => {
+  server?.closeAllConnections?.();
+  server?.close();
+});
+
+// Accepts connections but never responds — simulates a black-holed relay.
+function serveNever(): Promise<string> {
+  return new Promise((resolve) => {
+    server = createServer(() => {
+      /* hold the request open forever */
+    });
+    server.listen(0, "127.0.0.1", () => {
+      const addr = server.address() as { port: number };
+      resolve(`http://127.0.0.1:${addr.port}`);
+    });
+  });
+}
 
 function serve(status: number, body: unknown): Promise<string> {
   return new Promise((resolve) => {
@@ -36,6 +52,20 @@ describe("api client", () => {
   it("maps 409 to handle_taken", async () => {
     const relay = await serve(409, { error: "handle taken" });
     await expect(registerHandle(relay, "ken", "claude")).rejects.toMatchObject({ code: "handle_taken" });
+  });
+  it("register times out with a clear error when the relay never responds", async () => {
+    const relay = await serveNever();
+    await expect(registerHandle(relay, "ken", "claude", { timeoutMs: 100 })).rejects.toMatchObject({
+      code: "network",
+      message: expect.stringMatching(/did not respond/),
+    });
+  });
+  it("status times out with a clear error when the relay never responds", async () => {
+    const relay = await serveNever();
+    await expect(getStatus(relay, "ken", { timeoutMs: 100 })).rejects.toMatchObject({
+      code: "network",
+      message: expect.stringMatching(/did not respond/),
+    });
   });
   it("gets status and maps 404", async () => {
     const relay = await serve(200, { online: true });

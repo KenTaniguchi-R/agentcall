@@ -2,8 +2,8 @@ import { existsSync, mkdtempSync, readFileSync } from "node:fs";
 import { createServer, type Server } from "node:http";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { afterEach, describe, expect, it } from "vitest";
-import { resolveExtraPathDirs, runSetup } from "../src/setup.js";
+import { afterEach, describe, expect, it, vi } from "vitest";
+import { resolveExtraPathDirs, runSetup, warnIfOutsideLaunchdPath } from "../src/setup.js";
 import { getPaths } from "../src/paths.js";
 
 let server: Server;
@@ -165,6 +165,52 @@ describe("runSetup", () => {
       expect(captured).toEqual(["/Users/x/.local/bin"]);
     } finally {
       delete process.env.AGENTCALL_HOME;
+    }
+  });
+});
+
+describe("setup progress output", () => {
+  it("prints a progress line before registering with the relay", async () => {
+    const home = mkdtempSync(join(tmpdir(), "agentcall-setup-"));
+    process.env.AGENTCALL_HOME = home;
+    const logs: string[] = [];
+    const spy = vi.spyOn(console, "log").mockImplementation((...a: unknown[]) => {
+      logs.push(a.map(String).join(" "));
+    });
+    try {
+      const relay = await fakeRelay();
+      await runSetup({ handle: "ken9", agent: "claude", relay, snippet: false, skipLaunchd: true });
+      expect(logs.some((l) => l.includes("Registering ken9"))).toBe(true);
+    } finally {
+      spy.mockRestore();
+      delete process.env.AGENTCALL_HOME;
+    }
+  });
+});
+
+describe("warnIfOutsideLaunchdPath", () => {
+  it("prints one short line with a copy-pasteable symlink fix", () => {
+    const errors: string[] = [];
+    const spy = vi.spyOn(console, "error").mockImplementation((...a: unknown[]) => {
+      errors.push(a.map(String).join(" "));
+    });
+    try {
+      warnIfOutsideLaunchdPath("claude", () => "/Users/x/.local/bin/claude");
+    } finally {
+      spy.mockRestore();
+    }
+    expect(errors).toHaveLength(1);
+    expect(errors[0]).toContain("ln -s /Users/x/.local/bin/claude /opt/homebrew/bin/claude");
+    expect(errors[0]!.length).toBeLessThan(200);
+  });
+
+  it("stays silent when the binary is inside launchd's search path", () => {
+    const spy = vi.spyOn(console, "error").mockImplementation(() => {});
+    try {
+      warnIfOutsideLaunchdPath("claude", () => "/opt/homebrew/bin/claude");
+      expect(spy).not.toHaveBeenCalled();
+    } finally {
+      spy.mockRestore();
     }
   });
 });

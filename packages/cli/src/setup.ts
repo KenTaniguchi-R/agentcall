@@ -1,9 +1,9 @@
 import { execFileSync } from "node:child_process";
-import { mkdirSync, writeFileSync, createReadStream, createWriteStream, openSync } from "node:fs";
+import { mkdirSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { dirname, join } from "node:path";
-import { createInterface } from "node:readline";
 import { getPaths, type Paths } from "./paths.js";
+import { ask as ttyAsk } from "./tty.js";
 import { loadConfig, saveConfig, relayUrl, type Config } from "./config.js";
 import { registerHandle } from "./api.js";
 import { srtSettings, toolchainReadDirs } from "./srt.js";
@@ -50,29 +50,6 @@ function defaultResolveBin(name: string): string | null {
   }
 }
 
-// Opens /dev/tty directly (rather than process.stdin/stdout) so the prompt
-// still works when stdin/stdout are piped, e.g. `agentcall setup | tee log`.
-// Falls back to stdin/stdout if /dev/tty isn't available (non-interactive
-// environments, some CI runners).
-function defaultAsk(question: string): Promise<string> {
-  return new Promise((resolve) => {
-    let input: NodeJS.ReadableStream = process.stdin;
-    let output: NodeJS.WritableStream = process.stdout;
-    try {
-      const fd = openSync("/dev/tty", "r+");
-      input = createReadStream("", { fd });
-      output = createWriteStream("", { fd });
-    } catch {
-      /* no controlling tty; fall back to stdin/stdout */
-    }
-    const rl = createInterface({ input, output });
-    rl.question(question, (answer) => {
-      rl.close();
-      resolve(answer);
-    });
-  });
-}
-
 async function detectAgentKind(
   opts: SetupOpts, hasBin: (name: string) => boolean, ask: (q: string) => Promise<string>,
 ): Promise<"claude" | "codex"> {
@@ -98,15 +75,13 @@ async function detectAgentKind(
   );
 }
 
-function warnIfOutsideLaunchdPath(name: string, resolveBin: (n: string) => string | null): void {
+export function warnIfOutsideLaunchdPath(name: string, resolveBin: (n: string) => string | null): void {
   const path = resolveBin(name);
   if (!path) return; // already surfaced via detectAgentKind's error, or not required (e.g. npx)
   if (!LAUNCHD_PATH_DIRS.includes(dirname(path))) {
     console.error(
-      `Warning: \`${name}\` resolves to ${path}, outside ${LAUNCHD_PATH_DIRS.join(":")}. ` +
-        `The background listener (launchd) only searches ${LAUNCHD_PATH_DIRS.join(":")}:/usr/bin:/bin, ` +
-        `so \`agentcall listen\` may fail to find \`${name}\` even though this shell can. ` +
-        `If calls fail with "command not found", symlink \`${name}\` into ${LAUNCHD_PATH_DIRS[0]}.`,
+      `Warning: ${name} is outside the background listener's PATH — if calls fail with ` +
+        `"command not found", run: ln -s ${path} ${LAUNCHD_PATH_DIRS[0]}/${name}`,
     );
   }
 }
@@ -127,7 +102,7 @@ export async function runSetup(opts: SetupOpts): Promise<void> {
   const paths: Paths = getPaths();
   const hasBinFn = opts.hasBin ?? ((name) => (opts.resolveBin ?? defaultResolveBin)(name) !== null);
   const resolveBinFn = opts.resolveBin ?? defaultResolveBin;
-  const ask = opts.io?.ask ?? defaultAsk;
+  const ask = opts.io?.ask ?? ttyAsk;
 
   const agentKind = await detectAgentKind(opts, hasBinFn, ask);
   warnIfOutsideLaunchdPath(agentKind, resolveBinFn);
@@ -159,6 +134,7 @@ export async function runSetup(opts: SetupOpts): Promise<void> {
 
     const relay = (opts.relay ?? relayUrl()).replace(/\/+$/, "");
 
+    console.log(`Registering ${handle} with ${relay} ...`);
     const { token, address: registeredAddress } = await registerHandle(relay, handle, agentKind);
     cfg = { handle, token, agent_kind: agentKind, relay };
     address = registeredAddress;
