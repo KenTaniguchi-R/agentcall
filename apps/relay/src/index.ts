@@ -1,6 +1,6 @@
 import { Hono } from "hono";
 import { RegisterRequest, RESERVED_HANDLES } from "@agentcall/shared";
-import { generateToken, sha256Hex } from "./auth.js";
+import { generateToken, sha256Hex, verifyHandleToken } from "./auth.js";
 
 export { HandleDO } from "./do.js";
 
@@ -8,6 +8,10 @@ export type Env = { DB: D1Database; HANDLE_DO: DurableObjectNamespace };
 export const RELAY_HOST = "agentcall.benree.tech";
 
 const app = new Hono<{ Bindings: Env }>();
+
+async function handleExists(db: D1Database, handle: string): Promise<boolean> {
+  return !!(await db.prepare("SELECT 1 FROM handles WHERE handle = ?").bind(handle).first());
+}
 
 app.post("/v1/register", async (c) => {
   const body = RegisterRequest.safeParse(await c.req.json().catch(() => null));
@@ -23,6 +27,37 @@ app.post("/v1/register", async (c) => {
     return c.json({ error: "handle taken" }, 409);
   }
   return c.json({ token, address: `${handle}@${RELAY_HOST}` });
+});
+
+app.get("/v1/status/:handle", async (c) => {
+  const handle = c.req.param("handle");
+  if (!(await handleExists(c.env.DB, handle))) return c.json({ error: "unknown handle" }, 404);
+  const stub = c.env.HANDLE_DO.get(c.env.HANDLE_DO.idFromName(handle));
+  return stub.fetch("https://do/status");
+});
+
+app.get("/v1/ws", async (c) => {
+  if (c.req.header("Upgrade")?.toLowerCase() !== "websocket") return c.json({ error: "expected websocket" }, 426);
+  const role = c.req.query("role");
+  const handle = c.req.header("X-AgentCall-Handle") ?? "";
+  const token = (c.req.header("Authorization") ?? "").replace(/^Bearer\s+/i, "");
+  if (!(await verifyHandleToken(c.env.DB, handle, token))) return c.json({ error: "unauthorized" }, 401);
+
+  let target: string;
+  if (role === "listen") {
+    target = handle;
+  } else if (role === "call") {
+    const to = c.req.query("to") ?? "";
+    if (!(await handleExists(c.env.DB, to))) return c.json({ error: "unknown handle" }, 404);
+    target = to;
+  } else {
+    return c.json({ error: "bad role" }, 400);
+  }
+
+  const stub = c.env.HANDLE_DO.get(c.env.HANDLE_DO.idFromName(target));
+  const fwd = new Request(`https://do/ws?role=${role}`, c.req.raw);
+  fwd.headers.set("X-Verified-From", handle);
+  return stub.fetch(fwd);
 });
 
 export default app;
