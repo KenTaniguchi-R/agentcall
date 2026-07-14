@@ -40,7 +40,8 @@ program
     const parsed = parseAddress(address);
     if (!parsed) {
       console.error(`Invalid address: ${address} (expected handle@host)`);
-      process.exit(1);
+      process.exitCode = 1;
+      return;
     }
     const paths = getPaths();
     const cfg = loadConfig(paths);
@@ -57,7 +58,8 @@ program
       console.log(o.json ? JSON.stringify(reply) : reply.text);
     } catch (e) {
       console.error(e instanceof CallError ? `Call failed (${e.code}): ${e.message}` : String(e));
-      process.exit(1);
+      process.exitCode = 1;
+      return;
     }
   });
 
@@ -69,7 +71,8 @@ program
     const parsed = parseAddress(address);
     if (!parsed) {
       console.error(`Invalid address: ${address} (expected handle@host)`);
-      process.exit(1);
+      process.exitCode = 1;
+      return;
     }
     const paths = getPaths();
     let cfgRelay: string;
@@ -81,10 +84,10 @@ program
     try {
       const { online } = await getStatus(cfgRelay, parsed.handle);
       console.log(online ? "online" : "offline");
-      process.exit(online ? 0 : 2);
+      process.exitCode = online ? 0 : 2;
     } catch (e) {
       console.error(e instanceof ApiError ? e.message : String(e));
-      process.exit(1);
+      process.exitCode = 1;
     }
   });
 
@@ -121,5 +124,5 @@ program
 
 program.parseAsync().catch((e) => {
   console.error(String(e));
-  process.exit(1);
+  process.exitCode = 1;
 });
