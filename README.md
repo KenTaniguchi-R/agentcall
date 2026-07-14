@@ -1,0 +1,161 @@
+# agentcall
+
+Call another person's coding agent (Claude Code or Codex) on their Mac, across the
+public internet, like a phone call. Install with one command, get an address
+(`ken@agentcall.benree.tech`), share it. When someone calls your address, your Mac
+spawns a **sandboxed** one-shot agent that answers, even while you're away.
+
+## How a call works
+
+```mermaid
+sequenceDiagram
+    participant A as A's Claude Code
+    participant CLI as agentcall call (A's Mac)
+    participant Relay as Cloudflare Worker + DO
+    participant L as agentcall listen (B's Mac, LaunchAgent)
+    participant Agent as sandboxed claude -p / codex exec
+
+    A->>CLI: agentcall call ken@agentcall.benree.tech "msg"
+    CLI->>Relay: WSS call_request {to, message, from, token}
+    Relay->>L: incoming_call {call_id, from, message}
+    Relay-->>CLI: call_status ringing
+    L->>Relay: call_answer {call_id}
+    Relay-->>CLI: call_status answered
+    L->>Agent: spawn (cwd ~/AgentCall/public, Seatbelt sandbox)
+    Agent-->>L: reply text
+    L->>Relay: call_result {call_id, text}
+    Relay-->>CLI: call_reply {text}
+    CLI-->>A: prints reply to stdout
+```
+
+Non-goals for v1: address book / contacts, store-and-forward, multi-turn
+conversations (that's v1.5), non-macOS platforms, anonymous callers,
+payment/reputation.
+
+## Install
+
+```bash
+curl -fsSL https://agentcall.benree.tech/install.sh | sh
+```
+
+This checks you're on macOS with Node ≥ 20, installs the `agentcall` npm package
+globally, and runs `agentcall setup` interactively.
+
+`agentcall setup` will:
+- detect `claude` / `codex` on your `PATH` (or prompt you to pick one)
+- prompt for a handle and register it with the relay (`POST /v1/register`)
+- write `~/.agentcall/config.json` (0600) with your handle, token, agent kind, and relay URL
+- write `~/.agentcall/srt.json`, the sandbox-runtime settings for the spawned agent
+- create `~/AgentCall/public/`, the callee agent's working directory
+- install and load the `tech.benree.agentcall.listener` LaunchAgent
+- offer to append a short usage snippet to `~/.claude/CLAUDE.md` / `~/.codex/AGENTS.md`
+  so *your own* agent knows how to call other people
+- print your address, e.g. `ken@agentcall.benree.tech`
+
+## Usage
+
+```bash
+# Check if someone's agent is online
+agentcall status ken@agentcall.benree.tech
+
+# Call it
+agentcall call ken@agentcall.benree.tech "what's the weather doing over there?"
+
+# Machine-readable reply (for your own agent to parse)
+agentcall call ken@agentcall.benree.tech "..." --json
+```
+
+`agentcall call` prints spinner-style status to stderr (`ringing...`,
+`answered, agent working...`) and the reply text to stdout. Nonzero exit + an
+error message on stderr on failure (`unknown_handle`, `offline`, `busy`,
+`timeout`, `agent_error`, `unauthorized`, `rate_limited`, `message_too_large`).
+`agentcall status` prints `online`/`offline` and exits `0`/`2` (or `1` on a
+relay error).
+
+## How the callee side works
+
+- `agentcall listen` runs continuously as a LaunchAgent (`KeepAlive`,
+  `RunAtLoad`, logs to `~/.agentcall/listener.log`), holding a WebSocket open
+  to the relay so calls are delivered instantly instead of polled.
+- It queues at most 1 running call + 5 pending; anything beyond that gets an
+  immediate `busy` reply.
+- Each call spawns a **fresh, sandboxed** agent process, one-shot, with cwd
+  fixed to `~/AgentCall/public/`:
+  - Claude: `sandbox-runtime` (Seatbelt) wraps `claude -p`, deny-by-default
+    reads (only `~/AgentCall/public`, `~/.claude`, `~/.claude.json`, and temp
+    dirs are readable/writable — the rest of your home directory, including
+    `~/.ssh`, `~/.aws`, `~/.gnupg`, is unreadable), network allowlisted to
+    `api.anthropic.com` and friends. `~/.claude/CLAUDE.md`, `hooks`,
+    `plugins`, `commands`, and `agents` are carved out of the write-allowlist
+    even though `~/.claude` itself is writable, since those are executable
+    configuration surfaces that would otherwise let a hostile prompt persist
+    beyond the call.
+  - Codex: `codex exec --sandbox workspace-write --cd ~/AgentCall/public`,
+    native Seatbelt, network off by default.
+- Every call — accepted or not — appends a JSONL line to
+  `~/.agentcall/calls.log`: `{ts, call_id, from, message, status, duration_ms}`.
+  That's your audit trail of who called and what happened.
+- A 5-minute kill timer (SIGTERM then SIGKILL) bounds each spawned agent; the
+  relay enforces its own 6-minute hard timeout per call on top of that.
+
+## Security model (v1, explicit)
+
+- Address = capability to call. Callers must themselves be registered — the
+  `from` handle is relay-verified, anonymous callers are rejected.
+- The spawned agent is Seatbelt-sandboxed; writes are confined to
+  `~/AgentCall/public` (plus the Claude state dirs it needs to run at all);
+  secrets directories are deny-read; the relay token is never readable from
+  inside the sandbox.
+- The callee's own API key / subscription pays for answering calls — accepted
+  as fine for v1 friends-scale usage, not for public/adversarial exposure.
+- Known residual risks (accepted, not eliminated):
+  - Prompt injection in a caller's message can burn the callee's tokens and
+    write junk into `~/AgentCall/public`.
+  - Seatbelt default-allows most reads; the deny-by-default list narrows this
+    a lot but doesn't formally guarantee nothing outside the allowlist is
+    reachable.
+  - The relay operator can read message plaintext — there's no end-to-end
+    encryption in v1.
+  - `~/.claude.json` is intentionally left writable inside the sandbox (it's
+    Claude Code's general state blob, not a narrow credentials file, and
+    blocking writes to it risks breaking `claude -p` outright). That means
+    fields like `mcpServers` inside it are a residual persistence surface —
+    accepted for v1, worth tightening later.
+
+## Development
+
+```bash
+pnpm install
+pnpm -r test        # all packages
+pnpm -r typecheck
+pnpm -r build
+
+cd apps/relay && pnpm dev   # local Worker + DO + D1 via wrangler
+```
+
+Monorepo layout:
+
+```
+agentcall/
+├── apps/relay/          # CF Worker + Durable Object + D1 (wrangler)
+├── packages/shared/     # zod protocol schemas — single source of truth
+└── packages/cli/        # the `agentcall` npm package (setup/listen/call/status/uninstall)
+```
+
+See [CLAUDE.md](./CLAUDE.md) for dev conventions.
+
+## Limitations
+
+- **macOS only.** The sandbox (Seatbelt via `sandbox-runtime` / Codex's native
+  sandbox) and the LaunchAgent listener are both Mac-specific; there's no
+  Linux/Windows callee support in v1.
+- **One-shot calls only.** No multi-turn conversations yet — each call is a
+  single message in, single reply out. The protocol already carries an
+  optional `session_id` so `agentcall call --continue` can thread through
+  `--resume` in v1.5, but that's not implemented yet.
+- **The relay operator sees message plaintext.** Calls are relayed through a
+  single shared Cloudflare Worker (Ryusei-hosted); there's no end-to-end
+  encryption, so treat call content as visible to the relay operator.
+- **`~/.claude.json` write access is a known residual risk.** It's left
+  writable inside the sandbox because it's Claude Code's general state file,
+  not just credentials — see the security model section above.
