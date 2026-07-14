@@ -20,6 +20,8 @@ const HUMAN: Record<string, string> = {
 export interface CallOpts {
   relay: string; from: string; token: string; to: string; message: string;
   sessionId?: string; onStatus?: (state: string) => void; timeoutMs?: number;
+  // Interval for the caller-side keepalive ping below; overridable for tests.
+  pingIntervalMs?: number;
 }
 
 export function callAgent(opts: CallOpts): Promise<CallReplyType> {
@@ -29,7 +31,16 @@ export function callAgent(opts: CallOpts): Promise<CallReplyType> {
       headers: { Authorization: `Bearer ${opts.token}`, "X-AgentCall-Handle": opts.from },
     });
     let settled = false;
-    const finish = (fn: () => void) => { if (!settled) { settled = true; clearTimeout(timer); fn(); try { ws.close(); } catch {} } };
+    let pingTimer: ReturnType<typeof setInterval> | undefined;
+    const finish = (fn: () => void) => {
+      if (!settled) {
+        settled = true;
+        clearTimeout(timer);
+        if (pingTimer) clearInterval(pingTimer);
+        fn();
+        try { ws.close(); } catch {}
+      }
+    };
     const timer = setTimeout(
       () => finish(() => reject(new CallError(HUMAN.timeout, "timeout"))),
       opts.timeoutMs ?? 420_000,
@@ -42,6 +53,11 @@ export function callAgent(opts: CallOpts): Promise<CallReplyType> {
     ws.on("error", (e) => finish(() => reject(new CallError(`Connection failed: ${e.message}`, "connection_failed"))));
     ws.on("open", () => {
       ws.send(JSON.stringify({ type: "call_request", to: opts.to, message: opts.message, session_id: opts.sessionId }));
+      // Cloudflare's idle timeout can drop a long-running call (agent answers
+      // can take up to AGENT_TIMEOUT_MS) if the socket goes quiet. Ping keeps
+      // it alive; unref() so this timer alone never keeps the process open.
+      pingTimer = setInterval(() => { try { ws.send("ping"); } catch { /* dead */ } }, opts.pingIntervalMs ?? 30_000);
+      pingTimer.unref?.();
     });
     ws.on("message", (raw) => {
       const frame = safeParseFrame(RelayToCallerFrame, String(raw));

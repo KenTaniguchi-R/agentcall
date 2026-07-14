@@ -59,4 +59,22 @@ describe("callAgent", () => {
     const relay = await fakeRelay(() => { /* say nothing */ });
     await expect(callAgent({ relay, ...base, timeoutMs: 200 })).rejects.toMatchObject({ code: "timeout" });
   });
+
+  it("sends a keepalive ping on an interval and ignores pong replies", async () => {
+    const pings: string[] = [];
+    const relay = await fakeRelay((ws) => {
+      ws.on("message", (raw) => {
+        const s = String(raw);
+        if (s === "ping") { pings.push(s); return; }
+        const f = JSON.parse(s);
+        if (f.type === "call_request") {
+          ws.send("pong");
+          setTimeout(() => ws.send(JSON.stringify({ type: "call_reply", call_id: "c1", text: "yo" })), 60);
+        }
+      });
+    });
+    const reply = await callAgent({ relay, ...base, pingIntervalMs: 20 });
+    expect(reply.text).toBe("yo");
+    expect(pings.length).toBeGreaterThan(0);
+  });
 });

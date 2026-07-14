@@ -37,4 +37,17 @@ describe("config", () => {
     try { expect(relayUrl(cfg)).toBe("http://localhost:8787"); }
     finally { delete process.env.AGENTCALL_RELAY; }
   });
+  it("relayUrl strips a trailing slash from env, config, and default", () => {
+    const cfg = { handle: "k", token: "t", agent_kind: "claude" as const, relay: "https://custom.example/" };
+    expect(relayUrl(cfg)).toBe("https://custom.example");
+    process.env.AGENTCALL_RELAY = "http://localhost:8787/";
+    try { expect(relayUrl(cfg)).toBe("http://localhost:8787"); }
+    finally { delete process.env.AGENTCALL_RELAY; }
+  });
+  it("relayUrl treats an empty-string env var as unset", () => {
+    const cfg = { handle: "k", token: "t", agent_kind: "claude" as const, relay: "https://custom.example" };
+    process.env.AGENTCALL_RELAY = "";
+    try { expect(relayUrl(cfg)).toBe("https://custom.example"); }
+    finally { delete process.env.AGENTCALL_RELAY; }
+  });
 });

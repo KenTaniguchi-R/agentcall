@@ -24,6 +24,15 @@ export function saveConfig(p: Paths, cfg: Config): void {
   chmodSync(p.configFile, 0o600);
 }
 
+// Strips a trailing slash so callers can build "${relayUrl(cfg)}/v1/..." without
+// risking a double slash when the env/config/default value already ends in one.
+export function normalizeRelay(url: string): string {
+  return url.replace(/\/+$/, "");
+}
+
 export function relayUrl(cfg?: Config): string {
-  return process.env.AGENTCALL_RELAY ?? cfg?.relay ?? DEFAULT_RELAY;
+  // An empty-string AGENTCALL_RELAY (e.g. exported but unset in a shell profile)
+  // is treated as unset rather than as "point at the empty string".
+  const envRelay = process.env.AGENTCALL_RELAY || undefined;
+  return normalizeRelay(envRelay ?? cfg?.relay ?? DEFAULT_RELAY);
 }
