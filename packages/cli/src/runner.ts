@@ -15,6 +15,10 @@ export class AgentRunError extends Error {
 // final MAX_REPLY_BYTES truncation applied to the parsed reply text — this
 // bounds memory for a runaway/malicious process that never stops writing.
 const MAX_STDOUT_BYTES = 10 * 1024 * 1024;
+// Cap on accumulated stderr — only ever surfaced as `.slice(0, 2000)` in an
+// error message, so 1MB is plenty of headroom while still bounding memory
+// for a runaway process that floods stderr instead of stdout.
+const MAX_STDERR_BYTES = 1 * 1024 * 1024;
 // Grace period between SIGTERM and SIGKILL when tearing down an agent's
 // process group (on timeout or stdout overflow).
 const KILL_GRACE_MS = 10_000;
@@ -120,9 +124,14 @@ export function runAgent(
     // of leaving orphans that hold the stdout pipe open or keep running
     // past the timeout.
     const child = spawn(spec.cmd, spec.args, { cwd: spec.cwd, stdio: ["ignore", "pipe", "pipe"], detached: true });
-    let stdout = "";
-    let stderr = "";
+    // Buffers are accumulated and decoded to a string exactly once, at exit
+    // (below) — decoding each chunk independently (`stdout += d`) can split
+    // a multi-byte UTF-8 character across a pipe chunk boundary, corrupting
+    // it into U+FFFD (e.g. mangling non-ASCII replies).
+    const stdoutChunks: Buffer[] = [];
+    const stderrChunks: Buffer[] = [];
     let stdoutBytes = 0;
+    let stderrBytes = 0;
     let timedOut = false;
     let overflowed = false;
     let settled = false;
@@ -144,9 +153,12 @@ export function runAgent(
         if (!overflowed) { overflowed = true; escalate(); }
         return;
       }
-      stdout += d;
+      stdoutChunks.push(d);
     });
-    child.stderr.on("data", (d) => (stderr += d));
+    child.stderr.on("data", (d: Buffer) => {
+      stderrBytes += d.length;
+      if (stderrBytes <= MAX_STDERR_BYTES) stderrChunks.push(d);
+    });
 
     const timer = setTimeout(() => {
       timedOut = true;
@@ -173,6 +185,11 @@ export function runAgent(
       if (killTimer) clearTimeout(killTimer);
       if (timedOut) return reject(new AgentRunError(`agent timed out after ${timeoutMs}ms`, "timeout"));
       if (overflowed) return reject(new AgentRunError(`agent stdout exceeded ${MAX_STDOUT_BYTES} bytes`, "agent_error"));
+      // Decoded once here, not incrementally in the `data` handlers, so a
+      // multi-byte UTF-8 character split across a pipe chunk boundary is
+      // decoded correctly instead of corrupting into U+FFFD.
+      const stdout = Buffer.concat(stdoutChunks).toString("utf8");
+      const stderr = Buffer.concat(stderrChunks).toString("utf8");
       if (code !== 0) return reject(new AgentRunError(`agent exited ${code}: ${stderr.slice(0, 2000)}`, "agent_error"));
       try {
         const out = kind === "claude" ? parseClaudeJson(stdout) : parseCodexJsonl(stdout);

@@ -107,6 +107,21 @@ describe("runAgent (with a fake agent binary)", () => {
     });
     expect(res.text).toBe("hi");
   });
+  it("reassembles a multi-byte UTF-8 character split across a stdout chunk boundary", async () => {
+    // Regression: accumulating stdout via `stdout += d` decodes each Buffer
+    // chunk independently, so a multi-byte character straddling a pipe
+    // chunk boundary gets corrupted into U+FFFD. Force two separate `data`
+    // events by writing the JSON payload's bytes in two pieces, split
+    // mid-way through a multi-byte character, with a delay between them.
+    const script = `
+      const full = Buffer.from(JSON.stringify({ type: "result", result: "日本語", session_id: "s" }), "utf8");
+      const splitAt = full.findIndex((b) => b >= 0xc0) + 1;
+      process.stdout.write(full.subarray(0, splitAt));
+      setTimeout(() => process.stdout.write(full.subarray(splitAt)), 20);
+    `;
+    const res = await runAgent("claude", "x", p, 5000, { cmd: "node", args: ["-e", script], cwd: "/tmp" });
+    expect(res.text).toBe("日本語");
+  });
   it("rejects agent_error on nonzero exit", async () => {
     await expect(
       runAgent("claude", "x", p, 5000, { cmd: "node", args: ["-e", "process.exit(3)"], cwd: "/tmp" }),

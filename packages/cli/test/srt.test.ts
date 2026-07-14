@@ -1,4 +1,6 @@
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, statSync, writeFileSync } from "node:fs";
+import {
+  existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, realpathSync, rmSync, statSync, writeFileSync,
+} from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, isAbsolute, join } from "node:path";
 import { describe, expect, it } from "vitest";
@@ -30,7 +32,7 @@ describe("srtSettings", () => {
     const settings = srtSettings(getPaths("/tmp/fakehome"), "claude") as any;
     expect(settings.filesystem.denyWrite).toEqual(
       expect.arrayContaining(["~/.claude/settings.json", "~/.claude/CLAUDE.md", "~/.claude/hooks",
-        "~/.claude/plugins", "~/.claude/commands", "~/.claude/agents"]),
+        "~/.claude/plugins", "~/.claude/commands", "~/.claude/agents", "~/.claude/skills"]),
     );
     // See srt.ts comment: ~/.claude.json is Claude Code's general state
     // blob (rewritten on nearly every invocation), not a narrow
@@ -78,8 +80,8 @@ describe("srtSettings", () => {
   it("denies writes to executable codex config surfaces but not to session/state files", () => {
     const settings = srtSettings(getPaths("/tmp/fakehome"), "codex") as any;
     expect(settings.filesystem.denyWrite).toEqual(
-      expect.arrayContaining(["~/.codex/config.toml", "~/.codex/AGENTS.md", "~/.codex/hooks.json",
-        "~/.codex/plugins", "~/.codex/skills"]),
+      expect.arrayContaining(["~/.codex/config.toml", "~/.codex/AGENTS.md", "~/.codex/AGENTS.override.md",
+        "~/.codex/hooks.json", "~/.codex/plugins", "~/.codex/skills", "~/.codex/prompts"]),
     );
     // auth.json, sessions/, sqlite state, etc. are rewritten on nearly
     // every invocation (same rationale as ~/.claude.json) — denying them
@@ -151,6 +153,8 @@ describe("ensureDenyWriteTargetsExist", () => {
     expect(existsSync(join(home, ".claude", "commands"))).toBe(true);
     expect(existsSync(join(home, ".claude", "agents"))).toBe(true);
     expect(statSync(join(home, ".claude", "agents")).isDirectory()).toBe(true);
+    expect(existsSync(join(home, ".claude", "skills"))).toBe(true);
+    expect(statSync(join(home, ".claude", "skills")).isDirectory()).toBe(true);
     // JSON files get valid empty JSON, not a 0-byte file that would fail
     // to parse on claude's next startup.
     expect(JSON.parse(readFileSync(join(home, ".claude", "settings.json"), "utf8"))).toEqual({});
@@ -184,7 +188,30 @@ describe("ensureDenyWriteTargetsExist", () => {
     expect(existsSync(join(home, ".codex", "config.toml"))).toBe(true);
     expect(existsSync(join(home, ".codex", "AGENTS.md"))).toBe(true);
     expect(JSON.parse(readFileSync(join(home, ".codex", "hooks.json"), "utf8"))).toEqual({});
+    expect(existsSync(join(home, ".codex", "prompts"))).toBe(true);
+    expect(statSync(join(home, ".codex", "prompts")).isDirectory()).toBe(true);
+    expect(existsSync(join(home, ".codex", "AGENTS.override.md"))).toBe(true);
     expect(existsSync(join(home, ".claude"))).toBe(false);
     rmSync(home, { recursive: true, force: true });
   });
+});
+
+describe("single source of truth: denyWrite <-> ensureDenyWriteTargetsExist", () => {
+  it.each(["claude", "codex"] as const)(
+    "creates exactly the paths that srtSettings denyWrite lists (%s)",
+    (kind) => {
+      const home = tempHome();
+      const settings = srtSettings(getPaths("/tmp/fakehome"), kind) as any;
+      const dotDir = join(home, kind === "claude" ? ".claude" : ".codex");
+      const expected = new Set(
+        (settings.filesystem.denyWrite as string[]).map((rel) => join(home, rel.replace(/^~\//, ""))),
+      );
+
+      ensureDenyWriteTargetsExist(kind, home);
+
+      const actual = new Set(readdirSync(dotDir).map((name) => join(dotDir, name)));
+      expect(actual).toEqual(expected);
+      rmSync(home, { recursive: true, force: true });
+    },
+  );
 });
