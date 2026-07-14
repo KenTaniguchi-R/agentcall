@@ -1,6 +1,6 @@
-import { existsSync, mkdirSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, realpathSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
-import { join } from "node:path";
+import { delimiter, dirname, join, sep } from "node:path";
 import type { Paths } from "./paths.js";
 
 // Shape verified against the installed @anthropic-ai/sandbox-runtime README
@@ -60,11 +60,17 @@ import type { Paths } from "./paths.js";
 // `claude -p` outright rather than just degrading a security margin; see
 // the fix note in task-7-report.md for the mcpServers residual-risk
 // tradeoff this leaves open.
-export function srtSettings(p: Paths): object {
+// extraReadDirs (see toolchainReadDirs below) widens allowRead with the
+// directories the sandboxed process actually needs to *execute* its own
+// toolchain (node/npx/claude|codex) — distinct from the fixed dirs below,
+// which are what the agent's *work* needs (publicDir, claude state, tmp).
+export function srtSettings(p: Paths, extraReadDirs: string[] = []): object {
   return {
     filesystem: {
       denyRead: ["~"],
-      allowRead: [p.publicDir, "~/.claude", "~/.claude.json", "/tmp", "/private/tmp", "/var/folders"],
+      allowRead: [
+        ...new Set([p.publicDir, "~/.claude", "~/.claude.json", "/tmp", "/private/tmp", "/var/folders", ...extraReadDirs]),
+      ],
       allowWrite: [p.publicDir, "~/.claude", "~/.claude.json", "/tmp", "/private/tmp", "/var/folders"],
       denyWrite: [
         "~/.claude/settings.json",
@@ -110,4 +116,120 @@ export function ensureDenyWriteTargetsExist(home: string = homedir()): void {
     // CLAUDE.md is freeform markdown, so an empty file is safe as-is.
     writeFileSync(file, rel.endsWith(".json") ? "{}\n" : "");
   }
+}
+
+// --- Toolchain read-access (allowRead) -------------------------------
+//
+// srtSettings' denyRead:["~"] blocks reads of the *whole* home directory
+// by default, re-allowed only via allowRead. That's a problem for a
+// toolchain installed under $HOME: on a real machine, `claude -p` was
+// found to resolve to ~/.local/bin/claude, and the sandbox denied it with
+// "Operation not permitted" until ~/.local was added to allowRead — the
+// binary and its runtime support files live under $HOME just like the
+// dotfiles denyRead is meant to protect, so the agent couldn't even start.
+// This isn't specific to a native install: nvm (~/.nvm), volta (~/.volta),
+// fnm (~/.fnm), and bun (~/.bun) all put node/npx/the agent under $HOME
+// too. Homebrew installs (/opt/homebrew, /usr/local) fall outside $HOME
+// and are already unaffected by denyRead:["~"], so they need no extra
+// entry — but toolchainReadDirs adds their bin dir anyway since it's
+// harmless and keeps the logic uniform across install methods.
+//
+// which()-style PATH search, resolving the first match's real (symlink-
+// followed) absolute path. Returns null rather than throwing so callers
+// that only *want* an optional extra read dir (e.g. npx) can skip it.
+function resolveOnPath(name: string, pathEnv: string): string | null {
+  for (const dir of pathEnv.split(delimiter)) {
+    if (!dir) continue;
+    const candidate = join(dir, name);
+    if (!existsSync(candidate)) continue;
+    try {
+      return realpathSync(candidate);
+    } catch {
+      continue;
+    }
+  }
+  return null;
+}
+
+// Resolves the absolute, symlink-followed path to the claude/codex binary
+// via a PATH search, throwing a clear error if it can't be found — used by
+// buildSpawnSpec (a bare "claude"/"codex" arg fails inside srt's sandboxed
+// shell, see runner.ts) and by toolchainReadDirs below. `env` is overridable
+// for tests; production callers should leave it as process.env.
+export function resolveAgentBin(agentKind: "claude" | "codex", env: NodeJS.ProcessEnv = process.env): string {
+  const resolved = resolveOnPath(agentKind, env.PATH ?? "");
+  if (!resolved) {
+    throw new Error(
+      `Could not find \`${agentKind}\` on PATH. Install it, or make sure it's discoverable via PATH before running agentcall.`,
+    );
+  }
+  return resolved;
+}
+
+// If realPath lives under home (e.g. /Users/x/.local/bin/claude with home
+// /Users/x), returns the first path segment under home as its own allowRead
+// root (e.g. /Users/x/.local) — covering the whole install (support files,
+// node_modules, etc.), not just the one resolved binary's directory.
+// Returns null for paths outside home (system dirs, homebrew), which don't
+// need this treatment since denyRead:["~"] doesn't touch them. home is
+// realpath'd before comparison — on macOS, `os.tmpdir()` (used by test temp
+// homes) is itself a symlink into /private, so comparing a resolved binary
+// path against the unresolved home would silently never match.
+function homeInstallRoot(realPath: string, home: string): string | null {
+  let resolvedHome: string;
+  try {
+    resolvedHome = realpathSync(home);
+  } catch {
+    resolvedHome = home; // home may not exist (e.g. a made-up test path)
+  }
+  const prefix = resolvedHome.endsWith(sep) ? resolvedHome : resolvedHome + sep;
+  if (!realPath.startsWith(prefix)) return null;
+  // Root is built from the original (unresolved) `home`, not resolvedHome,
+  // so the returned allowRead entry matches the path form callers actually
+  // pass around (e.g. os.homedir()'s own return value).
+  const firstSegment = realPath.slice(prefix.length).split(sep)[0];
+  return firstSegment ? join(home, firstSegment) : null;
+}
+
+// Directories to add to srtSettings' allowRead so the sandboxed process can
+// execute its own toolchain: node (process.execPath), npx, and the agent
+// binary. For each, adds its containing dir plus — if it resolves under
+// home — the home-level install root (see homeInstallRoot). Entries that
+// fail to resolve are skipped rather than throwing, since a missing npx (for
+// example) shouldn't block the agent's own read access; `home`/`env` are
+// overridable for tests.
+export function toolchainReadDirs(
+  agentKind: "claude" | "codex", home: string = homedir(), env: NodeJS.ProcessEnv = process.env,
+): string[] {
+  let nodePath: string | null;
+  try {
+    nodePath = realpathSync(process.execPath);
+  } catch {
+    nodePath = null;
+  }
+  const npxPath = resolveOnPath("npx", env.PATH ?? "");
+  let agentPath: string | null;
+  try {
+    agentPath = resolveAgentBin(agentKind, env);
+  } catch {
+    agentPath = null;
+  }
+
+  const dirs = new Set<string>();
+  for (const resolved of [nodePath, npxPath, agentPath]) {
+    if (!resolved) continue;
+    dirs.add(dirname(resolved));
+    const root = homeInstallRoot(resolved, home);
+    if (root) dirs.add(root);
+  }
+  return [...dirs];
+}
+
+// Recomputes srtSettings with the current toolchain's read dirs and writes
+// it to p.srtFile. Called from runAgent before every real spawn (not just
+// once at `setup` time) so a node/npm-manager upgrade or reinstall since
+// setup doesn't leave a stale allowlist that denies the sandboxed process
+// its own binary.
+export function writeSrtSettings(p: Paths, agentKind: "claude" | "codex"): void {
+  writeFileSync(p.srtFile, JSON.stringify(srtSettings(p, toolchainReadDirs(agentKind)), null, 2) + "\n");
 }

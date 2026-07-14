@@ -1,6 +1,6 @@
 import { readFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { isAbsolute, join } from "node:path";
 import { describe, expect, it } from "vitest";
 import { buildPrompt } from "../src/prompt.js";
 import { buildSpawnSpec, parseClaudeJson, parseCodexJsonl, runAgent, truncateUtf8 } from "../src/runner.js";
@@ -18,23 +18,37 @@ describe("buildPrompt", () => {
 });
 
 describe("buildSpawnSpec", () => {
-  it("wraps claude in srt with settings file", () => {
-    const s = buildSpawnSpec("claude", "PROMPT", p);
+  // A bare "claude"/"codex" arg fails inside srt's sandboxed shell (it can't
+  // resolve PATH the way an interactive shell does — "command not found",
+  // exit 127, confirmed against a real sandboxed spawn). buildSpawnSpec must
+  // pass the agent's resolved absolute path instead, via an injectable
+  // resolver (production default is resolveAgentBin; tests inject a fake so
+  // they don't depend on claude/codex actually being installed).
+  it("wraps claude in srt with settings file, using the resolved absolute agent path", () => {
+    const s = buildSpawnSpec("claude", "PROMPT", p, () => "/abs/path/to/claude");
     expect(s.cmd).toBe("npx");
     expect(s.args).toEqual([
       "-y", "@anthropic-ai/sandbox-runtime", "--settings", p.srtFile, "--",
-      "claude", "-p", "PROMPT", "--output-format", "json",
+      "/abs/path/to/claude", "-p", "PROMPT", "--output-format", "json",
     ]);
     expect(s.cwd).toBe(p.publicDir);
   });
   it("wraps codex in srt too, so reads are protected even though codex's own sandbox only confines writes", () => {
-    const s = buildSpawnSpec("codex", "PROMPT", p);
+    const s = buildSpawnSpec("codex", "PROMPT", p, () => "/abs/path/to/codex");
     expect(s.cmd).toBe("npx");
     expect(s.args).toEqual([
       "-y", "@anthropic-ai/sandbox-runtime", "--settings", p.srtFile, "--",
-      "codex", "exec", "--sandbox", "workspace-write", "--cd", p.publicDir, "--skip-git-repo-check", "--json", "PROMPT",
+      "/abs/path/to/codex", "exec", "--sandbox", "workspace-write", "--cd", p.publicDir, "--skip-git-repo-check", "--json", "PROMPT",
     ]);
     expect(s.cwd).toBe(p.publicDir);
+  });
+  it("resolves an absolute path by default, not a bare binary name", () => {
+    // "node" stands in for a real agent kind: guaranteed to be on PATH
+    // wherever this suite runs, so the production default resolver
+    // (resolveAgentBin) can be exercised without claude/codex installed.
+    const s = buildSpawnSpec("node" as unknown as "claude" | "codex", "PROMPT", p);
+    const idx = s.args.indexOf("--");
+    expect(isAbsolute(s.args[idx + 1])).toBe(true);
   });
 });
 

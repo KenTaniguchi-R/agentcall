@@ -1,8 +1,10 @@
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { dirname, isAbsolute, join } from "node:path";
 import { describe, expect, it } from "vitest";
-import { ensureDenyWriteTargetsExist, srtSettings } from "../src/srt.js";
+import {
+  ensureDenyWriteTargetsExist, resolveAgentBin, srtSettings, toolchainReadDirs, writeSrtSettings,
+} from "../src/srt.js";
 import { getPaths } from "../src/paths.js";
 
 function tempHome() { return mkdtempSync(join(tmpdir(), "agentcall-srt-test-")); }
@@ -34,6 +36,67 @@ describe("srtSettings", () => {
     // blob (rewritten on nearly every invocation), not a narrow
     // credentials file — denying it risks breaking claude -p outright.
     expect(settings.filesystem.denyWrite).not.toContain("~/.claude.json");
+  });
+
+  it("merges extraReadDirs into allowRead without dropping the base deny/allow rules", () => {
+    const settings = srtSettings(getPaths("/tmp/fakehome"), ["/x/.local"]) as any;
+    expect(settings.filesystem.allowRead).toContain("/x/.local");
+    expect(settings.filesystem.allowRead).toContain("~/.claude");
+    expect(settings.filesystem.denyRead).toEqual(["~"]);
+    expect(settings.network.deniedDomains).toEqual([]);
+  });
+});
+
+describe("resolveAgentBin", () => {
+  it("throws a clear error naming the binary when it isn't on PATH", () => {
+    expect(() => resolveAgentBin("claude", { PATH: "" })).toThrow(/claude/i);
+  });
+
+  it("returns an absolute, symlink-resolved path when the binary is found on PATH", () => {
+    // "node" stands in for a real agent binary: same PATH-search + realpath
+    // logic, and guaranteed to exist on PATH wherever this suite runs.
+    const resolved = resolveAgentBin("node" as unknown as "claude" | "codex");
+    expect(isAbsolute(resolved)).toBe(true);
+    expect(existsSync(resolved)).toBe(true);
+  });
+});
+
+describe("toolchainReadDirs", () => {
+  it("includes the dir containing the running node binary", () => {
+    const dirs = toolchainReadDirs("claude", "/no-such-home", { PATH: "" });
+    expect(dirs).toContain(dirname(realpathSync(process.execPath)));
+  });
+
+  it("adds both the bin dir and the home-level install root for a toolchain living under home", () => {
+    const home = tempHome();
+    const binDir = join(home, ".local", "bin");
+    mkdirSync(binDir, { recursive: true });
+    writeFileSync(join(binDir, "npx"), "#!/bin/sh\necho fake npx\n");
+    const dirs = toolchainReadDirs("claude", home, { PATH: binDir });
+    // Compared via realpath, not the raw joined path: on macOS, os.tmpdir()
+    // (what tempHome() is built from) is itself a symlink into /private, and
+    // toolchainReadDirs resolves everything through fs.realpathSync.
+    expect(dirs).toContain(dirname(realpathSync(join(binDir, "npx"))));
+    expect(dirs).toContain(join(home, ".local"));
+    rmSync(home, { recursive: true, force: true });
+  });
+
+  it("dedupes and drops entries that fail to resolve", () => {
+    const dirs = toolchainReadDirs("claude", "/no-such-home", { PATH: "" });
+    expect(dirs.length).toBe(new Set(dirs).size);
+  });
+});
+
+describe("writeSrtSettings", () => {
+  it("writes srt.json with the current toolchain's read dirs merged into allowRead", () => {
+    const home = tempHome();
+    const p = getPaths(home);
+    mkdirSync(p.dir, { recursive: true });
+    writeSrtSettings(p, "claude");
+    const written = JSON.parse(readFileSync(p.srtFile, "utf8"));
+    expect(written.filesystem.allowRead).toContain(dirname(realpathSync(process.execPath)));
+    expect(written.filesystem.denyRead).toEqual(["~"]);
+    rmSync(home, { recursive: true, force: true });
   });
 });
 

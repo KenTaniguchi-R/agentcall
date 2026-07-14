@@ -6,7 +6,7 @@ import { createInterface } from "node:readline";
 import { getPaths, type Paths } from "./paths.js";
 import { saveConfig, relayUrl, type Config } from "./config.js";
 import { registerHandle } from "./api.js";
-import { srtSettings } from "./srt.js";
+import { srtSettings, toolchainReadDirs } from "./srt.js";
 import { appendSnippet } from "./snippet.js";
 import { installLaunchAgent } from "./launchd.js";
 
@@ -130,7 +130,20 @@ export async function runSetup(opts: SetupOpts): Promise<void> {
   const cfg: Config = { handle, token, agent_kind: agentKind, relay };
   saveConfig(paths, cfg);
 
-  writeFileSync(paths.srtFile, JSON.stringify(srtSettings(paths), null, 2) + "\n");
+  // Seed srt.json with the current toolchain's read dirs (see srt.ts's
+  // toolchainReadDirs) so the sandboxed agent can execute node/npx/itself
+  // from first call, not just after runAgent's first real spawn rewrites
+  // it. If resolution throws (an odd PATH during setup), fall back to the
+  // base allowlist rather than failing setup outright — runAgent rewrites
+  // srt.json before every real spawn anyway, so this only affects the
+  // file's content between `setup` and the first real call.
+  let extraReadDirs: string[] = [];
+  try {
+    extraReadDirs = toolchainReadDirs(agentKind);
+  } catch {
+    /* fall back to srtSettings(paths) below */
+  }
+  writeFileSync(paths.srtFile, JSON.stringify(srtSettings(paths, extraReadDirs), null, 2) + "\n");
   mkdirSync(paths.publicDir, { recursive: true });
 
   if (!opts.skipLaunchd) {

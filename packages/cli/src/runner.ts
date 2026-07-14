@@ -1,6 +1,6 @@
 import { spawn } from "node:child_process";
 import { AGENT_TIMEOUT_MS, MAX_REPLY_BYTES } from "@agentcall/shared";
-import { ensureDenyWriteTargetsExist } from "./srt.js";
+import { ensureDenyWriteTargetsExist, resolveAgentBin, writeSrtSettings } from "./srt.js";
 import type { Paths } from "./paths.js";
 
 export type AgentKind = "claude" | "codex";
@@ -19,12 +19,20 @@ const MAX_STDOUT_BYTES = 10 * 1024 * 1024;
 // process group (on timeout or stdout overflow).
 const KILL_GRACE_MS = 10_000;
 
-export function buildSpawnSpec(kind: AgentKind, prompt: string, p: Paths): SpawnSpec {
+// resolveBin is injectable for tests (default resolveAgentBin resolves the
+// real binary via PATH). Production callers should leave it as the default:
+// a bare "claude"/"codex" arg fails inside srt's sandboxed shell, which
+// can't resolve PATH the way an interactive shell does ("command not
+// found", exit 127, confirmed against a real sandboxed spawn) — the
+// resolved absolute path sidesteps that entirely.
+export function buildSpawnSpec(
+  kind: AgentKind, prompt: string, p: Paths, resolveBin: (kind: AgentKind) => string = resolveAgentBin,
+): SpawnSpec {
   if (kind === "claude") {
     return {
       cmd: "npx",
       args: ["-y", "@anthropic-ai/sandbox-runtime", "--settings", p.srtFile, "--",
-        "claude", "-p", prompt, "--output-format", "json"],
+        resolveBin(kind), "-p", prompt, "--output-format", "json"],
       cwd: p.publicDir,
     };
   }
@@ -36,7 +44,7 @@ export function buildSpawnSpec(kind: AgentKind, prompt: string, p: Paths): Spawn
   return {
     cmd: "npx",
     args: ["-y", "@anthropic-ai/sandbox-runtime", "--settings", p.srtFile, "--",
-      "codex", "exec", "--sandbox", "workspace-write", "--cd", p.publicDir, "--skip-git-repo-check", "--json", prompt],
+      resolveBin(kind), "exec", "--sandbox", "workspace-write", "--cd", p.publicDir, "--skip-git-repo-check", "--json", prompt],
     cwd: p.publicDir,
   };
 }
@@ -84,12 +92,18 @@ export function truncateUtf8(text: string, maxBytes: number): string {
 export function runAgent(
   kind: AgentKind, prompt: string, p: Paths, timeoutMs: number = AGENT_TIMEOUT_MS, specOverride?: SpawnSpec,
 ): Promise<AgentOutput> {
-  const spec = specOverride ?? buildSpawnSpec(kind, prompt, p);
   // Real spawn (no test override): make sure srt's denyWrite targets exist
   // before the sandbox starts — see srt.ts, denyWrite silently no-ops for
-  // paths that aren't there yet. Skipped for specOverride so unit tests
-  // never touch the real ~/.claude.
-  if (!specOverride) ensureDenyWriteTargetsExist();
+  // paths that aren't there yet — and rewrite srt.json with the current
+  // toolchain's read dirs (see srt.ts's toolchainReadDirs) so a node/npm-
+  // manager upgrade since `setup` doesn't leave a stale allowlist that
+  // denies the sandboxed process its own binary. Both skipped for
+  // specOverride so unit tests never touch the real ~/.claude or srt.json.
+  if (!specOverride) {
+    ensureDenyWriteTargetsExist();
+    writeSrtSettings(p, kind);
+  }
+  const spec = specOverride ?? buildSpawnSpec(kind, prompt, p);
   return new Promise((resolve, reject) => {
     // detached: true makes the child its own process group leader, so any
     // grandchildren it forks (sandbox-exec, the actual claude/codex
