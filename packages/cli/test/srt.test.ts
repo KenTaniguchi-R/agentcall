@@ -63,6 +63,30 @@ describe("srtSettings", () => {
     ]);
     expect(settings.network.allowedDomains).not.toContain("api.anthropic.com");
   });
+
+  it("re-allows ~/.codex for reads/writes for codex, not ~/.claude", () => {
+    // Regression: filesystem allow/deny lists used to be hardcoded to
+    // ~/.claude regardless of agentKind, so a srt-wrapped codex process
+    // could never even read its own config.toml — confirmed live: `agent
+    // exited 1: Error loading config.toml: ... Operation not permitted`.
+    const settings = srtSettings(getPaths("/tmp/fakehome"), "codex") as any;
+    expect(settings.filesystem.allowRead).toContain("~/.codex");
+    expect(settings.filesystem.allowWrite).toContain("~/.codex");
+    expect(settings.filesystem.allowRead).not.toContain("~/.claude");
+  });
+
+  it("denies writes to executable codex config surfaces but not to session/state files", () => {
+    const settings = srtSettings(getPaths("/tmp/fakehome"), "codex") as any;
+    expect(settings.filesystem.denyWrite).toEqual(
+      expect.arrayContaining(["~/.codex/config.toml", "~/.codex/AGENTS.md", "~/.codex/hooks.json",
+        "~/.codex/plugins", "~/.codex/skills"]),
+    );
+    // auth.json, sessions/, sqlite state, etc. are rewritten on nearly
+    // every invocation (same rationale as ~/.claude.json) — denying them
+    // risks breaking `codex exec` outright rather than just degrading a
+    // security margin.
+    expect(settings.filesystem.denyWrite).not.toContain("~/.codex/auth.json");
+  });
 });
 
 describe("resolveAgentBin", () => {
@@ -121,7 +145,7 @@ describe("writeSrtSettings", () => {
 describe("ensureDenyWriteTargetsExist", () => {
   it("creates missing denyWrite dirs and seeds missing files with parseable content", () => {
     const home = tempHome();
-    ensureDenyWriteTargetsExist(home);
+    ensureDenyWriteTargetsExist("claude", home);
     expect(existsSync(join(home, ".claude", "hooks"))).toBe(true);
     expect(existsSync(join(home, ".claude", "plugins"))).toBe(true);
     expect(existsSync(join(home, ".claude", "commands"))).toBe(true);
@@ -144,11 +168,23 @@ describe("ensureDenyWriteTargetsExist", () => {
     mkdirSync(join(claudeDir, "agents"), { recursive: true });
     writeFileSync(join(claudeDir, "agents", "existing-agent.md"), "real agent");
 
-    ensureDenyWriteTargetsExist(home);
+    ensureDenyWriteTargetsExist("claude", home);
 
     expect(readFileSync(join(claudeDir, "settings.json"), "utf8")).toBe('{"real":"config"}');
     expect(readFileSync(join(claudeDir, "CLAUDE.md"), "utf8")).toBe("# real instructions\n");
     expect(readFileSync(join(claudeDir, "agents", "existing-agent.md"), "utf8")).toBe("real agent");
+    rmSync(home, { recursive: true, force: true });
+  });
+
+  it("creates missing codex denyWrite dirs/files under ~/.codex, not ~/.claude", () => {
+    const home = tempHome();
+    ensureDenyWriteTargetsExist("codex", home);
+    expect(existsSync(join(home, ".codex", "plugins"))).toBe(true);
+    expect(existsSync(join(home, ".codex", "skills"))).toBe(true);
+    expect(existsSync(join(home, ".codex", "config.toml"))).toBe(true);
+    expect(existsSync(join(home, ".codex", "AGENTS.md"))).toBe(true);
+    expect(JSON.parse(readFileSync(join(home, ".codex", "hooks.json"), "utf8"))).toEqual({});
+    expect(existsSync(join(home, ".claude"))).toBe(false);
     rmSync(home, { recursive: true, force: true });
   });
 });

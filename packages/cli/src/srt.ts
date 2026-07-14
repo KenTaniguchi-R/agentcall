@@ -74,23 +74,53 @@ const ALLOWED_DOMAINS: Record<"claude" | "codex", string[]> = {
   codex: ["api.openai.com", "auth.openai.com", "chatgpt.com", "*.sentry.io"],
 };
 
+// Per-agent home config dir + persistence-surface carve-outs (see the
+// denyWrite rationale above the ALLOWED_DOMAINS comment block). ~/.codex
+// mirrors ~/.claude: config.toml (mcp_servers/hooks config) and AGENTS.md
+// (instructions read on the next unsandboxed invocation) are codex's
+// analogues of settings.json/CLAUDE.md, hooks.json is an explicit
+// lifecycle-hook definition file, and plugins/skills are extension points
+// — all denyWrite'd. auth.json, sessions/, and the sqlite state/log/cache
+// files are left writable: like ~/.claude.json, they're rewritten on
+// nearly every invocation, so denying them risks breaking `codex exec`
+// outright rather than just degrading a security margin.
+const AGENT_HOME: Record<"claude" | "codex", { dir: string; extraAllow: string[]; denyWrite: string[] }> = {
+  claude: {
+    dir: "~/.claude",
+    extraAllow: ["~/.claude.json"],
+    denyWrite: [
+      "~/.claude/settings.json",
+      "~/.claude/settings.local.json",
+      "~/.claude/CLAUDE.md",
+      "~/.claude/hooks",
+      "~/.claude/plugins",
+      "~/.claude/commands",
+      "~/.claude/agents",
+    ],
+  },
+  codex: {
+    dir: "~/.codex",
+    extraAllow: [],
+    denyWrite: [
+      "~/.codex/config.toml",
+      "~/.codex/AGENTS.md",
+      "~/.codex/hooks.json",
+      "~/.codex/plugins",
+      "~/.codex/skills",
+    ],
+  },
+};
+
 export function srtSettings(p: Paths, agentKind: "claude" | "codex", extraReadDirs: string[] = []): object {
+  const home = AGENT_HOME[agentKind];
   return {
     filesystem: {
       denyRead: ["~"],
       allowRead: [
-        ...new Set([p.publicDir, "~/.claude", "~/.claude.json", "/tmp", "/private/tmp", "/var/folders", ...extraReadDirs]),
+        ...new Set([p.publicDir, home.dir, ...home.extraAllow, "/tmp", "/private/tmp", "/var/folders", ...extraReadDirs]),
       ],
-      allowWrite: [p.publicDir, "~/.claude", "~/.claude.json", "/tmp", "/private/tmp", "/var/folders"],
-      denyWrite: [
-        "~/.claude/settings.json",
-        "~/.claude/settings.local.json",
-        "~/.claude/CLAUDE.md",
-        "~/.claude/hooks",
-        "~/.claude/plugins",
-        "~/.claude/commands",
-        "~/.claude/agents",
-      ],
+      allowWrite: [p.publicDir, home.dir, ...home.extraAllow, "/tmp", "/private/tmp", "/var/folders"],
+      denyWrite: home.denyWrite,
     },
     network: {
       allowedDomains: ALLOWED_DOMAINS[agentKind],
@@ -99,32 +129,47 @@ export function srtSettings(p: Paths, agentKind: "claude" | "codex", extraReadDi
   };
 }
 
-const DENY_WRITE_DIRS = ["hooks", "plugins", "commands", "agents"];
-const DENY_WRITE_FILES = ["settings.json", "settings.local.json", "CLAUDE.md"];
+const DENY_WRITE_DIRS: Record<"claude" | "codex", string[]> = {
+  claude: ["hooks", "plugins", "commands", "agents"],
+  codex: ["plugins", "skills"],
+};
+// Files whose content must be valid JSON on the agent's next startup get
+// seeded with "{}\n"; everything else (markdown/toml instructions) is safe
+// as an empty file.
+const DENY_WRITE_FILES: Record<"claude" | "codex", Array<{ rel: string; json: boolean }>> = {
+  claude: [
+    { rel: "settings.json", json: true },
+    { rel: "settings.local.json", json: true },
+    { rel: "CLAUDE.md", json: false },
+  ],
+  codex: [
+    { rel: "config.toml", json: false },
+    { rel: "AGENTS.md", json: false },
+    { rel: "hooks.json", json: true },
+  ],
+};
 
 // Must be called once before spawning a sandboxed agent (see srtSettings'
-// point 2 above): pre-creates each denyWrite target under ~/.claude that
-// doesn't already exist, so srt's deny rule actually has something to
-// bind to instead of silently letting a create-new-file slip through.
-// Idempotent and harmless if the paths already have real content — it
-// only ever creates, never overwrites. `home` is overridable for tests;
-// production callers should leave it as the real home directory, since
-// this always targets the real user's ~/.claude regardless of
-// AGENTCALL_HOME (agentcall doesn't get its own claude config).
-export function ensureDenyWriteTargetsExist(home: string = homedir()): void {
-  const claudeDir = join(home, ".claude");
-  for (const rel of DENY_WRITE_DIRS) {
-    const dir = join(claudeDir, rel);
+// point 2 above): pre-creates each denyWrite target under the agent's home
+// config dir that doesn't already exist, so srt's deny rule actually has
+// something to bind to instead of silently letting a create-new-file slip
+// through. Idempotent and harmless if the paths already have real content
+// — it only ever creates, never overwrites. `home` is overridable for
+// tests; production callers should leave it as the real home directory,
+// since this always targets the real user's ~/.claude or ~/.codex
+// regardless of AGENTCALL_HOME (agentcall doesn't get its own agent
+// config).
+export function ensureDenyWriteTargetsExist(agentKind: "claude" | "codex", home: string = homedir()): void {
+  const agentDir = join(home, agentKind === "claude" ? ".claude" : ".codex");
+  for (const rel of DENY_WRITE_DIRS[agentKind]) {
+    const dir = join(agentDir, rel);
     if (!existsSync(dir)) mkdirSync(dir, { recursive: true });
   }
-  for (const rel of DENY_WRITE_FILES) {
-    const file = join(claudeDir, rel);
+  for (const { rel, json } of DENY_WRITE_FILES[agentKind]) {
+    const file = join(agentDir, rel);
     if (existsSync(file)) continue;
-    mkdirSync(claudeDir, { recursive: true });
-    // settings.json / settings.local.json are parsed as JSON by claude on
-    // startup; an empty file would fail to parse, so seed valid empty JSON.
-    // CLAUDE.md is freeform markdown, so an empty file is safe as-is.
-    writeFileSync(file, rel.endsWith(".json") ? "{}\n" : "");
+    mkdirSync(agentDir, { recursive: true });
+    writeFileSync(file, json ? "{}\n" : "");
   }
 }
 

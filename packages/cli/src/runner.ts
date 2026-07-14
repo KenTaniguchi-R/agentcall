@@ -108,7 +108,7 @@ export function runAgent(
   // denies the sandboxed process its own binary. Both skipped for
   // specOverride so unit tests never touch the real ~/.claude or srt.json.
   if (!specOverride) {
-    ensureDenyWriteTargetsExist();
+    ensureDenyWriteTargetsExist(kind);
     writeSrtSettings(p, kind);
   }
   const spec = specOverride ?? buildSpawnSpec(kind, prompt, p);
