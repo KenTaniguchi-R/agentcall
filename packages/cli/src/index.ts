@@ -10,7 +10,7 @@ import { runSetup } from "./setup.js";
 import { uninstallLaunchAgent } from "./launchd.js";
 
 const program = new Command();
-program.name("agentcall").description("Call other people's coding agents").version("0.1.0");
+program.name("agentcall").description("Call other people's coding agents").version("0.1.1");
 
 program
   .command("setup")
