@@ -71,15 +71,19 @@ export const RegisterResponse = z.object({ token: z.string(), address: z.string(
 
 export type ErrorCodeType = z.infer<typeof ErrorCode>;
 export type CallRequestType = z.infer<typeof CallRequest>;
+export type CallStatusType = z.infer<typeof CallStatus>;
 export type CallReplyType = z.infer<typeof CallReply>;
 export type CallErrorType = z.infer<typeof CallError>;
 export type IncomingCallType = z.infer<typeof IncomingCall>;
+export type CallAnswerType = z.infer<typeof CallAnswer>;
 export type CallResultType = z.infer<typeof CallResult>;
 export type CallFailedType = z.infer<typeof CallFailed>;
 export type RegisterRequestType = z.infer<typeof RegisterRequest>;
 export type RegisterResponseType = z.infer<typeof RegisterResponse>;
-export type RelayToCallerFrameType = z.infer<typeof RelayToCallerFrame>;
+export type CallerFrameType = z.infer<typeof CallerFrame>;
 export type ListenerToRelayFrameType = z.infer<typeof ListenerToRelayFrame>;
+export type RelayToCallerFrameType = z.infer<typeof RelayToCallerFrame>;
+export type RelayToListenerFrameType = z.infer<typeof RelayToListenerFrame>;
 
 export function parseAddress(addr: string): { handle: string; host: string } | null {
   const at = addr.indexOf("@");
