@@ -53,6 +53,18 @@ describe("call flow", () => {
     expect(await nextFrame(caller)).toMatchObject({ type: "call_error", code: "message_too_large" });
   });
 
+  it("charges the per-hour rate limit for oversized frames too, not just accepted ones", async () => {
+    const { callerToken } = await setupPair("ovr-rl-callee", "ovr-rl-caller");
+    for (let i = 0; i < 10; i++) {
+      const c = await openWs("/v1/ws?role=call&to=ovr-rl-callee", wsAuth("ovr-rl-caller", callerToken));
+      c.send(JSON.stringify({ type: "call_request", to: "ovr-rl-callee", message: "x".repeat(65_000) }));
+      expect(await nextFrame(c)).toMatchObject({ type: "call_error", code: "message_too_large" });
+    }
+    const eleventh = await openWs("/v1/ws?role=call&to=ovr-rl-callee", wsAuth("ovr-rl-caller", callerToken));
+    eleventh.send(JSON.stringify({ type: "call_request", to: "ovr-rl-callee", message: "one too many" }));
+    expect(await nextFrame(eleventh)).toMatchObject({ type: "call_error", code: "rate_limited" });
+  });
+
   it("rate limits the 11th call in an hour", async () => {
     const { callerToken, listener } = await setupPair("rl-callee", "rl-caller");
     for (let i = 0; i < 10; i++) {

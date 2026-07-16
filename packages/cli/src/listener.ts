@@ -61,8 +61,8 @@ export function startListener(deps: ListenerDeps): { stop(): void } {
       try {
         resolution = resolveTask(loadPolicy(deps.paths), loadTasks(deps.paths), from, requestedTask);
       } catch (e) {
-        send({ type: "call_failed", call_id, code: "agent_error", detail: `policy error: ${String(e).slice(0, 300)}` });
-        audit({ call_id, from, message: message.slice(0, 500), status: "policy_error", duration_ms: 0 });
+        send({ type: "call_failed", call_id, code: "agent_error", detail: "A local policy error prevented this call from completing." });
+        audit({ call_id, from, message: message.slice(0, 500), status: "policy_error", duration_ms: 0, error: String(e).slice(0, 2000) });
         return;
       }
       if (!resolution.ok) {
@@ -88,8 +88,11 @@ export function startListener(deps: ListenerDeps): { stop(): void } {
           audit({ call_id, from, message: message.slice(0, 500), task: task.id, status: "ok", duration_ms: Date.now() - started });
         } catch (e) {
           const code = e instanceof AgentRunError ? e.code : "agent_error";
-          send({ type: "call_failed", call_id, code, detail: String(e).slice(0, 500) });
-          audit({ call_id, from, message: message.slice(0, 500), task: task.id, status: code, duration_ms: Date.now() - started });
+          send({ type: "call_failed", call_id, code, detail: "The agent hit an internal error while answering." });
+          audit({
+            call_id, from, message: message.slice(0, 500), task: task.id, status: code,
+            duration_ms: Date.now() - started, error: String(e).slice(0, 2000),
+          });
         }
       });
       if (!accepted) {

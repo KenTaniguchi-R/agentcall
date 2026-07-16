@@ -73,6 +73,36 @@ describe("buildCardReport", () => {
     expect(r.problems).toEqual([]);
   });
 
+  it("warns that codex gives no per-tool exec restriction when a task's tools exclude exec", () => {
+    const h = home();
+    writeSkill(h, "intro", "---\ndescription: d\ntools: [read]\n---\n");
+    const p = getPaths(h);
+    writeFileSync(p.policyFile, JSON.stringify({ default_offer: ["ask", "intro"], callers: {} }));
+    const codexCfg: Config = { ...cfg, agent_kind: "codex" };
+    const r = buildCardReport(codexCfg, p);
+    expect(r.notices.join("\n")).toMatch(/intro/);
+    expect(r.notices.join("\n")).toMatch(/codex/i);
+  });
+
+  it("does not warn about the codex exec gap for a claude-backed agent", () => {
+    const h = home();
+    writeSkill(h, "intro", "---\ndescription: d\ntools: [read]\n---\n");
+    const p = getPaths(h);
+    writeFileSync(p.policyFile, JSON.stringify({ default_offer: ["ask", "intro"], callers: {} }));
+    const r = buildCardReport(cfg, p);
+    expect(r.notices.join("\n")).not.toMatch(/codex/i);
+  });
+
+  it("does not warn about the ask task itself, and not about a task that already declares exec", () => {
+    const h = home();
+    writeSkill(h, "runner", "---\ndescription: d\ntools: [read, exec]\n---\n");
+    const p = getPaths(h);
+    writeFileSync(p.policyFile, JSON.stringify({ default_offer: ["ask", "runner"], callers: {} }));
+    const codexCfg: Config = { ...cfg, agent_kind: "codex" };
+    const r = buildCardReport(codexCfg, p);
+    expect(r.notices.join("\n")).not.toMatch(/codex/i);
+  });
+
   it("lists per-caller grants and blocked callers in the menu", () => {
     const h = home();
     const p = getPaths(h);

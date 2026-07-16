@@ -88,13 +88,22 @@ export class HandleDO extends DurableObject {
     if (att.kind === "caller") {
       const frame = safeParseFrame(CallerFrame, raw);
       if (!frame || att.call_id) return this.fail(ws, "protocol_error");
-      if (new TextEncoder().encode(frame.message).byteLength > MAX_MESSAGE_BYTES) {
-        return this.fail(ws, "message_too_large");
-      }
+
+      // Rate limit is checked before the size check so an over-budget caller
+      // is turned away before an oversized-message parse/response cycle, but
+      // an oversized frame still charges one unit of the hourly budget
+      // below — otherwise unlimited oversized frames could be sent for free
+      // without ever tripping the limit.
       const now = Date.now();
       const rlKey = `rl:${att.from}`;
       const stamps = ((await this.ctx.storage.get<number[]>(rlKey)) ?? []).filter((t) => now - t < 3_600_000);
       if (stamps.length >= RATE_LIMIT_PER_HOUR) return this.fail(ws, "rate_limited");
+
+      if (new TextEncoder().encode(frame.message).byteLength > MAX_MESSAGE_BYTES) {
+        stamps.push(now);
+        await this.ctx.storage.put(rlKey, stamps);
+        return this.fail(ws, "message_too_large");
+      }
       const listener = this.ctx.getWebSockets("listener")[0];
       if (!listener) return this.fail(ws, "offline");
 

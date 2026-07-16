@@ -4,7 +4,10 @@ import { expect } from "vitest";
 export async function registerHandle(handle: string, kind: "claude" | "codex" = "claude"): Promise<string> {
   const res = await SELF.fetch("https://relay.test/v1/register", {
     method: "POST",
-    headers: { "content-type": "application/json" },
+    // Synthetic per-handle source IP: without it every call in a test file
+    // shares the same "unknown" fallback key and would collide with the
+    // register-endpoint rate limit (REGISTER_RL) across unrelated tests.
+    headers: { "content-type": "application/json", "cf-connecting-ip": `test-${handle}` },
     body: JSON.stringify({ handle, agent_kind: kind }),
   });
   expect(res.status).toBe(200);

@@ -81,14 +81,14 @@ describe("startListener", () => {
     expect(got.find((f) => f.call_id === "c2")).toMatchObject({ type: "call_failed", code: "busy" });
   });
 
-  it("maps runner failures to call_failed with the runner's code", async () => {
+  it("maps runner failures to call_failed with the runner's code, without leaking stderr to the caller", async () => {
     const paths = getPaths(mkdtempSync(join(tmpdir(), "agentcall-l-")));
     const { AgentRunError } = await import("../src/runner.js");
     const relayReady = new Promise<WsSocket>((resolveWs) => {
       void fakeRelay((ws) => resolveWs(ws)).then((url) => {
         stopper = startListener({
           relay: url, config: cfg, paths,
-          run: async () => { throw new AgentRunError("boom", "timeout"); },
+          run: async () => { throw new AgentRunError("boom: /Users/shusaku/secret-project stack trace", "timeout"); },
         });
       });
     });
@@ -97,6 +97,10 @@ describe("startListener", () => {
     ws.send(JSON.stringify({ type: "incoming_call", call_id: "c9", from: "x", message: "y" }));
     const got = await expectFrames;
     expect(got[1]).toMatchObject({ type: "call_failed", call_id: "c9", code: "timeout" });
+    expect(got[1].detail).not.toContain("boom");
+    expect(got[1].detail).not.toContain("secret-project");
+    const audit = readFileSync(paths.callsLog, "utf8").trim().split("\n").map((l) => JSON.parse(l));
+    expect(audit[0].error).toContain("secret-project");
   });
 });
 
@@ -201,7 +205,7 @@ describe("startListener task resolution", () => {
     expect(seen.envelope).toEqual({ caps: ["read"], write_paths: [], network: [] });
   });
 
-  it("maps a corrupt policy file to call_failed agent_error without spawning", async () => {
+  it("maps a corrupt policy file to call_failed agent_error without spawning, and without leaking the parse error", async () => {
     const paths = getPaths(mkdtempSync(join(tmpdir(), "agentcall-l-")));
     mkdirSync(paths.dir, { recursive: true });
     writeFileSync(paths.policyFile, "{corrupt");
@@ -216,6 +220,9 @@ describe("startListener task resolution", () => {
     ws.send(JSON.stringify({ type: "incoming_call", call_id: "c5", from: "a", message: "hi" }));
     const [failed] = await expectFrames;
     expect(failed).toMatchObject({ type: "call_failed", call_id: "c5", code: "agent_error" });
+    expect(failed.detail).not.toMatch(/JSON|SyntaxError|corrupt/i);
     expect(spawned).toBe(false);
+    const audit = readFileSync(paths.callsLog, "utf8").trim().split("\n").map((l) => JSON.parse(l));
+    expect(audit[0].error).toMatch(/JSON|SyntaxError/i);
   });
 });

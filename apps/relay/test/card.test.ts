@@ -41,6 +41,21 @@ describe("PUT /v1/card", () => {
     const res = await SELF.fetch("https://relay.test/v1/card/ken4");
     expect((await res.json<{ description: string }>()).description).toBe("updated");
   });
+
+  it("rate limits card pushes for a single handle past the configured burst limit", async () => {
+    const token = await registerHandle("cardrl");
+    for (let i = 0; i < 20; i++) {
+      expect((await putCard("cardrl", token)).status).toBe(200);
+    }
+    expect((await putCard("cardrl", token)).status).toBe(429);
+  });
+
+  it("does not rate limit an invalid token before it 401s", async () => {
+    await registerHandle("cardrl2");
+    for (let i = 0; i < 25; i++) {
+      expect((await putCard("cardrl2", "wrong-token")).status).toBe(401);
+    }
+  });
 });
 
 describe("GET /v1/card/:handle", () => {

@@ -14,6 +14,10 @@ export const RESERVED_HANDLES = [
 ] as const;
 export const MAX_MESSAGE_BYTES = 64_000;
 export const MAX_REPLY_BYTES = 256_000;
+// Bounds session_id, an otherwise-opaque caller-supplied token that today is
+// forwarded and dropped (see listener.ts) but has no reason to ever need to
+// be large — without a cap it's unbounded attacker-controlled bandwidth.
+export const MAX_SESSION_ID_LENGTH = 256;
 export const RELAY_CALL_TIMEOUT_MS = 360_000;
 export const AGENT_TIMEOUT_MS = 300_000;
 export const RATE_LIMIT_PER_HOUR = 10;
@@ -28,7 +32,7 @@ export const CallRequest = z.object({
   type: z.literal("call_request"),
   to: z.string().regex(HANDLE_RE),
   message: z.string().min(1),
-  session_id: z.string().optional(),
+  session_id: z.string().max(MAX_SESSION_ID_LENGTH).optional(),
   task: z.string().regex(TASK_ID_RE).optional(),
 });
 export const CallStatus = z.object({
@@ -39,8 +43,8 @@ export const CallReply = z.object({
   type: z.literal("call_reply"),
   call_id: z.string(),
   text: z.string(),
-  session_id: z.string().optional(),
-  task: z.string().optional(),
+  session_id: z.string().max(MAX_SESSION_ID_LENGTH).optional(),
+  task: z.string().regex(TASK_ID_RE).optional(),
 });
 export const CallError = z.object({
   type: z.literal("call_error"),
@@ -53,7 +57,7 @@ export const IncomingCall = z.object({
   call_id: z.string(),
   from: z.string(),
   message: z.string(),
-  session_id: z.string().optional(),
+  session_id: z.string().max(MAX_SESSION_ID_LENGTH).optional(),
   task: z.string().regex(TASK_ID_RE).optional(),
 });
 export const CallAnswer = z.object({ type: z.literal("call_answer"), call_id: z.string() });
@@ -61,7 +65,7 @@ export const CallResult = z.object({
   type: z.literal("call_result"),
   call_id: z.string(),
   text: z.string(),
-  session_id: z.string().optional(),
+  session_id: z.string().max(MAX_SESSION_ID_LENGTH).optional(),
   task: z.string().regex(TASK_ID_RE).optional(),
 });
 export const CallFailed = z.object({

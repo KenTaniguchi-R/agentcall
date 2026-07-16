@@ -3,7 +3,7 @@ import { buildCardUpload } from "./card.js";
 import type { Config } from "./config.js";
 import type { Paths } from "./paths.js";
 import { loadPolicy, stripPlus, type Policy } from "./policy.js";
-import { loadTasks } from "./tasks.js";
+import { ASK_TASK, loadTasks } from "./tasks.js";
 
 export interface CardReport {
   menu: string[];     // the owner's card as callers see it
@@ -56,6 +56,24 @@ export function buildCardReport(cfg: Config, p: Paths): CardReport {
   }
   const blocked = Object.entries(policy.callers).filter(([, e]) => e.block).map(([h]) => h);
   if (blocked.length > 0) menu.push(`  Blocked: ${blocked.join(", ")}`);
+
+  // codex has no per-tool allowlist (see runner.ts's codex branch): only the
+  // `write` cap maps to anything (workspace-write vs read-only sandbox
+  // level). A task's `tools:` list excluding "exec" promises no shell
+  // execution, but under codex that promise doesn't hold — surface it here
+  // rather than leave the owner to discover it the hard way.
+  if (cfg.agent_kind === "codex") {
+    for (const t of tasks) {
+      if (t.id === ASK_TASK.id) continue;
+      if (!t.envelope.caps.includes("exec")) {
+        notices.push(
+          `task "${t.id}": codex has no per-tool restriction, so this task can still execute arbitrary ` +
+          `shell commands regardless of its \`tools:\` list — only the \`write\` cap has any real effect ` +
+          `(it toggles codex's read-only vs workspace-write sandbox mode)`,
+        );
+      }
+    }
+  }
 
   if (!existsSync(p.cardSnapshotFile)) {
     notices.push("card has never been pushed — run `agentcall card push`");

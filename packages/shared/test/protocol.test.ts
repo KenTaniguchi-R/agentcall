@@ -1,8 +1,8 @@
 import { describe, expect, it } from "vitest";
 import {
   CallRequest, CallerFrame, RelayToCallerFrame, ListenerToRelayFrame,
-  HANDLE_RE, RESERVED_HANDLES, MAX_MESSAGE_BYTES, parseAddress, safeParseFrame,
-  RegisterRequest,
+  HANDLE_RE, RESERVED_HANDLES, MAX_MESSAGE_BYTES, MAX_SESSION_ID_LENGTH, parseAddress, safeParseFrame,
+  RegisterRequest, CallReply, IncomingCall,
 } from "../src/index.js";
 
 describe("handle rules", () => {
@@ -51,6 +51,30 @@ describe("frames", () => {
   });
   it("exposes size constants", () => {
     expect(MAX_MESSAGE_BYTES).toBe(64_000);
+  });
+});
+
+describe("session_id bounds", () => {
+  it("rejects a CallRequest with an oversized session_id", () => {
+    const f = { type: "call_request", to: "ken", message: "hi", session_id: "s".repeat(MAX_SESSION_ID_LENGTH + 1) };
+    expect(CallRequest.safeParse(f).success).toBe(false);
+    expect(safeParseFrame(CallerFrame, JSON.stringify(f))).toBeNull();
+  });
+
+  it("accepts a CallRequest with a session_id within the bound", () => {
+    const f = { type: "call_request", to: "ken", message: "hi", session_id: "s".repeat(MAX_SESSION_ID_LENGTH) };
+    expect(CallRequest.safeParse(f).success).toBe(true);
+  });
+
+  it("applies the same session_id bound to other frames carrying it", () => {
+    const oversized = "s".repeat(MAX_SESSION_ID_LENGTH + 1);
+    expect(CallReply.safeParse({ type: "call_reply", call_id: "x", text: "t", session_id: oversized }).success).toBe(false);
+    expect(IncomingCall.safeParse({ type: "incoming_call", call_id: "x", from: "a", message: "m", session_id: oversized }).success).toBe(false);
+  });
+
+  it("bounds CallReply.task with the same TASK_ID_RE as other task fields", () => {
+    expect(CallReply.safeParse({ type: "call_reply", call_id: "x", text: "t", task: "Not Valid!" }).success).toBe(false);
+    expect(CallReply.safeParse({ type: "call_reply", call_id: "x", text: "t", task: "valid-task" }).success).toBe(true);
   });
 });
 

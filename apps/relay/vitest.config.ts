@@ -8,7 +8,17 @@ export default defineWorkersConfig(async () => {
       poolOptions: {
         workers: {
           wrangler: { configPath: "./wrangler.jsonc" },
-          miniflare: { bindings: { TEST_MIGRATIONS: migrations } },
+          // wrangler.jsonc's own "ratelimits" field isn't recognized by this
+          // tool's wrangler.jsonc ingestion (it warns "Unexpected fields" and
+          // drops it), so the bindings are declared directly here instead —
+          // same binding names/limits, just wired through miniflare options.
+          miniflare: {
+            bindings: { TEST_MIGRATIONS: migrations },
+            ratelimits: {
+              REGISTER_RL: { namespace_id: "1001", simple: { limit: 5, period: 60 } },
+              CARD_RL: { namespace_id: "1002", simple: { limit: 20, period: 60 } },
+            },
+          },
         },
       },
     },

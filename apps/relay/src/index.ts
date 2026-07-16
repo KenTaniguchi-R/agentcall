@@ -5,7 +5,12 @@ import { INSTALL_SH } from "./install-sh.js";
 
 export { HandleDO } from "./do.js";
 
-export type Env = { DB: D1Database; HANDLE_DO: DurableObjectNamespace };
+export type Env = {
+  DB: D1Database;
+  HANDLE_DO: DurableObjectNamespace;
+  REGISTER_RL: RateLimit;
+  CARD_RL: RateLimit;
+};
 // Not exported: workerd treats every named export of the entry module as a
 // potential WorkerEntrypoint and rejects non-handler values outright
 // ("Incorrect type for map entry 'RELAY_HOST'"), killing the worker at
@@ -21,6 +26,8 @@ async function handleExists(db: D1Database, handle: string): Promise<boolean> {
 app.get("/install.sh", (c) => c.text(INSTALL_SH, 200, { "content-type": "text/x-shellscript; charset=utf-8" }));
 
 app.post("/v1/register", async (c) => {
+  const ip = c.req.header("cf-connecting-ip") ?? "unknown";
+  if (!(await c.env.REGISTER_RL.limit({ key: ip })).success) return c.json({ error: "rate limited" }, 429);
   const body = RegisterRequest.safeParse(await c.req.json().catch(() => null));
   if (!body.success) return c.json({ error: "invalid request" }, 400);
   const { handle, agent_kind } = body.data;
@@ -47,6 +54,7 @@ app.put("/v1/card", async (c) => {
   const handle = c.req.header("X-AgentCall-Handle") ?? "";
   const token = (c.req.header("Authorization") ?? "").replace(/^Bearer\s+/i, "");
   if (!(await verifyHandleToken(c.env.DB, handle, token))) return c.json({ error: "unauthorized" }, 401);
+  if (!(await c.env.CARD_RL.limit({ key: handle })).success) return c.json({ error: "rate limited" }, 429);
   const body = CardUpload.safeParse(await c.req.json().catch(() => null));
   if (!body.success) return c.json({ error: "invalid card" }, 400);
   await c.env.DB.prepare(
