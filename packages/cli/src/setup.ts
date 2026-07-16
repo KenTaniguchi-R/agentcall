@@ -169,17 +169,20 @@ export async function runSetup(opts: SetupOpts): Promise<void> {
   const reusedCfg =
     existingCfg !== undefined && (!opts.handle || opts.handle === existingCfg.handle) ? existingCfg : undefined;
 
-  // Downgrade (callable -> caller-only) is out of scope for setup: make no
-  // changes and point at uninstall, which removes the background listener.
-  if (opts.callerOnly && reusedCfg?.agent_kind) {
+  const callable = await decideCallable(opts, hasBinFn, ask, reusedCfg);
+
+  // A caller-only outcome must not clobber an existing callable install:
+  // config.json is machine-global, and the installed LaunchAgent would keep
+  // relaunching `agentcall listen` against a config it can no longer serve
+  // (assertCallableConfig throws -> crash loop) while the old handle
+  // silently went offline. Refuse and point at uninstall instead.
+  if (!callable && existingCfg?.agent_kind) {
     console.error(
-      "This install is already callable. To stop answering calls, run `agentcall uninstall` " +
-        "(config is kept; re-run `agentcall setup` to come back).",
+      `This machine already answers calls as "${existingCfg.handle}". To stop answering calls, run ` +
+        "`agentcall uninstall` (config is kept; re-run `agentcall setup` to come back).",
     );
     return;
   }
-
-  const callable = await decideCallable(opts, hasBinFn, ask, reusedCfg);
 
   // On reuse the saved agent_kind is what actually gets spawned (see
   // listener.ts), so skip detection entirely — it may prompt ("Which should

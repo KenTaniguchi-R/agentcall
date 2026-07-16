@@ -492,4 +492,27 @@ describe("caller-only setup", () => {
       delete process.env.AGENTCALL_HOME;
     }
   });
+
+  it("refuses a caller-only setup under a new handle when the machine already answers calls", async () => {
+    const home = mkdtempSync(join(tmpdir(), "agentcall-setup-"));
+    process.env.AGENTCALL_HOME = home;
+    const errors: string[] = [];
+    const spy = vi.spyOn(console, "error").mockImplementation((...a: unknown[]) => {
+      errors.push(a.map(String).join(" "));
+    });
+    try {
+      const relay = await fakeRelay();
+      await runSetup({ handle: "resident", agent: "claude", relay, snippet: false, skipLaunchd: true });
+      const p = getPaths(home);
+      const before = readFileSync(p.configFile, "utf8");
+
+      await runSetup({ handle: "other", callerOnly: true, relay, snippet: false, hasBin: () => false });
+
+      expect(readFileSync(p.configFile, "utf8")).toBe(before);
+      expect(errors.some((l) => l.includes("uninstall") && l.includes("resident"))).toBe(true);
+    } finally {
+      spy.mockRestore();
+      delete process.env.AGENTCALL_HOME;
+    }
+  });
 });
