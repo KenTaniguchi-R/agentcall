@@ -1,6 +1,6 @@
-import { createServer, type Server } from "node:http";
+import { createServer, type Server, type IncomingMessage, type ServerResponse } from "node:http";
 import { afterEach, describe, expect, it } from "vitest";
-import { registerHandle, getStatus } from "../src/api.js";
+import { registerHandle, getStatus, fetchCard, pushCard } from "../src/api.js";
 
 let server: Server;
 afterEach(() => {
@@ -72,5 +72,62 @@ describe("api client", () => {
     expect(await getStatus(relay, "ken")).toEqual({ online: true });
     const relay2 = await serve(404, { error: "unknown handle" });
     await expect(getStatus(relay2, "ghost")).rejects.toMatchObject({ code: "unknown_handle" });
+  });
+});
+
+// Spins up a local server whose handler gets the collected request body
+// alongside req/res, so tests can assert on method/url/headers/body without
+// each handler re-implementing body collection.
+function startServer(
+  handler: (req: IncomingMessage, res: ServerResponse, body: string) => void,
+): Promise<string> {
+  return new Promise((resolve) => {
+    server = createServer((req, res) => {
+      let body = "";
+      req.on("data", (d) => (body += d));
+      req.on("end", () => handler(req, res, body));
+    });
+    server.listen(0, "127.0.0.1", () => {
+      const addr = server.address() as { port: number };
+      resolve(`http://127.0.0.1:${addr.port}`);
+    });
+  });
+}
+
+describe("pushCard / fetchCard", () => {
+  it("PUTs the upload with bearer auth and succeeds on 200", async () => {
+    let seen: { method?: string; url?: string; auth?: string; body?: string } = {};
+    const relay = await startServer((req, res, body) => {
+      seen = { method: req.method, url: req.url, auth: req.headers.authorization as string, body };
+      res.writeHead(200, { "content-type": "application/json" });
+      res.end(JSON.stringify({ ok: true }));
+    });
+    await pushCard(relay, { handle: "ken", token: "tok" }, {
+      description: "", agent_kind: "claude",
+      tasks: [{ id: "ask", name: "Ask", description: "d", examples: [], tier: "T1" }],
+      default_offer: ["ask"], grants: {},
+    });
+    expect(seen.method).toBe("PUT");
+    expect(seen.url).toBe("/v1/card");
+    expect(seen.auth).toBe("Bearer tok");
+    expect(JSON.parse(seen.body!)).toMatchObject({ default_offer: ["ask"] });
+  });
+
+  it("fetchCard parses and returns the card; 404 -> ApiError unknown_handle", async () => {
+    const card = {
+      handle: "ken", description: "", agent_kind: "claude",
+      tasks: [{ id: "ask", name: "Ask", description: "d", examples: [], tier: "T1" }], updated_at: 1,
+    };
+    const relay = await startServer((req, res) => {
+      if (req.url === "/v1/card/ken") {
+        res.writeHead(200, { "content-type": "application/json" });
+        res.end(JSON.stringify(card));
+      } else {
+        res.writeHead(404, { "content-type": "application/json" });
+        res.end(JSON.stringify({ error: "no card" }));
+      }
+    });
+    expect(await fetchCard(relay, "ken")).toMatchObject({ handle: "ken" });
+    await expect(fetchCard(relay, "ghost")).rejects.toMatchObject({ code: "unknown_handle" });
   });
 });

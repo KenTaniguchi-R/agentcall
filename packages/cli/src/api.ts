@@ -1,4 +1,4 @@
-import { HANDLE_RE, RESERVED_HANDLES } from "@benree/agentcall-shared";
+import { HANDLE_RE, RESERVED_HANDLES, AgentCard, type AgentCardType, type CardUploadType } from "@benree/agentcall-shared";
 
 export class ApiError extends Error {
   constructor(message: string, public code: "handle_taken" | "invalid" | "unknown_handle" | "network") {
@@ -63,4 +63,39 @@ export async function getStatus(
   if (res.status === 404) throw new ApiError(`No agent registered as "${handle}".`, "unknown_handle");
   if (!res.ok) throw new ApiError(`Status check failed (${res.status}).`, "network");
   return (await res.json()) as { online: boolean };
+}
+
+export async function pushCard(
+  relay: string, auth: { handle: string; token: string }, upload: CardUploadType,
+  opts: { timeoutMs?: number } = {},
+): Promise<void> {
+  const res = await relayFetch(
+    relay,
+    "/v1/card",
+    {
+      method: "PUT",
+      headers: {
+        "content-type": "application/json",
+        Authorization: `Bearer ${auth.token}`,
+        "X-AgentCall-Handle": auth.handle,
+      },
+      body: JSON.stringify(upload),
+    },
+    opts.timeoutMs ?? RELAY_TIMEOUT_MS,
+  );
+  if (res.status === 401) throw new ApiError("Your credentials were rejected. Re-run `agentcall setup`.", "invalid");
+  if (!res.ok) throw new ApiError(`Card push failed (${res.status}).`, "network");
+}
+
+export async function fetchCard(
+  relay: string, handle: string, auth?: { handle: string; token: string },
+  opts: { timeoutMs?: number } = {},
+): Promise<AgentCardType> {
+  const headers: Record<string, string> = auth
+    ? { Authorization: `Bearer ${auth.token}`, "X-AgentCall-Handle": auth.handle }
+    : {};
+  const res = await relayFetch(relay, `/v1/card/${handle}`, { headers }, opts.timeoutMs ?? RELAY_TIMEOUT_MS);
+  if (res.status === 404) throw new ApiError(`No card published for "${handle}".`, "unknown_handle");
+  if (!res.ok) throw new ApiError(`Card fetch failed (${res.status}).`, "network");
+  return AgentCard.parse(await res.json());
 }
