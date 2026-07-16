@@ -4,6 +4,7 @@ import { relayUrl, type Config } from "./config.js";
 import type { Paths } from "./paths.js";
 import { AgentRunError, runAgent, type AgentKind } from "./runner.js";
 import { resolveAgentBin } from "./srt.js";
+import { ASK_TASK } from "./tasks.js";
 
 // One row of verification output, shared by `setup` and `agentcall doctor`.
 export interface VerifyCheck {
@@ -43,8 +44,9 @@ export function classifyAgentFailure(kind: AgentKind, error: unknown): string | 
   return undefined;
 }
 
-// Truncated, single-line error text for a check's detail field.
-const short = (e: unknown) => String(e instanceof Error ? e.message : e).slice(0, 300);
+// Truncated, single-line error text for a check's detail field. Shared with
+// doctor.ts.
+export const short = (e: unknown) => String(e instanceof Error ? e.message : e).slice(0, 300);
 
 export function checkAgentBinary(kind: AgentKind, resolveBin: (kind: AgentKind) => string = resolveAgentBin): VerifyCheck {
   try {
@@ -85,12 +87,15 @@ export const VERIFY_TIMEOUT_MS = 120_000;
 
 // The real thing: the byte-identical sandboxed spawn path an inbound call
 // uses. A successfully parsed reply is the pass signal — the reply text is
-// NOT asserted, since chatty models don't reliably echo "OK" verbatim.
+// NOT asserted, since chatty models don't reliably echo "OK" verbatim. Runs
+// under the same read-only "ask" envelope a real inbound plain call gets —
+// not the FULL_ACCESS_ENVELOPE default — since verification must not exercise
+// more capability than an untrusted caller would actually be granted.
 export async function checkSandboxSpawn(
   kind: AgentKind, paths: Paths, runFn: typeof runAgent = runAgent,
 ): Promise<VerifyCheck> {
   try {
-    await runFn(kind, VERIFY_PROMPT, paths, VERIFY_TIMEOUT_MS);
+    await runFn(kind, VERIFY_PROMPT, paths, VERIFY_TIMEOUT_MS, undefined, ASK_TASK.envelope);
     return { name: "sandboxed agent run", ok: true };
   } catch (e) {
     return { name: "sandboxed agent run", ok: false, detail: short(e), hint: classifyAgentFailure(kind, e) };
@@ -134,6 +139,10 @@ export async function checkRelaySelfCall(cfg: Config, callFn: typeof callAgent =
       token: cfg.token,
       to: cfg.handle,
       message: "agentcall doctor self-test: reply briefly",
+      // Bound below callAgent's 420s default: sandbox spawn budget plus a
+      // margin for relay round-trip, so a stuck self-call fails promptly
+      // instead of hanging the whole doctor run.
+      timeoutMs: VERIFY_TIMEOUT_MS + 30_000,
     });
     return { name: "relay self-call", ok: true };
   } catch (e) {

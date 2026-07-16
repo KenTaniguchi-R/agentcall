@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { getPaths } from "../src/paths.js";
 import { AgentRunError } from "../src/runner.js";
+import { ASK_TASK } from "../src/tasks.js";
 import {
   checkAgentBinary,
   checkCodexAuth,
@@ -119,13 +120,13 @@ describe("checkSandboxSpawn", () => {
     expect(c).toMatchObject({ name: "sandboxed agent run", ok: true });
   });
 
-  it("invokes runFn with the verify prompt and timeout", async () => {
+  it("invokes runFn with the verify prompt, timeout, and the read-only ask envelope", async () => {
     const seen: unknown[] = [];
-    await checkSandboxSpawn("claude", fakePaths, async (kind, prompt, _p, timeoutMs) => {
-      seen.push(kind, prompt, timeoutMs);
+    await checkSandboxSpawn("claude", fakePaths, async (kind, prompt, _p, timeoutMs, _specOverride, envelope) => {
+      seen.push(kind, prompt, timeoutMs, envelope);
       return { text: "OK" };
     });
-    expect(seen).toEqual(["claude", VERIFY_PROMPT, VERIFY_TIMEOUT_MS]);
+    expect(seen).toEqual(["claude", VERIFY_PROMPT, VERIFY_TIMEOUT_MS, ASK_TASK.envelope]);
   });
 
   it("classifies an auth failure into a hint", async () => {
@@ -190,13 +191,18 @@ describe("checkRelaySelfCall", () => {
   const cfg = { handle: "ken", token: "tok", agent_kind: "claude" as const, relay: "https://relay.example" };
 
   it("calls the agent's own address through the relay and passes on a reply", async () => {
-    const seen: Array<{ from: string; to: string; relay: string }> = [];
+    const seen: Array<{ from: string; to: string; relay: string; token: string; message: string; timeoutMs?: number }> = [];
     const c = await checkRelaySelfCall(cfg, async (opts) => {
-      seen.push({ from: opts.from, to: opts.to, relay: opts.relay });
+      seen.push({ from: opts.from, to: opts.to, relay: opts.relay, token: opts.token, message: opts.message, timeoutMs: opts.timeoutMs });
       return { type: "call_reply", call_id: "c1", text: "hi", task: "ask" } as never;
     });
     expect(c).toMatchObject({ name: "relay self-call", ok: true });
-    expect(seen).toEqual([{ from: "ken", to: "ken", relay: "https://relay.example" }]);
+    expect(seen).toEqual([
+      {
+        from: "ken", to: "ken", relay: "https://relay.example", token: "tok",
+        message: "agentcall doctor self-test: reply briefly", timeoutMs: VERIFY_TIMEOUT_MS + 30_000,
+      },
+    ]);
   });
 
   it("fails with a launchd-environment hint when the call errors", async () => {

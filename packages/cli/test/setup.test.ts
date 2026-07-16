@@ -545,10 +545,11 @@ describe("caller-only setup", () => {
       const p = getPaths(home);
       const before = readFileSync(p.configFile, "utf8");
 
-      await runSetup({ verify: false, callerOnly: true, relay, snippet: false, hasBin: () => true });
+      const result = await runSetup({ verify: false, callerOnly: true, relay, snippet: false, hasBin: () => true });
 
       expect(readFileSync(p.configFile, "utf8")).toBe(before);
       expect(errors.some((l) => l.includes("uninstall"))).toBe(true);
+      expect(result.ready).toBe(false);
     } finally {
       spy.mockRestore();
       delete process.env.AGENTCALL_HOME;
@@ -568,10 +569,11 @@ describe("caller-only setup", () => {
       const p = getPaths(home);
       const before = readFileSync(p.configFile, "utf8");
 
-      await runSetup({ verify: false, handle: "other", callerOnly: true, relay, snippet: false, hasBin: () => false });
+      const result = await runSetup({ verify: false, handle: "other", callerOnly: true, relay, snippet: false, hasBin: () => false });
 
       expect(readFileSync(p.configFile, "utf8")).toBe(before);
       expect(errors.some((l) => l.includes("uninstall") && l.includes("resident"))).toBe(true);
+      expect(result.ready).toBe(false);
     } finally {
       spy.mockRestore();
       delete process.env.AGENTCALL_HOME;

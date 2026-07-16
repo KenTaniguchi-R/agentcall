@@ -5,7 +5,7 @@ import { callAgent } from "./callClient.js";
 import { loadConfig, relayUrl, type Config } from "./config.js";
 import { LAUNCH_LABEL } from "./launchd.js";
 import type { Paths } from "./paths.js";
-import { checkRelaySelfCall, formatCheck, verifyAgent, type VerifyCheck, type VerifyFns } from "./verify.js";
+import { checkRelaySelfCall, formatCheck, short, verifyAgent, type VerifyCheck, type VerifyFns } from "./verify.js";
 
 export interface DoctorDeps {
   paths: Paths;
@@ -20,8 +20,6 @@ export interface DoctorDeps {
 
 const defaultLaunchctlList = () =>
   execFileSync("launchctl", ["list"], { encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] });
-
-const short = (e: unknown) => String(e instanceof Error ? e.message : e).slice(0, 300);
 
 // Verifies this install can answer calls, printing one line per check.
 // Ladder semantics (see the design spec): static checks are informational
