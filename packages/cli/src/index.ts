@@ -13,6 +13,7 @@ import { loadPolicy, savePolicy } from "./policy.js";
 import { loadTasks, scaffoldTask } from "./tasks.js";
 import { execVerb, type Verb } from "./verbs.js";
 import { buildCardReport } from "./lint.js";
+import { runDoctor } from "./doctor.js";
 
 const program = new Command();
 program.name("agentcall").description("Call other people's coding agents").version("0.2.0");
@@ -111,6 +112,13 @@ program
       console.error(e instanceof ApiError ? e.message : String(e));
       process.exitCode = 1;
     }
+  });
+
+program
+  .command("doctor")
+  .description("verify this install can answer calls: binary, auth, sandbox spawn, listener, relay self-call")
+  .action(async () => {
+    process.exitCode = await runDoctor({ paths: getPaths() });
   });
 
 program
