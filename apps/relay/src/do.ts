@@ -69,8 +69,8 @@ export class HandleDO extends DurableObject {
     try { ws.send(JSON.stringify(frame)); } catch { /* socket gone */ }
   }
 
-  private fail(ws: WebSocket, code: ErrorCodeType, detail?: string, close = true): void {
-    this.send(ws, { type: "call_error", code, detail });
+  private fail(ws: WebSocket, code: ErrorCodeType, detail?: string, offered?: string[], close = true): void {
+    this.send(ws, { type: "call_error", code, detail, offered });
     if (close) { try { ws.close(1000, code); } catch { /* already closed */ } }
   }
 
@@ -108,7 +108,7 @@ export class HandleDO extends DurableObject {
       this.send(ws, { type: "call_status", state: "ringing" });
       this.send(listener, {
         type: "incoming_call", call_id, from: att.from,
-        message: frame.message, session_id: frame.session_id,
+        message: frame.message, session_id: frame.session_id, task: frame.task,
       });
       return;
     }
@@ -127,14 +127,14 @@ export class HandleDO extends DurableObject {
     if (frame.type === "call_result") {
       const text = truncateUtf8Bytes(frame.text, MAX_REPLY_BYTES);
       if (caller) {
-        this.send(caller, { type: "call_reply", call_id: frame.call_id, text, session_id: frame.session_id });
+        this.send(caller, { type: "call_reply", call_id: frame.call_id, text, session_id: frame.session_id, task: frame.task });
         try { caller.close(1000, "done"); } catch { /* closed */ }
       }
       await this.ctx.storage.delete(`call:${frame.call_id}`);
       return;
     }
     if (frame.type === "call_failed") {
-      if (caller) this.fail(caller, frame.code, frame.detail);
+      if (caller) this.fail(caller, frame.code, frame.detail, frame.offered);
       await this.ctx.storage.delete(`call:${frame.call_id}`);
     }
   }
