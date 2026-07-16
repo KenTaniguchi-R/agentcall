@@ -11,6 +11,7 @@ import { DEFAULT_POLICY } from "./policy.js";
 import { isEphemeralDir, preferDurableBin, srtSettings, toolchainReadDirs } from "./srt.js";
 import { appendSnippet } from "./snippet.js";
 import { installLaunchAgent } from "./launchd.js";
+import { formatCheck, verifyAgent, type VerifyCheck, type VerifyFns } from "./verify.js";
 
 // Re-exported for test-import compatibility (test/setup.test.ts imports
 // these from setup.js) — the actual definitions now live in srt.ts
@@ -33,11 +34,14 @@ export interface SetupOpts {
   relay?: string;
   skipLaunchd?: boolean;
   callerOnly?: boolean;
+  // false skips post-setup agent verification (commander's --no-verify).
+  verify?: boolean;
   io?: { ask(question: string): Promise<string> };
   // Test seams — production callers should leave these as the defaults.
   hasBin?: (name: string) => boolean;
   resolveBin?: (name: string) => string | null;
   installLaunchAgentFn?: typeof installLaunchAgent;
+  verifyFns?: VerifyFns;
 }
 
 // Dirnames of the resolved bins, deduped and skipping any that failed to
@@ -136,7 +140,7 @@ async function decideCallable(
   return answer === "" || answer === "y" || answer === "yes";
 }
 
-export async function runSetup(opts: SetupOpts): Promise<void> {
+export async function runSetup(opts: SetupOpts): Promise<{ ready: boolean }> {
   const paths: Paths = getPaths();
   const hasBinFn = opts.hasBin ?? ((name) => (opts.resolveBin ?? defaultResolveBin)(name) !== null);
   const resolveBinFn = opts.resolveBin ?? defaultResolveBin;
@@ -169,7 +173,7 @@ export async function runSetup(opts: SetupOpts): Promise<void> {
       `This machine already answers calls as "${existingCfg.handle}". To stop answering calls, run ` +
         "`agentcall uninstall` (config is kept; re-run `agentcall setup` to come back).",
     );
-    return;
+    return { ready: false };
   }
 
   // On reuse the saved agent_kind is what actually gets spawned (see
@@ -211,6 +215,7 @@ export async function runSetup(opts: SetupOpts): Promise<void> {
   // Everything below the config is listener-side (callee) machinery: a
   // caller-only install (no agent_kind) has no sandbox to seed, no tasks or
   // card to publish, and no listener to install, so it needs none of it.
+  let verifyFailure: VerifyCheck | undefined;
   if (cfg.agent_kind) {
     // Seed srt.json with the current toolchain's read dirs (see srt.ts's
     // toolchainReadDirs) so the sandboxed agent can execute node/npx/itself
@@ -245,6 +250,13 @@ export async function runSetup(opts: SetupOpts): Promise<void> {
       const extraPathDirs = resolveExtraPathDirs([cfg.agent_kind, "npx"], resolveBinFn);
       (opts.installLaunchAgentFn ?? installLaunchAgent)(paths, undefined, extraPathDirs);
     }
+
+    if (opts.verify !== false) {
+      console.log(`\nVerifying ${cfg.agent_kind} can answer a sandboxed test call (takes ~10-30s)...`);
+      const checks = await verifyAgent(cfg.agent_kind, paths, opts.verifyFns);
+      for (const c of checks) console.log(formatCheck(c));
+      verifyFailure = checks.find((c) => !c.ok);
+    }
   }
 
   if (opts.snippet !== false) {
@@ -252,9 +264,23 @@ export async function runSetup(opts: SetupOpts): Promise<void> {
     appendSnippet(join(homedir(), ".codex", "AGENTS.md"));
   }
 
+  if (cfg.agent_kind && verifyFailure) {
+    console.error(
+      `\nagentcall is set up, but your agent is NOT ready to answer calls.\n` +
+        `  Failed check: ${verifyFailure.name}${verifyFailure.detail ? ` — ${verifyFailure.detail}` : ""}\n` +
+        (verifyFailure.hint ? `  Fix: ${verifyFailure.hint}\n` : "") +
+        `\nOnce fixed, run \`agentcall doctor\` to confirm — calls start working immediately, no setup re-run needed.\n\n` +
+        `  Handle:  ${cfg.handle}\n` +
+        `  Agent:   ${cfg.agent_kind}\n` +
+        `  Relay:   ${cfg.relay}\n` +
+        `  Address: ${address}\n`,
+    );
+    return { ready: false };
+  }
   if (cfg.agent_kind) {
     console.log(
       `\nagentcall is set up.\n` +
+        (opts.verify !== false ? `  ✓ agent verified (${cfg.agent_kind} answered a sandboxed test call)\n` : "") +
         `  Handle:  ${cfg.handle}\n` +
         `  Agent:   ${cfg.agent_kind}\n` +
         `  Relay:   ${cfg.relay}\n` +
@@ -273,4 +299,5 @@ export async function runSetup(opts: SetupOpts): Promise<void> {
         `To make your own agent callable later, install claude or codex and re-run \`agentcall setup\`.\n`,
     );
   }
+  return { ready: true };
 }

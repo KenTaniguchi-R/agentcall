@@ -26,6 +26,7 @@ program
   .option("--no-snippet", "skip appending the agentcall usage snippet to CLAUDE.md/AGENTS.md")
   .option("--skip-launchd", "skip installing the launchd background listener")
   .option("--caller-only", "register a handle to call others without making your own agent callable")
+  .option("--no-verify", "skip verifying the agent can answer a sandboxed test call")
   .action(
     async (o: {
       handle?: string;
@@ -34,15 +35,18 @@ program
       snippet?: boolean;
       skipLaunchd?: boolean;
       callerOnly?: boolean;
+      verify?: boolean;
     }) => {
-      await runSetup({
+      const result = await runSetup({
         handle: o.handle,
         agent: o.agent as "claude" | "codex" | undefined,
         relay: o.relay,
         snippet: o.snippet,
         skipLaunchd: o.skipLaunchd,
         callerOnly: o.callerOnly,
+        verify: o.verify,
       });
+      if (!result.ready) process.exitCode = 1;
     },
   );
 
