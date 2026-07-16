@@ -148,6 +148,17 @@ describe("runAgent (with a fake agent binary)", () => {
       runAgent("claude", "x", p, 5000, { cmd: "node", args: ["-e", "process.exit(3)"], cwd: "/tmp" }),
     ).rejects.toMatchObject({ code: "agent_error" });
   });
+  it("falls back to stdout for the error message when stderr is empty", async () => {
+    // Real shape: claude -p reports an auth failure as is_error JSON on
+    // stdout with exit 1 and nothing on stderr — the old code built the
+    // AgentRunError message from stderr alone, so this case surfaced as an
+    // empty, unclassifiable "agent exited 1: ".
+    const stdout = JSON.stringify({ type: "result", is_error: true, result: "Not logged in · Please run /login" });
+    const script = `process.stdout.write(${JSON.stringify(stdout)}); process.exit(1);`;
+    await expect(
+      runAgent("claude", "x", p, 5000, { cmd: "node", args: ["-e", script], cwd: "/tmp" }),
+    ).rejects.toMatchObject({ code: "agent_error", message: expect.stringContaining("Not logged in") });
+  });
   it("kills the whole process group on timeout, so a grandchild holding stdout doesn't hang the promise", async () => {
     const marker = join(tmpdir(), `agentcall-pgid-test-${Date.now()}-${Math.random()}.pid`);
     // The outer process spawns a grandchild that inherits stdio (holding

@@ -37,6 +37,18 @@ describe("classifyAgentFailure", () => {
         ),
       ),
     ).toBe(HINTS.claudeAuth);
+    // Real shape (claude 2.1.211): unauthenticated claude -p exits 1 with
+    // empty stderr and the error in stdout's is_error JSON, which runner.ts
+    // now falls back to for the AgentRunError message.
+    expect(
+      classifyAgentFailure(
+        "claude",
+        new AgentRunError(
+          'agent exited 1: {"type":"result","is_error":true,"result":"Not logged in · Please run /login"}',
+          "agent_error",
+        ),
+      ),
+    ).toBe(HINTS.claudeAuth);
   });
 
   it("maps codex auth errors to the codex login hint", () => {

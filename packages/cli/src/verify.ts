@@ -38,7 +38,7 @@ export function classifyAgentFailure(kind: AgentKind, error: unknown): string | 
   if (/exited 127|command not found/i.test(msg)) return HINTS.pathMissing;
   const authRe =
     kind === "claude"
-      ? /invalid api key|please run \/login|authentication_error|oauth token has expired/i
+      ? /invalid api key|please run \/login|authentication_error|oauth token has expired|not logged in/i
       : /token_invalidated|not logged in|codex login|\b401\b/i;
   if (authRe.test(msg)) return kind === "claude" ? HINTS.claudeAuth : HINTS.codexAuth;
   return undefined;

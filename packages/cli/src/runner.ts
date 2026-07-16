@@ -214,7 +214,15 @@ export function runAgent(
       // decoded correctly instead of corrupting into U+FFFD.
       const stdout = Buffer.concat(stdoutChunks).toString("utf8");
       const stderr = Buffer.concat(stderrChunks).toString("utf8");
-      if (code !== 0) return reject(new AgentRunError(`agent exited ${code}: ${stderr.slice(0, 2000)}`, "agent_error"));
+      if (code !== 0) {
+        // claude -p reports auth failures as is_error JSON on stdout with
+        // exit 1 and empty stderr, so stderr alone can be the empty string
+        // even though the actual error text is sitting right there on
+        // stdout — fall back to it so classifyAgentFailure has something to
+        // match against.
+        const errText = (stderr.trim() ? stderr : stdout).slice(0, 2000);
+        return reject(new AgentRunError(`agent exited ${code}: ${errText}`, "agent_error"));
+      }
       try {
         const out = kind === "claude" ? parseClaudeJson(stdout) : parseCodexJsonl(stdout);
         resolve({ ...out, text: truncateUtf8(out.text, MAX_REPLY_BYTES) });
