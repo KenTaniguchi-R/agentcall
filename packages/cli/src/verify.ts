@@ -1,5 +1,6 @@
 import { execFileSync } from "node:child_process";
-import { AgentRunError, type AgentKind } from "./runner.js";
+import type { Paths } from "./paths.js";
+import { AgentRunError, runAgent, type AgentKind } from "./runner.js";
 import { resolveAgentBin } from "./srt.js";
 
 // One row of verification output, shared by `setup` and `agentcall doctor`.
@@ -73,4 +74,46 @@ export function checkCodexAuth(execFn: ExecFn = defaultExec): VerifyCheck {
 export function formatCheck(c: VerifyCheck): string {
   const head = `${c.ok ? "✓" : "✗"} ${c.name}${c.detail ? ` — ${c.detail}` : ""}`;
   return !c.ok && c.hint ? `${head}\n  fix: ${c.hint}` : head;
+}
+
+export const VERIFY_PROMPT = "Reply with exactly: OK";
+// Generous vs the observed ~10-25s of a healthy run, far below AGENT_TIMEOUT_MS:
+// a verification hang should fail in 2 minutes, not 5.
+export const VERIFY_TIMEOUT_MS = 120_000;
+
+// The real thing: the byte-identical sandboxed spawn path an inbound call
+// uses. A successfully parsed reply is the pass signal — the reply text is
+// NOT asserted, since chatty models don't reliably echo "OK" verbatim.
+export async function checkSandboxSpawn(
+  kind: AgentKind, paths: Paths, runFn: typeof runAgent = runAgent,
+): Promise<VerifyCheck> {
+  try {
+    await runFn(kind, VERIFY_PROMPT, paths, VERIFY_TIMEOUT_MS);
+    return { name: "sandboxed agent run", ok: true };
+  } catch (e) {
+    return { name: "sandboxed agent run", ok: false, detail: short(e), hint: classifyAgentFailure(kind, e) };
+  }
+}
+
+// Injection seams for tests and for setup/doctor callers; production leaves
+// all three unset (same pattern as SetupOpts.installLaunchAgentFn).
+export interface VerifyFns {
+  runFn?: typeof runAgent;
+  execFn?: ExecFn;
+  resolveBin?: (kind: AgentKind) => string;
+}
+
+// The binary -> codex-auth -> sandbox-spawn ladder shared by setup and
+// doctor. Stops at the first failure: a failed pre-check must not burn a
+// model call, and the user should see the first broken layer, not a cascade.
+export async function verifyAgent(kind: AgentKind, paths: Paths, fns: VerifyFns = {}): Promise<VerifyCheck[]> {
+  const checks: VerifyCheck[] = [checkAgentBinary(kind, fns.resolveBin)];
+  if (!checks[0].ok) return checks;
+  if (kind === "codex") {
+    const auth = checkCodexAuth(fns.execFn);
+    checks.push(auth);
+    if (!auth.ok) return checks;
+  }
+  checks.push(await checkSandboxSpawn(kind, paths, fns.runFn));
+  return checks;
 }

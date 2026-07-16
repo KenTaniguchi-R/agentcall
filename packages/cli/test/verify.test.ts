@@ -1,6 +1,17 @@
 import { describe, expect, it } from "vitest";
+import { getPaths } from "../src/paths.js";
 import { AgentRunError } from "../src/runner.js";
-import { checkAgentBinary, checkCodexAuth, classifyAgentFailure, formatCheck, HINTS } from "../src/verify.js";
+import {
+  checkAgentBinary,
+  checkCodexAuth,
+  checkSandboxSpawn,
+  classifyAgentFailure,
+  formatCheck,
+  HINTS,
+  VERIFY_PROMPT,
+  VERIFY_TIMEOUT_MS,
+  verifyAgent,
+} from "../src/verify.js";
 
 describe("classifyAgentFailure", () => {
   it("maps claude auth errors to the /login hint", () => {
@@ -96,5 +107,80 @@ describe("checkCodexAuth", () => {
     });
     expect(c.ok).toBe(false);
     expect(c.hint).toBe(HINTS.codexAuth);
+  });
+});
+
+const fakePaths = getPaths("/tmp/agentcall-verify-test-home");
+
+describe("checkSandboxSpawn", () => {
+  it("passes when runFn resolves, without asserting reply text", async () => {
+    const c = await checkSandboxSpawn("claude", fakePaths, async () => ({ text: "OK, got it!" }));
+    expect(c).toMatchObject({ name: "sandboxed agent run", ok: true });
+  });
+
+  it("invokes runFn with the verify prompt and timeout", async () => {
+    const seen: unknown[] = [];
+    await checkSandboxSpawn("claude", fakePaths, async (kind, prompt, _p, timeoutMs) => {
+      seen.push(kind, prompt, timeoutMs);
+      return { text: "OK" };
+    });
+    expect(seen).toEqual(["claude", VERIFY_PROMPT, VERIFY_TIMEOUT_MS]);
+  });
+
+  it("classifies an auth failure into a hint", async () => {
+    const c = await checkSandboxSpawn("claude", fakePaths, async () => {
+      throw new AgentRunError("could not parse agent output: Error: claude reported an error: Invalid API key · Please run /login", "agent_error");
+    });
+    expect(c.ok).toBe(false);
+    expect(c.hint).toBe(HINTS.claudeAuth);
+    expect(c.detail).toContain("Invalid API key");
+  });
+});
+
+describe("verifyAgent", () => {
+  it("runs binary -> spawn for claude and returns both checks", async () => {
+    const checks = await verifyAgent("claude", fakePaths, {
+      resolveBin: () => "/fake/bin/claude",
+      runFn: async () => ({ text: "OK" }),
+    });
+    expect(checks.map((c) => c.name)).toEqual(["agent binary", "sandboxed agent run"]);
+    expect(checks.every((c) => c.ok)).toBe(true);
+  });
+
+  it("runs binary -> codex auth -> spawn for codex", async () => {
+    const checks = await verifyAgent("codex", fakePaths, {
+      resolveBin: () => "/fake/bin/codex",
+      execFn: () => {},
+      runFn: async () => ({ text: "OK" }),
+    });
+    expect(checks.map((c) => c.name)).toEqual(["agent binary", "codex auth", "sandboxed agent run"]);
+  });
+
+  it("stops the ladder at the first failure (no spawn after failed codex auth)", async () => {
+    let spawned = false;
+    const checks = await verifyAgent("codex", fakePaths, {
+      resolveBin: () => "/fake/bin/codex",
+      execFn: () => {
+        throw new Error("Not logged in");
+      },
+      runFn: async () => {
+        spawned = true;
+        return { text: "OK" };
+      },
+    });
+    expect(checks.map((c) => c.name)).toEqual(["agent binary", "codex auth"]);
+    expect(checks[1].ok).toBe(false);
+    expect(spawned).toBe(false);
+  });
+
+  it("stops after a failed binary check", async () => {
+    const checks = await verifyAgent("claude", fakePaths, {
+      resolveBin: () => {
+        throw new Error("Could not find `claude` on PATH.");
+      },
+      runFn: async () => ({ text: "OK" }),
+    });
+    expect(checks).toHaveLength(1);
+    expect(checks[0].ok).toBe(false);
   });
 });
