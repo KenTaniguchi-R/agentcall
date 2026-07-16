@@ -10,7 +10,7 @@ import { runSetup } from "./setup.js";
 import { uninstallLaunchAgent } from "./launchd.js";
 import { publishCard } from "./card.js";
 import { loadPolicy, savePolicy } from "./policy.js";
-import { loadTasks } from "./tasks.js";
+import { loadTasks, scaffoldTask } from "./tasks.js";
 import { execVerb, type Verb } from "./verbs.js";
 import { buildCardReport } from "./lint.js";
 
@@ -176,6 +176,25 @@ function policyVerbAction(verb: Verb) {
     }
   };
 }
+
+const task = program.command("task").description("manage the tasks your agent offers");
+task
+  .command("new")
+  .description("scaffold a new task (does not publish it)")
+  .argument("<id>", "task id: lowercase kebab-case, becomes the directory name")
+  .action((id: string) => {
+    const paths = getPaths();
+    try {
+      const file = scaffoldTask(paths, id);
+      console.log(`Created ${file}\nEdit it, then:`);
+      console.log(`  agentcall card                      # check it validates`);
+      console.log(`  agentcall offer ${id}    # offer to everyone, or:`);
+      console.log(`  agentcall allow <handle> ${id}`);
+    } catch (e) {
+      console.error(String(e instanceof Error ? e.message : e));
+      process.exitCode = 1;
+    }
+  });
 
 program.command("allow").description("grant a caller an extra task (and republish your card)")
   .argument("<handle>").argument("<task-id>").action(policyVerbAction("allow"));

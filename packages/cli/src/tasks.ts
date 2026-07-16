@@ -1,4 +1,4 @@
-import { existsSync, readdirSync, readFileSync } from "node:fs";
+import { existsSync, mkdirSync, readdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { z } from "zod";
 import { parse as parseYaml } from "yaml";
@@ -129,4 +129,42 @@ export function loadTasks(p: Paths, warn: (msg: string) => void = console.error)
     });
   }
   return tasks;
+}
+
+// Scaffold for `agentcall task new`. Parses cleanly as-is: the TODO
+// description shows up verbatim on the owner's card review, which is its
+// own nudge to edit before offering. Commented lines document every
+// optional frontmatter field with its default.
+export const SKILL_TEMPLATE = `---
+description: TODO — one line callers will see on your card
+# name: defaults to the directory name
+# tier: T1                # T1 runs immediately; T2 reserved for approval gates
+# tools: [read]           # read | write | fetch | exec
+# write_paths: []         # e.g. [public/inbox] — must be public or under it
+# network: []             # extra allowed domains, e.g. [calendar.google.com]
+# timeout_s: 300
+# examples:
+#   - An example message a caller might send
+---
+# Instructions for this task
+
+Describe how your agent should perform it. This text is given to the
+agent verbatim when a caller invokes the task.
+`;
+
+// Creates ~/AgentCall/tasks/<id>/SKILL.md from the template and returns the
+// file path. Never overwrites; never touches policy — a scaffolded task is
+// invisible to callers until the owner runs `agentcall offer <id>` or
+// `agentcall allow <handle> <id>` (create ≠ publish).
+export function scaffoldTask(p: Paths, id: string): string {
+  if (!TASK_ID_RE.test(id)) {
+    throw new Error(`"${id}" is not a valid task id: lowercase letters, digits, and hyphens, starting with a letter or digit.`);
+  }
+  if (id === ASK_TASK.id) throw new Error(`"ask" is the built-in reserved task and can't be redefined.`);
+  const dir = join(p.tasksDir, id);
+  if (existsSync(dir)) throw new Error(`Task "${id}" already exists at ${dir}.`);
+  mkdirSync(dir, { recursive: true });
+  const file = join(dir, "SKILL.md");
+  writeFileSync(file, SKILL_TEMPLATE);
+  return file;
 }

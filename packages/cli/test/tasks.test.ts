@@ -2,7 +2,7 @@ import { mkdirSync, mkdtempSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
-import { ASK_TASK, FULL_ACCESS_ENVELOPE, loadTasks, SkillFrontmatter, splitFrontmatter } from "../src/tasks.js";
+import { ASK_TASK, FULL_ACCESS_ENVELOPE, loadTasks, scaffoldTask, SkillFrontmatter, splitFrontmatter } from "../src/tasks.js";
 import { getPaths } from "../src/paths.js";
 
 function tempHome() { return mkdtempSync(join(tmpdir(), "agentcall-tasks-")); }
@@ -99,6 +99,28 @@ describe("loadTasks", () => {
     expect(tasks.map((t) => t.id)).toEqual(["ask"]);
     expect(tasks[0]!.name).toBe(ASK_TASK.name);
     expect(warnings).toHaveLength(2);
+  });
+});
+
+describe("scaffoldTask", () => {
+  it("creates a SKILL.md that loadTasks accepts as a valid task", () => {
+    const home = tempHome();
+    const p = getPaths(home);
+    const file = scaffoldTask(p, "schedule-meeting");
+    expect(file).toBe(join(p.tasksDir, "schedule-meeting", "SKILL.md"));
+    const warnings: string[] = [];
+    const tasks = loadTasks(p, (m) => warnings.push(m));
+    expect(warnings).toEqual([]);
+    const t = tasks.find((x) => x.id === "schedule-meeting")!;
+    expect(t.description).toContain("TODO");
+    expect(t.envelope).toEqual({ caps: ["read"], write_paths: [], network: [] });
+  });
+  it("refuses invalid ids, the reserved ask id, and existing directories", () => {
+    const p = getPaths(tempHome());
+    expect(() => scaffoldTask(p, "Bad_Id")).toThrow(/valid task id/i);
+    expect(() => scaffoldTask(p, "ask")).toThrow(/reserved/i);
+    scaffoldTask(p, "twice");
+    expect(() => scaffoldTask(p, "twice")).toThrow(/already exists/i);
   });
 });
 
