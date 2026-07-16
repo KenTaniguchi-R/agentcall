@@ -1,4 +1,6 @@
+import { execFileSync } from "node:child_process";
 import { AgentRunError, type AgentKind } from "./runner.js";
+import { resolveAgentBin } from "./srt.js";
 
 // One row of verification output, shared by `setup` and `agentcall doctor`.
 export interface VerifyCheck {
@@ -36,6 +38,36 @@ export function classifyAgentFailure(kind: AgentKind, error: unknown): string | 
       : /token_invalidated|not logged in|codex login|\b401\b/i;
   if (authRe.test(msg)) return kind === "claude" ? HINTS.claudeAuth : HINTS.codexAuth;
   return undefined;
+}
+
+// Truncated, single-line error text for a check's detail field.
+const short = (e: unknown) => String(e instanceof Error ? e.message : e).slice(0, 300);
+
+export function checkAgentBinary(kind: AgentKind, resolveBin: (kind: AgentKind) => string = resolveAgentBin): VerifyCheck {
+  try {
+    return { name: "agent binary", ok: true, detail: resolveBin(kind) };
+  } catch (e) {
+    return { name: "agent binary", ok: false, detail: short(e) };
+  }
+}
+
+export type ExecFn = (cmd: string, args: string[]) => void;
+
+const defaultExec: ExecFn = (cmd, args) => {
+  execFileSync(cmd, args, { encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] });
+};
+
+// codex-only fast path: `codex login status` is free (no model call) and
+// exits nonzero when logged out, so codex users learn about missing auth
+// without burning a spawn. claude has no equivalent — its auth failures are
+// caught by checkSandboxSpawn.
+export function checkCodexAuth(execFn: ExecFn = defaultExec): VerifyCheck {
+  try {
+    execFn("codex", ["login", "status"]);
+    return { name: "codex auth", ok: true };
+  } catch (e) {
+    return { name: "codex auth", ok: false, detail: short(e), hint: HINTS.codexAuth };
+  }
 }
 
 export function formatCheck(c: VerifyCheck): string {

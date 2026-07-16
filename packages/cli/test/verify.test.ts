@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { AgentRunError } from "../src/runner.js";
-import { classifyAgentFailure, formatCheck, HINTS } from "../src/verify.js";
+import { checkAgentBinary, checkCodexAuth, classifyAgentFailure, formatCheck, HINTS } from "../src/verify.js";
 
 describe("classifyAgentFailure", () => {
   it("maps claude auth errors to the /login hint", () => {
@@ -62,5 +62,39 @@ describe("formatCheck", () => {
     expect(formatCheck({ name: "sandboxed agent run", ok: false, detail: "boom", hint: "do X" })).toBe(
       "✗ sandboxed agent run — boom\n  fix: do X",
     );
+  });
+});
+
+describe("checkAgentBinary", () => {
+  it("passes with the resolved path as detail", () => {
+    const c = checkAgentBinary("claude", () => "/fake/bin/claude");
+    expect(c).toMatchObject({ name: "agent binary", ok: true, detail: "/fake/bin/claude" });
+  });
+
+  it("fails with the resolver's message when the binary is missing", () => {
+    const c = checkAgentBinary("codex", () => {
+      throw new Error("Could not find `codex` on PATH.");
+    });
+    expect(c.ok).toBe(false);
+    expect(c.detail).toContain("Could not find");
+  });
+});
+
+describe("checkCodexAuth", () => {
+  it("passes when `codex login status` exits 0", () => {
+    const calls: string[][] = [];
+    const c = checkCodexAuth((cmd, args) => {
+      calls.push([cmd, ...args]);
+    });
+    expect(c).toMatchObject({ name: "codex auth", ok: true });
+    expect(calls).toEqual([["codex", "login", "status"]]);
+  });
+
+  it("fails with the codex login hint when it exits nonzero", () => {
+    const c = checkCodexAuth(() => {
+      throw new Error("Not logged in");
+    });
+    expect(c.ok).toBe(false);
+    expect(c.hint).toBe(HINTS.codexAuth);
   });
 });
