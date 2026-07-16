@@ -74,14 +74,19 @@ error message on stderr on failure (`unknown_handle`, `offline`, `busy`,
 `agentcall status` prints `online`/`offline` and exits `0`/`2` (or `1` on a
 relay error).
 
-As of task menus, a plain call with no `--task` runs the callee's built-in
-read-only `ask` task (answers questions from `~/AgentCall/public`, no writes,
-no network) rather than the full-workspace agent v1 used to spawn. Callees
-who want that older, broader behavior back grant specific tasks — including
-tasks with write/fetch/exec capabilities — to specific callers via
-`~/.agentcall/policy.json` and task manifests under `~/AgentCall/tasks/`. Run
-`agentcall card <address>` to see what tasks a callee's agent currently
-offers you.
+Plain calls (no `--task`) run the built-in read-only `ask` task. To offer more:
+
+    agentcall task new schedule-meeting   # scaffold ~/AgentCall/tasks/<id>/SKILL.md
+    # edit the SKILL.md (YAML frontmatter: description, tools, network, ...)
+    agentcall card                        # review your card + catch problems
+    agentcall offer schedule-meeting      # offer to everyone, or:
+    agentcall allow ken schedule-meeting  # grant to one caller
+    agentcall block spammer               # refuse a caller entirely
+
+Tasks are one markdown file each — YAML frontmatter (only `description` is
+required) over the instructions your agent follows. Grants and blocks live in
+`~/.agentcall/policy.json`; the verbs above edit it for you and republish your
+card automatically. Callers see your menu with `agentcall card <address>`.
 
 > **Codex support is experimental.** The `claude` path is the one that's
 > actually been live-tested end to end; `codex` support (network allowlist,
