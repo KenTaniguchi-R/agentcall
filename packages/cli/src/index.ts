@@ -113,9 +113,14 @@ program
       }
       const report = buildCardReport(cfg, paths);
       for (const line of report.menu) console.log(line);
-      if (report.problems.length || report.notices.length) console.log("\nProblems:");
-      for (const p of report.problems) console.log(`  ✗ ${p}`);
-      for (const n of report.notices) console.log(`  ! ${n}`);
+      if (report.problems.length > 0) {
+        console.log("\nProblems:");
+        for (const p of report.problems) console.log(`  ✗ ${p}`);
+      }
+      if (report.notices.length > 0) {
+        console.log("\nNotes:");
+        for (const n of report.notices) console.log(`  ! ${n}`);
+      }
       if (report.problems.length > 0) process.exitCode = 1;
       return;
     }

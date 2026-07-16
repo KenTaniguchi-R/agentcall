@@ -65,6 +65,14 @@ describe("buildCardReport", () => {
     expect(r.notices.join("\n")).toContain("out of date");
   });
 
+  it("reports an unreadable card snapshot as a notice, not a problem", () => {
+    const p = getPaths(home());
+    writeFileSync(p.cardSnapshotFile, "{corrupt");
+    const r = buildCardReport(cfg, p);
+    expect(r.notices.join("\n")).toContain("snapshot unreadable");
+    expect(r.problems).toEqual([]);
+  });
+
   it("lists per-caller grants and blocked callers in the menu", () => {
     const h = home();
     const p = getPaths(h);
