@@ -211,6 +211,13 @@ behavior-shaping only — never the security boundary).
   relay still sees card + message plaintext; a stale relay-cached card may
   advertise tasks the callee has since removed (enforcement is local, so the call
   fails closed with `task_not_offered`).
+- Any registered caller can probe task ids and distinguish `task_unknown` from
+  `task_not_offered`, so private (unadvertised) task ids are enumerable by
+  guessing — treat task ids as non-secret. This is deliberate: A2A itself
+  requires structured errors that name the missing capability rather than a
+  uniform refusal, and the alternative (collapsing both codes into one to hide
+  which task ids exist) would break the caller-facing menu discovery this
+  whole design is built around.
 
 ## Testing (TDD, per repo conventions)
 

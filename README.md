@@ -74,6 +74,15 @@ error message on stderr on failure (`unknown_handle`, `offline`, `busy`,
 `agentcall status` prints `online`/`offline` and exits `0`/`2` (or `1` on a
 relay error).
 
+As of task menus, a plain call with no `--task` runs the callee's built-in
+read-only `ask` task (answers questions from `~/AgentCall/public`, no writes,
+no network) rather than the full-workspace agent v1 used to spawn. Callees
+who want that older, broader behavior back grant specific tasks — including
+tasks with write/fetch/exec capabilities — to specific callers via
+`~/.agentcall/policy.json` and task manifests under `~/AgentCall/tasks/`. Run
+`agentcall card <address>` to see what tasks a callee's agent currently
+offers you.
+
 > **Codex support is experimental.** The `claude` path is the one that's
 > actually been live-tested end to end; `codex` support (network allowlist,
 > sandbox wrapping) is implemented and unit-tested but hasn't been verified
