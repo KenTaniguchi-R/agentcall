@@ -123,10 +123,29 @@ function addressFromConfig(cfg: Config): string {
   }
 }
 
-// Whether this install should answer calls (run the listener). Task-5 of the
-// caller-only plan expands this decision with agent detection and a prompt.
-function decideCallable(opts: SetupOpts): boolean {
-  return !opts.callerOnly;
+// Whether this install should answer calls (run the listener) or stay
+// caller-only. Precedence: explicit --caller-only > a reused config that is
+// already callable > explicit --agent > no agent binary on PATH (fall back
+// to caller-only instead of failing setup) > --yes > ask.
+async function decideCallable(
+  opts: SetupOpts,
+  hasBin: (name: string) => boolean,
+  ask: (q: string) => Promise<string>,
+  reusedCfg: Config | undefined,
+): Promise<boolean> {
+  if (opts.callerOnly) return false;
+  if (reusedCfg?.agent_kind) return true;
+  if (opts.agent) return true;
+  if (!hasBin("claude") && !hasBin("codex")) {
+    console.log(
+      "No claude or codex found on PATH — setting up as caller-only.\n" +
+        "Install one and re-run `agentcall setup` to make your agent callable.",
+    );
+    return false;
+  }
+  if (opts.yes) return true;
+  const answer = (await ask("Make your agent callable by others? [Y/n]: ")).trim().toLowerCase();
+  return answer === "" || answer === "y" || answer === "yes";
 }
 
 export async function runSetup(opts: SetupOpts): Promise<void> {
@@ -150,7 +169,7 @@ export async function runSetup(opts: SetupOpts): Promise<void> {
   const reusedCfg =
     existingCfg !== undefined && (!opts.handle || opts.handle === existingCfg.handle) ? existingCfg : undefined;
 
-  const callable = decideCallable(opts);
+  const callable = await decideCallable(opts, hasBinFn, ask, reusedCfg);
 
   // On reuse the saved agent_kind is what actually gets spawned (see
   // listener.ts), so skip detection entirely — it may prompt ("Which should

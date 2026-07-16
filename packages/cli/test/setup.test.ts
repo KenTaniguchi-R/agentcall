@@ -149,6 +149,7 @@ describe("runSetup", () => {
         snippet: false,
         skipLaunchd: true,
         hasBin: (name) => name === "codex",
+        io: { ask: async () => "y" },
       });
       const p = getPaths(home);
       const cfg = JSON.parse(readFileSync(p.configFile, "utf8"));
@@ -158,15 +159,30 @@ describe("runSetup", () => {
     }
   });
 
-  it("throws a friendly error when neither agent is found", async () => {
+  it("falls back to caller-only with a notice when neither agent is found", async () => {
     const home = mkdtempSync(join(tmpdir(), "agentcall-setup-"));
     process.env.AGENTCALL_HOME = home;
+    const logs: string[] = [];
+    const spy = vi.spyOn(console, "log").mockImplementation((...a: unknown[]) => {
+      logs.push(a.map(String).join(" "));
+    });
     try {
       const relay = await fakeRelay();
-      await expect(
-        runSetup({ handle: "ken3", relay, snippet: false, skipLaunchd: true, hasBin: () => false }),
-      ).rejects.toThrow(/claude|codex/i);
+      let launchdCalled = false;
+      await runSetup({
+        handle: "ken3",
+        relay,
+        snippet: false,
+        hasBin: () => false,
+        installLaunchAgentFn: () => { launchdCalled = true; },
+      });
+      const p = getPaths(home);
+      const cfg = JSON.parse(readFileSync(p.configFile, "utf8"));
+      expect(cfg.agent_kind).toBeUndefined();
+      expect(launchdCalled).toBe(false);
+      expect(logs.some((l) => l.includes("caller-only"))).toBe(true);
     } finally {
+      spy.mockRestore();
       delete process.env.AGENTCALL_HOME;
     }
   });
@@ -369,6 +385,54 @@ describe("caller-only setup", () => {
       expect(asked).toEqual([]);
       expect(JSON.parse(readFileSync(p.configFile, "utf8"))).toEqual(firstCfg);
       expect(existsSync(p.srtFile)).toBe(false);
+    } finally {
+      delete process.env.AGENTCALL_HOME;
+    }
+  });
+
+  it("asks 'Make your agent callable' and answering n yields caller-only", async () => {
+    const home = mkdtempSync(join(tmpdir(), "agentcall-setup-"));
+    process.env.AGENTCALL_HOME = home;
+    try {
+      const relay = await fakeRelay();
+      const asked: string[] = [];
+      let launchdCalled = false;
+      await runSetup({
+        handle: "asker",
+        relay,
+        snippet: false,
+        hasBin: () => true, // agents ARE installed; user still opts out
+        io: { ask: async (q) => { asked.push(q); return "n"; } },
+        installLaunchAgentFn: () => { launchdCalled = true; },
+      });
+      expect(asked.some((q) => q.includes("callable"))).toBe(true);
+      const p = getPaths(home);
+      const cfg = JSON.parse(readFileSync(p.configFile, "utf8"));
+      expect(cfg.agent_kind).toBeUndefined();
+      expect(existsSync(p.srtFile)).toBe(false);
+      expect(launchdCalled).toBe(false);
+    } finally {
+      delete process.env.AGENTCALL_HOME;
+    }
+  });
+
+  it("an empty answer defaults to callable", async () => {
+    const home = mkdtempSync(join(tmpdir(), "agentcall-setup-"));
+    process.env.AGENTCALL_HOME = home;
+    try {
+      const relay = await fakeRelay();
+      await runSetup({
+        handle: "defaulter",
+        relay,
+        snippet: false,
+        skipLaunchd: true,
+        hasBin: (name) => name === "claude",
+        io: { ask: async () => "" },
+      });
+      const p = getPaths(home);
+      const cfg = JSON.parse(readFileSync(p.configFile, "utf8"));
+      expect(cfg.agent_kind).toBe("claude");
+      expect(existsSync(p.srtFile)).toBe(true);
     } finally {
       delete process.env.AGENTCALL_HOME;
     }
