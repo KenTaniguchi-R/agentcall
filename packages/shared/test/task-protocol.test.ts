@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
   AgentCard, CallError, CallFailed, CallRequest, CallReply, CallResult,
-  CardUpload, ErrorCode, IncomingCall, TASK_ID_RE,
+  CardUpload, ErrorCode, IncomingCall, MAX_OFFERED_TASKS, TASK_ID_RE,
 } from "../src/index.js";
 
 describe("task fields on call frames", () => {
@@ -23,6 +23,27 @@ describe("task fields on call frames", () => {
   it("carries offered[] on call_failed and call_error", () => {
     expect(CallFailed.safeParse({ type: "call_failed", call_id: "c1", code: "task_not_offered", offered: ["ask"] }).success).toBe(true);
     expect(CallError.safeParse({ type: "call_error", code: "blocked", offered: [] }).success).toBe(true);
+  });
+  it("rejects an offered[] entry that isn't a valid task id (terminal-injection guard)", () => {
+    const badFailed = CallFailed.safeParse({
+      type: "call_failed", call_id: "c1", code: "task_not_offered", offered: ["Bad\x1b[31mTask"],
+    });
+    expect(badFailed.success).toBe(false);
+    const badError = CallError.safeParse({ type: "call_error", code: "blocked", offered: ["Bad\x1b[31mTask"] });
+    expect(badError.success).toBe(false);
+  });
+  it("rejects offered[] longer than MAX_OFFERED_TASKS (unbounded relay payload guard)", () => {
+    const tooMany = Array.from({ length: MAX_OFFERED_TASKS + 1 }, (_, i) => `task-${i}`);
+    expect(CallFailed.safeParse({
+      type: "call_failed", call_id: "c1", code: "task_not_offered", offered: tooMany,
+    }).success).toBe(false);
+    expect(CallError.safeParse({ type: "call_error", code: "blocked", offered: tooMany }).success).toBe(false);
+  });
+  it("still accepts a valid offered[] list at or under the cap", () => {
+    const okMany = Array.from({ length: MAX_OFFERED_TASKS }, (_, i) => `task-${i}`);
+    expect(CallFailed.safeParse({
+      type: "call_failed", call_id: "c1", code: "task_not_offered", offered: okMany,
+    }).success).toBe(true);
   });
   it("accepts the new error codes", () => {
     for (const code of ["blocked", "task_not_offered", "task_unknown"]) {

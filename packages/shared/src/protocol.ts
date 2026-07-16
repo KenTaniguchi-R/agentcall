@@ -2,6 +2,12 @@ import { z } from "zod";
 
 export const HANDLE_RE = /^[a-z0-9][a-z0-9-]{1,30}$/;
 export const TASK_ID_RE = /^[a-z0-9][a-z0-9-]{0,63}$/;
+// Bounds the `offered` list on call_failed/call_error: without a cap, a
+// hostile listener could hand back thousands of entries (unbounded relay
+// payload); without the TASK_ID_RE constraint on each entry, an unvalidated
+// string could carry terminal-escape/control sequences straight into a
+// caller's stdout (terminal injection).
+export const MAX_OFFERED_TASKS = 50;
 export const RESERVED_HANDLES = [
   "admin", "www", "relay", "api", "install", "help", "support", "root",
   "agentcall", "system", "status", "info",
@@ -40,7 +46,7 @@ export const CallError = z.object({
   type: z.literal("call_error"),
   code: ErrorCode,
   detail: z.string().optional(),
-  offered: z.array(z.string()).optional(),
+  offered: z.array(z.string().regex(TASK_ID_RE)).max(MAX_OFFERED_TASKS).optional(),
 });
 export const IncomingCall = z.object({
   type: z.literal("incoming_call"),
@@ -63,7 +69,7 @@ export const CallFailed = z.object({
   call_id: z.string(),
   code: ErrorCode,
   detail: z.string().optional(),
-  offered: z.array(z.string()).optional(),
+  offered: z.array(z.string().regex(TASK_ID_RE)).max(MAX_OFFERED_TASKS).optional(),
 });
 
 export const CallerFrame = z.discriminatedUnion("type", [CallRequest]);
