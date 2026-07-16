@@ -5,7 +5,7 @@ import { describe, expect, it } from "vitest";
 import { buildPrompt } from "../src/prompt.js";
 import { buildSpawnSpec, claudeAllowedTools, parseClaudeJson, parseCodexJsonl, runAgent, truncateUtf8 } from "../src/runner.js";
 import { getPaths } from "../src/paths.js";
-import { FULL_ACCESS_ENVELOPE, type Envelope } from "../src/tasks.js";
+import { ASK_TASK, FULL_ACCESS_ENVELOPE, type Envelope, type Task } from "../src/tasks.js";
 
 const p = getPaths("/tmp/fakehome");
 
@@ -15,6 +15,24 @@ describe("buildPrompt", () => {
     expect(out).toContain("ken's public agent");
     expect(out).toContain('"shusaku"');
     expect(out).toContain("\n---\nreview my plan");
+  });
+
+  it("embeds the task name, id, and SKILL.md content when a non-ask task is given", () => {
+    const task: Task = {
+      id: "schedule-meeting", name: "Schedule a meeting", description: "Book a time.",
+      examples: [], tier: "T1", envelope: { caps: ["read"], write_paths: [], network: [] },
+      skill: "# Steps\nCheck the calendar first.",
+    };
+    const out = buildPrompt("ken", "shusaku", "next tue?", task);
+    expect(out).toContain('task "Schedule a meeting" (schedule-meeting)');
+    expect(out).toContain("Check the calendar first.");
+    expect(out).toContain("must not perform any other task");
+    expect(out).toContain("\n---\nnext tue?");
+  });
+
+  it("adds no task section for the built-in ask task or when no task is given", () => {
+    expect(buildPrompt("ken", "shusaku", "q?", ASK_TASK)).not.toContain("TASK-INSTRUCTIONS");
+    expect(buildPrompt("ken", "shusaku", "q?")).not.toContain("TASK-INSTRUCTIONS");
   });
 });
 
