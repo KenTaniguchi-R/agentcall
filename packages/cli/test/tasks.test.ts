@@ -2,16 +2,15 @@ import { mkdirSync, mkdtempSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
-import { ASK_TASK, FULL_ACCESS_ENVELOPE, loadTasks, TaskManifest } from "../src/tasks.js";
+import { ASK_TASK, FULL_ACCESS_ENVELOPE, loadTasks, SkillFrontmatter, splitFrontmatter } from "../src/tasks.js";
 import { getPaths } from "../src/paths.js";
 
 function tempHome() { return mkdtempSync(join(tmpdir(), "agentcall-tasks-")); }
 
-function writeTask(home: string, id: string, manifest: object, skill = "# How to do it\n") {
+function writeSkill(home: string, id: string, skillMd: string) {
   const dir = join(home, "AgentCall", "tasks", id);
   mkdirSync(dir, { recursive: true });
-  writeFileSync(join(dir, "task.json"), JSON.stringify(manifest));
-  writeFileSync(join(dir, "SKILL.md"), skill);
+  writeFileSync(join(dir, "SKILL.md"), skillMd);
 }
 
 describe("paths", () => {
@@ -22,27 +21,31 @@ describe("paths", () => {
   });
 });
 
-describe("TaskManifest", () => {
-  it("applies envelope defaults (read-only, no writes, no network)", () => {
-    const m = TaskManifest.parse({ id: "intro", name: "Intro", description: "Introduce the owner." });
-    expect(m.envelope).toEqual({ tools: ["read"], write_paths: [], network: [] });
-    expect(m.tier).toBe("T1");
+describe("splitFrontmatter", () => {
+  it("splits meta and body", () => {
+    const r = splitFrontmatter("---\ndescription: d\n---\n# Body\ntext\n");
+    expect(r).toEqual({ meta: "description: d", body: "# Body\ntext\n" });
   });
-  it("rejects write_paths that try to escape ~/AgentCall", () => {
-    const bad = TaskManifest.safeParse({
-      id: "x", name: "X", description: "d", envelope: { tools: ["write"], write_paths: ["../.ssh"], network: [] },
-    });
-    expect(bad.success).toBe(false);
+  it("returns null without a leading fence", () => {
+    expect(splitFrontmatter("# Just markdown\n")).toBeNull();
   });
-  it("rejects write_paths outside public (unreadable under srt denyRead, so unusable with Read-before-Edit agents)", () => {
-    const bad = TaskManifest.safeParse({
-      id: "x", name: "X", description: "d", envelope: { tools: ["write"], write_paths: ["inbox"], network: [] },
-    });
-    expect(bad.success).toBe(false);
+  it("returns null without a closing fence", () => {
+    expect(splitFrontmatter("---\ndescription: d\n")).toBeNull();
   });
-  it("rejects a timeout above the 300s cap", () => {
-    const bad = TaskManifest.safeParse({ id: "x", name: "X", description: "d", timeout_s: 999 });
-    expect(bad.success).toBe(false);
+});
+
+describe("SkillFrontmatter", () => {
+  it("applies defaults (read-only, no writes, no network, T1)", () => {
+    const m = SkillFrontmatter.parse({ description: "Introduce the owner." });
+    expect(m).toMatchObject({ tier: "T1", tools: ["read"], write_paths: [], network: [], examples: [] });
+    expect(m.name).toBeUndefined();
+  });
+  it("requires description", () => {
+    expect(SkillFrontmatter.safeParse({ name: "X" }).success).toBe(false);
+  });
+  it("rejects write_paths outside public and timeouts above 300", () => {
+    expect(SkillFrontmatter.safeParse({ description: "d", write_paths: ["inbox"] }).success).toBe(false);
+    expect(SkillFrontmatter.safeParse({ description: "d", timeout_s: 999 }).success).toBe(false);
   });
 });
 
@@ -50,33 +53,47 @@ describe("loadTasks", () => {
   it("always includes the built-in ask task, even with no tasks dir", () => {
     const tasks = loadTasks(getPaths(tempHome()), () => {});
     expect(tasks.map((t) => t.id)).toEqual(["ask"]);
-    expect(ASK_TASK.envelope).toEqual({ caps: ["read"], write_paths: [], network: [] });
   });
-  it("loads a task dir with manifest + SKILL.md, mapping tools -> caps", () => {
+  it("loads a frontmatter SKILL.md; dir name is the id; name defaults to id", () => {
     const home = tempHome();
-    writeTask(home, "schedule-meeting", {
-      id: "schedule-meeting", name: "Schedule", description: "Book a time.",
-      envelope: { tools: ["read", "fetch"], write_paths: [], network: ["calendar.google.com"] },
-      timeout_s: 120,
-    }, "# Check the calendar first\n");
+    writeSkill(home, "schedule-meeting", [
+      "---",
+      "description: Book a time.",
+      "tools: [read, fetch]",
+      "network: [calendar.google.com]",
+      "timeout_s: 120",
+      "---",
+      "# Check the calendar first",
+      "",
+    ].join("\n"));
     const tasks = loadTasks(getPaths(home), () => {});
     const t = tasks.find((x) => x.id === "schedule-meeting")!;
+    expect(t.name).toBe("schedule-meeting");
     expect(t.envelope).toEqual({ caps: ["read", "fetch"], write_paths: [], network: ["calendar.google.com"] });
     expect(t.skill).toContain("Check the calendar");
     expect(t.timeout_s).toBe(120);
   });
-  it("skips a dir whose name doesn't match the manifest id, with a warning", () => {
+  it("uses an explicit name when given", () => {
     const home = tempHome();
-    writeTask(home, "wrong-dir", { id: "other-id", name: "X", description: "d" });
+    writeSkill(home, "intro", "---\nname: Owner introduction\ndescription: d\n---\nbody\n");
+    expect(loadTasks(getPaths(home), () => {}).find((t) => t.id === "intro")!.name).toBe("Owner introduction");
+  });
+  it("skips missing SKILL.md, missing frontmatter, bad YAML, and schema violations — each with a warning", () => {
+    const home = tempHome();
+    mkdirSync(join(home, "AgentCall", "tasks", "empty-dir"), { recursive: true });
+    writeSkill(home, "no-fm", "# bare markdown, no frontmatter\n");
+    writeSkill(home, "bad-yaml", "---\ndescription: [unclosed\n---\nbody\n");
+    writeSkill(home, "bad-schema", "---\nname: X\n---\nbody\n"); // missing description
     const warnings: string[] = [];
     const tasks = loadTasks(getPaths(home), (m) => warnings.push(m));
     expect(tasks.map((t) => t.id)).toEqual(["ask"]);
-    expect(warnings.some((w) => w.includes("wrong-dir"))).toBe(true);
+    expect(warnings).toHaveLength(4);
+    expect(warnings.some((w) => w.includes("no-fm"))).toBe(true);
   });
-  it("skips invalid manifests and a task trying to shadow the built-in ask", () => {
+  it("skips a dir whose name is not a valid task id, and a task shadowing ask", () => {
     const home = tempHome();
-    writeTask(home, "bad", { id: "bad" }); // missing name/description
-    writeTask(home, "ask", { id: "ask", name: "Evil", description: "override" });
+    writeSkill(home, "Bad_Name", "---\ndescription: d\n---\n");
+    writeSkill(home, "ask", "---\ndescription: override\n---\n");
     const warnings: string[] = [];
     const tasks = loadTasks(getPaths(home), (m) => warnings.push(m));
     expect(tasks.map((t) => t.id)).toEqual(["ask"]);

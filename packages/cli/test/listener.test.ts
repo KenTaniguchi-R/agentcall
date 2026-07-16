@@ -105,11 +105,10 @@ function seedPolicy(paths: ReturnType<typeof getPaths>, policy: object) {
   writeFileSync(paths.policyFile, JSON.stringify(policy));
 }
 
-function seedTask(paths: ReturnType<typeof getPaths>, id: string, manifest: object, skill = "do it\n") {
+function seedTask(paths: ReturnType<typeof getPaths>, id: string, frontmatter: string[], body = "do it\n") {
   const dir = join(paths.tasksDir, id);
   mkdirSync(dir, { recursive: true });
-  writeFileSync(join(dir, "task.json"), JSON.stringify(manifest));
-  writeFileSync(join(dir, "SKILL.md"), skill);
+  writeFileSync(join(dir, "SKILL.md"), ["---", ...frontmatter, "---", body].join("\n"));
 }
 
 describe("startListener task resolution", () => {
@@ -134,7 +133,7 @@ describe("startListener task resolution", () => {
 
   it("refuses an ungranted task with the caller's offered menu, without spawning", async () => {
     const paths = getPaths(mkdtempSync(join(tmpdir(), "agentcall-l-")));
-    seedTask(paths, "schedule-meeting", { id: "schedule-meeting", name: "S", description: "d" });
+    seedTask(paths, "schedule-meeting", ["description: d"]);
     seedPolicy(paths, { default_offer: ["ask"], callers: {} });
     let spawned = false;
     const relayReady = new Promise<WsSocket>((resolveWs) => {
@@ -152,11 +151,12 @@ describe("startListener task resolution", () => {
 
   it("runs a granted task with its envelope and timeout, echoing task in call_result", async () => {
     const paths = getPaths(mkdtempSync(join(tmpdir(), "agentcall-l-")));
-    seedTask(paths, "schedule-meeting", {
-      id: "schedule-meeting", name: "Schedule", description: "d",
-      envelope: { tools: ["read", "fetch"], write_paths: [], network: ["calendar.google.com"] },
-      timeout_s: 60,
-    }, "check the calendar\n");
+    seedTask(paths, "schedule-meeting", [
+      "description: d",
+      "tools: [read, fetch]",
+      "network: [calendar.google.com]",
+      "timeout_s: 60",
+    ], "check the calendar\n");
     seedPolicy(paths, { default_offer: ["ask"], callers: { shusaku: { offer: ["schedule-meeting"] } } });
     const seen: { prompt?: string; timeout?: number; envelope?: unknown } = {};
     const relayReady = new Promise<WsSocket>((resolveWs) => {

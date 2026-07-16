@@ -1,6 +1,7 @@
 import { existsSync, readdirSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import { z } from "zod";
+import { parse as parseYaml } from "yaml";
 import { TASK_ID_RE } from "@benree/agentcall-shared";
 import type { Paths } from "./paths.js";
 
@@ -34,22 +35,29 @@ const WRITE_PATH_RE = /^public(?:\/[a-z0-9][a-z0-9\/_-]*)?$/;
 // Hostnames for srt allowedDomains ("*.example.com" wildcards allowed).
 const DOMAIN_RE = /^(\*\.)?[a-z0-9][a-z0-9.-]*\.[a-z]{2,}$/;
 
-export const TaskManifest = z.object({
-  id: z.string().regex(TASK_ID_RE),
-  name: z.string().min(1).max(100),
+// A SKILL.md is YAML frontmatter between --- fences, then the skill body.
+// Returns null when the file has no leading fence or no closing fence.
+export function splitFrontmatter(text: string): { meta: string; body: string } | null {
+  const m = text.match(/^---\r?\n([\s\S]*?)\r?\n---\r?\n?([\s\S]*)$/);
+  if (!m) return null;
+  return { meta: m[1]!, body: m[2] ?? "" };
+}
+
+// Frontmatter schema. The task id is NOT here — the directory name is the
+// id, so there is no dual source to drift. `description` is the only
+// required field: a card entry without one is useless to callers. `name`
+// defaults to the id at load time.
+export const SkillFrontmatter = z.object({
+  name: z.string().min(1).max(100).optional(),
   description: z.string().min(1).max(1000),
   examples: z.array(z.string().max(500)).max(10).default([]),
   tier: z.enum(["T1", "T2"]).default("T1"),
-  envelope: z
-    .object({
-      tools: z.array(z.enum(CAPS)).default(["read"]),
-      write_paths: z.array(z.string().regex(WRITE_PATH_RE)).default([]),
-      network: z.array(z.string().regex(DOMAIN_RE)).default([]),
-    })
-    .default({ tools: ["read"], write_paths: [], network: [] }),
+  tools: z.array(z.enum(CAPS)).default(["read"]),
+  write_paths: z.array(z.string().regex(WRITE_PATH_RE)).default([]),
+  network: z.array(z.string().regex(DOMAIN_RE)).default([]),
   timeout_s: z.number().int().positive().max(300).optional(),
 });
-export type TaskManifestType = z.infer<typeof TaskManifest>;
+export type SkillFrontmatterType = z.infer<typeof SkillFrontmatter>;
 
 export interface Task {
   id: string;
@@ -59,7 +67,7 @@ export interface Task {
   tier: "T1" | "T2";
   envelope: Envelope;
   timeout_s?: number;
-  skill: string; // SKILL.md content, embedded into the spawn prompt
+  skill: string; // SKILL.md body (after the frontmatter), embedded into the spawn prompt
 }
 
 export const ASK_TASK: Task = {
@@ -72,45 +80,52 @@ export const ASK_TASK: Task = {
   skill: "",
 };
 
-// Reads ~/AgentCall/tasks/<id>/{task.json,SKILL.md}. Invalid or duplicate
-// entries are skipped with a warning rather than failing the whole listener:
-// one broken manifest must not take every other task offline.
+// Reads ~/AgentCall/tasks/<id>/SKILL.md (YAML frontmatter + body). Invalid
+// or duplicate entries are skipped with a warning rather than failing the
+// whole listener: one broken manifest must not take every other task
+// offline.
 export function loadTasks(p: Paths, warn: (msg: string) => void = console.error): Task[] {
   const tasks: Task[] = [ASK_TASK];
   if (!existsSync(p.tasksDir)) return tasks;
   for (const entry of readdirSync(p.tasksDir, { withFileTypes: true })) {
     if (!entry.isDirectory()) continue;
-    const dir = join(p.tasksDir, entry.name);
-    const manifestFile = join(dir, "task.json");
-    if (!existsSync(manifestFile)) {
-      warn(`agentcall: task "${entry.name}": missing task.json, skipped`);
+    const id = entry.name;
+    if (!TASK_ID_RE.test(id)) {
+      warn(`agentcall: task "${id}": directory name is not a valid task id (lowercase kebab-case), skipped`);
       continue;
     }
-    let m: TaskManifestType;
+    if (tasks.some((t) => t.id === id)) {
+      warn(`agentcall: task "${id}": duplicate or reserved id, skipped`);
+      continue;
+    }
+    const skillFile = join(p.tasksDir, id, "SKILL.md");
+    if (!existsSync(skillFile)) {
+      warn(`agentcall: task "${id}": missing SKILL.md, skipped`);
+      continue;
+    }
+    let fm: SkillFrontmatterType;
+    let body: string;
     try {
-      m = TaskManifest.parse(JSON.parse(readFileSync(manifestFile, "utf8")));
+      const split = splitFrontmatter(readFileSync(skillFile, "utf8"));
+      if (!split) {
+        warn(`agentcall: task "${id}": SKILL.md has no YAML frontmatter (--- fences), skipped`);
+        continue;
+      }
+      fm = SkillFrontmatter.parse(parseYaml(split.meta));
+      body = split.body;
     } catch (e) {
-      warn(`agentcall: task "${entry.name}": invalid task.json, skipped (${String(e).slice(0, 200)})`);
+      warn(`agentcall: task "${id}": invalid SKILL.md frontmatter, skipped (${String(e).slice(0, 200)})`);
       continue;
     }
-    if (m.id !== entry.name) {
-      warn(`agentcall: task "${entry.name}": directory name must equal manifest id "${m.id}", skipped`);
-      continue;
-    }
-    if (tasks.some((t) => t.id === m.id)) {
-      warn(`agentcall: task "${m.id}": duplicate or reserved id, skipped`);
-      continue;
-    }
-    const skillFile = join(dir, "SKILL.md");
     tasks.push({
-      id: m.id,
-      name: m.name,
-      description: m.description,
-      examples: m.examples,
-      tier: m.tier,
-      envelope: { caps: m.envelope.tools, write_paths: m.envelope.write_paths, network: m.envelope.network },
-      timeout_s: m.timeout_s,
-      skill: existsSync(skillFile) ? readFileSync(skillFile, "utf8") : "",
+      id,
+      name: fm.name ?? id,
+      description: fm.description,
+      examples: fm.examples,
+      tier: fm.tier,
+      envelope: { caps: fm.tools, write_paths: fm.write_paths, network: fm.network },
+      timeout_s: fm.timeout_s,
+      skill: body,
     });
   }
   return tasks;
