@@ -4,6 +4,7 @@ import { AgentRunError } from "../src/runner.js";
 import {
   checkAgentBinary,
   checkCodexAuth,
+  checkRelaySelfCall,
   checkSandboxSpawn,
   classifyAgentFailure,
   formatCheck,
@@ -182,5 +183,27 @@ describe("verifyAgent", () => {
     });
     expect(checks).toHaveLength(1);
     expect(checks[0].ok).toBe(false);
+  });
+});
+
+describe("checkRelaySelfCall", () => {
+  const cfg = { handle: "ken", token: "tok", agent_kind: "claude" as const, relay: "https://relay.example" };
+
+  it("calls the agent's own address through the relay and passes on a reply", async () => {
+    const seen: Array<{ from: string; to: string; relay: string }> = [];
+    const c = await checkRelaySelfCall(cfg, async (opts) => {
+      seen.push({ from: opts.from, to: opts.to, relay: opts.relay });
+      return { type: "call_reply", call_id: "c1", text: "hi", task: "ask" } as never;
+    });
+    expect(c).toMatchObject({ name: "relay self-call", ok: true });
+    expect(seen).toEqual([{ from: "ken", to: "ken", relay: "https://relay.example" }]);
+  });
+
+  it("fails with a launchd-environment hint when the call errors", async () => {
+    const c = await checkRelaySelfCall(cfg, async () => {
+      throw new Error("The remote agent hit an error while answering.");
+    });
+    expect(c.ok).toBe(false);
+    expect(c.hint).toContain("listener");
   });
 });

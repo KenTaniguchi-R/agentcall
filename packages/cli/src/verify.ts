@@ -1,4 +1,6 @@
 import { execFileSync } from "node:child_process";
+import { callAgent } from "./callClient.js";
+import { relayUrl, type Config } from "./config.js";
 import type { Paths } from "./paths.js";
 import { AgentRunError, runAgent, type AgentKind } from "./runner.js";
 import { resolveAgentBin } from "./srt.js";
@@ -116,4 +118,32 @@ export async function verifyAgent(kind: AgentKind, paths: Paths, fns: VerifyFns 
   }
   checks.push(await checkSandboxSpawn(kind, paths, fns.runFn));
   return checks;
+}
+
+// Doctor-only, end-to-end: a real call to our own address through the relay
+// and the launchd-spawned listener. This is the only check that exercises
+// the listener's environment (fixed PATH, no shell rc, possibly locked
+// keychain) — a direct checkSandboxSpawn from an interactive shell can pass
+// while this fails. Works under the default policy because the built-in
+// "ask" task always exists.
+export async function checkRelaySelfCall(cfg: Config, callFn: typeof callAgent = callAgent): Promise<VerifyCheck> {
+  try {
+    await callFn({
+      relay: relayUrl(cfg),
+      from: cfg.handle,
+      token: cfg.token,
+      to: cfg.handle,
+      message: "agentcall doctor self-test: reply briefly",
+    });
+    return { name: "relay self-call", ok: true };
+  } catch (e) {
+    return {
+      name: "relay self-call",
+      ok: false,
+      detail: short(e),
+      hint:
+        "a direct sandboxed run works but the call through the background listener failed — its environment " +
+        "differs from your shell (fixed PATH, no shell env, keychain); check ~/.agentcall/listener.log and calls.log.",
+    };
+  }
 }
