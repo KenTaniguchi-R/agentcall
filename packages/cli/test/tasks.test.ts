@@ -34,6 +34,12 @@ describe("TaskManifest", () => {
     });
     expect(bad.success).toBe(false);
   });
+  it("rejects write_paths outside public (unreadable under srt denyRead, so unusable with Read-before-Edit agents)", () => {
+    const bad = TaskManifest.safeParse({
+      id: "x", name: "X", description: "d", envelope: { tools: ["write"], write_paths: ["inbox"], network: [] },
+    });
+    expect(bad.success).toBe(false);
+  });
   it("rejects a timeout above the 300s cap", () => {
     const bad = TaskManifest.safeParse({ id: "x", name: "X", description: "d", timeout_s: 999 });
     expect(bad.success).toBe(false);

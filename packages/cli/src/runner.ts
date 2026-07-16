@@ -71,7 +71,7 @@ export function buildSpawnSpec(
   // agent kinds get the same read protection; codex's native sandbox still
   // handles write confinement inside publicDir.
   // Codex has no per-tool granularity; the envelope's write cap maps onto
-  // its sandbox level, and srt (Task 6) still enforces the exact write
+  // its sandbox level, and srt (see srt.ts) still enforces the exact write
   // paths and network domains underneath.
   const sandbox = envelope.caps.includes("write") ? "workspace-write" : "read-only";
   return {

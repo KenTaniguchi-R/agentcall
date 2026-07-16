@@ -22,10 +22,15 @@ export const FULL_ACCESS_ENVELOPE: Envelope = {
   network: [],
 };
 
-// write_paths are relative to ~/AgentCall; the character set forbids "." so
+// write_paths are relative to ~/AgentCall. Phase 1 allows only "public" or
+// subpaths of it: dirs outside publicDir would be readable-never (srt's
+// denyRead ~, see srt.ts) so writes there can't work with Read-before-Edit
+// agents — a write_paths entry outside public is a broken grant that would
+// silently no-op, so it's made inexpressible here rather than left for an
+// owner to discover at call time. The character set still forbids "." so
 // "../" traversal can't be expressed at all, and a leading "/" is rejected
 // by the first-character class.
-const WRITE_PATH_RE = /^[a-z0-9][a-z0-9/_-]*$/;
+const WRITE_PATH_RE = /^public(?:\/[a-z0-9][a-z0-9\/_-]*)?$/;
 // Hostnames for srt allowedDomains ("*.example.com" wildcards allowed).
 const DOMAIN_RE = /^(\*\.)?[a-z0-9][a-z0-9.-]*\.[a-z]{2,}$/;
 

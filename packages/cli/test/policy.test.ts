@@ -96,4 +96,10 @@ describe("resolveTask", () => {
       ok: false, code: "task_unknown", offered: ["ask"],
     });
   });
+  it("invite-only policy (empty default_offer, no callers) -> task_not_offered with an empty menu", () => {
+    const p: Policy = { description: "", default_offer: [], callers: {} };
+    expect(resolveTask(p, TASKS, "x")).toEqual({
+      ok: false, code: "task_not_offered", offered: [],
+    });
+  });
 });

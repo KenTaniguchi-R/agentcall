@@ -18,7 +18,10 @@ describe("buildCardUpload", () => {
   const policy: Policy = {
     description: "Ken's agent",
     default_offer: ["ask", "owner-introduction"],
-    callers: { mia: { offer: ["+schedule-meeting"], block: false }, spammer: { offer: [], block: true } },
+    callers: {
+      mia: { offer: ["+schedule-meeting"], block: false },
+      spammer: { offer: ["owner-introduction"], block: true },
+    },
   };
 
   it("includes card metadata but never envelopes or SKILL.md content", () => {
