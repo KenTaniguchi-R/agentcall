@@ -6,7 +6,11 @@ import { INSTALL_SH } from "./install-sh.js";
 export { HandleDO } from "./do.js";
 
 export type Env = { DB: D1Database; HANDLE_DO: DurableObjectNamespace };
-export const RELAY_HOST = "agentcall.benree.tech";
+// Not exported: workerd treats every named export of the entry module as a
+// potential WorkerEntrypoint and rejects non-handler values outright
+// ("Incorrect type for map entry 'RELAY_HOST'"), killing the worker at
+// startup under current wrangler/workerd. Nothing outside this file uses it.
+const RELAY_HOST = "agentcall.benree.tech";
 
 const app = new Hono<{ Bindings: Env }>();
 
