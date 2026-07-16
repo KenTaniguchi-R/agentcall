@@ -1,5 +1,5 @@
 import { createServer, type Server } from "node:http";
-import { mkdtempSync, readFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { WebSocketServer, type WebSocket as WsSocket } from "ws";
@@ -97,5 +97,125 @@ describe("startListener", () => {
     ws.send(JSON.stringify({ type: "incoming_call", call_id: "c9", from: "x", message: "y" }));
     const got = await expectFrames;
     expect(got[1]).toMatchObject({ type: "call_failed", call_id: "c9", code: "timeout" });
+  });
+});
+
+function seedPolicy(paths: ReturnType<typeof getPaths>, policy: object) {
+  mkdirSync(paths.dir, { recursive: true });
+  writeFileSync(paths.policyFile, JSON.stringify(policy));
+}
+
+function seedTask(paths: ReturnType<typeof getPaths>, id: string, manifest: object, skill = "do it\n") {
+  const dir = join(paths.tasksDir, id);
+  mkdirSync(dir, { recursive: true });
+  writeFileSync(join(dir, "task.json"), JSON.stringify(manifest));
+  writeFileSync(join(dir, "SKILL.md"), skill);
+}
+
+describe("startListener task resolution", () => {
+  it("refuses a blocked caller without spawning, and audits it", async () => {
+    const paths = getPaths(mkdtempSync(join(tmpdir(), "agentcall-l-")));
+    seedPolicy(paths, { default_offer: ["ask"], callers: { spammer: { block: true } } });
+    let spawned = false;
+    const relayReady = new Promise<WsSocket>((resolveWs) => {
+      void fakeRelay((ws) => resolveWs(ws)).then((url) => {
+        stopper = startListener({ relay: url, config: cfg, paths, run: async () => { spawned = true; return { text: "x" }; } });
+      });
+    });
+    const ws = await relayReady;
+    const expectFrames = frames(ws, 1);
+    ws.send(JSON.stringify({ type: "incoming_call", call_id: "c1", from: "spammer", message: "hi" }));
+    const [failed] = await expectFrames;
+    expect(failed).toMatchObject({ type: "call_failed", call_id: "c1", code: "blocked" });
+    expect(spawned).toBe(false);
+    const audit = readFileSync(paths.callsLog, "utf8").trim().split("\n").map((l) => JSON.parse(l));
+    expect(audit[0]).toMatchObject({ call_id: "c1", from: "spammer", status: "blocked" });
+  });
+
+  it("refuses an ungranted task with the caller's offered menu, without spawning", async () => {
+    const paths = getPaths(mkdtempSync(join(tmpdir(), "agentcall-l-")));
+    seedTask(paths, "schedule-meeting", { id: "schedule-meeting", name: "S", description: "d" });
+    seedPolicy(paths, { default_offer: ["ask"], callers: {} });
+    let spawned = false;
+    const relayReady = new Promise<WsSocket>((resolveWs) => {
+      void fakeRelay((ws) => resolveWs(ws)).then((url) => {
+        stopper = startListener({ relay: url, config: cfg, paths, run: async () => { spawned = true; return { text: "x" }; } });
+      });
+    });
+    const ws = await relayReady;
+    const expectFrames = frames(ws, 1);
+    ws.send(JSON.stringify({ type: "incoming_call", call_id: "c2", from: "stranger", message: "book", task: "schedule-meeting" }));
+    const [failed] = await expectFrames;
+    expect(failed).toMatchObject({ type: "call_failed", call_id: "c2", code: "task_not_offered", offered: ["ask"] });
+    expect(spawned).toBe(false);
+  });
+
+  it("runs a granted task with its envelope and timeout, echoing task in call_result", async () => {
+    const paths = getPaths(mkdtempSync(join(tmpdir(), "agentcall-l-")));
+    seedTask(paths, "schedule-meeting", {
+      id: "schedule-meeting", name: "Schedule", description: "d",
+      envelope: { tools: ["read", "fetch"], write_paths: [], network: ["calendar.google.com"] },
+      timeout_s: 60,
+    }, "check the calendar\n");
+    seedPolicy(paths, { default_offer: ["ask"], callers: { shusaku: { offer: ["schedule-meeting"] } } });
+    const seen: { prompt?: string; timeout?: number; envelope?: unknown } = {};
+    const relayReady = new Promise<WsSocket>((resolveWs) => {
+      void fakeRelay((ws) => resolveWs(ws)).then((url) => {
+        stopper = startListener({
+          relay: url, config: cfg, paths,
+          run: async (_k, prompt, _p, timeoutMs, _spec, envelope) => {
+            seen.prompt = prompt; seen.timeout = timeoutMs; seen.envelope = envelope;
+            return { text: "booked" };
+          },
+        });
+      });
+    });
+    const ws = await relayReady;
+    const expectFrames = frames(ws, 2);
+    ws.send(JSON.stringify({ type: "incoming_call", call_id: "c3", from: "shusaku", message: "tue?", task: "schedule-meeting" }));
+    const [, result] = await expectFrames;
+    expect(result).toMatchObject({ type: "call_result", call_id: "c3", text: "booked", task: "schedule-meeting" });
+    expect(seen.prompt).toContain("check the calendar");
+    expect(seen.timeout).toBe(60_000);
+    expect(seen.envelope).toEqual({ caps: ["read", "fetch"], write_paths: [], network: ["calendar.google.com"] });
+    const audit = readFileSync(paths.callsLog, "utf8").trim().split("\n").map((l) => JSON.parse(l));
+    expect(audit[0]).toMatchObject({ call_id: "c3", task: "schedule-meeting", status: "ok" });
+  });
+
+  it("falls back to the ask task (read-only envelope) for a plain message", async () => {
+    const paths = getPaths(mkdtempSync(join(tmpdir(), "agentcall-l-")));
+    const seen: { envelope?: unknown } = {};
+    const relayReady = new Promise<WsSocket>((resolveWs) => {
+      void fakeRelay((ws) => resolveWs(ws)).then((url) => {
+        stopper = startListener({
+          relay: url, config: cfg, paths,
+          run: async (_k, _prompt, _p, _t, _spec, envelope) => { seen.envelope = envelope; return { text: "hi" }; },
+        });
+      });
+    });
+    const ws = await relayReady;
+    const expectFrames = frames(ws, 2);
+    ws.send(JSON.stringify({ type: "incoming_call", call_id: "c4", from: "anyone", message: "q?" }));
+    const [, result] = await expectFrames;
+    expect(result).toMatchObject({ type: "call_result", task: "ask" });
+    expect(seen.envelope).toEqual({ caps: ["read"], write_paths: [], network: [] });
+  });
+
+  it("maps a corrupt policy file to call_failed agent_error without spawning", async () => {
+    const paths = getPaths(mkdtempSync(join(tmpdir(), "agentcall-l-")));
+    mkdirSync(paths.dir, { recursive: true });
+    writeFileSync(paths.policyFile, "{corrupt");
+    let spawned = false;
+    const relayReady = new Promise<WsSocket>((resolveWs) => {
+      void fakeRelay((ws) => resolveWs(ws)).then((url) => {
+        stopper = startListener({ relay: url, config: cfg, paths, run: async () => { spawned = true; return { text: "x" }; } });
+      });
+    });
+    const ws = await relayReady;
+    const expectFrames = frames(ws, 1);
+    ws.send(JSON.stringify({ type: "incoming_call", call_id: "c5", from: "a", message: "hi" }));
+    const [failed] = await expectFrames;
+    expect(failed).toMatchObject({ type: "call_failed", call_id: "c5", code: "agent_error" });
+    expect(spawned).toBe(false);
   });
 });

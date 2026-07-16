@@ -9,6 +9,8 @@ import type { Paths } from "./paths.js";
 import { buildPrompt } from "./prompt.js";
 import { AgentRunError, runAgent } from "./runner.js";
 import { SerialQueue } from "./queue.js";
+import { loadPolicy, resolveTask } from "./policy.js";
+import { loadTasks } from "./tasks.js";
 
 export interface ListenerDeps {
   relay: string;
@@ -48,29 +50,51 @@ export function startListener(deps: ListenerDeps): { stop(): void } {
       if (s === "pong") return;
       const frame = safeParseFrame(RelayToListenerFrame, s);
       if (!frame) return;
-      const { call_id, from, message } = frame;
+      const { call_id, from, message, task: requestedTask } = frame;
       const started = Date.now();
       const send = (obj: unknown) => { try { ws?.send(JSON.stringify(obj)); } catch { /* dead */ } };
+
+      // Resolve caller -> task -> envelope BEFORE the message is placed in any
+      // prompt (see policy.ts). Refusals never enqueue and never spawn: no
+      // tokens are burned by blocked callers or menu probing.
+      let resolution: ReturnType<typeof resolveTask>;
+      try {
+        resolution = resolveTask(loadPolicy(deps.paths), loadTasks(deps.paths), from, requestedTask);
+      } catch (e) {
+        send({ type: "call_failed", call_id, code: "agent_error", detail: `policy error: ${String(e).slice(0, 300)}` });
+        audit({ call_id, from, message: message.slice(0, 500), status: "policy_error", duration_ms: 0 });
+        return;
+      }
+      if (!resolution.ok) {
+        send({ type: "call_failed", call_id, code: resolution.code, offered: resolution.offered });
+        audit({ call_id, from, message: message.slice(0, 500), task: requestedTask, status: resolution.code, duration_ms: 0 });
+        return;
+      }
+      const task = resolution.task;
+      const timeoutMs = task.timeout_s !== undefined ? task.timeout_s * 1000 : AGENT_TIMEOUT_MS;
+
       const accepted = queue.tryEnqueue(async () => {
         send({ type: "call_answer", call_id });
         try {
           const out = await run(
             deps.config.agent_kind,
-            buildPrompt(deps.config.handle, from, message),
+            buildPrompt(deps.config.handle, from, message, task),
             deps.paths,
-            AGENT_TIMEOUT_MS,
+            timeoutMs,
+            undefined,
+            task.envelope,
           );
-          send({ type: "call_result", call_id, text: out.text, session_id: out.session_id });
-          audit({ call_id, from, message: message.slice(0, 500), status: "ok", duration_ms: Date.now() - started });
+          send({ type: "call_result", call_id, text: out.text, session_id: out.session_id, task: task.id });
+          audit({ call_id, from, message: message.slice(0, 500), task: task.id, status: "ok", duration_ms: Date.now() - started });
         } catch (e) {
           const code = e instanceof AgentRunError ? e.code : "agent_error";
           send({ type: "call_failed", call_id, code, detail: String(e).slice(0, 500) });
-          audit({ call_id, from, message: message.slice(0, 500), status: code, duration_ms: Date.now() - started });
+          audit({ call_id, from, message: message.slice(0, 500), task: task.id, status: code, duration_ms: Date.now() - started });
         }
       });
       if (!accepted) {
         send({ type: "call_failed", call_id, code: "busy" });
-        audit({ call_id, from, message: message.slice(0, 500), status: "busy", duration_ms: 0 });
+        audit({ call_id, from, message: message.slice(0, 500), task: task.id, status: "busy", duration_ms: 0 });
       }
     });
     const scheduleReconnect = () => {
