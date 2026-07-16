@@ -82,7 +82,7 @@ describe("buildCardReport", () => {
       callers: { mia: { offer: ["intro"], block: false }, spammer: { offer: [], block: true } },
     }));
     const text = buildCardReport(cfg, p).menu.join("\n");
-    expect(text).toContain("mia: intro");
+    expect(text).toContain("mia: intro [T1]");
     expect(text).toContain("Blocked: spammer");
   });
 });

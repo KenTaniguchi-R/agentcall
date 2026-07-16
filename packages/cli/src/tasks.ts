@@ -38,7 +38,7 @@ const DOMAIN_RE = /^(\*\.)?[a-z0-9][a-z0-9.-]*\.[a-z]{2,}$/;
 // A SKILL.md is YAML frontmatter between --- fences, then the skill body.
 // Returns null when the file has no leading fence or no closing fence.
 export function splitFrontmatter(text: string): { meta: string; body: string } | null {
-  const m = text.match(/^---\r?\n([\s\S]*?)\r?\n---\r?\n?([\s\S]*)$/);
+  const m = text.match(/^---\r?\n([\s\S]*?)\r?\n---[ \t]*(?:\r?\n|$)([\s\S]*)$/);
   if (!m) return null;
   return { meta: m[1]!, body: m[2] ?? "" };
 }

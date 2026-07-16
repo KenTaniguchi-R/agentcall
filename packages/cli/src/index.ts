@@ -165,6 +165,11 @@ function policyVerbAction(verb: Verb) {
   return async (a: string, b?: string) => {
     const paths = getPaths();
     const cfg = loadConfig(paths);
+    if (!cfg.agent_kind) {
+      console.error("This handle is caller-only (no agent configured) — there is no card or policy to manage.");
+      process.exitCode = 1;
+      return;
+    }
     try {
       const { policy, lines } = execVerb(loadPolicy(paths), loadTasks(paths), verb, a, b);
       savePolicy(paths, policy);

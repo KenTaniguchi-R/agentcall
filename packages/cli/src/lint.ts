@@ -2,7 +2,7 @@ import { existsSync, readFileSync } from "node:fs";
 import { buildCardUpload } from "./card.js";
 import type { Config } from "./config.js";
 import type { Paths } from "./paths.js";
-import { loadPolicy, type Policy } from "./policy.js";
+import { loadPolicy, stripPlus, type Policy } from "./policy.js";
 import { loadTasks } from "./tasks.js";
 
 export interface CardReport {
@@ -29,13 +29,13 @@ export function buildCardReport(cfg: Config, p: Paths): CardReport {
     return { menu: [], problems, notices };
   }
 
-  const exists = (id: string) => tasks.some((t) => t.id === id.replace(/^\+/, ""));
+  const exists = (id: string) => tasks.some((t) => t.id === stripPlus(id));
   for (const id of policy.default_offer) {
-    if (!exists(id)) problems.push(`policy.json: default_offer references "${id.replace(/^\+/, "")}" but no such task exists`);
+    if (!exists(id)) problems.push(`policy.json: default_offer references "${stripPlus(id)}" but no such task exists`);
   }
   for (const [caller, entry] of Object.entries(policy.callers)) {
     for (const id of entry.offer) {
-      if (!exists(id)) problems.push(`policy.json: grant for ${caller} references "${id.replace(/^\+/, "")}" but no such task exists`);
+      if (!exists(id)) problems.push(`policy.json: grant for ${caller} references "${stripPlus(id)}" but no such task exists`);
     }
   }
 
@@ -50,7 +50,9 @@ export function buildCardReport(cfg: Config, p: Paths): CardReport {
   const grantEntries = Object.entries(upload.grants);
   if (grantEntries.length > 0) {
     menu.push("  Granted per caller:");
-    for (const [caller, ids] of grantEntries) menu.push(`    ${caller}: ${ids.join(", ")}`);
+    for (const [caller, ids] of grantEntries) {
+      menu.push(`    ${caller}: ${ids.map((id) => `${id} [${byId.get(id)!.tier}]`).join(", ")}`);
+    }
   }
   const blocked = Object.entries(policy.callers).filter(([, e]) => e.block).map(([h]) => h);
   if (blocked.length > 0) menu.push(`  Blocked: ${blocked.join(", ")}`);

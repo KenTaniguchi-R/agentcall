@@ -1,5 +1,5 @@
 import { HANDLE_RE, TASK_ID_RE } from "@benree/agentcall-shared";
-import { offeredFor, type Policy } from "./policy.js";
+import { offeredFor, stripPlus, type Policy } from "./policy.js";
 import type { Task } from "./tasks.js";
 
 export type Verb = "allow" | "revoke" | "block" | "unblock" | "offer" | "unoffer";
@@ -13,7 +13,9 @@ export function execVerb(
   policy: Policy, tasks: Task[], verb: Verb, a: string, b?: string,
 ): { policy: Policy; lines: string[] } {
   const requireHandle = (h: string) => {
-    if (!HANDLE_RE.test(h)) throw new Error(`"${h}" is not a valid handle.`);
+    if (!HANDLE_RE.test(h)) {
+      throw new Error(`"${h}" is not a valid handle. Use the bare handle (e.g. ken), not handle@host.`);
+    }
     return h;
   };
   const requireTaskId = (id: string | undefined, forVerb: string) => {
@@ -33,11 +35,20 @@ export function execVerb(
       Object.entries(policy.callers).map(([k, v]) => [k, { offer: [...v.offer], block: v.block }]),
     ),
   });
+  // Enforcement (resolveTask) only ever offers ids that exist on disk; the
+  // printed menu must match, or an owner reading `allow`'s output would
+  // believe a dangling grant is live when a caller would never see it.
   const menuLine = (next: Policy, handle: string): string => {
     const offered = offeredFor(next, handle);
-    return offered === "blocked"
-      ? `${handle} is blocked; grants are kept but inactive until: agentcall unblock ${handle}`
-      : `${handle} can now: ${offered.join(", ")}`;
+    if (offered === "blocked") {
+      return `${handle} is blocked; grants are kept but inactive until: agentcall unblock ${handle}`;
+    }
+    const menu = offered.filter((id) => tasks.some((t) => t.id === id));
+    return `${handle} can now: ${menu.join(", ")}`;
+  };
+  const defaultOfferLine = (next: Policy): string => {
+    const menu = next.default_offer.map(stripPlus).filter((id) => tasks.some((t) => t.id === id));
+    return `Offered to anyone: ${menu.join(", ") || "(nothing — invite-only)"}`;
   };
 
   const next = clone();
@@ -55,7 +66,7 @@ export function execVerb(
       const id = requireTaskId(b, "revoke");
       const entry = next.callers[handle];
       if (entry) {
-        entry.offer = entry.offer.filter((x) => x.replace(/^\+/, "") !== id);
+        entry.offer = entry.offer.filter((x) => stripPlus(x) !== id);
         if (entry.offer.length === 0 && !entry.block) delete next.callers[handle];
       }
       return { policy: next, lines: [next.callers[handle] ? menuLine(next, handle) : `${handle} has no grants.`] };
@@ -79,12 +90,12 @@ export function execVerb(
     case "offer": {
       const id = requireTaskExists(requireTaskId(a, "offer"));
       if (!next.default_offer.includes(id)) next.default_offer.push(id);
-      return { policy: next, lines: [`Offered to anyone: ${next.default_offer.join(", ")}`] };
+      return { policy: next, lines: [defaultOfferLine(next)] };
     }
     case "unoffer": {
       const id = requireTaskId(a, "unoffer");
-      next.default_offer = next.default_offer.filter((x) => x.replace(/^\+/, "") !== id);
-      return { policy: next, lines: [`Offered to anyone: ${next.default_offer.join(", ") || "(nothing — invite-only)"}`] };
+      next.default_offer = next.default_offer.filter((x) => stripPlus(x) !== id);
+      return { policy: next, lines: [defaultOfferLine(next)] };
     }
   }
 }

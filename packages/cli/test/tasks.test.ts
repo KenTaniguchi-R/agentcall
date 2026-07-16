@@ -32,6 +32,30 @@ describe("splitFrontmatter", () => {
   it("returns null without a closing fence", () => {
     expect(splitFrontmatter("---\ndescription: d\n")).toBeNull();
   });
+  it("does not treat a mid-frontmatter line like '---- separator' as the closing fence", () => {
+    const r = splitFrontmatter([
+      "---",
+      "description: d",
+      "notes: ---- separator",
+      "examples:",
+      "  - example after the dashes",
+      "---",
+      "# Body",
+      "",
+    ].join("\n"));
+    expect(r).not.toBeNull();
+    expect(r!.meta).toContain("notes: ---- separator");
+    expect(r!.meta).toContain("example after the dashes");
+    expect(r!.body).toBe("# Body\n");
+  });
+  it("splits a CRLF-fenced file", () => {
+    const r = splitFrontmatter("---\r\ndescription: d\r\n---\r\n# Body\r\ntext\r\n");
+    expect(r).toEqual({ meta: "description: d", body: "# Body\r\ntext\r\n" });
+  });
+  it("parses with an empty body when there is no trailing newline after the closing fence", () => {
+    const r = splitFrontmatter("---\ndescription: d\n---");
+    expect(r).toEqual({ meta: "description: d", body: "" });
+  });
 });
 
 describe("SkillFrontmatter", () => {

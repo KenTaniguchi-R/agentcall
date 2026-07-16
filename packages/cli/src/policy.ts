@@ -39,7 +39,7 @@ export function savePolicy(p: Paths, policy: Policy): void {
 
 // Grant entries may carry the spec's "+" prefix ("+schedule-meeting");
 // semantics are additive either way, so the prefix is just stripped.
-const stripPlus = (id: string) => id.replace(/^\+/, "");
+export const stripPlus = (id: string) => id.replace(/^\+/, "");
 
 export function offeredFor(policy: Policy, from: string): string[] | "blocked" {
   const entry = policy.callers[from];

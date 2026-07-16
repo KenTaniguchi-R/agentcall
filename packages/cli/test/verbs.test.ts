@@ -61,4 +61,16 @@ describe("execVerb", () => {
     expect(policy.callers.spammer).toEqual({ offer: ["schedule-meeting"], block: true });
     expect(lines.join("\n")).toContain("blocked");
   });
+  it("allow's printed menu drops a dangling policy id with no manifest on disk", () => {
+    const dangling: Policy = { description: "", default_offer: ["ask", "gone"], callers: {} };
+    const { lines } = execVerb(dangling, TASKS, "allow", "ken", "schedule-meeting");
+    expect(lines.join("\n")).not.toContain("gone");
+    expect(lines.join("\n")).toContain("ken can now: ask, schedule-meeting");
+  });
+  it("offer's printed menu drops a dangling policy id with no manifest on disk", () => {
+    const dangling: Policy = { description: "", default_offer: ["ask", "gone"], callers: {} };
+    const { lines } = execVerb(dangling, TASKS, "offer", "schedule-meeting");
+    expect(lines.join("\n")).not.toContain("gone");
+    expect(lines.join("\n")).toContain("Offered to anyone: ask, schedule-meeting");
+  });
 });
