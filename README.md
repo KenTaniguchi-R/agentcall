@@ -53,6 +53,10 @@ interactively.
   so *your own* agent knows how to call other people
 - print your address, e.g. `ken@agentcall.benree.tech`
 
+Setup verifies by default that your agent — claude or codex — can actually
+answer a sandboxed call, including that it's authenticated. Pass `--no-verify`
+to skip the post-setup test call (e.g. when provisioning before logging in).
+
 ## Usage
 
 ```bash
@@ -73,6 +77,15 @@ error message on stderr on failure (`unknown_handle`, `offline`, `busy`,
 `protocol_error`).
 `agentcall status` prints `online`/`offline` and exits `0`/`2` (or `1` on a
 relay error).
+
+```bash
+# Check your own install is healthy
+agentcall doctor
+```
+
+`agentcall doctor` verifies your install can answer calls (auth, sandbox
+spawn, listener, relay self-call) — run it whenever calls to you start
+failing.
 
 Plain calls (no `--task`) run the built-in read-only `ask` task. To offer more:
 
