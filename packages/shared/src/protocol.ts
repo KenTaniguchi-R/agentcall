@@ -1,6 +1,7 @@
 import { z } from "zod";
 
 export const HANDLE_RE = /^[a-z0-9][a-z0-9-]{1,30}$/;
+export const TASK_ID_RE = /^[a-z0-9][a-z0-9-]{0,63}$/;
 export const RESERVED_HANDLES = [
   "admin", "www", "relay", "api", "install", "help", "support", "root",
   "agentcall", "system", "status", "info",
@@ -14,6 +15,7 @@ export const RATE_LIMIT_PER_HOUR = 10;
 export const ErrorCode = z.enum([
   "unknown_handle", "offline", "busy", "timeout", "agent_error",
   "unauthorized", "rate_limited", "message_too_large", "protocol_error",
+  "blocked", "task_not_offered", "task_unknown",
 ]);
 
 export const CallRequest = z.object({
@@ -21,6 +23,7 @@ export const CallRequest = z.object({
   to: z.string().regex(HANDLE_RE),
   message: z.string().min(1),
   session_id: z.string().optional(),
+  task: z.string().regex(TASK_ID_RE).optional(),
 });
 export const CallStatus = z.object({
   type: z.literal("call_status"),
@@ -31,11 +34,13 @@ export const CallReply = z.object({
   call_id: z.string(),
   text: z.string(),
   session_id: z.string().optional(),
+  task: z.string().optional(),
 });
 export const CallError = z.object({
   type: z.literal("call_error"),
   code: ErrorCode,
   detail: z.string().optional(),
+  offered: z.array(z.string()).optional(),
 });
 export const IncomingCall = z.object({
   type: z.literal("incoming_call"),
@@ -43,6 +48,7 @@ export const IncomingCall = z.object({
   from: z.string(),
   message: z.string(),
   session_id: z.string().optional(),
+  task: z.string().regex(TASK_ID_RE).optional(),
 });
 export const CallAnswer = z.object({ type: z.literal("call_answer"), call_id: z.string() });
 export const CallResult = z.object({
@@ -50,12 +56,14 @@ export const CallResult = z.object({
   call_id: z.string(),
   text: z.string(),
   session_id: z.string().optional(),
+  task: z.string().regex(TASK_ID_RE).optional(),
 });
 export const CallFailed = z.object({
   type: z.literal("call_failed"),
   call_id: z.string(),
   code: ErrorCode,
   detail: z.string().optional(),
+  offered: z.array(z.string()).optional(),
 });
 
 export const CallerFrame = z.discriminatedUnion("type", [CallRequest]);
