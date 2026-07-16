@@ -20,15 +20,26 @@ program
   .option("--relay <url>", "relay URL to register against")
   .option("--no-snippet", "skip appending the agentcall usage snippet to CLAUDE.md/AGENTS.md")
   .option("--skip-launchd", "skip installing the launchd background listener")
-  .action(async (o: { handle?: string; agent?: string; relay?: string; snippet?: boolean; skipLaunchd?: boolean }) => {
-    await runSetup({
-      handle: o.handle,
-      agent: o.agent as "claude" | "codex" | undefined,
-      relay: o.relay,
-      snippet: o.snippet,
-      skipLaunchd: o.skipLaunchd,
-    });
-  });
+  .option("--caller-only", "register a handle to call others without making your own agent callable")
+  .action(
+    async (o: {
+      handle?: string;
+      agent?: string;
+      relay?: string;
+      snippet?: boolean;
+      skipLaunchd?: boolean;
+      callerOnly?: boolean;
+    }) => {
+      await runSetup({
+        handle: o.handle,
+        agent: o.agent as "claude" | "codex" | undefined,
+        relay: o.relay,
+        snippet: o.snippet,
+        skipLaunchd: o.skipLaunchd,
+        callerOnly: o.callerOnly,
+      });
+    },
+  );
 
 program
   .command("call")
