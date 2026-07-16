@@ -12,6 +12,7 @@ import { publishCard } from "./card.js";
 import { loadPolicy, savePolicy } from "./policy.js";
 import { loadTasks } from "./tasks.js";
 import { execVerb, type Verb } from "./verbs.js";
+import { buildCardReport } from "./lint.js";
 
 const program = new Command();
 program.name("agentcall").description("Call other people's coding agents").version("0.1.2");
@@ -99,10 +100,25 @@ program
 
 program
   .command("card")
-  .description("show an agent's task menu, or publish your own (agentcall card push)")
-  .argument("<target>", "handle@host to fetch, or 'push' to publish your card")
-  .action(async (target: string) => {
+  .description("show your own card with problems, another agent's menu, or publish yours (push)")
+  .argument("[target]", "handle@host to fetch, 'push' to publish, or omit to review your own card")
+  .action(async (target?: string) => {
     const paths = getPaths();
+    if (target === undefined) {
+      const cfg = loadConfig(paths);
+      if (!cfg.agent_kind) {
+        console.error("This handle is caller-only (no agent configured) — no card to review.");
+        process.exitCode = 1;
+        return;
+      }
+      const report = buildCardReport(cfg, paths);
+      for (const line of report.menu) console.log(line);
+      if (report.problems.length || report.notices.length) console.log("\nProblems:");
+      for (const p of report.problems) console.log(`  ✗ ${p}`);
+      for (const n of report.notices) console.log(`  ! ${n}`);
+      if (report.problems.length > 0) process.exitCode = 1;
+      return;
+    }
     if (target === "push") {
       const cfg = loadConfig(paths);
       if (!cfg.agent_kind) {
