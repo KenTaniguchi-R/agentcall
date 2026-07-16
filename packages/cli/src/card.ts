@@ -1,5 +1,11 @@
+import { writeFileSync } from "node:fs";
 import type { CardUploadType } from "@benree/agentcall-shared";
+import { pushCard } from "./api.js";
+import { relayUrl } from "./config.js";
+import { loadPolicy } from "./policy.js";
+import { loadTasks } from "./tasks.js";
 import type { Config } from "./config.js";
+import type { Paths } from "./paths.js";
 import type { Policy } from "./policy.js";
 import type { Task } from "./tasks.js";
 
@@ -8,7 +14,8 @@ const stripPlus = (id: string) => id.replace(/^\+/, "");
 // The upload contains only advertisement fields (id/name/description/
 // examples/tier) — never envelopes or SKILL.md content. Envelopes are
 // enforcement detail that stays on the callee's machine; the card and the
-// enforcement both derive from the same task.json, so they cannot disagree.
+// enforcement both derive from the same SKILL.md frontmatter, so they cannot
+// disagree.
 export function buildCardUpload(cfg: Config, policy: Policy, tasks: Task[]): CardUploadType {
   const exists = (id: string) => tasks.some((t) => t.id === id);
   const defaultOffer = policy.default_offer.map(stripPlus).filter(exists);
@@ -30,4 +37,16 @@ export function buildCardUpload(cfg: Config, policy: Policy, tasks: Task[]): Car
     default_offer: defaultOffer,
     grants,
   };
+}
+
+// Single path for every card publish (setup, `card push`, policy verbs):
+// build from local policy+tasks, push, then record what was pushed so
+// `agentcall card` can detect staleness without any relay round-trip.
+// The snapshot is written only after a successful push — a failed push
+// must keep the old snapshot so staleness detection stays truthful.
+export async function publishCard(cfg: Config, p: Paths, push: typeof pushCard = pushCard): Promise<CardUploadType> {
+  const upload = buildCardUpload(cfg, loadPolicy(p), loadTasks(p));
+  await push(relayUrl(cfg), { handle: cfg.handle, token: cfg.token }, upload);
+  writeFileSync(p.cardSnapshotFile, JSON.stringify(upload, null, 2) + "\n");
+  return upload;
 }

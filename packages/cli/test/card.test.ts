@@ -1,5 +1,9 @@
+import { mkdirSync, mkdtempSync, readFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { describe, expect, it } from "vitest";
-import { buildCardUpload } from "../src/card.js";
+import { buildCardUpload, publishCard } from "../src/card.js";
+import { getPaths } from "../src/paths.js";
 import { ASK_TASK, type Task } from "../src/tasks.js";
 import type { Policy } from "../src/policy.js";
 import type { Config } from "../src/config.js";
@@ -44,5 +48,33 @@ describe("buildCardUpload", () => {
     expect(upload.default_offer).toEqual(["ask"]);
     expect(upload.grants).toEqual({});
     expect(upload.tasks.map((t) => t.id)).toEqual(["ask"]);
+  });
+});
+
+describe("publishCard", () => {
+  function tempPaths() {
+    const p = getPaths(mkdtempSync(join(tmpdir(), "agentcall-pub-")));
+    mkdirSync(p.dir, { recursive: true });
+    return p;
+  }
+
+  it("exposes the snapshot path on Paths", () => {
+    expect(getPaths("/tmp/fakehome").cardSnapshotFile).toBe("/tmp/fakehome/.agentcall/card.pushed.json");
+  });
+
+  it("pushes the built upload and writes the snapshot", async () => {
+    const p = tempPaths();
+    let pushed: unknown;
+    const upload = await publishCard(cfg, p, async (_relay, _auth, u) => { pushed = u; });
+    expect(pushed).toEqual(upload);
+    expect(upload.default_offer).toEqual(["ask"]); // DEFAULT_POLICY, no tasks dir
+    const snap = JSON.parse(readFileSync(p.cardSnapshotFile, "utf8"));
+    expect(snap).toEqual(upload);
+  });
+
+  it("does not write the snapshot when the push fails", async () => {
+    const p = tempPaths();
+    await expect(publishCard(cfg, p, async () => { throw new Error("relay down"); })).rejects.toThrow("relay down");
+    expect(() => readFileSync(p.cardSnapshotFile, "utf8")).toThrow();
   });
 });

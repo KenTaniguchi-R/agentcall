@@ -4,7 +4,7 @@ import { join } from "node:path";
 export interface Paths {
   home: string; dir: string; configFile: string; srtFile: string;
   callsLog: string; listenerLog: string; publicDir: string; plistFile: string;
-  tasksDir: string; policyFile: string;
+  tasksDir: string; policyFile: string; cardSnapshotFile: string;
 }
 
 export function getPaths(home: string = process.env.AGENTCALL_HOME ?? os.homedir()): Paths {
@@ -19,5 +19,6 @@ export function getPaths(home: string = process.env.AGENTCALL_HOME ?? os.homedir
     plistFile: join(home, "Library", "LaunchAgents", "tech.benree.agentcall.listener.plist"),
     policyFile: join(dir, "policy.json"),
     tasksDir: join(home, "AgentCall", "tasks"),
+    cardSnapshotFile: join(dir, "card.pushed.json"),
   };
 }

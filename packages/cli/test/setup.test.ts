@@ -221,6 +221,7 @@ describe("runSetup", () => {
       const cardPut = requests.find((r) => r.method === "PUT" && r.url === "/v1/card");
       expect(cardPut).toBeDefined();
       expect(JSON.parse(cardPut!.body!)).toMatchObject({ agent_kind: "claude", default_offer: ["ask"] });
+      expect(existsSync(p.cardSnapshotFile)).toBe(true);
     } finally {
       delete process.env.AGENTCALL_HOME;
     }

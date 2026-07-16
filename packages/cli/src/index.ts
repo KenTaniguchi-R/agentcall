@@ -4,13 +4,11 @@ import { parseAddress } from "@benree/agentcall-shared";
 import { getPaths } from "./paths.js";
 import { loadConfig, relayUrl } from "./config.js";
 import { callAgent, CallError } from "./callClient.js";
-import { getStatus, fetchCard, pushCard, ApiError } from "./api.js";
+import { getStatus, fetchCard, ApiError } from "./api.js";
 import { startListener } from "./listener.js";
 import { runSetup } from "./setup.js";
 import { uninstallLaunchAgent } from "./launchd.js";
-import { loadPolicy } from "./policy.js";
-import { loadTasks } from "./tasks.js";
-import { buildCardUpload } from "./card.js";
+import { publishCard } from "./card.js";
 
 const program = new Command();
 program.name("agentcall").description("Call other people's coding agents").version("0.1.2");
@@ -109,7 +107,7 @@ program
         process.exitCode = 1;
         return;
       }
-      await pushCard(relayUrl(cfg), { handle: cfg.handle, token: cfg.token }, buildCardUpload(cfg, loadPolicy(paths), loadTasks(paths)));
+      await publishCard(cfg, paths);
       console.log("Card published.");
       return;
     }

@@ -5,10 +5,9 @@ import { dirname, join, resolve } from "node:path";
 import { getPaths, type Paths } from "./paths.js";
 import { ask as ttyAsk } from "./tty.js";
 import { loadConfig, saveConfig, relayUrl, type Config } from "./config.js";
-import { pushCard, registerHandle } from "./api.js";
-import { buildCardUpload } from "./card.js";
-import { DEFAULT_POLICY, loadPolicy } from "./policy.js";
-import { loadTasks } from "./tasks.js";
+import { registerHandle } from "./api.js";
+import { publishCard } from "./card.js";
+import { DEFAULT_POLICY } from "./policy.js";
 import { srtSettings, toolchainReadDirs } from "./srt.js";
 import { appendSnippet } from "./snippet.js";
 import { installLaunchAgent } from "./launchd.js";
@@ -201,11 +200,7 @@ export async function runSetup(opts: SetupOpts): Promise<void> {
   // what this agent offers before calling. Best-effort: a relay hiccup here
   // must not abort setup — `agentcall card push` re-publishes any time.
   try {
-    await pushCard(
-      relayUrl(cfg),
-      { handle: cfg.handle, token: cfg.token },
-      buildCardUpload(cfg, loadPolicy(paths), loadTasks(paths)),
-    );
+    await publishCard(cfg, paths);
   } catch (e) {
     console.error(`Warning: could not publish the agent card (${String(e)}). Run \`agentcall card push\` later.`);
   }
