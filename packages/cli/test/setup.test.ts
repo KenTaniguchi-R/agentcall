@@ -3,7 +3,7 @@ import { createServer, type Server } from "node:http";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { resolveExtraPathDirs, runSetup, warnIfOutsideLaunchdPath } from "../src/setup.js";
+import { isEphemeralDir, preferDurableBin, resolveExtraPathDirs, runSetup, warnIfOutsideLaunchdPath } from "../src/setup.js";
 import { getPaths } from "../src/paths.js";
 
 let server: Server;
@@ -247,5 +247,53 @@ describe("resolveExtraPathDirs", () => {
   });
   it("falls back to [] when nothing resolves", () => {
     expect(resolveExtraPathDirs(["claude", "npx"], () => null)).toEqual([]);
+  });
+  it("excludes ephemeral temp dirs so session-scoped shims never get baked into the plist PATH", () => {
+    // Regression: setup run inside a cmux session resolved `claude` to a shim
+    // under $TMPDIR/cmux-cli-shims/<uuid>/; that dir got written into the
+    // LaunchAgent's PATH and shadowed the real binary after the session died.
+    const resolveBin = (name: string) =>
+      name === "claude"
+        ? "/var/folders/89/xx/T/cmux-cli-shims/AA8B8E91/claude"
+        : name === "npx"
+          ? "/Users/x/.local/bin/npx"
+          : null;
+    expect(resolveExtraPathDirs(["claude", "npx"], resolveBin)).toEqual(["/Users/x/.local/bin"]);
+  });
+});
+
+describe("isEphemeralDir", () => {
+  it("flags dirs under the OS temp root and the macOS per-user temp tree", () => {
+    expect(isEphemeralDir(join(tmpdir(), "cmux-cli-shims", "AA8B8E91"))).toBe(true);
+    expect(isEphemeralDir("/var/folders/89/xx/T/cmux-cli-shims/AA8B8E91")).toBe(true);
+    expect(isEphemeralDir("/private/var/folders/89/xx/T/anything")).toBe(true);
+    expect(isEphemeralDir("/tmp/some-bin")).toBe(true);
+    expect(isEphemeralDir("/private/tmp/some-bin")).toBe(true);
+  });
+  it("leaves durable install dirs alone", () => {
+    expect(isEphemeralDir("/Users/x/.local/bin")).toBe(false);
+    expect(isEphemeralDir("/opt/homebrew/bin")).toBe(false);
+    expect(isEphemeralDir("/usr/local/bin")).toBe(false);
+    // "/tmpfoo" must not match a "/tmp" prefix check done without a separator
+    expect(isEphemeralDir("/tmpfoo/bin")).toBe(false);
+  });
+});
+
+describe("preferDurableBin", () => {
+  it("skips ephemeral matches and returns the first durable one", () => {
+    expect(
+      preferDurableBin([
+        "/var/folders/89/xx/T/cmux-cli-shims/AA8B8E91/claude",
+        "/Users/x/.local/bin/claude",
+      ]),
+    ).toBe("/Users/x/.local/bin/claude");
+  });
+  it("falls back to the first match when every candidate is ephemeral", () => {
+    expect(preferDurableBin(["/var/folders/89/xx/T/cmux-cli-shims/AA8B8E91/claude"])).toBe(
+      "/var/folders/89/xx/T/cmux-cli-shims/AA8B8E91/claude",
+    );
+  });
+  it("returns null for no candidates", () => {
+    expect(preferDurableBin([])).toBe(null);
   });
 });

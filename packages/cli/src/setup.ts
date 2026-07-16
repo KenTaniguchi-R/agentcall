@@ -1,7 +1,7 @@
 import { execFileSync } from "node:child_process";
 import { mkdirSync, writeFileSync } from "node:fs";
-import { homedir } from "node:os";
-import { dirname, join } from "node:path";
+import { homedir, tmpdir } from "node:os";
+import { dirname, join, resolve } from "node:path";
 import { getPaths, type Paths } from "./paths.js";
 import { ask as ttyAsk } from "./tty.js";
 import { loadConfig, saveConfig, relayUrl, type Config } from "./config.js";
@@ -30,21 +30,45 @@ export interface SetupOpts {
   installLaunchAgentFn?: typeof installLaunchAgent;
 }
 
+// Roots whose contents don't survive the session that created them. A dir
+// under any of these must never be baked into the LaunchAgent's PATH:
+// terminal wrappers (e.g. cmux) plant per-session bin shims in $TMPDIR that
+// shadow the real agent binary, then vanish — or worse, linger and exec a
+// wrapper for a dead session. /var/folders and /tmp are listed alongside
+// os.tmpdir() (and in /private-prefixed form, their macOS realpath) because
+// the per-user temp tree differs per machine.
+const EPHEMERAL_ROOTS = [tmpdir(), "/tmp", "/private/tmp", "/var/folders", "/private/var/folders"];
+
+export function isEphemeralDir(dir: string): boolean {
+  const normalized = resolve(dir);
+  return EPHEMERAL_ROOTS.some((root) => normalized === root || normalized.startsWith(root + "/"));
+}
+
+// First candidate whose dir survives the current session; falls back to the
+// first match (better a warning-producing shim than claiming the binary
+// doesn't exist at all) and null when there are no candidates.
+export function preferDurableBin(candidates: string[]): string | null {
+  return candidates.find((c) => !isEphemeralDir(dirname(c))) ?? candidates[0] ?? null;
+}
+
 // Dirnames of the resolved bins, deduped and skipping any that failed to
 // resolve. Used to widen the LaunchAgent's PATH (see launchd.ts) so the
 // listener can find an agent/npx install that lives outside its base dirs.
+// Ephemeral dirs (see EPHEMERAL_ROOTS) are dropped even if that's where the
+// bin resolved — a PATH entry into temp is wrong in a persistent LaunchAgent.
 export function resolveExtraPathDirs(names: string[], resolveBin: (name: string) => string | null): string[] {
   const dirs = names
     .map((name) => resolveBin(name))
     .filter((path): path is string => path !== null)
-    .map((path) => dirname(path));
+    .map((path) => dirname(path))
+    .filter((dir) => !isEphemeralDir(dir));
   return [...new Set(dirs)];
 }
 
 function defaultResolveBin(name: string): string | null {
   try {
-    const out = execFileSync("which", [name], { encoding: "utf8", stdio: ["ignore", "pipe", "ignore"] }).trim();
-    return out || null;
+    const out = execFileSync("which", ["-a", name], { encoding: "utf8", stdio: ["ignore", "pipe", "ignore"] });
+    return preferDurableBin(out.split("\n").map((l) => l.trim()).filter(Boolean));
   } catch {
     return null;
   }
