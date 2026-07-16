@@ -169,6 +169,16 @@ export async function runSetup(opts: SetupOpts): Promise<void> {
   const reusedCfg =
     existingCfg !== undefined && (!opts.handle || opts.handle === existingCfg.handle) ? existingCfg : undefined;
 
+  // Downgrade (callable -> caller-only) is out of scope for setup: make no
+  // changes and point at uninstall, which removes the background listener.
+  if (opts.callerOnly && reusedCfg?.agent_kind) {
+    console.error(
+      "This install is already callable. To stop answering calls, run `agentcall uninstall` " +
+        "(config is kept; re-run `agentcall setup` to come back).",
+    );
+    return;
+  }
+
   const callable = await decideCallable(opts, hasBinFn, ask, reusedCfg);
 
   // On reuse the saved agent_kind is what actually gets spawned (see
@@ -185,6 +195,13 @@ export async function runSetup(opts: SetupOpts): Promise<void> {
   let address: string;
   if (reusedCfg) {
     cfg = reusedCfg;
+    if (callable && !cfg.agent_kind && agentKind) {
+      // Upgrade caller-only -> callable: keep handle/token, add the agent
+      // locally. The relay's stored agent_kind stays NULL, which is fine —
+      // the relay never reads that column after registration.
+      cfg = { ...cfg, agent_kind: agentKind };
+      saveConfig(paths, cfg);
+    }
     address = addressFromConfig(cfg);
     console.log(`Reusing existing registration for ${cfg.handle}`);
   } else {

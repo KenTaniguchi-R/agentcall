@@ -437,4 +437,59 @@ describe("caller-only setup", () => {
       delete process.env.AGENTCALL_HOME;
     }
   });
+
+  it("re-running setup upgrades a caller-only config to callable, keeping handle and token", async () => {
+    const home = mkdtempSync(join(tmpdir(), "agentcall-setup-"));
+    process.env.AGENTCALL_HOME = home;
+    try {
+      const relay = await fakeRelay();
+      await runSetup({ handle: "upg", callerOnly: true, relay, snippet: false, hasBin: () => false });
+      const p = getPaths(home);
+      expect(JSON.parse(readFileSync(p.configFile, "utf8")).agent_kind).toBeUndefined();
+
+      // The upgrade run points at a relay that 409s every register call —
+      // it must reuse the existing handle/token, not re-register.
+      const badRelay = await fakeRelay409();
+      let launchdCalled = false;
+      await runSetup({
+        relay: badRelay,
+        snippet: false,
+        hasBin: (name) => name === "claude",
+        io: { ask: async () => "y" },
+        installLaunchAgentFn: () => { launchdCalled = true; },
+      });
+      const cfg = JSON.parse(readFileSync(p.configFile, "utf8"));
+      expect(cfg.handle).toBe("upg");
+      expect(cfg.token).toBe("tok-123");
+      expect(cfg.agent_kind).toBe("claude");
+      expect(existsSync(p.srtFile)).toBe(true);
+      expect(existsSync(p.publicDir)).toBe(true);
+      expect(launchdCalled).toBe(true);
+    } finally {
+      delete process.env.AGENTCALL_HOME;
+    }
+  });
+
+  it("--caller-only against an already-callable config makes no changes and points at uninstall", async () => {
+    const home = mkdtempSync(join(tmpdir(), "agentcall-setup-"));
+    process.env.AGENTCALL_HOME = home;
+    const errors: string[] = [];
+    const spy = vi.spyOn(console, "error").mockImplementation((...a: unknown[]) => {
+      errors.push(a.map(String).join(" "));
+    });
+    try {
+      const relay = await fakeRelay();
+      await runSetup({ handle: "full", agent: "claude", relay, snippet: false, skipLaunchd: true });
+      const p = getPaths(home);
+      const before = readFileSync(p.configFile, "utf8");
+
+      await runSetup({ callerOnly: true, relay, snippet: false, hasBin: () => true });
+
+      expect(readFileSync(p.configFile, "utf8")).toBe(before);
+      expect(errors.some((l) => l.includes("uninstall"))).toBe(true);
+    } finally {
+      spy.mockRestore();
+      delete process.env.AGENTCALL_HOME;
+    }
+  });
 });
