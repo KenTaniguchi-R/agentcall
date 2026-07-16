@@ -38,7 +38,7 @@ async function relayFetch(relay: string, path: string, init: RequestInit, timeou
 }
 
 export async function registerHandle(
-  relay: string, handle: string, agentKind: "claude" | "codex", opts: { timeoutMs?: number } = {},
+  relay: string, handle: string, agentKind?: "claude" | "codex", opts: { timeoutMs?: number } = {},
 ): Promise<{ token: string; address: string }> {
   assertValidHandle(handle);
   const res = await relayFetch(

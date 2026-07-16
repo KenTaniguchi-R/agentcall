@@ -4,7 +4,7 @@ import WebSocket from "ws";
 import {
   AGENT_TIMEOUT_MS, RelayToListenerFrame, safeParseFrame,
 } from "@benree/agentcall-shared";
-import type { Config } from "./config.js";
+import type { CallableConfig } from "./config.js";
 import type { Paths } from "./paths.js";
 import { buildPrompt } from "./prompt.js";
 import { AgentRunError, runAgent } from "./runner.js";
@@ -12,7 +12,7 @@ import { SerialQueue } from "./queue.js";
 
 export interface ListenerDeps {
   relay: string;
-  config: Config;
+  config: CallableConfig;
   paths: Paths;
   run?: typeof runAgent;
   maxPending?: number;

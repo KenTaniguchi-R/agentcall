@@ -146,7 +146,8 @@ export async function runSetup(opts: SetupOpts): Promise<void> {
   // listener.ts), so skip detection entirely — it may prompt ("Which should
   // agentcall use?") and its answer would be ignored anyway.
   const agentKind =
-    canReuse && existingCfg ? existingCfg.agent_kind : await detectAgentKind(opts, hasBinFn, ask);
+    (canReuse && existingCfg ? existingCfg.agent_kind : undefined) ??
+    (await detectAgentKind(opts, hasBinFn, ask));
   warnIfOutsideLaunchdPath(agentKind, resolveBinFn);
   warnIfOutsideLaunchdPath("npx", resolveBinFn);
 
@@ -169,6 +170,10 @@ export async function runSetup(opts: SetupOpts): Promise<void> {
     saveConfig(paths, cfg);
   }
 
+  // cfg.agent_kind is always set at this point (no caller-only configs exist
+  // yet); this local narrows the optional field for the calls below.
+  const kind = cfg.agent_kind ?? agentKind;
+
   // Seed srt.json with the current toolchain's read dirs (see srt.ts's
   // toolchainReadDirs) so the sandboxed agent can execute node/npx/itself
   // from first call, not just after runAgent's first real spawn rewrites
@@ -183,15 +188,15 @@ export async function runSetup(opts: SetupOpts): Promise<void> {
   // gets spawned (see listener.ts).
   let extraReadDirs: string[] = [];
   try {
-    extraReadDirs = toolchainReadDirs(cfg.agent_kind);
+    extraReadDirs = toolchainReadDirs(kind);
   } catch {
     /* fall back to srtSettings(paths, cfg.agent_kind) below */
   }
-  writeFileSync(paths.srtFile, JSON.stringify(srtSettings(paths, cfg.agent_kind, extraReadDirs), null, 2) + "\n");
+  writeFileSync(paths.srtFile, JSON.stringify(srtSettings(paths, kind, extraReadDirs), null, 2) + "\n");
   mkdirSync(paths.publicDir, { recursive: true });
 
   if (!opts.skipLaunchd) {
-    const extraPathDirs = resolveExtraPathDirs([cfg.agent_kind, "npx"], resolveBinFn);
+    const extraPathDirs = resolveExtraPathDirs([kind, "npx"], resolveBinFn);
     (opts.installLaunchAgentFn ?? installLaunchAgent)(paths, undefined, extraPathDirs);
   }
 

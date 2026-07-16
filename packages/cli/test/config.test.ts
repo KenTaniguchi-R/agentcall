@@ -3,7 +3,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 import { getPaths } from "../src/paths.js";
-import { loadConfig, saveConfig, relayUrl } from "../src/config.js";
+import { loadConfig, saveConfig, relayUrl, assertCallableConfig } from "../src/config.js";
 
 function tempHome() { return mkdtempSync(join(tmpdir(), "agentcall-test-")); }
 
@@ -49,5 +49,18 @@ describe("config", () => {
     process.env.AGENTCALL_RELAY = "";
     try { expect(relayUrl(cfg)).toBe("https://custom.example"); }
     finally { delete process.env.AGENTCALL_RELAY; }
+  });
+  it("round-trips a caller-only config (no agent_kind)", () => {
+    const p = getPaths(tempHome());
+    const cfg = { handle: "solo", token: "t".repeat(43), relay: "https://agentcall.benree.tech" };
+    saveConfig(p, cfg);
+    expect(loadConfig(p)).toEqual(cfg);
+    expect(loadConfig(p).agent_kind).toBeUndefined();
+  });
+  it("assertCallableConfig passes a full config and rejects caller-only", () => {
+    const full = { handle: "k", token: "t", agent_kind: "claude" as const, relay: "https://x.y" };
+    expect(() => assertCallableConfig(full)).not.toThrow();
+    expect(() => assertCallableConfig({ handle: "k", token: "t", relay: "https://x.y" }))
+      .toThrow(/caller-only.*agentcall setup/);
   });
 });

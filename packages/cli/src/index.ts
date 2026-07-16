@@ -2,7 +2,7 @@ import { rmSync } from "node:fs";
 import { Command } from "commander";
 import { parseAddress } from "@benree/agentcall-shared";
 import { getPaths } from "./paths.js";
-import { loadConfig, relayUrl } from "./config.js";
+import { loadConfig, relayUrl, assertCallableConfig } from "./config.js";
 import { callAgent, CallError } from "./callClient.js";
 import { getStatus, ApiError } from "./api.js";
 import { startListener } from "./listener.js";
@@ -97,6 +97,7 @@ program
   .action(() => {
     const paths = getPaths();
     const cfg = loadConfig(paths);
+    assertCallableConfig(cfg);
     console.log(`agentcall listener starting for ${cfg.handle} -> ${relayUrl(cfg)}`);
     const l = startListener({ relay: relayUrl(cfg), config: cfg, paths });
     process.on("SIGTERM", () => {
