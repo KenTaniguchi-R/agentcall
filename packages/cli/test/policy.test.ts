@@ -2,7 +2,7 @@ import { mkdirSync, mkdtempSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { describe, expect, it } from "vitest";
-import { DEFAULT_POLICY, loadPolicy, offeredFor, resolveTask, type Policy } from "../src/policy.js";
+import { DEFAULT_POLICY, loadPolicy, offeredFor, resolveTask, savePolicy, type Policy } from "../src/policy.js";
 import { ASK_TASK, type Task } from "../src/tasks.js";
 import { getPaths } from "../src/paths.js";
 
@@ -101,5 +101,15 @@ describe("resolveTask", () => {
     expect(resolveTask(p, TASKS, "x")).toEqual({
       ok: false, code: "task_not_offered", offered: [],
     });
+  });
+});
+
+describe("savePolicy", () => {
+  it("round-trips through loadPolicy", () => {
+    const p = getPaths(mkdtempSync(join(tmpdir(), "agentcall-pol-")));
+    mkdirSync(dirname(p.policyFile), { recursive: true });
+    const pol: Policy = { description: "x", default_offer: ["ask"], callers: { ken: { offer: ["a-task"], block: false } } };
+    savePolicy(p, pol);
+    expect(loadPolicy(p)).toEqual(pol);
   });
 });

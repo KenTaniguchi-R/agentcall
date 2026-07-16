@@ -1,4 +1,5 @@
-import { existsSync, readFileSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { dirname } from "node:path";
 import { z } from "zod";
 import type { Paths } from "./paths.js";
 import type { Task } from "./tasks.js";
@@ -27,6 +28,13 @@ export const DEFAULT_POLICY: Policy = { description: "", default_offer: ["ask"],
 export function loadPolicy(p: Paths): Policy {
   if (!existsSync(p.policyFile)) return DEFAULT_POLICY;
   return PolicySchema.parse(JSON.parse(readFileSync(p.policyFile, "utf8")));
+}
+
+// Writes the exact shape PolicySchema parses, so hand-edits and the CLI
+// verbs (verbs.ts) interoperate on the same file.
+export function savePolicy(p: Paths, policy: Policy): void {
+  mkdirSync(dirname(p.policyFile), { recursive: true });
+  writeFileSync(p.policyFile, JSON.stringify(policy, null, 2) + "\n");
 }
 
 // Grant entries may carry the spec's "+" prefix ("+schedule-meeting");

@@ -9,6 +9,9 @@ import { startListener } from "./listener.js";
 import { runSetup } from "./setup.js";
 import { uninstallLaunchAgent } from "./launchd.js";
 import { publishCard } from "./card.js";
+import { loadPolicy, savePolicy } from "./policy.js";
+import { loadTasks } from "./tasks.js";
+import { execVerb, type Verb } from "./verbs.js";
 
 const program = new Command();
 program.name("agentcall").description("Call other people's coding agents").version("0.1.2");
@@ -136,6 +139,40 @@ program
       process.exitCode = 1;
     }
   });
+
+function policyVerbAction(verb: Verb) {
+  return async (a: string, b?: string) => {
+    const paths = getPaths();
+    const cfg = loadConfig(paths);
+    try {
+      const { policy, lines } = execVerb(loadPolicy(paths), loadTasks(paths), verb, a, b);
+      savePolicy(paths, policy);
+      for (const line of lines) console.log(line);
+      try {
+        await publishCard(cfg, paths);
+        console.log("Card updated.");
+      } catch (e) {
+        console.error(`Warning: policy saved locally, but the card push failed (${String(e)}). Run \`agentcall card push\` later.`);
+      }
+    } catch (e) {
+      console.error(String(e instanceof Error ? e.message : e));
+      process.exitCode = 1;
+    }
+  };
+}
+
+program.command("allow").description("grant a caller an extra task (and republish your card)")
+  .argument("<handle>").argument("<task-id>").action(policyVerbAction("allow"));
+program.command("revoke").description("remove a caller's task grant")
+  .argument("<handle>").argument("<task-id>").action(policyVerbAction("revoke"));
+program.command("block").description("refuse all calls from a handle")
+  .argument("<handle>").action(policyVerbAction("block"));
+program.command("unblock").description("lift a block")
+  .argument("<handle>").action(policyVerbAction("unblock"));
+program.command("offer").description("offer a task to any registered caller")
+  .argument("<task-id>").action(policyVerbAction("offer"));
+program.command("unoffer").description("stop offering a task publicly")
+  .argument("<task-id>").action(policyVerbAction("unoffer"));
 
 program
   .command("listen")
