@@ -2,6 +2,7 @@ import { existsSync, mkdirSync, realpathSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { delimiter, dirname, join, sep } from "node:path";
 import type { Paths } from "./paths.js";
+import { FULL_ACCESS_ENVELOPE, type Envelope } from "./tasks.js";
 
 // Shape verified against the installed @anthropic-ai/sandbox-runtime README
 // (`npm view @anthropic-ai/sandbox-runtime readme`): settings are flat
@@ -127,20 +128,26 @@ const AGENT_HOME: Record<"claude" | "codex", AgentHome> = {
   },
 };
 
-export function srtSettings(p: Paths, agentKind: "claude" | "codex", extraReadDirs: string[] = []): object {
+export function srtSettings(
+  p: Paths, agentKind: "claude" | "codex", extraReadDirs: string[] = [], envelope: Envelope = FULL_ACCESS_ENVELOPE,
+): object {
   const home = AGENT_HOME[agentKind];
   const homeDir = "~/" + home.dotDir;
+  // Task envelopes name their writable dirs relative to ~/AgentCall
+  // ("public" -> p.publicDir). WRITE_PATH_RE in tasks.ts forbids "." so
+  // traversal outside ~/AgentCall cannot be expressed.
+  const taskWriteDirs = envelope.write_paths.map((wp) => join(p.home, "AgentCall", wp));
   return {
     filesystem: {
       denyRead: ["~"],
       allowRead: [
         ...new Set([p.publicDir, homeDir, ...home.extraAllow, "/tmp", "/private/tmp", "/var/folders", ...extraReadDirs]),
       ],
-      allowWrite: [p.publicDir, homeDir, ...home.extraAllow, "/tmp", "/private/tmp", "/var/folders"],
+      allowWrite: [...taskWriteDirs, homeDir, ...home.extraAllow, "/tmp", "/private/tmp", "/var/folders"],
       denyWrite: home.protected.map((e) => `~/${home.dotDir}/${e.rel}`),
     },
     network: {
-      allowedDomains: ALLOWED_DOMAINS[agentKind],
+      allowedDomains: [...ALLOWED_DOMAINS[agentKind], ...envelope.network],
       deniedDomains: [],
     },
   };
@@ -283,6 +290,8 @@ export function toolchainReadDirs(
 // once at `setup` time) so a node/npm-manager upgrade or reinstall since
 // setup doesn't leave a stale allowlist that denies the sandboxed process
 // its own binary.
-export function writeSrtSettings(p: Paths, agentKind: "claude" | "codex"): void {
-  writeFileSync(p.srtFile, JSON.stringify(srtSettings(p, agentKind, toolchainReadDirs(agentKind)), null, 2) + "\n");
+export function writeSrtSettings(p: Paths, agentKind: "claude" | "codex", envelope: Envelope = FULL_ACCESS_ENVELOPE): void {
+  writeFileSync(
+    p.srtFile, JSON.stringify(srtSettings(p, agentKind, toolchainReadDirs(agentKind), envelope), null, 2) + "\n",
+  );
 }

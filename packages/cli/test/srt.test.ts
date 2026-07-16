@@ -8,6 +8,7 @@ import {
   ensureDenyWriteTargetsExist, resolveAgentBin, srtSettings, toolchainReadDirs, writeSrtSettings,
 } from "../src/srt.js";
 import { getPaths } from "../src/paths.js";
+import { FULL_ACCESS_ENVELOPE, type Envelope } from "../src/tasks.js";
 
 function tempHome() { return mkdtempSync(join(tmpdir(), "agentcall-srt-test-")); }
 
@@ -214,4 +215,45 @@ describe("single source of truth: denyWrite <-> ensureDenyWriteTargetsExist", ()
       rmSync(home, { recursive: true, force: true });
     },
   );
+});
+
+describe("srtSettings with a task envelope", () => {
+  const READ_ONLY: Envelope = { caps: ["read"], write_paths: [], network: [] };
+
+  it("read-only envelope removes publicDir from allowWrite but keeps agent state writable", () => {
+    const s = srtSettings(getPaths("/tmp/fakehome"), "claude", [], READ_ONLY) as any;
+    expect(s.filesystem.allowWrite).not.toContain("/tmp/fakehome/AgentCall/public");
+    expect(s.filesystem.allowWrite).toContain("~/.claude"); // claude -p must still run
+    expect(s.filesystem.allowRead).toContain("/tmp/fakehome/AgentCall/public"); // reads stay
+  });
+
+  it("write_paths map to dirs under ~/AgentCall", () => {
+    const env: Envelope = { caps: ["read", "write"], write_paths: ["public/inbox"], network: [] };
+    const s = srtSettings(getPaths("/tmp/fakehome"), "claude", [], env) as any;
+    expect(s.filesystem.allowWrite).toContain("/tmp/fakehome/AgentCall/public/inbox");
+    expect(s.filesystem.allowWrite).not.toContain("/tmp/fakehome/AgentCall/public");
+  });
+
+  it("envelope network domains are appended to the agent-kind allowlist", () => {
+    const env: Envelope = { caps: ["read", "fetch"], write_paths: [], network: ["calendar.google.com"] };
+    const s = srtSettings(getPaths("/tmp/fakehome"), "claude", [], env) as any;
+    expect(s.network.allowedDomains).toContain("api.anthropic.com");
+    expect(s.network.allowedDomains).toContain("calendar.google.com");
+  });
+
+  it("defaults to FULL_ACCESS_ENVELOPE, reproducing today's allowWrite exactly", () => {
+    const withDefault = srtSettings(getPaths("/tmp/fakehome"), "claude") as any;
+    const explicit = srtSettings(getPaths("/tmp/fakehome"), "claude", [], FULL_ACCESS_ENVELOPE) as any;
+    expect(withDefault.filesystem.allowWrite).toEqual(explicit.filesystem.allowWrite);
+    expect(withDefault.filesystem.allowWrite).toContain("/tmp/fakehome/AgentCall/public");
+  });
+
+  it("writeSrtSettings persists the envelope-scoped settings", () => {
+    const home = tempHome();
+    const p = getPaths(home);
+    mkdirSync(p.dir, { recursive: true });
+    writeSrtSettings(p, "claude", READ_ONLY);
+    const written = JSON.parse(readFileSync(p.srtFile, "utf8"));
+    expect(written.filesystem.allowWrite).not.toContain(join(home, "AgentCall", "public"));
+  });
 });
