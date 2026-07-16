@@ -1,4 +1,4 @@
-import { existsSync, mkdtempSync, readFileSync } from "node:fs";
+import { existsSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
 import { createServer, type Server } from "node:http";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -39,6 +39,21 @@ function fakeRelay409(): Promise<string> {
       res.end(JSON.stringify({ error: "handle taken" }));
     });
     server409.listen(0, "127.0.0.1", () => resolve(`http://127.0.0.1:${(server409.address() as { port: number }).port}`));
+  });
+}
+
+function fakeRelayRecording(requests: { method?: string; url?: string; body?: string }[]): Promise<string> {
+  return new Promise((resolve) => {
+    server = createServer((req, res) => {
+      let body = "";
+      req.on("data", (d) => (body += d));
+      req.on("end", () => {
+        requests.push({ method: req.method, url: req.url, body });
+        res.writeHead(200, { "content-type": "application/json" });
+        res.end(JSON.stringify({ token: "tok-123", address: "ken@agentcall.benree.tech", ok: true }));
+      });
+    });
+    server.listen(0, "127.0.0.1", () => resolve(`http://127.0.0.1:${(server.address() as { port: number }).port}`));
   });
 }
 
@@ -187,6 +202,41 @@ describe("runSetup", () => {
         },
       });
       expect(captured).toEqual(["/Users/x/.local/bin"]);
+    } finally {
+      delete process.env.AGENTCALL_HOME;
+    }
+  });
+
+  it("seeds policy.json + tasks dir and publishes the card", async () => {
+    const home = mkdtempSync(join(tmpdir(), "agentcall-setup-"));
+    process.env.AGENTCALL_HOME = home;
+    try {
+      const requests: { method?: string; url?: string; body?: string }[] = [];
+      const relay = await fakeRelayRecording(requests);
+      await runSetup({ handle: "ken", agent: "claude", relay, snippet: false, skipLaunchd: true });
+      const p = getPaths(home);
+      expect(existsSync(p.tasksDir)).toBe(true);
+      const policy = JSON.parse(readFileSync(p.policyFile, "utf8"));
+      expect(policy.default_offer).toEqual(["ask"]);
+      const cardPut = requests.find((r) => r.method === "PUT" && r.url === "/v1/card");
+      expect(cardPut).toBeDefined();
+      expect(JSON.parse(cardPut!.body!)).toMatchObject({ agent_kind: "claude", default_offer: ["ask"] });
+    } finally {
+      delete process.env.AGENTCALL_HOME;
+    }
+  });
+
+  it("does not overwrite an existing policy.json on re-run", async () => {
+    const home = mkdtempSync(join(tmpdir(), "agentcall-setup-"));
+    process.env.AGENTCALL_HOME = home;
+    try {
+      const relay = await fakeRelay();
+      await runSetup({ handle: "ken", agent: "claude", relay, snippet: false, skipLaunchd: true });
+      const p = getPaths(home);
+      const custom = { description: "custom", default_offer: ["ask"], callers: { mia: { offer: ["x"], block: false } } };
+      writeFileSync(p.policyFile, JSON.stringify(custom));
+      await runSetup({ handle: "ken", agent: "claude", relay, snippet: false, skipLaunchd: true });
+      expect(JSON.parse(readFileSync(p.policyFile, "utf8"))).toEqual(custom);
     } finally {
       delete process.env.AGENTCALL_HOME;
     }

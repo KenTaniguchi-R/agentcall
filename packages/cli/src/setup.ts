@@ -1,11 +1,14 @@
 import { execFileSync } from "node:child_process";
-import { mkdirSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, writeFileSync } from "node:fs";
 import { homedir, tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { getPaths, type Paths } from "./paths.js";
 import { ask as ttyAsk } from "./tty.js";
 import { loadConfig, saveConfig, relayUrl, type Config } from "./config.js";
-import { registerHandle } from "./api.js";
+import { pushCard, registerHandle } from "./api.js";
+import { buildCardUpload } from "./card.js";
+import { DEFAULT_POLICY, loadPolicy } from "./policy.js";
+import { loadTasks } from "./tasks.js";
 import { srtSettings, toolchainReadDirs } from "./srt.js";
 import { appendSnippet } from "./snippet.js";
 import { installLaunchAgent } from "./launchd.js";
@@ -189,6 +192,23 @@ export async function runSetup(opts: SetupOpts): Promise<void> {
   }
   writeFileSync(paths.srtFile, JSON.stringify(srtSettings(paths, cfg.agent_kind, extraReadDirs), null, 2) + "\n");
   mkdirSync(paths.publicDir, { recursive: true });
+  mkdirSync(paths.tasksDir, { recursive: true });
+  if (!existsSync(paths.policyFile)) {
+    writeFileSync(paths.policyFile, JSON.stringify(DEFAULT_POLICY, null, 2) + "\n");
+  }
+
+  // Publish the agent card (task menu) to the relay so callers can discover
+  // what this agent offers before calling. Best-effort: a relay hiccup here
+  // must not abort setup — `agentcall card push` re-publishes any time.
+  try {
+    await pushCard(
+      relayUrl(cfg),
+      { handle: cfg.handle, token: cfg.token },
+      buildCardUpload(cfg, loadPolicy(paths), loadTasks(paths)),
+    );
+  } catch (e) {
+    console.error(`Warning: could not publish the agent card (${String(e)}). Run \`agentcall card push\` later.`);
+  }
 
   if (!opts.skipLaunchd) {
     const extraPathDirs = resolveExtraPathDirs([cfg.agent_kind, "npx"], resolveBinFn);
