@@ -65,7 +65,8 @@ export const RelayToListenerFrame = z.discriminatedUnion("type", [IncomingCall])
 
 export const RegisterRequest = z.object({
   handle: z.string().regex(HANDLE_RE),
-  agent_kind: z.enum(["claude", "codex"]),
+  // Absent = caller-only: the handle can call others but is not callable.
+  agent_kind: z.enum(["claude", "codex"]).optional(),
 });
 export const RegisterResponse = z.object({ token: z.string(), address: z.string() });
 

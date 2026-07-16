@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import {
   CallRequest, CallerFrame, RelayToCallerFrame, ListenerToRelayFrame,
   HANDLE_RE, RESERVED_HANDLES, MAX_MESSAGE_BYTES, parseAddress, safeParseFrame,
+  RegisterRequest,
 } from "../src/index.js";
 
 describe("handle rules", () => {
@@ -50,5 +51,16 @@ describe("frames", () => {
   });
   it("exposes size constants", () => {
     expect(MAX_MESSAGE_BYTES).toBe(64_000);
+  });
+});
+
+describe("RegisterRequest", () => {
+  it("parses with and without agent_kind (absent = caller-only)", () => {
+    expect(RegisterRequest.parse({ handle: "ken", agent_kind: "claude" }))
+      .toEqual({ handle: "ken", agent_kind: "claude" });
+    expect(RegisterRequest.parse({ handle: "solo" })).toEqual({ handle: "solo" });
+  });
+  it("still rejects invalid agent kinds", () => {
+    expect(RegisterRequest.safeParse({ handle: "ken", agent_kind: "vim" }).success).toBe(false);
   });
 });
