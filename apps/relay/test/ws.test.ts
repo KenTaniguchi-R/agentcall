@@ -1,6 +1,6 @@
 import { SELF } from "cloudflare:test";
 import { describe, expect, it } from "vitest";
-import { registerHandle, wsAuth, openWs, closed } from "./helpers.js";
+import { registerHandle, wsAuth, openWs, closed, nextFrame } from "./helpers.js";
 
 describe("listener attach + status", () => {
   it("401s a listener with a bad token", async () => {
@@ -54,5 +54,27 @@ describe("listener attach + status", () => {
       headers: { Upgrade: "websocket", ...wsAuth("gina", token) },
     });
     expect(res.status).toBe(400);
+  });
+
+  it("a caller-only handle can authenticate and place a call", async () => {
+    // Callee: a normal, callable registration with a listener attached.
+    const hostToken = await registerHandle("host1");
+    const listener = await openWs("/v1/ws?role=listen", wsAuth("host1", hostToken));
+    const incoming = nextFrame(listener);
+
+    // Caller: registered with no agent_kind at all.
+    const res = await SELF.fetch("https://relay.test/v1/register", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ handle: "solo2" }),
+    });
+    expect(res.status).toBe(200);
+    const { token } = await res.json<{ token: string }>();
+
+    const caller = await openWs("/v1/ws?role=call&to=host1", wsAuth("solo2", token));
+    caller.send(JSON.stringify({ type: "call_request", to: "host1", message: "hi" }));
+    const frame = await incoming;
+    expect(frame.type).toBe("incoming_call");
+    expect(frame.from).toBe("solo2");
   });
 });

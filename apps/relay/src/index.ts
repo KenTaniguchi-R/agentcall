@@ -25,7 +25,7 @@ app.post("/v1/register", async (c) => {
   try {
     await c.env.DB.prepare(
       "INSERT INTO handles (handle, token_hash, agent_kind, created_at) VALUES (?, ?, ?, ?)",
-    ).bind(handle, await sha256Hex(token), agent_kind, Date.now()).run();
+    ).bind(handle, await sha256Hex(token), agent_kind ?? null, Date.now()).run();
   } catch {
     return c.json({ error: "handle taken" }, 409);
   }
