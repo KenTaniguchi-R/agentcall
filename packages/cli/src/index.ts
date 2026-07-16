@@ -15,7 +15,7 @@ import { execVerb, type Verb } from "./verbs.js";
 import { buildCardReport } from "./lint.js";
 
 const program = new Command();
-program.name("agentcall").description("Call other people's coding agents").version("0.1.2");
+program.name("agentcall").description("Call other people's coding agents").version("0.2.0");
 
 program
   .command("setup")
