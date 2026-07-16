@@ -3,8 +3,9 @@ import { tmpdir } from "node:os";
 import { isAbsolute, join } from "node:path";
 import { describe, expect, it } from "vitest";
 import { buildPrompt } from "../src/prompt.js";
-import { buildSpawnSpec, parseClaudeJson, parseCodexJsonl, runAgent, truncateUtf8 } from "../src/runner.js";
+import { buildSpawnSpec, claudeAllowedTools, parseClaudeJson, parseCodexJsonl, runAgent, truncateUtf8 } from "../src/runner.js";
 import { getPaths } from "../src/paths.js";
+import { FULL_ACCESS_ENVELOPE, type Envelope } from "../src/tasks.js";
 
 const p = getPaths("/tmp/fakehome");
 
@@ -30,6 +31,8 @@ describe("buildSpawnSpec", () => {
     expect(s.args).toEqual([
       "-y", "@anthropic-ai/sandbox-runtime@0.0.65", "--settings", p.srtFile, "--",
       "/abs/path/to/claude", "-p", "PROMPT", "--output-format", "json",
+      "--permission-mode", "dontAsk",
+      "--allowedTools", "Read,Grep,Glob,LS,Write,Edit,WebFetch,WebSearch,Bash",
     ]);
     expect(s.cwd).toBe(p.publicDir);
   });
@@ -168,4 +171,33 @@ describe("runAgent (with a fake agent binary)", () => {
     // 20s timeout — proves the cap tripped, not the timeout.
     expect(Date.now() - start).toBeLessThan(10_000);
   }, 15_000);
+});
+
+describe("envelope-scoped spawn spec", () => {
+  const READ_ONLY: Envelope = { caps: ["read"], write_paths: [], network: [] };
+
+  it("claudeAllowedTools maps caps to tool lists, read always included, CAPS order", () => {
+    expect(claudeAllowedTools(READ_ONLY)).toBe("Read,Grep,Glob,LS");
+    expect(claudeAllowedTools({ caps: ["fetch"], write_paths: [], network: [] })).toBe("Read,Grep,Glob,LS,WebFetch,WebSearch");
+    expect(claudeAllowedTools(FULL_ACCESS_ENVELOPE)).toBe("Read,Grep,Glob,LS,Write,Edit,WebFetch,WebSearch,Bash");
+  });
+
+  it("read-only envelope restricts claude's allowedTools", () => {
+    const s = buildSpawnSpec("claude", "PROMPT", p, () => "/abs/claude", READ_ONLY);
+    const idx = s.args.indexOf("--allowedTools");
+    expect(s.args[idx + 1]).toBe("Read,Grep,Glob,LS");
+    expect(s.args).toContain("dontAsk");
+  });
+
+  it("codex gets --sandbox read-only when the envelope has no write cap", () => {
+    const s = buildSpawnSpec("codex", "PROMPT", p, () => "/abs/codex", READ_ONLY);
+    const idx = s.args.indexOf("--sandbox");
+    expect(s.args[idx + 1]).toBe("read-only");
+  });
+
+  it("codex keeps workspace-write when the envelope has the write cap", () => {
+    const s = buildSpawnSpec("codex", "PROMPT", p, () => "/abs/codex", FULL_ACCESS_ENVELOPE);
+    const idx = s.args.indexOf("--sandbox");
+    expect(s.args[idx + 1]).toBe("workspace-write");
+  });
 });
