@@ -2,7 +2,9 @@ import WebSocket from "ws";
 import { RelayToCallerFrame, safeParseFrame, type CallReplyType, type ErrorCodeType } from "@benree/agentcall-shared";
 
 export class CallError extends Error {
-  constructor(message: string, public code: ErrorCodeType | "connection_failed") { super(message); }
+  constructor(message: string, public code: ErrorCodeType | "connection_failed", public offered?: string[]) {
+    super(message);
+  }
 }
 
 const HUMAN: Record<string, string> = {
@@ -15,6 +17,9 @@ const HUMAN: Record<string, string> = {
   agent_error: "The remote agent hit an error while answering.",
   message_too_large: "Your message is too large (64KB max).",
   protocol_error: "Protocol error.",
+  blocked: "This agent's owner has blocked calls from your handle.",
+  task_not_offered: "That task isn't offered to you.",
+  task_unknown: "That task doesn't exist on this agent.",
 };
 
 export interface CallOpts {
@@ -22,6 +27,9 @@ export interface CallOpts {
   sessionId?: string; onStatus?: (state: string) => void; timeoutMs?: number;
   // Interval for the caller-side keepalive ping below; overridable for tests.
   pingIntervalMs?: number;
+  // Task id from the callee's card to perform; omitted lets the callee's
+  // policy pick a default (single offered task, or "ask").
+  task?: string;
 }
 
 export function callAgent(opts: CallOpts): Promise<CallReplyType> {
@@ -52,7 +60,7 @@ export function callAgent(opts: CallOpts): Promise<CallReplyType> {
     });
     ws.on("error", (e) => finish(() => reject(new CallError(`Connection failed: ${e.message}`, "connection_failed"))));
     ws.on("open", () => {
-      ws.send(JSON.stringify({ type: "call_request", to: opts.to, message: opts.message, session_id: opts.sessionId }));
+      ws.send(JSON.stringify({ type: "call_request", to: opts.to, message: opts.message, session_id: opts.sessionId, task: opts.task }));
       // Cloudflare's idle timeout can drop a long-running call (agent answers
       // can take up to AGENT_TIMEOUT_MS) if the socket goes quiet. Ping keeps
       // it alive; unref() so this timer alone never keeps the process open.
@@ -64,7 +72,11 @@ export function callAgent(opts: CallOpts): Promise<CallReplyType> {
       if (!frame) return;
       if (frame.type === "call_status") opts.onStatus?.(frame.state);
       else if (frame.type === "call_reply") finish(() => resolve(frame));
-      else if (frame.type === "call_error") finish(() => reject(new CallError(frame.detail ?? HUMAN[frame.code] ?? frame.code, frame.code)));
+      else if (frame.type === "call_error") {
+        const base = frame.detail ?? HUMAN[frame.code] ?? frame.code;
+        const msg = frame.offered?.length ? `${base} Tasks offered to you: ${frame.offered.join(", ")}` : base;
+        finish(() => reject(new CallError(msg, frame.code, frame.offered)));
+      }
     });
     ws.on("close", () => finish(() => reject(new CallError("Connection closed before a reply arrived.", "connection_failed"))));
   });

@@ -20,6 +20,19 @@ function fakeRelay(script: Script): Promise<string> {
   });
 }
 
+// Thin wrapper over fakeRelay: captures each non-ping frame the client sends
+// and hands it to `handler` alongside the socket, so tests can assert on the
+// outbound frame and script a reply in one place.
+function fakeRelayCapture(handler: (ws: import("ws").WebSocket, frame: any) => void): Promise<string> {
+  return fakeRelay((ws) => {
+    ws.on("message", (raw) => {
+      const s = String(raw);
+      if (s === "ping") return;
+      handler(ws, JSON.parse(s));
+    });
+  });
+}
+
 const base = { from: "me", token: "tok", to: "ken", message: "hi" };
 
 describe("callAgent", () => {
@@ -76,5 +89,28 @@ describe("callAgent", () => {
     const reply = await callAgent({ relay, ...base, pingIntervalMs: 20 });
     expect(reply.text).toBe("yo");
     expect(pings.length).toBeGreaterThan(0);
+  });
+
+  it("sends the task field in call_request when opts.task is set", async () => {
+    // Arrange a fake relay that captures the first frame, then replies.
+    let captured: any;
+    const url = await fakeRelayCapture((ws, frame) => {
+      captured = frame;
+      ws.send(JSON.stringify({ type: "call_reply", call_id: "c1", text: "ok", task: frame.task }));
+    });
+    const reply = await callAgent({ relay: url, from: "bob", token: "t", to: "ken", message: "tue?", task: "schedule-meeting" });
+    expect(captured).toMatchObject({ type: "call_request", task: "schedule-meeting" });
+    expect(reply.task).toBe("schedule-meeting");
+  });
+
+  it("surfaces offered[] from call_error on the thrown CallError", async () => {
+    const url = await fakeRelayCapture((ws) => {
+      ws.send(JSON.stringify({ type: "call_error", code: "task_not_offered", offered: ["ask", "owner-introduction"] }));
+    });
+    const err = await callAgent({ relay: url, from: "bob", token: "t", to: "ken", message: "x", task: "deploy" })
+      .then(() => null, (e) => e);
+    expect(err.code).toBe("task_not_offered");
+    expect(err.offered).toEqual(["ask", "owner-introduction"]);
+    expect(err.message).toContain("ask");
   });
 });

@@ -4,10 +4,13 @@ import { parseAddress } from "@benree/agentcall-shared";
 import { getPaths } from "./paths.js";
 import { loadConfig, relayUrl } from "./config.js";
 import { callAgent, CallError } from "./callClient.js";
-import { getStatus, ApiError } from "./api.js";
+import { getStatus, fetchCard, pushCard, ApiError } from "./api.js";
 import { startListener } from "./listener.js";
 import { runSetup } from "./setup.js";
 import { uninstallLaunchAgent } from "./launchd.js";
+import { loadPolicy } from "./policy.js";
+import { loadTasks } from "./tasks.js";
+import { buildCardUpload } from "./card.js";
 
 const program = new Command();
 program.name("agentcall").description("Call other people's coding agents").version("0.1.2");
@@ -36,7 +39,8 @@ program
   .argument("<address>", "handle@host to call")
   .argument("<message...>", "message to send")
   .option("--json", "print the full reply envelope instead of just the text")
-  .action(async (address: string, messageParts: string[], o: { json?: boolean }) => {
+  .option("--task <id>", "task from the callee's card to perform (see: agentcall card <address>)")
+  .action(async (address: string, messageParts: string[], o: { json?: boolean; task?: string }) => {
     const parsed = parseAddress(address);
     if (!parsed) {
       console.error(`Invalid address: ${address} (expected handle@host)`);
@@ -53,6 +57,7 @@ program
         token: cfg.token,
         to: parsed.handle,
         message,
+        task: o.task,
         onStatus: (s) => console.error(s === "ringing" ? "ringing..." : "answered, agent working..."),
       });
       console.log(o.json ? JSON.stringify(reply) : reply.text);
@@ -85,6 +90,49 @@ program
       const { online } = await getStatus(cfgRelay, parsed.handle);
       console.log(online ? "online" : "offline");
       process.exitCode = online ? 0 : 2;
+    } catch (e) {
+      console.error(e instanceof ApiError ? e.message : String(e));
+      process.exitCode = 1;
+    }
+  });
+
+program
+  .command("card")
+  .description("show an agent's task menu, or publish your own (agentcall card push)")
+  .argument("<target>", "handle@host to fetch, or 'push' to publish your card")
+  .action(async (target: string) => {
+    const paths = getPaths();
+    if (target === "push") {
+      const cfg = loadConfig(paths);
+      if (!cfg.agent_kind) {
+        console.error("This handle is caller-only (no agent configured) and has nothing to publish a card for.");
+        process.exitCode = 1;
+        return;
+      }
+      await pushCard(relayUrl(cfg), { handle: cfg.handle, token: cfg.token }, buildCardUpload(cfg, loadPolicy(paths), loadTasks(paths)));
+      console.log("Card published.");
+      return;
+    }
+    const parsed = parseAddress(target);
+    if (!parsed) {
+      console.error(`Invalid address: ${target} (expected handle@host, or 'push')`);
+      process.exitCode = 1;
+      return;
+    }
+    let cfg;
+    try { cfg = loadConfig(paths); } catch { cfg = undefined; }
+    try {
+      const card = await fetchCard(
+        cfg ? relayUrl(cfg) : relayUrl(undefined),
+        parsed.handle,
+        cfg ? { handle: cfg.handle, token: cfg.token } : undefined,
+      );
+      console.log(`${card.handle} (${card.agent_kind})${card.description ? ` — ${card.description}` : ""}`);
+      for (const t of card.tasks) {
+        console.log(`  ${t.id} [${t.tier}] — ${t.description}`);
+        for (const ex of t.examples) console.log(`      e.g. ${ex}`);
+      }
+      console.log(`\nCall with: agentcall call ${target} --task <id> "<message>"`);
     } catch (e) {
       console.error(e instanceof ApiError ? e.message : String(e));
       process.exitCode = 1;
