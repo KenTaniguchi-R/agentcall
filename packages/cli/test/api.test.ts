@@ -34,6 +34,24 @@ function serve(status: number, body: unknown): Promise<string> {
   });
 }
 
+function serveCapturing(status: number, body: unknown, captured: unknown[]): Promise<string> {
+  return new Promise((resolve) => {
+    server = createServer((req, res) => {
+      let raw = "";
+      req.on("data", (d) => (raw += d));
+      req.on("end", () => {
+        captured.push(JSON.parse(raw));
+        res.writeHead(status, { "content-type": "application/json" });
+        res.end(JSON.stringify(body));
+      });
+    });
+    server.listen(0, "127.0.0.1", () => {
+      const addr = server.address() as { port: number };
+      resolve(`http://127.0.0.1:${addr.port}`);
+    });
+  });
+}
+
 describe("api client", () => {
   it("registers", async () => {
     const relay = await serve(200, { token: "tok", address: "ken@agentcall.benree.tech" });
@@ -72,6 +90,12 @@ describe("api client", () => {
     expect(await getStatus(relay, "ken")).toEqual({ online: true });
     const relay2 = await serve(404, { error: "unknown handle" });
     await expect(getStatus(relay2, "ghost")).rejects.toMatchObject({ code: "unknown_handle" });
+  });
+  it("registers caller-only: omits agent_kind from the request body entirely", async () => {
+    const captured: unknown[] = [];
+    const relay = await serveCapturing(200, { token: "tok", address: "solo@agentcall.benree.tech" }, captured);
+    expect(await registerHandle(relay, "solo")).toEqual({ token: "tok", address: "solo@agentcall.benree.tech" });
+    expect(captured).toEqual([{ handle: "solo" }]);
   });
 });
 

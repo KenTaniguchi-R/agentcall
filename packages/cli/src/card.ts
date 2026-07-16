@@ -17,6 +17,14 @@ const stripPlus = (id: string) => id.replace(/^\+/, "");
 // enforcement both derive from the same SKILL.md frontmatter, so they cannot
 // disagree.
 export function buildCardUpload(cfg: Config, policy: Policy, tasks: Task[]): CardUploadType {
+  // A card only exists for a callee. Caller-only handles (no agent_kind, a
+  // config shape added by caller-only setup) have nothing to advertise —
+  // every call site already guards on agent_kind, so reaching here without
+  // one is a bug, not a user error; fail loud rather than emit a card whose
+  // required agent_kind is undefined.
+  if (!cfg.agent_kind) {
+    throw new Error("Cannot build an agent card for a caller-only handle (no agent configured).");
+  }
   const exists = (id: string) => tasks.some((t) => t.id === id);
   const defaultOffer = policy.default_offer.map(stripPlus).filter(exists);
 

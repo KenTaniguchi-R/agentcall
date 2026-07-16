@@ -32,6 +32,7 @@ export interface SetupOpts {
   snippet?: boolean;
   relay?: string;
   skipLaunchd?: boolean;
+  callerOnly?: boolean;
   io?: { ask(question: string): Promise<string> };
   // Test seams — production callers should leave these as the defaults.
   hasBin?: (name: string) => boolean;
@@ -110,6 +111,31 @@ function addressFromConfig(cfg: Config): string {
   }
 }
 
+// Whether this install should answer calls (run the listener) or stay
+// caller-only. Precedence: explicit --caller-only > a reused config that is
+// already callable > explicit --agent > no agent binary on PATH (fall back
+// to caller-only instead of failing setup) > --yes > ask.
+async function decideCallable(
+  opts: SetupOpts,
+  hasBin: (name: string) => boolean,
+  ask: (q: string) => Promise<string>,
+  reusedCfg: Config | undefined,
+): Promise<boolean> {
+  if (opts.callerOnly) return false;
+  if (reusedCfg?.agent_kind) return true;
+  if (opts.agent) return true;
+  if (!hasBin("claude") && !hasBin("codex")) {
+    console.log(
+      "No claude or codex found on PATH — setting up as caller-only.\n" +
+        "Install one and re-run `agentcall setup` to make your agent callable.",
+    );
+    return false;
+  }
+  if (opts.yes) return true;
+  const answer = (await ask("Make your agent callable by others? [Y/n]: ")).trim().toLowerCase();
+  return answer === "" || answer === "y" || answer === "yes";
+}
+
 export async function runSetup(opts: SetupOpts): Promise<void> {
   const paths: Paths = getPaths();
   const hasBinFn = opts.hasBin ?? ((name) => (opts.resolveBin ?? defaultResolveBin)(name) !== null);
@@ -128,20 +154,45 @@ export async function runSetup(opts: SetupOpts): Promise<void> {
   } catch {
     existingCfg = undefined;
   }
-  const canReuse = existingCfg !== undefined && (!opts.handle || opts.handle === existingCfg.handle);
+  const reusedCfg =
+    existingCfg !== undefined && (!opts.handle || opts.handle === existingCfg.handle) ? existingCfg : undefined;
+
+  const callable = await decideCallable(opts, hasBinFn, ask, reusedCfg);
+
+  // A caller-only outcome must not clobber an existing callable install:
+  // config.json is machine-global, and the installed LaunchAgent would keep
+  // relaunching `agentcall listen` against a config it can no longer serve
+  // (assertCallableConfig throws -> crash loop) while the old handle
+  // silently went offline. Refuse and point at uninstall instead.
+  if (!callable && existingCfg?.agent_kind) {
+    console.error(
+      `This machine already answers calls as "${existingCfg.handle}". To stop answering calls, run ` +
+        "`agentcall uninstall` (config is kept; re-run `agentcall setup` to come back).",
+    );
+    return;
+  }
 
   // On reuse the saved agent_kind is what actually gets spawned (see
   // listener.ts), so skip detection entirely — it may prompt ("Which should
   // agentcall use?") and its answer would be ignored anyway.
-  const agentKind =
-    canReuse && existingCfg ? existingCfg.agent_kind : await detectAgentKind(opts, hasBinFn, ask);
-  warnIfOutsideLaunchdPath(agentKind, resolveBinFn);
-  warnIfOutsideLaunchdPath("npx", resolveBinFn);
+  let agentKind: "claude" | "codex" | undefined;
+  if (callable) {
+    agentKind = reusedCfg?.agent_kind ?? (await detectAgentKind(opts, hasBinFn, ask));
+    warnIfOutsideLaunchdPath(agentKind, resolveBinFn);
+    warnIfOutsideLaunchdPath("npx", resolveBinFn);
+  }
 
   let cfg: Config;
   let address: string;
-  if (canReuse && existingCfg) {
-    cfg = existingCfg;
+  if (reusedCfg) {
+    cfg = reusedCfg;
+    if (callable && !cfg.agent_kind && agentKind) {
+      // Upgrade caller-only -> callable: keep handle/token, add the agent
+      // locally. The relay's stored agent_kind stays NULL, which is fine —
+      // the relay never reads that column after registration.
+      cfg = { ...cfg, agent_kind: agentKind };
+      saveConfig(paths, cfg);
+    }
     address = addressFromConfig(cfg);
     console.log(`Reusing existing registration for ${cfg.handle}`);
   } else {
@@ -152,48 +203,48 @@ export async function runSetup(opts: SetupOpts): Promise<void> {
 
     console.log(`Registering ${handle} with ${relay} ...`);
     const { token, address: registeredAddress } = await registerHandle(relay, handle, agentKind);
-    cfg = { handle, token, agent_kind: agentKind, relay };
+    cfg = agentKind ? { handle, token, agent_kind: agentKind, relay } : { handle, token, relay };
     address = registeredAddress;
     saveConfig(paths, cfg);
   }
 
-  // Seed srt.json with the current toolchain's read dirs (see srt.ts's
-  // toolchainReadDirs) so the sandboxed agent can execute node/npx/itself
-  // from first call, not just after runAgent's first real spawn rewrites
-  // it. If resolution throws (an odd PATH during setup), fall back to the
-  // base allowlist rather than failing setup outright — runAgent rewrites
-  // srt.json before every real spawn anyway, so this only affects the
-  // file's content between `setup` and the first real call.
-  //
-  // Uses cfg.agent_kind (the registered/reused agent), not the freshly
-  // detected agentKind: on a reuse run those could disagree (e.g. both
-  // claude and codex are now on PATH) and cfg.agent_kind is what actually
-  // gets spawned (see listener.ts).
-  let extraReadDirs: string[] = [];
-  try {
-    extraReadDirs = toolchainReadDirs(cfg.agent_kind);
-  } catch {
-    /* fall back to srtSettings(paths, cfg.agent_kind) below */
-  }
-  writeFileSync(paths.srtFile, JSON.stringify(srtSettings(paths, cfg.agent_kind, extraReadDirs), null, 2) + "\n");
-  mkdirSync(paths.publicDir, { recursive: true });
-  mkdirSync(paths.tasksDir, { recursive: true });
-  if (!existsSync(paths.policyFile)) {
-    writeFileSync(paths.policyFile, JSON.stringify(DEFAULT_POLICY, null, 2) + "\n");
-  }
+  // Everything below the config is listener-side (callee) machinery: a
+  // caller-only install (no agent_kind) has no sandbox to seed, no tasks or
+  // card to publish, and no listener to install, so it needs none of it.
+  if (cfg.agent_kind) {
+    // Seed srt.json with the current toolchain's read dirs (see srt.ts's
+    // toolchainReadDirs) so the sandboxed agent can execute node/npx/itself
+    // from first call, not just after runAgent's first real spawn rewrites
+    // it. If resolution throws (an odd PATH during setup), fall back to the
+    // base allowlist rather than failing setup outright — runAgent rewrites
+    // srt.json before every real spawn anyway, so this only affects the
+    // file's content between `setup` and the first real call.
+    let extraReadDirs: string[] = [];
+    try {
+      extraReadDirs = toolchainReadDirs(cfg.agent_kind);
+    } catch {
+      /* fall back to srtSettings(paths, cfg.agent_kind) below */
+    }
+    writeFileSync(paths.srtFile, JSON.stringify(srtSettings(paths, cfg.agent_kind, extraReadDirs), null, 2) + "\n");
+    mkdirSync(paths.publicDir, { recursive: true });
+    mkdirSync(paths.tasksDir, { recursive: true });
+    if (!existsSync(paths.policyFile)) {
+      writeFileSync(paths.policyFile, JSON.stringify(DEFAULT_POLICY, null, 2) + "\n");
+    }
 
-  // Publish the agent card (task menu) to the relay so callers can discover
-  // what this agent offers before calling. Best-effort: a relay hiccup here
-  // must not abort setup — `agentcall card push` re-publishes any time.
-  try {
-    await publishCard(cfg, paths);
-  } catch (e) {
-    console.error(`Warning: could not publish the agent card (${String(e)}). Run \`agentcall card push\` later.`);
-  }
+    // Publish the agent card (task menu) to the relay so callers can discover
+    // what this agent offers before calling. Best-effort: a relay hiccup here
+    // must not abort setup — `agentcall card push` re-publishes any time.
+    try {
+      await publishCard(cfg, paths);
+    } catch (e) {
+      console.error(`Warning: could not publish the agent card (${String(e)}). Run \`agentcall card push\` later.`);
+    }
 
-  if (!opts.skipLaunchd) {
-    const extraPathDirs = resolveExtraPathDirs([cfg.agent_kind, "npx"], resolveBinFn);
-    (opts.installLaunchAgentFn ?? installLaunchAgent)(paths, undefined, extraPathDirs);
+    if (!opts.skipLaunchd) {
+      const extraPathDirs = resolveExtraPathDirs([cfg.agent_kind, "npx"], resolveBinFn);
+      (opts.installLaunchAgentFn ?? installLaunchAgent)(paths, undefined, extraPathDirs);
+    }
   }
 
   if (opts.snippet !== false) {
@@ -201,13 +252,25 @@ export async function runSetup(opts: SetupOpts): Promise<void> {
     appendSnippet(join(homedir(), ".codex", "AGENTS.md"));
   }
 
-  console.log(
-    `\nagentcall is set up.\n` +
-      `  Handle:  ${cfg.handle}\n` +
-      `  Agent:   ${cfg.agent_kind}\n` +
-      `  Relay:   ${cfg.relay}\n` +
-      `  Address: ${address}\n\n` +
-      `Share your address so others can call your agent:\n` +
-      `  agentcall call ${address} "hello"\n`,
-  );
+  if (cfg.agent_kind) {
+    console.log(
+      `\nagentcall is set up.\n` +
+        `  Handle:  ${cfg.handle}\n` +
+        `  Agent:   ${cfg.agent_kind}\n` +
+        `  Relay:   ${cfg.relay}\n` +
+        `  Address: ${address}\n\n` +
+        `Share your address so others can call your agent:\n` +
+        `  agentcall call ${address} "hello"\n`,
+    );
+  } else {
+    console.log(
+      `\nagentcall is set up (caller-only).\n` +
+        `  Handle:  ${cfg.handle}\n` +
+        `  Relay:   ${cfg.relay}\n` +
+        `  Address: ${address}\n\n` +
+        `You can call other agents:\n` +
+        `  agentcall call ken@agentcall.benree.tech "hello"\n\n` +
+        `To make your own agent callable later, install claude or codex and re-run \`agentcall setup\`.\n`,
+    );
+  }
 }

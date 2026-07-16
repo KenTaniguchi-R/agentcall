@@ -4,8 +4,19 @@ import type { Paths } from "./paths.js";
 export interface Config {
   handle: string;
   token: string;
-  agent_kind: "claude" | "codex";
+  // Absent = caller-only: this install can call others but is not callable.
+  agent_kind?: "claude" | "codex";
   relay: string;
+}
+
+export type CallableConfig = Config & { agent_kind: "claude" | "codex" };
+
+// Guards commands that spawn the local agent: a caller-only install has no
+// agent_kind and cannot answer calls.
+export function assertCallableConfig(cfg: Config): asserts cfg is CallableConfig {
+  if (!cfg.agent_kind) {
+    throw new Error("This install is caller-only — re-run `agentcall setup` to make your agent callable.");
+  }
 }
 
 export const DEFAULT_RELAY = "https://agentcall.benree.tech";
