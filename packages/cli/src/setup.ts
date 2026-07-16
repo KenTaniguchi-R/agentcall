@@ -1,16 +1,23 @@
 import { execFileSync } from "node:child_process";
 import { existsSync, mkdirSync, writeFileSync } from "node:fs";
-import { homedir, tmpdir } from "node:os";
-import { dirname, join, resolve } from "node:path";
+import { homedir } from "node:os";
+import { dirname, join } from "node:path";
 import { getPaths, type Paths } from "./paths.js";
 import { ask as ttyAsk } from "./tty.js";
 import { loadConfig, saveConfig, relayUrl, type Config } from "./config.js";
 import { registerHandle } from "./api.js";
 import { publishCard } from "./card.js";
 import { DEFAULT_POLICY } from "./policy.js";
-import { srtSettings, toolchainReadDirs } from "./srt.js";
+import { isEphemeralDir, preferDurableBin, srtSettings, toolchainReadDirs } from "./srt.js";
 import { appendSnippet } from "./snippet.js";
 import { installLaunchAgent } from "./launchd.js";
+
+// Re-exported for test-import compatibility (test/setup.test.ts imports
+// these from setup.js) — the actual definitions now live in srt.ts
+// alongside resolveOnPath, which needs the same durable-vs-ephemeral logic
+// to resolve the runner's agent binary past session shims (see srt.ts's
+// resolveOnPath comment).
+export { isEphemeralDir, preferDurableBin } from "./srt.js";
 
 // Directories launchd's fixed PATH (see launchd.ts's plistContent) actually
 // searches. If claude/codex/npx resolve outside of these, the background
@@ -30,27 +37,6 @@ export interface SetupOpts {
   hasBin?: (name: string) => boolean;
   resolveBin?: (name: string) => string | null;
   installLaunchAgentFn?: typeof installLaunchAgent;
-}
-
-// Roots whose contents don't survive the session that created them. A dir
-// under any of these must never be baked into the LaunchAgent's PATH:
-// terminal wrappers (e.g. cmux) plant per-session bin shims in $TMPDIR that
-// shadow the real agent binary, then vanish — or worse, linger and exec a
-// wrapper for a dead session. /var/folders and /tmp are listed alongside
-// os.tmpdir() (and in /private-prefixed form, their macOS realpath) because
-// the per-user temp tree differs per machine.
-const EPHEMERAL_ROOTS = [tmpdir(), "/tmp", "/private/tmp", "/var/folders", "/private/var/folders"];
-
-export function isEphemeralDir(dir: string): boolean {
-  const normalized = resolve(dir);
-  return EPHEMERAL_ROOTS.some((root) => normalized === root || normalized.startsWith(root + "/"));
-}
-
-// First candidate whose dir survives the current session; falls back to the
-// first match (better a warning-producing shim than claiming the binary
-// doesn't exist at all) and null when there are no candidates.
-export function preferDurableBin(candidates: string[]): string | null {
-  return candidates.find((c) => !isEphemeralDir(dirname(c))) ?? candidates[0] ?? null;
 }
 
 // Dirnames of the resolved bins, deduped and skipping any that failed to

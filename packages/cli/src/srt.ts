@@ -1,6 +1,6 @@
 import { existsSync, mkdirSync, realpathSync, writeFileSync } from "node:fs";
-import { homedir } from "node:os";
-import { delimiter, dirname, join, sep } from "node:path";
+import { homedir, tmpdir } from "node:os";
+import { delimiter, dirname, join, resolve, sep } from "node:path";
 import type { Paths } from "./paths.js";
 import { FULL_ACCESS_ENVELOPE, type Envelope } from "./tasks.js";
 
@@ -194,21 +194,48 @@ export function ensureDenyWriteTargetsExist(agentKind: "claude" | "codex", home:
 // entry — but toolchainReadDirs adds their bin dir anyway since it's
 // harmless and keeps the logic uniform across install methods.
 //
-// which()-style PATH search, resolving the first match's real (symlink-
-// followed) absolute path. Returns null rather than throwing so callers
-// that only *want* an optional extra read dir (e.g. npx) can skip it.
+// Roots whose contents don't survive the session that created them. A dir
+// under any of these must never be treated as the preferred resolution of a
+// PATH search: terminal wrappers (e.g. cmux) plant per-session bin shims in
+// $TMPDIR that shadow the real agent binary, then vanish — or worse, linger
+// and exec a wrapper for a dead session. /var/folders and /tmp are listed
+// alongside os.tmpdir() (and in /private-prefixed form, their macOS
+// realpath) because the per-user temp tree differs per machine.
+const EPHEMERAL_ROOTS = [tmpdir(), "/tmp", "/private/tmp", "/var/folders", "/private/var/folders"];
+
+export function isEphemeralDir(dir: string): boolean {
+  const normalized = resolve(dir);
+  return EPHEMERAL_ROOTS.some((root) => normalized === root || normalized.startsWith(root + "/"));
+}
+
+// First candidate whose dir survives the current session; falls back to the
+// first match (better a warning-producing shim than claiming the binary
+// doesn't exist at all) and null when there are no candidates.
+export function preferDurableBin(candidates: string[]): string | null {
+  return candidates.find((c) => !isEphemeralDir(dirname(c))) ?? candidates[0] ?? null;
+}
+
+// which()-style PATH search, resolving every match's real (symlink-
+// followed) absolute path, then preferring a durable install (see
+// preferDurableBin/EPHEMERAL_ROOTS above) over an ephemeral per-session
+// shim that happens to sit earlier on PATH — e.g. a cmux session's
+// $TMPDIR/cmux-cli-shims/<uuid>/claude, which fails with exit 127 once the
+// session that created it is gone. Falls back to the first match when every
+// candidate is ephemeral. Returns null rather than throwing so callers that
+// only *want* an optional extra read dir (e.g. npx) can skip it.
 function resolveOnPath(name: string, pathEnv: string): string | null {
+  const matches: string[] = [];
   for (const dir of pathEnv.split(delimiter)) {
     if (!dir) continue;
     const candidate = join(dir, name);
     if (!existsSync(candidate)) continue;
     try {
-      return realpathSync(candidate);
+      matches.push(realpathSync(candidate));
     } catch {
       continue;
     }
   }
-  return null;
+  return preferDurableBin(matches);
 }
 
 // Resolves the absolute, symlink-followed path to the claude/codex binary
