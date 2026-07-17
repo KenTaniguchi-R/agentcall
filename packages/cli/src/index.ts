@@ -1,6 +1,5 @@
 import { rmSync } from "node:fs";
 import { Command } from "commander";
-import { parseAddress } from "@benree/agentcall-shared";
 import { getPaths } from "./paths.js";
 import { loadConfig, relayUrl, assertCallableConfig } from "./config.js";
 import { callAgent, CallError } from "./callClient.js";
@@ -14,6 +13,7 @@ import { loadTasks, scaffoldTask } from "./tasks.js";
 import { execVerb, type Verb } from "./verbs.js";
 import { buildCardReport } from "./lint.js";
 import { runDoctor } from "./doctor.js";
+import { loadContacts, addContact, removeContact, resolveAddress } from "./contacts.js";
 
 const program = new Command();
 program.name("agentcall").description("Call other people's coding agents").version("0.2.0");
@@ -54,18 +54,18 @@ program
 program
   .command("call")
   .description("call another handle's agent with a message and print its reply")
-  .argument("<address>", "handle@host to call")
+  .argument("<address>", "contact name or handle@host to call")
   .argument("<message...>", "message to send")
   .option("--json", "print the full reply envelope instead of just the text")
   .option("--task <id>", "task from the callee's card to perform (see: agentcall card <address>)")
   .action(async (address: string, messageParts: string[], o: { json?: boolean; task?: string }) => {
-    const parsed = parseAddress(address);
-    if (!parsed) {
-      console.error(`Invalid address: ${address} (expected handle@host)`);
+    const paths = getPaths();
+    const parsed = resolveAddress(paths, address);
+    if (!parsed.ok) {
+      console.error(parsed.error);
       process.exitCode = 1;
       return;
     }
-    const paths = getPaths();
     const cfg = loadConfig(paths);
     const message = messageParts.join(" ");
     try {
@@ -89,15 +89,15 @@ program
 program
   .command("status")
   .description("check whether a handle's agent is currently online")
-  .argument("<address>", "handle@host to check")
+  .argument("<address>", "contact name or handle@host to check")
   .action(async (address: string) => {
-    const parsed = parseAddress(address);
-    if (!parsed) {
-      console.error(`Invalid address: ${address} (expected handle@host)`);
+    const paths = getPaths();
+    const parsed = resolveAddress(paths, address);
+    if (!parsed.ok) {
+      console.error(parsed.error);
       process.exitCode = 1;
       return;
     }
-    const paths = getPaths();
     let cfgRelay: string;
     try {
       cfgRelay = relayUrl(loadConfig(paths));
@@ -158,9 +158,9 @@ program
       console.log("Card published.");
       return;
     }
-    const parsed = parseAddress(target);
-    if (!parsed) {
-      console.error(`Invalid address: ${target} (expected handle@host, or 'push')`);
+    const parsed = resolveAddress(paths, target);
+    if (!parsed.ok) {
+      console.error(`${parsed.error} (or 'push')`);
       process.exitCode = 1;
       return;
     }
@@ -180,6 +180,57 @@ program
       console.log(`\nCall with: agentcall call ${target} --task <id> "<message>"`);
     } catch (e) {
       console.error(e instanceof ApiError ? e.message : String(e));
+      process.exitCode = 1;
+    }
+  });
+
+const contacts = program.command("contacts").description("manage your local address book of callable agents");
+contacts
+  .command("add")
+  .description("save (or update) a contact so you can call them by name")
+  .argument("<name>", "short name to call them by (no @)")
+  .argument("<address>", "their handle@host")
+  .option("--note <note>", "who they are and what to ask them about")
+  .action((name: string, address: string, o: { note?: string }) => {
+    try {
+      const result = addContact(getPaths(), name, address, o.note);
+      console.log(`${result === "added" ? "Added" : "Updated"} ${name} -> ${address}`);
+    } catch (e) {
+      console.error(String(e instanceof Error ? e.message : e));
+      process.exitCode = 1;
+    }
+  });
+contacts
+  .command("list")
+  .description("list saved contacts (name, address, who they are)")
+  .option("--json", "print the raw contacts array")
+  .action((o: { json?: boolean }) => {
+    try {
+      const sorted = [...loadContacts(getPaths()).contacts].sort((a, b) => a.name.localeCompare(b.name));
+      if (o.json) {
+        console.log(JSON.stringify(sorted));
+        return;
+      }
+      if (sorted.length === 0) {
+        console.log('No contacts yet. Save one with:\n  agentcall contacts add <name> <handle@host> --note "who they are"\nThen call by name: agentcall call <name> "<message>"');
+        return;
+      }
+      for (const c of sorted) console.log(`${c.name}  ${c.address}${c.note ? `  — ${c.note}` : ""}`);
+    } catch (e) {
+      console.error(String(e instanceof Error ? e.message : e));
+      process.exitCode = 1;
+    }
+  });
+contacts
+  .command("remove")
+  .description("delete a contact")
+  .argument("<name>")
+  .action((name: string) => {
+    try {
+      removeContact(getPaths(), name);
+      console.log(`Removed ${name}.`);
+    } catch (e) {
+      console.error(String(e instanceof Error ? e.message : e));
       process.exitCode = 1;
     }
   });
