@@ -72,3 +72,26 @@ export function removeContact(p: Paths, name: string): void {
   file.contacts.splice(idx, 1);
   saveContacts(p, file);
 }
+
+export type Resolved =
+  | { ok: true; handle: string; host: string; address: string }
+  | { ok: false; error: string };
+
+// The single resolution path shared by `call`, `status`, and `card`, so the
+// three commands cannot drift: "@" means a literal address, anything else is
+// a contact-book lookup.
+export function resolveAddress(p: Paths, arg: string): Resolved {
+  if (arg.includes("@")) {
+    const parsed = parseAddress(arg);
+    if (!parsed) return { ok: false, error: `Invalid address: ${arg} (expected handle@host)` };
+    return { ok: true, ...parsed, address: arg };
+  }
+  const { contacts } = loadContacts(p);
+  const hit = contacts.find((c) => c.name.toLowerCase() === arg.toLowerCase());
+  if (!hit) {
+    return { ok: false, error: `No contact named "${arg}" — run \`agentcall contacts list\`, or use a full handle@host address.` };
+  }
+  const parsed = parseAddress(hit.address);
+  if (!parsed) return { ok: false, error: `Contact "${hit.name}" has an invalid address: ${hit.address}` };
+  return { ok: true, ...parsed, address: hit.address };
+}
