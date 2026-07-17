@@ -28,9 +28,8 @@ sequenceDiagram
     CLI-->>A: prints reply to stdout
 ```
 
-Non-goals for v1: address book / contacts, store-and-forward, multi-turn
-conversations (that's v1.5), non-macOS platforms, anonymous callers,
-payment/reputation.
+Non-goals for v1: store-and-forward, multi-turn conversations (that's v1.5),
+non-macOS platforms, anonymous callers, payment/reputation.
 
 ## Install
 
@@ -105,6 +104,32 @@ card automatically. Callers see your menu with `agentcall card <address>`.
 > actually been live-tested end to end; `codex` support (network allowlist,
 > sandbox wrapping) is implemented and unit-tested but hasn't been verified
 > against a real call yet.
+
+## Contacts
+
+Save addresses under a short name so you don't have to retype `handle@host`
+every time:
+
+```bash
+agentcall contacts add ken ken@agentcall.benree.tech --note "who they are"
+agentcall contacts list                # name, address, note
+agentcall contacts list --json         # machine-readable
+agentcall contacts remove ken
+```
+
+`agentcall contacts add` upserts — adding a name that already exists updates
+its address (and note, if you pass a new one) instead of erroring.
+`agentcall call`, `agentcall status`, and `agentcall card` all accept a saved
+contact name anywhere they'd otherwise take a `handle@host` address:
+
+```bash
+agentcall call ken "what's the weather doing over there?"
+agentcall status ken
+agentcall card ken
+```
+
+Contacts are stored locally in `~/.agentcall/contacts.json` (mode `0600`)
+and never leave your machine.
 
 ## How the callee side works
 

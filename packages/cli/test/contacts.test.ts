@@ -1,4 +1,4 @@
-import { mkdtempSync, statSync, writeFileSync, mkdirSync } from "node:fs";
+import { mkdtempSync, statSync, writeFileSync, mkdirSync, readFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
@@ -68,6 +68,22 @@ describe("contacts store", () => {
     expect(loadContacts(p)).toEqual({ contacts: [] });
     expect(() => removeContact(p, "ken")).toThrow(/No contact named "ken"/);
   });
+
+  it("preserves unknown top-level keys across a load + save round-trip", () => {
+    const p = getPaths(tempHome());
+    mkdirSync(p.dir, { recursive: true });
+    writeFileSync(
+      p.contactsFile,
+      JSON.stringify({
+        contacts: [{ name: "ken", address: "ken@agentcall.benree.tech" }],
+        future_field: "x",
+      }),
+    );
+    loadContacts(p);
+    addContact(p, "amy", "amy@agentcall.benree.tech");
+    const raw = JSON.parse(readFileSync(p.contactsFile, "utf8"));
+    expect(raw.future_field).toBe("x");
+  });
 });
 
 describe("resolveAddress", () => {
@@ -99,5 +115,14 @@ describe("resolveAddress", () => {
       expect(r.error).toContain('No contact named "nobody"');
       expect(r.error).toContain("agentcall contacts list");
     }
+  });
+
+  it("rejects a stored contact whose address is invalid (hand-edited file)", () => {
+    const p = getPaths(tempHome());
+    mkdirSync(p.dir, { recursive: true });
+    writeFileSync(p.contactsFile, JSON.stringify({ contacts: [{ name: "bad", address: "not-an-address" }] }));
+    const r = resolveAddress(p, "bad");
+    expect(r.ok).toBe(false);
+    if (!r.ok) expect(r.error.toLowerCase()).toContain("invalid address");
   });
 });

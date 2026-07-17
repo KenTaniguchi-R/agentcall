@@ -124,7 +124,7 @@ program
 program
   .command("card")
   .description("show your own card with problems, another agent's menu, or publish yours (push)")
-  .argument("[target]", "handle@host to fetch, 'push' to publish, or omit to review your own card")
+  .argument("[target]", "contact name or handle@host to fetch, 'push' to publish, or omit to review your own card")
   .action(async (target?: string) => {
     const paths = getPaths();
     if (target === undefined) {
@@ -224,7 +224,7 @@ contacts
 contacts
   .command("remove")
   .description("delete a contact")
-  .argument("<name>")
+  .argument("<name>", "contact name to delete")
   .action((name: string) => {
     try {
       removeContact(getPaths(), name);
