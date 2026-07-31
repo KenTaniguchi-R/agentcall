@@ -1,4 +1,4 @@
-import { existsSync, mkdirSync, realpathSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import { homedir, tmpdir } from "node:os";
 import { delimiter, dirname, join, resolve, sep } from "node:path";
 import type { Paths } from "./paths.js";
@@ -312,13 +312,63 @@ export function toolchainReadDirs(
   return [...dirs];
 }
 
-// Recomputes srtSettings with the current toolchain's read dirs and writes
-// it to p.srtFile. Called from runAgent before every real spawn (not just
-// once at `setup` time) so a node/npm-manager upgrade or reinstall since
-// setup doesn't leave a stale allowlist that denies the sandboxed process
-// its own binary.
+// Recomputes srtSettings with the current toolchain's read dirs, so a
+// node/npm-manager upgrade or reinstall since `setup` doesn't leave a stale
+// allowlist that denies the sandboxed process its own binary.
+function srtBody(p: Paths, agentKind: "claude" | "codex", envelope: Envelope): string {
+  return JSON.stringify(srtSettings(p, agentKind, toolchainReadDirs(agentKind), envelope), null, 2) + "\n";
+}
+
+// Writes the shared, user-inspectable ~/.agentcall/srt.json. This is a record
+// of the sandbox config, NOT what any live call enforces — see
+// writeCallSrtSettings below for why those are now separate.
 export function writeSrtSettings(p: Paths, agentKind: "claude" | "codex", envelope: Envelope = FULL_ACCESS_ENVELOPE): void {
-  writeFileSync(
-    p.srtFile, JSON.stringify(srtSettings(p, agentKind, toolchainReadDirs(agentKind), envelope), null, 2) + "\n",
-  );
+  writeFileSync(p.srtFile, srtBody(p, agentKind, envelope));
+}
+
+export interface CallSrtSettings {
+  /** Settings path to hand srt for exactly one spawn. */
+  file: string;
+  /** Removes the per-call file and its directory. Idempotent. */
+  cleanup(): void;
+}
+
+// The settings srt actually enforces for ONE spawn, written to a private
+// temp dir that no other process knows the name of.
+//
+// srt.json can't play that role: it's one machine-global path, but an
+// envelope is per-call, and `agentcall setup` (which writes it with the
+// full-access default) and `agentcall doctor` both write it from their own
+// processes — potentially in the window between the listener writing srt.json
+// for a narrow task and srt actually reading it. A private per-call copy
+// closes that window, and makes the design safe if the listener's serial
+// queue ever runs more than one call at a time, where a shared file would
+// mean one call's envelope silently governing another's.
+//
+// srt.json is still refreshed with the same content so `agentcall doctor` and
+// a curious owner can see the current shape of the sandbox; that write is
+// best-effort because it is now purely informational — a read-only
+// ~/.agentcall must not be able to fail a call.
+export function writeCallSrtSettings(
+  p: Paths, agentKind: "claude" | "codex", envelope: Envelope = FULL_ACCESS_ENVELOPE,
+): CallSrtSettings {
+  const body = srtBody(p, agentKind, envelope);
+  const dir = mkdtempSync(join(tmpdir(), "agentcall-srt-"));
+  const file = join(dir, "settings.json");
+  writeFileSync(file, body, { mode: 0o600 });
+  try {
+    writeFileSync(p.srtFile, body);
+  } catch {
+    /* reference copy only — never fail a call over it */
+  }
+  return {
+    file,
+    cleanup() {
+      try {
+        rmSync(dir, { recursive: true, force: true });
+      } catch {
+        /* already gone */
+      }
+    },
+  };
 }

@@ -1,6 +1,6 @@
 import { spawn } from "node:child_process";
 import { AGENT_TIMEOUT_MS, MAX_REPLY_BYTES } from "@benree/agentcall-shared";
-import { ensureDenyWriteTargetsExist, resolveAgentBin, writeSrtSettings } from "./srt.js";
+import { ensureDenyWriteTargetsExist, resolveAgentBin, writeCallSrtSettings, type CallSrtSettings } from "./srt.js";
 import { CAPS, FULL_ACCESS_ENVELOPE, type Cap, type Envelope } from "./tasks.js";
 import type { Paths } from "./paths.js";
 
@@ -46,9 +46,13 @@ export function claudeAllowedTools(envelope: Envelope): string {
   return CAPS.filter((c) => caps.has(c)).flatMap((c) => CLAUDE_TOOLS[c]).join(",");
 }
 
+// settingsFile is the srt config this spawn enforces. Production callers pass
+// runAgent's private per-call file (see srt.ts's writeCallSrtSettings); the
+// p.srtFile default is the shared, inspectable copy and exists so callers that
+// don't care about isolation keep working.
 export function buildSpawnSpec(
   kind: AgentKind, prompt: string, p: Paths, resolveBin: (kind: AgentKind) => string = resolveAgentBin,
-  envelope: Envelope = FULL_ACCESS_ENVELOPE,
+  envelope: Envelope = FULL_ACCESS_ENVELOPE, settingsFile: string = p.srtFile,
 ): SpawnSpec {
   if (kind === "claude") {
     return {
@@ -59,7 +63,7 @@ export function buildSpawnSpec(
       // verified against this exact version. Letting it float on `latest`
       // means a future release could silently change enforcement semantics
       // out from under every existing srt.json.
-      args: ["-y", "@anthropic-ai/sandbox-runtime@0.0.65", "--settings", p.srtFile, "--",
+      args: ["-y", "@anthropic-ai/sandbox-runtime@0.0.65", "--settings", settingsFile, "--",
         resolveBin(kind), "-p", prompt, "--output-format", "json",
         "--permission-mode", "dontAsk", "--allowedTools", claudeAllowedTools(envelope)],
       cwd: p.publicDir,
@@ -78,7 +82,7 @@ export function buildSpawnSpec(
     cmd: "npx",
     // Pinned for the same reason as the claude spec above: srt's deny/allow
     // behaviors were verified against this exact version.
-    args: ["-y", "@anthropic-ai/sandbox-runtime@0.0.65", "--settings", p.srtFile, "--",
+    args: ["-y", "@anthropic-ai/sandbox-runtime@0.0.65", "--settings", settingsFile, "--",
       resolveBin(kind), "exec", "--sandbox", sandbox, "--cd", p.publicDir, "--skip-git-repo-check", "--json", prompt],
     cwd: p.publicDir,
   };
@@ -130,17 +134,21 @@ export function runAgent(
 ): Promise<AgentOutput> {
   // Real spawn (no test override): make sure srt's denyWrite targets exist
   // before the sandbox starts — see srt.ts, denyWrite silently no-ops for
-  // paths that aren't there yet — and rewrite srt.json with the current
-  // toolchain's read dirs (see srt.ts's toolchainReadDirs) so a node/npm-
-  // manager upgrade since `setup` doesn't leave a stale allowlist that
-  // denies the sandboxed process its own binary. Both skipped for
-  // specOverride so unit tests never touch the real ~/.claude or srt.json.
+  // paths that aren't there yet — and write this call's own srt settings with
+  // the current toolchain's read dirs (see srt.ts's toolchainReadDirs) so a
+  // node/npm-manager upgrade since `setup` doesn't leave a stale allowlist
+  // that denies the sandboxed process its own binary. The settings go to a
+  // private per-call file rather than the shared srt.json, so a concurrent
+  // `agentcall setup`/`doctor` in another process cannot alter what this
+  // spawn enforces (see writeCallSrtSettings). Both skipped for specOverride
+  // so unit tests never touch the real ~/.claude or srt.json.
+  let callSettings: CallSrtSettings | undefined;
   if (!specOverride) {
     ensureDenyWriteTargetsExist(kind);
-    writeSrtSettings(p, kind, envelope);
+    callSettings = writeCallSrtSettings(p, kind, envelope);
   }
-  const spec = specOverride ?? buildSpawnSpec(kind, prompt, p, resolveAgentBin, envelope);
-  return new Promise((resolve, reject) => {
+  const spec = specOverride ?? buildSpawnSpec(kind, prompt, p, resolveAgentBin, envelope, callSettings!.file);
+  const running = new Promise<AgentOutput>((resolve, reject) => {
     // detached: true makes the child its own process group leader, so any
     // grandchildren it forks (sandbox-exec, the actual claude/codex
     // process, ...) share its process group unless they detach themselves.
@@ -231,4 +239,10 @@ export function runAgent(
       }
     });
   });
+  // .finally, not a cleanup call per settle path: the promise above rejects
+  // from several places (spawn error, timeout, overflow, nonzero exit, parse
+  // failure) and every one of them must still remove the per-call settings
+  // file. Note the file only needs to outlive srt's startup read, not the
+  // whole agent run, so this is comfortably late enough.
+  return callSettings ? running.finally(() => callSettings.cleanup()) : running;
 }

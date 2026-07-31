@@ -6,7 +6,7 @@ import { delimiter, dirname, isAbsolute, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
 import {
-  ensureDenyWriteTargetsExist, resolveAgentBin, srtSettings, toolchainReadDirs, writeSrtSettings,
+  ensureDenyWriteTargetsExist, resolveAgentBin, srtSettings, toolchainReadDirs, writeCallSrtSettings, writeSrtSettings,
 } from "../src/srt.js";
 import { getPaths } from "../src/paths.js";
 import { FULL_ACCESS_ENVELOPE, type Envelope } from "../src/tasks.js";
@@ -187,6 +187,98 @@ describe("writeSrtSettings", () => {
     const written = JSON.parse(readFileSync(p.srtFile, "utf8"));
     expect(written.filesystem.allowRead).toContain(dirname(realpathSync(process.execPath)));
     expect(written.filesystem.denyRead).toEqual(["~"]);
+    rmSync(home, { recursive: true, force: true });
+  });
+});
+
+// srt.json is machine-global, but an envelope is per-call — and `agentcall
+// setup` / `agentcall doctor` write srt.json from their own processes while
+// the launchd listener may be mid-call. Enforcement therefore has to read a
+// copy no other process can reach between the write and the spawn.
+describe("writeCallSrtSettings", () => {
+  it("writes the enforced settings somewhere private, not to the shared srt.json", () => {
+    const home = tempHome();
+    const p = getPaths(home);
+    mkdirSync(p.dir, { recursive: true });
+    const call = writeCallSrtSettings(p, "claude");
+    expect(call.file).not.toBe(p.srtFile);
+    expect(existsSync(call.file)).toBe(true);
+    expect(JSON.parse(readFileSync(call.file, "utf8")).filesystem.denyRead).toEqual(["~"]);
+    call.cleanup();
+    rmSync(home, { recursive: true, force: true });
+  });
+
+  it("scopes the per-call file to the envelope it was given", () => {
+    const home = tempHome();
+    const p = getPaths(home);
+    mkdirSync(p.dir, { recursive: true });
+    const readOnly: Envelope = { caps: ["read"], write_paths: [], network: [] };
+    const call = writeCallSrtSettings(p, "claude", readOnly);
+    const written = JSON.parse(readFileSync(call.file, "utf8"));
+    expect(written.filesystem.allowWrite).not.toContain(join(home, "AgentCall", "public"));
+    call.cleanup();
+    rmSync(home, { recursive: true, force: true });
+  });
+
+  it("a concurrent overwrite of the shared srt.json cannot change what this call enforces", () => {
+    const home = tempHome();
+    const p = getPaths(home);
+    mkdirSync(p.dir, { recursive: true });
+    const readOnly: Envelope = { caps: ["read"], write_paths: [], network: [] };
+    const call = writeCallSrtSettings(p, "claude", readOnly);
+    // Stand in for `agentcall setup` running mid-call: it rewrites srt.json
+    // with the full-access default envelope.
+    writeSrtSettings(p, "claude", FULL_ACCESS_ENVELOPE);
+    const written = JSON.parse(readFileSync(call.file, "utf8"));
+    expect(written.filesystem.allowWrite).not.toContain(join(home, "AgentCall", "public"));
+    call.cleanup();
+    rmSync(home, { recursive: true, force: true });
+  });
+
+  it("still refreshes srt.json as the inspectable record of the last sandbox config", () => {
+    const home = tempHome();
+    const p = getPaths(home);
+    mkdirSync(p.dir, { recursive: true });
+    const call = writeCallSrtSettings(p, "claude");
+    expect(existsSync(p.srtFile)).toBe(true);
+    expect(JSON.parse(readFileSync(p.srtFile, "utf8")).filesystem.denyRead).toEqual(["~"]);
+    call.cleanup();
+    rmSync(home, { recursive: true, force: true });
+  });
+
+  it("cleanup removes the per-call file and its directory, leaving srt.json alone", () => {
+    const home = tempHome();
+    const p = getPaths(home);
+    mkdirSync(p.dir, { recursive: true });
+    const call = writeCallSrtSettings(p, "claude");
+    const dir = dirname(call.file);
+    call.cleanup();
+    expect(existsSync(call.file)).toBe(false);
+    expect(existsSync(dir)).toBe(false);
+    expect(existsSync(p.srtFile)).toBe(true);
+    rmSync(home, { recursive: true, force: true });
+  });
+
+  it("cleanup is idempotent — a second call must not throw", () => {
+    const home = tempHome();
+    const p = getPaths(home);
+    mkdirSync(p.dir, { recursive: true });
+    const call = writeCallSrtSettings(p, "claude");
+    call.cleanup();
+    expect(() => call.cleanup()).not.toThrow();
+    rmSync(home, { recursive: true, force: true });
+  });
+
+  it("gives concurrent calls independent files", () => {
+    const home = tempHome();
+    const p = getPaths(home);
+    mkdirSync(p.dir, { recursive: true });
+    const a = writeCallSrtSettings(p, "claude");
+    const b = writeCallSrtSettings(p, "claude");
+    expect(a.file).not.toBe(b.file);
+    a.cleanup();
+    expect(existsSync(b.file)).toBe(true); // one call's teardown must not disarm the other
+    b.cleanup();
     rmSync(home, { recursive: true, force: true });
   });
 });

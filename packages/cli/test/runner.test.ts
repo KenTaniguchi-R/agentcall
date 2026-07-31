@@ -54,6 +54,20 @@ describe("buildSpawnSpec", () => {
     ]);
     expect(s.cwd).toBe(p.publicDir);
   });
+  // runAgent hands buildSpawnSpec a private per-call settings file (see
+  // srt.ts's writeCallSrtSettings) so a concurrent setup/doctor rewriting the
+  // shared srt.json can't change what this spawn enforces.
+  it("passes through an explicit settings file instead of the shared srt.json", () => {
+    const s = buildSpawnSpec("claude", "PROMPT", p, () => "/abs/claude", FULL_ACCESS_ENVELOPE, "/tmp/percall/settings.json");
+    expect(s.args).toContain("/tmp/percall/settings.json");
+    expect(s.args).not.toContain(p.srtFile);
+    expect(s.args[s.args.indexOf("--settings") + 1]).toBe("/tmp/percall/settings.json");
+  });
+  it("defaults to the shared srt.json when no settings file is given", () => {
+    const s = buildSpawnSpec("codex", "PROMPT", p, () => "/abs/codex");
+    expect(s.args[s.args.indexOf("--settings") + 1]).toBe(p.srtFile);
+  });
+
   it("wraps codex in srt too, so reads are protected even though codex's own sandbox only confines writes", () => {
     const s = buildSpawnSpec("codex", "PROMPT", p, () => "/abs/path/to/codex");
     expect(s.cmd).toBe("npx");
