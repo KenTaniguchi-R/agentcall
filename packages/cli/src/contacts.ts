@@ -79,17 +79,47 @@ export function removeContact(p: Paths, name: string): void {
 }
 
 export type Resolved =
-  | { ok: true; handle: string; host: string; address: string }
+  | { ok: true; handle: string; host: string; address: string; warning?: string }
   | { ok: false; error: string };
+
+// An address names a relay, but every command sends the call to the *configured*
+// relay and only uses the handle — so with a custom AGENTCALL_RELAY, calling
+// "ken@agentcall.benree.tech" actually reaches whichever "ken" is registered on
+// that other relay. This surfaces the divergence instead of letting it happen
+// silently.
+//
+// A warning rather than a rejection, deliberately: the relay builds every
+// address from a hardcoded RELAY_HOST (apps/relay/src/index.ts), so a
+// self-hosted or `wrangler dev` relay hands out agentcall.benree.tech
+// addresses that can never match its own host. Refusing those would break
+// local development and self-hosting for a mismatch that is currently normal.
+// An unparseable relay URL yields no warning — a diagnostic must not become a
+// second failure mode.
+function relayHostWarning(address: string, host: string, relay?: string): string | undefined {
+  if (!relay) return undefined;
+  let relayHost: string;
+  try {
+    relayHost = new URL(relay).host;
+  } catch {
+    return undefined;
+  }
+  if (!relayHost || relayHost === host) return undefined;
+  return (
+    `Warning: ${address} names the relay ${host}, but this install is configured for ${relayHost}. ` +
+    `The call goes to "${address.slice(0, address.indexOf("@"))}" on ${relayHost}, which may be a different agent.`
+  );
+}
 
 // The single resolution path shared by `call`, `status`, and `card`, so the
 // three commands cannot drift: "@" means a literal address, anything else is
-// a contact-book lookup.
-export function resolveAddress(p: Paths, arg: string): Resolved {
+// a contact-book lookup. `relay` is the URL the caller will actually dial;
+// pass it so the host check above applies uniformly to all three.
+export function resolveAddress(p: Paths, arg: string, relay?: string): Resolved {
   if (arg.includes("@")) {
     const parsed = parseAddress(arg);
     if (!parsed) return { ok: false, error: `Invalid address: ${arg} (expected handle@host)` };
-    return { ok: true, ...parsed, address: arg };
+    const warning = relayHostWarning(arg, parsed.host, relay);
+    return warning ? { ok: true, ...parsed, address: arg, warning } : { ok: true, ...parsed, address: arg };
   }
   const { contacts } = loadContacts(p);
   const hit = contacts.find((c) => c.name.toLowerCase() === arg.toLowerCase());
@@ -98,5 +128,8 @@ export function resolveAddress(p: Paths, arg: string): Resolved {
   }
   const parsed = parseAddress(hit.address);
   if (!parsed) return { ok: false, error: `Contact "${hit.name}" has an invalid address: ${hit.address}` };
-  return { ok: true, ...parsed, address: hit.address };
+  const warning = relayHostWarning(hit.address, parsed.host, relay);
+  return warning
+    ? { ok: true, ...parsed, address: hit.address, warning }
+    : { ok: true, ...parsed, address: hit.address };
 }

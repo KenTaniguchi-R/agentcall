@@ -117,6 +117,50 @@ describe("resolveAddress", () => {
     }
   });
 
+  // The host half of an address was parsed and then dropped: every command
+  // routes to the configured relay regardless of what the address says, so a
+  // custom AGENTCALL_RELAY silently sends the call somewhere else. It stays a
+  // warning rather than a rejection because the relay hands out a hardcoded
+  // RELAY_HOST, so a self-hosted or local-dev relay can never match.
+  it("warns when the address host is not the relay the call will actually go to", () => {
+    const p = getPaths(tempHome());
+    const r = resolveAddress(p, "ken@agentcall.benree.tech", "https://relay.example.com");
+    expect(r.ok).toBe(true);
+    if (r.ok) {
+      expect(r.warning).toContain("agentcall.benree.tech");
+      expect(r.warning).toContain("relay.example.com");
+    }
+  });
+
+  it("does not warn when the address host matches the relay", () => {
+    const p = getPaths(tempHome());
+    const r = resolveAddress(p, "ken@agentcall.benree.tech", "https://agentcall.benree.tech");
+    expect(r.ok).toBe(true);
+    if (r.ok) expect(r.warning).toBeUndefined();
+  });
+
+  it("does not warn when no relay is supplied", () => {
+    const p = getPaths(tempHome());
+    const r = resolveAddress(p, "ken@agentcall.benree.tech");
+    expect(r.ok).toBe(true);
+    if (r.ok) expect(r.warning).toBeUndefined();
+  });
+
+  it("warns for a contact-book hit too, naming the contact's address", () => {
+    const p = getPaths(tempHome());
+    addContact(p, "ken", "ken@agentcall.benree.tech");
+    const r = resolveAddress(p, "ken", "http://127.0.0.1:8787");
+    expect(r.ok).toBe(true);
+    if (r.ok) expect(r.warning).toContain("127.0.0.1:8787");
+  });
+
+  it("an unparseable relay URL is ignored rather than blocking the call", () => {
+    const p = getPaths(tempHome());
+    const r = resolveAddress(p, "ken@agentcall.benree.tech", "not a url");
+    expect(r.ok).toBe(true);
+    if (r.ok) expect(r.warning).toBeUndefined();
+  });
+
   it("rejects a stored contact whose address is invalid (hand-edited file)", () => {
     const p = getPaths(tempHome());
     mkdirSync(p.dir, { recursive: true });

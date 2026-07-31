@@ -60,13 +60,16 @@ program
   .option("--task <id>", "task from the callee's card to perform (see: agentcall card <address>)")
   .action(async (address: string, messageParts: string[], o: { json?: boolean; task?: string }) => {
     const paths = getPaths();
-    const parsed = resolveAddress(paths, address);
+    // Config is loaded before resolution so the address can be checked against
+    // the relay this call will actually dial (see resolveAddress).
+    const cfg = loadConfig(paths);
+    const parsed = resolveAddress(paths, address, relayUrl(cfg));
     if (!parsed.ok) {
       console.error(parsed.error);
       process.exitCode = 1;
       return;
     }
-    const cfg = loadConfig(paths);
+    if (parsed.warning) console.error(parsed.warning);
     const message = messageParts.join(" ");
     try {
       const reply = await callAgent({
@@ -92,18 +95,19 @@ program
   .argument("<address>", "contact name or handle@host to check")
   .action(async (address: string) => {
     const paths = getPaths();
-    const parsed = resolveAddress(paths, address);
-    if (!parsed.ok) {
-      console.error(parsed.error);
-      process.exitCode = 1;
-      return;
-    }
     let cfgRelay: string;
     try {
       cfgRelay = relayUrl(loadConfig(paths));
     } catch {
       cfgRelay = relayUrl(undefined);
     }
+    const parsed = resolveAddress(paths, address, cfgRelay);
+    if (!parsed.ok) {
+      console.error(parsed.error);
+      process.exitCode = 1;
+      return;
+    }
+    if (parsed.warning) console.error(parsed.warning);
     try {
       const { online } = await getStatus(cfgRelay, parsed.handle);
       console.log(online ? "online" : "offline");
@@ -158,14 +162,15 @@ program
       console.log("Card published.");
       return;
     }
-    const parsed = resolveAddress(paths, target);
+    let cfg;
+    try { cfg = loadConfig(paths); } catch { cfg = undefined; }
+    const parsed = resolveAddress(paths, target, relayUrl(cfg));
     if (!parsed.ok) {
       console.error(`${parsed.error} (or 'push')`);
       process.exitCode = 1;
       return;
     }
-    let cfg;
-    try { cfg = loadConfig(paths); } catch { cfg = undefined; }
+    if (parsed.warning) console.error(parsed.warning);
     try {
       const card = await fetchCard(
         cfg ? relayUrl(cfg) : relayUrl(undefined),
