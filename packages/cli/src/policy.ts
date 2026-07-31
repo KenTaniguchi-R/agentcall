@@ -41,8 +41,20 @@ export function savePolicy(p: Paths, policy: Policy): void {
 // semantics are additive either way, so the prefix is just stripped.
 export const stripPlus = (id: string) => id.replace(/^\+/, "");
 
+export type CallerEntry = Policy["callers"][string];
+
+// `policy.callers` comes from JSON.parse + zod's z.record, whose output object
+// inherits Object.prototype — and HANDLE_RE happily accepts "constructor".
+// A bare `callers[handle]` therefore resolves to the Object constructor for
+// any policy that doesn't define that key, which reads as a caller entry that
+// isn't there. Every lookup goes through here so an inherited property can
+// never be mistaken for a real entry.
+export function callerEntry(policy: Policy, handle: string): CallerEntry | undefined {
+  return Object.hasOwn(policy.callers, handle) ? policy.callers[handle] : undefined;
+}
+
 export function offeredFor(policy: Policy, from: string): string[] | "blocked" {
-  const entry = policy.callers[from];
+  const entry = callerEntry(policy, from);
   if (entry?.block) return "blocked";
   const ids = new Set(policy.default_offer.map(stripPlus));
   for (const id of entry?.offer ?? []) ids.add(stripPlus(id));

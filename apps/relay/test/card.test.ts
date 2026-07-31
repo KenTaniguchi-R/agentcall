@@ -88,6 +88,20 @@ describe("GET /v1/card/:handle", () => {
     const card = await res.json<{ tasks: { id: string }[] }>();
     expect(card.tasks.map((t) => t.id)).toEqual(["ask"]);
   });
+  // HANDLE_RE accepts "constructor", and the parsed card's `grants` object
+  // inherits Object.prototype — so an unguarded `grants[viewer]` lookup yields
+  // the Object constructor, which is not iterable and 500s the whole endpoint
+  // for that viewer against every callee.
+  it("serves the public view to a viewer whose handle is an Object.prototype key", async () => {
+    const token = await registerHandle("ext4");
+    await putCard("ext4", token);
+    const ctorToken = await registerHandle("constructor");
+    const res = await SELF.fetch("https://relay.test/v1/card/ext4", { headers: wsAuth("constructor", ctorToken) });
+    expect(res.status).toBe(200);
+    const card = await res.json<{ tasks: { id: string }[] }>();
+    expect(card.tasks.map((t) => t.id)).toEqual(["ask"]);
+  });
+
   it("401s when auth headers are present but invalid", async () => {
     const token = await registerHandle("ext3");
     await putCard("ext3", token);

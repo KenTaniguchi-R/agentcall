@@ -25,6 +25,24 @@ const policy: Policy = {
   },
 };
 
+// HANDLE_RE accepts "constructor", and a zod z.record / JSON.parse object
+// inherits Object.prototype — so an unguarded `callers[from]` lookup finds the
+// Object constructor instead of undefined. These lock in that such a caller is
+// treated as an ordinary, unknown caller.
+describe("Object.prototype-named callers", () => {
+  it("offeredFor treats an unknown prototype-named caller as an ordinary caller", () => {
+    expect(offeredFor(policy, "constructor")).toEqual(["ask", "owner-introduction"]);
+  });
+  it("offeredFor honours a real entry for a prototype-named caller", () => {
+    const withEntry: Policy = { ...policy, callers: { ...policy.callers, constructor: { offer: [], block: true } } };
+    expect(offeredFor(withEntry, "constructor")).toBe("blocked");
+  });
+  it("resolveTask still resolves a default task for a prototype-named caller", () => {
+    const r = resolveTask(policy, TASKS, "constructor");
+    expect(r.ok).toBe(true);
+  });
+});
+
 describe("loadPolicy", () => {
   it("returns DEFAULT_POLICY when the file doesn't exist", () => {
     const p = getPaths(mkdtempSync(join(tmpdir(), "agentcall-pol-")));

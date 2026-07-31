@@ -1,7 +1,7 @@
 import { DurableObject } from "cloudflare:workers";
 import {
   CallerFrame, ListenerToRelayFrame, MAX_MESSAGE_BYTES, MAX_REPLY_BYTES,
-  RATE_LIMIT_PER_HOUR, RELAY_CALL_TIMEOUT_MS, safeParseFrame,
+  RATE_LIMIT_PER_HOUR, RELAY_CALL_TIMEOUT_MS, safeParseFrame, sanitizeDetail,
   type ErrorCodeType,
 } from "@benree/agentcall-shared";
 
@@ -143,7 +143,11 @@ export class HandleDO extends DurableObject {
       return;
     }
     if (frame.type === "call_failed") {
-      if (caller) this.fail(caller, frame.code, frame.detail, frame.offered);
+      // The listener is an untrusted peer here — same posture as call_result's
+      // text above. sanitizeDetail bounds the string and strips the control
+      // characters that would otherwise reach the caller's terminal verbatim.
+      const detail = frame.detail === undefined ? undefined : sanitizeDetail(frame.detail);
+      if (caller) this.fail(caller, frame.code, detail, frame.offered);
       await this.ctx.storage.delete(`call:${frame.call_id}`);
     }
   }

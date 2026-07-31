@@ -14,6 +14,14 @@ export const RESERVED_HANDLES = [
 ] as const;
 export const MAX_MESSAGE_BYTES = 64_000;
 export const MAX_REPLY_BYTES = 256_000;
+// `detail` is the one free-form string a callee can put in front of a
+// caller's eyes, and the CLI prints it straight to the terminal (see
+// callClient.ts / index.ts). It needs the same treatment `offered` above
+// got, and for the same two reasons: unbounded it's attacker-controlled
+// relay bandwidth, and unfiltered it's terminal-escape injection — ESC/CSI
+// sequences can clear the caller's screen, retitle their window, or paint
+// fake output over a real error.
+export const MAX_DETAIL_LENGTH = 500;
 // Bounds session_id, an otherwise-opaque caller-supplied token that today is
 // forwarded and dropped (see listener.ts) but has no reason to ever need to
 // be large — without a cap it's unbounded attacker-controlled bandwidth.
@@ -46,10 +54,16 @@ export const CallReply = z.object({
   session_id: z.string().max(MAX_SESSION_ID_LENGTH).optional(),
   task: z.string().regex(TASK_ID_RE).optional(),
 });
+// detail is bounded here but NOT on CallFailed below: the same split the
+// protocol already makes for reply text. Listener->relay fields arrive from
+// an untrusted peer and are normalized by the relay (see do.ts's
+// truncateUtf8Bytes / sanitizeDetail); relay->caller fields are a contract
+// the relay guarantees, so bounding them here would turn a verbose callee
+// into a dropped frame and a 6-minute caller hang.
 export const CallError = z.object({
   type: z.literal("call_error"),
   code: ErrorCode,
-  detail: z.string().optional(),
+  detail: z.string().max(MAX_DETAIL_LENGTH).optional(),
   offered: z.array(z.string().regex(TASK_ID_RE)).max(MAX_OFFERED_TASKS).optional(),
 });
 export const IncomingCall = z.object({
@@ -112,6 +126,19 @@ export function parseAddress(addr: string): { handle: string; host: string } | n
   if (!HANDLE_RE.test(handle)) return null;
   if (!/^[a-z0-9][a-z0-9.-]*\.[a-z]{2,}$/.test(host)) return null;
   return { handle, host };
+}
+
+// Makes an untrusted `detail` safe to print and bounded in size. Control
+// characters become a space rather than being dropped, so a stripped newline
+// doesn't run two words together; a CSI/OSC sequence loses its introducer and
+// degrades to inert literal text. The length cut counts UTF-16 code units to
+// match zod's .max() on CallError.detail, trimming a trailing lone high
+// surrogate rather than emitting half a code point.
+export function sanitizeDetail(detail: string, max: number = MAX_DETAIL_LENGTH): string {
+  const cleaned = detail.replace(/[\u0000-\u001f\u007f-\u009f]/g, " ");
+  if (cleaned.length <= max) return cleaned;
+  const cut = cleaned.slice(0, max);
+  return /[\ud800-\udbff]$/.test(cut) ? cut.slice(0, -1) : cut;
 }
 
 export function safeParseFrame<S extends z.ZodTypeAny>(schema: S, raw: string): z.infer<S> | null {

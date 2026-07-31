@@ -1,5 +1,5 @@
 import { HANDLE_RE, TASK_ID_RE } from "@benree/agentcall-shared";
-import { offeredFor, stripPlus, type Policy } from "./policy.js";
+import { callerEntry, offeredFor, stripPlus, type Policy } from "./policy.js";
 import type { Task } from "./tasks.js";
 
 export type Verb = "allow" | "revoke" | "block" | "unblock" | "offer" | "unoffer";
@@ -56,7 +56,9 @@ export function execVerb(
     case "allow": {
       const handle = requireHandle(a);
       const id = requireTaskExists(requireTaskId(b, "allow"));
-      const entry = next.callers[handle] ?? { offer: [], block: false };
+      // callerEntry, not next.callers[handle]: see policy.ts — a bare lookup
+      // returns Object.prototype's own members for handles like "constructor".
+      const entry = callerEntry(next, handle) ?? { offer: [], block: false };
       if (!entry.offer.includes(id)) entry.offer.push(id);
       next.callers[handle] = entry;
       return { policy: next, lines: [menuLine(next, handle)] };
@@ -64,28 +66,28 @@ export function execVerb(
     case "revoke": {
       const handle = requireHandle(a);
       const id = requireTaskId(b, "revoke");
-      const entry = next.callers[handle];
+      const entry = callerEntry(next, handle);
       if (entry) {
         entry.offer = entry.offer.filter((x) => stripPlus(x) !== id);
         if (entry.offer.length === 0 && !entry.block) delete next.callers[handle];
       }
-      return { policy: next, lines: [next.callers[handle] ? menuLine(next, handle) : `${handle} has no grants.`] };
+      return { policy: next, lines: [callerEntry(next, handle) ? menuLine(next, handle) : `${handle} has no grants.`] };
     }
     case "block": {
       const handle = requireHandle(a);
-      const entry = next.callers[handle] ?? { offer: [], block: false };
+      const entry = callerEntry(next, handle) ?? { offer: [], block: false };
       entry.block = true;
       next.callers[handle] = entry;
       return { policy: next, lines: [`${handle} is blocked.`] };
     }
     case "unblock": {
       const handle = requireHandle(a);
-      const entry = next.callers[handle];
+      const entry = callerEntry(next, handle);
       if (entry) {
         entry.block = false;
         if (entry.offer.length === 0) delete next.callers[handle];
       }
-      return { policy: next, lines: [next.callers[handle] ? menuLine(next, handle) : `${handle} is not blocked.`] };
+      return { policy: next, lines: [callerEntry(next, handle) ? menuLine(next, handle) : `${handle} is not blocked.`] };
     }
     case "offer": {
       const id = requireTaskExists(requireTaskId(a, "offer"));

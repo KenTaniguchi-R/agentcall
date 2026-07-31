@@ -1,5 +1,5 @@
 import WebSocket from "ws";
-import { RelayToCallerFrame, safeParseFrame, type CallReplyType, type ErrorCodeType } from "@benree/agentcall-shared";
+import { RelayToCallerFrame, safeParseFrame, sanitizeDetail, type CallReplyType, type ErrorCodeType } from "@benree/agentcall-shared";
 
 export class CallError extends Error {
   constructor(message: string, public code: ErrorCodeType | "connection_failed", public offered?: string[]) {
@@ -73,7 +73,11 @@ export function callAgent(opts: CallOpts): Promise<CallReplyType> {
       if (frame.type === "call_status") opts.onStatus?.(frame.state);
       else if (frame.type === "call_reply") finish(() => resolve(frame));
       else if (frame.type === "call_error") {
-        const base = frame.detail ?? HUMAN[frame.code] ?? frame.code;
+        // Sanitized again here, not just at the relay: the relay and the CLI
+        // deploy independently, so this process must not print bytes it got
+        // over the wire on the assumption that some other version cleaned them.
+        const detail = frame.detail === undefined ? undefined : sanitizeDetail(frame.detail);
+        const base = detail ?? HUMAN[frame.code] ?? frame.code;
         const msg = frame.offered?.length ? `${base} Tasks offered to you: ${frame.offered.join(", ")}` : base;
         finish(() => reject(new CallError(msg, frame.code, frame.offered)));
       }

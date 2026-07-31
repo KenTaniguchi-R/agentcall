@@ -61,6 +61,26 @@ describe("execVerb", () => {
     expect(policy.callers.spammer).toEqual({ offer: ["schedule-meeting"], block: true });
     expect(lines.join("\n")).toContain("blocked");
   });
+  // `policy.callers` is a JSON.parse'd / zod z.record object, so it inherits
+  // Object.prototype — and HANDLE_RE accepts "constructor". Without an
+  // own-property guard, every lookup below resolves to the Object constructor
+  // and throws, making a caller with that handle impossible to block.
+  it("handles a caller named after an Object.prototype key", () => {
+    const { policy, lines } = execVerb(base, TASKS, "block", "constructor");
+    expect(policy.callers.constructor).toEqual({ offer: [], block: true });
+    expect(lines.join("\n")).toContain("constructor is blocked.");
+  });
+  it("allow works for a caller named after an Object.prototype key", () => {
+    const { policy } = execVerb(base, TASKS, "allow", "constructor", "schedule-meeting");
+    expect(policy.callers.constructor).toEqual({ offer: ["schedule-meeting"], block: false });
+  });
+  it("revoke/unblock stay no-ops for an Object.prototype-named caller with no entry", () => {
+    expect(execVerb(base, TASKS, "revoke", "constructor", "ask").lines.join("\n"))
+      .toContain("constructor has no grants.");
+    expect(execVerb(base, TASKS, "unblock", "constructor").lines.join("\n"))
+      .toContain("constructor is not blocked.");
+  });
+
   it("allow's printed menu drops a dangling policy id with no manifest on disk", () => {
     const dangling: Policy = { description: "", default_offer: ["ask", "gone"], callers: {} };
     const { lines } = execVerb(dangling, TASKS, "allow", "ken", "schedule-meeting");

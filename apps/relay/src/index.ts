@@ -83,7 +83,12 @@ app.get("/v1/card/:handle", async (c) => {
   }
 
   const upload = CardUpload.parse(JSON.parse(row.card_json));
-  const visible = new Set([...upload.default_offer, ...(viewer ? (upload.grants[viewer] ?? []) : [])]);
+  // Own-property check, not a bare lookup: `grants` is a zod z.record object
+  // that inherits Object.prototype, and HANDLE_RE accepts "constructor" — so
+  // `grants[viewer]` would hand back the Object constructor (not iterable,
+  // 500s this endpoint) for a viewer with that handle against every callee.
+  const granted = viewer && Object.hasOwn(upload.grants, viewer) ? upload.grants[viewer]! : [];
+  const visible = new Set([...upload.default_offer, ...granted]);
   return c.json({
     handle,
     description: upload.description,

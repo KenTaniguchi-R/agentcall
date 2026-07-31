@@ -2,7 +2,7 @@ import { describe, expect, it } from "vitest";
 import {
   CallRequest, CallerFrame, RelayToCallerFrame, ListenerToRelayFrame,
   HANDLE_RE, RESERVED_HANDLES, MAX_MESSAGE_BYTES, MAX_SESSION_ID_LENGTH, parseAddress, safeParseFrame,
-  RegisterRequest, CallReply, IncomingCall,
+  RegisterRequest, CallReply, IncomingCall, CallError, MAX_DETAIL_LENGTH, sanitizeDetail,
 } from "../src/index.js";
 
 describe("handle rules", () => {
@@ -75,6 +75,51 @@ describe("session_id bounds", () => {
   it("bounds CallReply.task with the same TASK_ID_RE as other task fields", () => {
     expect(CallReply.safeParse({ type: "call_reply", call_id: "x", text: "t", task: "Not Valid!" }).success).toBe(false);
     expect(CallReply.safeParse({ type: "call_reply", call_id: "x", text: "t", task: "valid-task" }).success).toBe(true);
+  });
+});
+
+describe("detail bounds and sanitization", () => {
+  it("bounds CallError.detail — it is printed straight to a caller's terminal", () => {
+    const over = "x".repeat(MAX_DETAIL_LENGTH + 1);
+    expect(CallError.safeParse({ type: "call_error", code: "agent_error", detail: over }).success).toBe(false);
+    expect(CallError.safeParse({ type: "call_error", code: "agent_error", detail: "x".repeat(MAX_DETAIL_LENGTH) }).success).toBe(true);
+  });
+
+  it("sanitizeDetail strips the ESC that makes a CSI/OSC sequence dangerous", () => {
+    const out = sanitizeDetail("\u001b[31mred\u001b[0m\u001b]0;pwned");
+    expect(out).not.toContain("\u001b");
+    expect(out).toContain("red");
+  });
+
+  it("sanitizeDetail strips 8-bit C1 introducers, not just ESC", () => {
+    expect(sanitizeDetail("\u009b31m")).not.toContain("\u009b");
+  });
+
+  it("sanitizeDetail neutralizes carriage-return line overwriting", () => {
+    expect(sanitizeDetail("real error\rFAKE SUCCESS")).not.toContain("\r");
+  });
+
+  it("sanitizeDetail replaces controls with a space so words don't run together", () => {
+    expect(sanitizeDetail("line one\nline two")).toBe("line one line two");
+  });
+
+  it("sanitizeDetail leaves ordinary text (including non-ASCII) alone", () => {
+    expect(sanitizeDetail("agent failed — 日本語 ok")).toBe("agent failed — 日本語 ok");
+  });
+
+  it("sanitizeDetail truncates to MAX_DETAIL_LENGTH without splitting a surrogate pair", () => {
+    expect(sanitizeDetail("x".repeat(MAX_DETAIL_LENGTH + 50)).length).toBe(MAX_DETAIL_LENGTH);
+    // An astral char straddling the cut must be dropped whole, never halved.
+    const straddling = "a".repeat(MAX_DETAIL_LENGTH - 1) + "😀";
+    const cut = sanitizeDetail(straddling);
+    expect(cut.length).toBe(MAX_DETAIL_LENGTH - 1);
+    expect(/[\ud800-\udfff]/.test(cut)).toBe(false);
+  });
+
+  it("sanitized output always satisfies the CallError.detail bound", () => {
+    const hostile = ("\u001b[2J" + "y".repeat(50)).repeat(100);
+    const detail = sanitizeDetail(hostile);
+    expect(CallError.safeParse({ type: "call_error", code: "agent_error", detail }).success).toBe(true);
   });
 });
 

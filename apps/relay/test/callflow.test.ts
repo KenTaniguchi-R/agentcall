@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { RELAY_CALL_TIMEOUT_MS } from "@benree/agentcall-shared";
+import { MAX_DETAIL_LENGTH, RELAY_CALL_TIMEOUT_MS } from "@benree/agentcall-shared";
 import { registerHandle, wsAuth, openWs, nextFrame, closed } from "./helpers.js";
 import { clampTimeoutMs, truncateUtf8Bytes } from "../src/do.js";
 
@@ -44,6 +44,28 @@ describe("call flow", () => {
     const incoming = await nextFrame(listener);
     listener.send(JSON.stringify({ type: "call_failed", call_id: incoming.call_id, code: "busy" }));
     expect(await nextFrame(caller)).toMatchObject({ type: "call_error", code: "busy" });
+  });
+
+  // `detail` is the one free-form string a callee puts in front of a caller's
+  // eyes, and the CLI prints it straight to the terminal. The relay must not
+  // pass raw control bytes or an unbounded string through, the same way it
+  // already truncates call_result text.
+  it("sanitizes and bounds call_failed detail before relaying it", async () => {
+    const { callerToken, listener } = await setupPair("d-callee", "d-caller");
+    const caller = await openWs("/v1/ws?role=call&to=d-callee", wsAuth("d-caller", callerToken));
+    caller.send(JSON.stringify({ type: "call_request", to: "d-callee", message: "hi" }));
+    await nextFrame(caller); // ringing
+    const incoming = await nextFrame(listener);
+    listener.send(JSON.stringify({
+      type: "call_failed", call_id: incoming.call_id, code: "agent_error",
+      detail: "\u001b[2Jwiped\u001b]0;retitled\u0007" + "z".repeat(MAX_DETAIL_LENGTH * 2),
+    }));
+    const err = await nextFrame(caller);
+    expect(err).toMatchObject({ type: "call_error", code: "agent_error" });
+    expect(err.detail).not.toContain("\u001b");
+    expect(/[\u0000-\u001f\u007f-\u009f]/.test(err.detail)).toBe(false);
+    expect(err.detail.length).toBeLessThanOrEqual(MAX_DETAIL_LENGTH);
+    expect(err.detail).toContain("wiped");
   });
 
   it("rejects oversized messages", async () => {

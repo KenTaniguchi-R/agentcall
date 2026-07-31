@@ -103,6 +103,24 @@ describe("callAgent", () => {
     expect(reply.task).toBe("schedule-meeting");
   });
 
+  // The CLI must not trust the relay to have sanitized `detail`: the relay and
+  // the CLI deploy independently, so an older or rogue relay can still hand us
+  // raw control bytes that would otherwise land in the user's terminal.
+  it("strips terminal escapes from call_error detail before it reaches the message", async () => {
+    const url = await fakeRelayCapture((ws) => {
+      ws.send(JSON.stringify({
+        type: "call_error", code: "agent_error",
+        detail: "\u001b[2Jcleared your screen\u001b]0;retitled\u0007",
+      }));
+    });
+    const err = await callAgent({ relay: url, from: "bob", token: "t", to: "ken", message: "x" })
+      .then(() => null, (e) => e);
+    expect(err.code).toBe("agent_error");
+    expect(err.message).not.toContain("\u001b");
+    expect(/[\u0000-\u001f\u007f-\u009f]/.test(err.message)).toBe(false);
+    expect(err.message).toContain("cleared your screen");
+  });
+
   it("surfaces offered[] from call_error on the thrown CallError", async () => {
     const url = await fakeRelayCapture((ws) => {
       ws.send(JSON.stringify({ type: "call_error", code: "task_not_offered", offered: ["ask", "owner-introduction"] }));
