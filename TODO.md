@@ -29,7 +29,7 @@ not effort — preserved here.
 | Item | Status | Note |
 |---|---|---|
 | [A2A track](#a2a-conformance-track) | `designing` | **Owned by a separate session.** Don't pick up S2–S4 without checking. |
-| [C.2 — Codex read floor](#c-endpoint-security--the-argument-to-win) | `gated` | Design done; five unproven preconditions block implementation. **This is the recommended next task.** |
+| [C.2 — Codex read floor](#c-endpoint-security--the-argument-to-win) | `gated` | P1 and P3 now **pass**, P4 partial. **P2 is the sole remaining fatal precondition** and is the critical path — it needs its own experiment design, not another run of the script. |
 
 ---
 
@@ -81,7 +81,7 @@ which favours this design.
 | C.3 | **Make the policy envelope legible to a non-engineer** | `open` | `policy.json` + `resolveTask()` is the right foundation, but security teams need to *read* the granted surface as policy, not infer it from frontmatter. Deliverable: a rendered per-caller/per-task capability report. Self-contained, `packages/cli` only — no conflict with other tracks. |
 | C.4 | **Endpoint-agent threat model as a standalone doc** | `open` | We're asking for an inbound-instruction daemon on every dev machine holding real credentials. Best written *after* C.2's preconditions resolve, since P1/P2 determine what it can claim. Same item as S4. |
 
-### C.2 preconditions — round 1 verified 2026-08-01
+### C.2 preconditions — rounds 1–2 verified 2026-08-01
 
 Design: [codex-read-floor-design](./docs/superpowers/specs/2026-08-01-codex-read-floor-design.md#preconditions--all-unproven-all-blocking).
 Mechanism is Codex's **own** kernel-enforced `deny_read` (agentcall can only *require and
@@ -90,11 +90,11 @@ Verified against codex-cli **0.146.0**. Ordered by how badly failure damages the
 
 | # | Precondition | Status | If it fails |
 |---|---|---|---|
-| P1 | User config cannot weaken requirements | `partial` | **Design collapses entirely.** Closed without root: no env var relocates requirements, and `-c permissions.filesystem.deny_read` is **accepted and silently ignored** (confirming agentcall cannot set the floor per-spawn). **Still open — needs `sudo`:** `--sandbox danger-full-access`, `--dangerously-bypass-approvals-and-sandbox`, a planted `CODEX_HOME`, and a **nested Codex**. Script ready: `p1-root-test.sh` in the session scratchpad. |
+| P1 | User config cannot weaken requirements | **`pass`** | Was *"design collapses entirely."* **Verified with root 2026-08-01: 7/7 denied** — `-c` overrides, `--sandbox danger-full-access`, `--dangerously-bypass-approvals-and-sandbox`, a planted user-writable `CODEX_HOME`, and a **nested codex** launched from inside the sandboxed shell (the case argv ownership does not cover). Ceiling semantics are now tested, not inferred. Residual: malformed-requirements handling untested — a silently-skipped bad file would be fail-open. |
 | P2 | `deny_read` covers every local-read surface, not just shell | `open` | **`deny_read` is not a floor** and the design dies the same way the hook did. Killed the first draft. **Now two suspects, not one:** the bundled `codex_apps` tools, and **`codex-code-mode-host`** — a sibling helper process started on every spawn even under `--ignore-user-config`. Blocked behind P1's root step. Note the obvious test does not work: Codex applies Seatbelt in-process, with **no `sandbox-exec` wrapper** to look for. |
 | P3 | The `deny_read` schema is real and stable | **`pass`** | Confirmed against first-party source (`permissions_toml.rs`, `protocol/src/permissions.rs`), not binary strings. Bonus: `deny` is the **only** mode accepting glob paths, which is what `DENIED_BASENAMES` needs. `glob_scan_max_depth` is real and must be set explicitly. |
-| P4 | Enforcement verified per platform and per sandbox mode | `open` | Linked symbols prove linkage, not behaviour. Until tested, claim "designed to be cross-platform," never "cross-platform." |
-| P5 | Version qualification | `open` | `doctor` must fail closed on an unqualified Codex version, not assume forward compatibility. |
+| P4 | Enforcement verified per platform and per sandbox mode | `partial` | **macOS/arm64 now verified** — the round-2 baseline is the first direct evidence `deny_read` enforces at all; everything prior was linked symbols. Linux and Windows unverified, so claim "verified on macOS, designed to be cross-platform." |
+| P5 | Version qualification | `open` | 0.146.0 is now a qualified version, and `scripts/verify-codex-deny-read.sh` makes re-qualification a repeatable check. `doctor` must still fail closed on any version not on the list. |
 
 Implementation, once cleared: (1) `agentcall codex-requirements` prints a fragment for an
 admin to install — agentcall never writes `/etc`; (2) `doctor` proves the floor with a

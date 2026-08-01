@@ -338,6 +338,60 @@ read-only sandbox. The instruction to claim "designed to be cross-platform" rath
 
 ---
 
+## Verification round 2 — 2026-08-01, with root
+
+`scripts/verify-codex-deny-read.sh` run by Ryusei against the same binary
+(`0.146.0-aarch64-apple-darwin`, sha256 `ae1d3ffe…83da02`). **7 denied / 0 bypassed.**
+
+| Case | Result |
+|---|---|
+| **Baseline** — floor holds with no interference | denied |
+| `-c permissions.filesystem.deny_read=[]` | denied |
+| `-c permissions.filesystem.entries."<dir>"="read"` | denied |
+| `--sandbox danger-full-access` | denied |
+| `--dangerously-bypass-approvals-and-sandbox` | denied |
+| `CODEX_HOME=<user-writable>` + planted `config.toml` | denied |
+| **Nested codex** launched from inside a sandboxed shell | denied |
+
+### P1 — passes
+
+Ceiling semantics are now a tested property, not an inference from binary strings. The
+two "dangerous" escape hatches do not touch requirements, a user-writable `CODEX_HOME`
+cannot relocate the floor, and — the case argv ownership does **not** cover — a second
+`codex` launched by the model from inside the sandboxed shell is denied just the same, so
+requirements are re-read per process rather than inherited from the parent's sandbox.
+
+**Residual gap, small but real:** the design also asked to "confirm malformed requirements
+stop startup rather than being ignored." That was not tested. A requirements file that
+fails to parse and is silently skipped would be a fail-open path with the same shape as
+everything else found today. Worth one more case in the script.
+
+### P4 — upgraded to partial, and this is the round's quiet win
+
+The **baseline denial is the first direct evidence that `deny_read` enforces at all.**
+Everything before this was linked symbols and documentation. macOS/arm64 is now verified
+for the shell read surface, which is the platform the design is being built on.
+
+Linux and Windows remain unverified, so the standing instruction holds: claim
+**"verified on macOS, designed to be cross-platform"** — never "cross-platform".
+
+### P5 — one qualified version
+
+0.146.0 is now a *qualified* version, and the script makes re-qualification a repeatable
+20-minute check rather than a research project. The `doctor` requirement is unchanged:
+fail closed on any version not on the qualified list.
+
+### What this does and does not unblock
+
+P1 was the precondition whose failure collapsed the design. It held, so **the mechanism is
+sound and the design survives.** Implementation is still gated, because **P2 is now the
+sole remaining fatal precondition** — and it cannot be tested by the script above, since
+its two suspects (`codex_apps` tools, `codex-code-mode-host`) do not read through the
+shell. Closing it needs a floor installed *and* a way to make each suspect attempt a read.
+
+Ordering consequence: P2 is now the critical path for C.2, and it needs its own experiment
+design rather than another pass of this script.
+
 ## Findings outside the preconditions — 2026-08-01
 
 ### The Codex guard was registered but never ran — now fixed
