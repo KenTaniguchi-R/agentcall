@@ -3,39 +3,51 @@
 Market and competitive research for agentcall. **These are research notes, not
 decisions.** No implementation follows from them without a separate call.
 
-All four docs date from 2026-07-31 and were produced together; read them as one body
-of work rather than four independent studies.
+All five docs date from 2026-07-31 and were produced together; read them as one body
+of work rather than five independent studies.
 
-## Market research — read in this order
+## Reading order
 
-| Doc | Answers |
-|---|---|
-| [agent-coordination-landscape](./2026-07-31-agent-coordination-landscape.md) | Who else is in this market? Where is the gap? |
-| [enterprise-pivot-research](./2026-07-31-enterprise-pivot-research.md) | Who is the direct competitor, and how should the enterprise version work? |
-| [demand-validation](./2026-07-31-demand-validation.md) | Does anyone pay for this? What blocks deals? |
-| [market-outlook](./2026-07-31-market-outlook.md) | Is this market dying or growing? What kills us? |
+A qualifying sequence — is there a pain, is there a market, is the position open, what
+do we build, what can enforce it. It is deliberately **not** the order the docs were
+produced in. Later research revised earlier conclusions, so the production order
+(landscape → pivot → demand → outlook) puts an amendment *after* the doc it amends.
 
-## Technical reference
+| # | Doc | Answers |
+|---|---|---|
+| 1 | [demand-validation](./2026-07-31-demand-validation.md) | Does anyone pay for this? What blocks deals? |
+| 2 | [market-outlook](./2026-07-31-market-outlook.md) | Is this market dying or growing? What kills us, and how long do we have? |
+| 3 | [agent-coordination-landscape](./2026-07-31-agent-coordination-landscape.md) | Who else is in this market? Where is the gap? |
+| 4 | [enterprise-pivot-research](./2026-07-31-enterprise-pivot-research.md) | Who is the direct competitor, and how should the enterprise version work? |
+| 5 | [claude-code-enforcement-surfaces](./2026-07-31-claude-code-enforcement-surfaces.md) | With the OS sandbox gone, what can actually enforce policy — and what can't? |
 
-| Doc | Answers |
-|---|---|
-| [claude-code-enforcement-surfaces](./2026-07-31-claude-code-enforcement-surfaces.md) | With the OS sandbox gone, what can actually enforce policy — and what can't? |
+Two notes on the sequence:
+
+- **#3 predates two decisions made the same day.** `agent-coordination-landscape` was
+  written before the sandbox was dropped and before Q&A-first was chosen. Its
+  *Conclusion* and *What is not working* sections recommend leading with the sandbox and
+  treat callee-pays as the live economic model; both are obsolete. It sits at #3 so that
+  #4 supersedes it immediately rather than leaving it unresolved.
+- **#5 is not an optional appendix.** It is a technical reference, but its §5 also
+  constrains #4: `ask` rules error under `claude -p`, so the draft-then-approve flow
+  recommended there cannot be built on Claude's own permission mechanism and has to live
+  in our protocol. Read it in sequence, not on demand.
 
 ## The five findings that matter
 
-1. **The niche is real.** Person-scoped *execution* calling is the one unoccupied band.
-   Shared-corpus Q&A, knowledge twins, and laptop-agent governance are all taken.
-2. **Viven is the direct competitor** — $35M seed, Eightfold founders, on-prem ready.
-   Live routing beats their indexing model on freshness, data residency, privacy
-   enforcement, and departure semantics. They beat us on availability and funding.
-3. **The pain is a painkiller.** 47% of developers spend 30+ min/day answering
+1. **The pain is a painkiller.** 47% of developers spend 30+ min/day answering
    colleagues; it is managers' #2 ranked challenge. But say *"recover the 5 hrs/week
    your architects waste explaining architecture"* — "reduce interruptions" does not
    sell.
-4. **The market is not dying.** Every hard demand indicator is up and inference prices
+2. **The market is not dying.** Every hard demand indicator is up and inference prices
    are falling, which favours a token *consumer*.
-5. **Platform absorption is the only existential threat**, and market growth does not
+3. **Platform absorption is the only existential threat**, and market growth does not
    protect against it. Roughly a 12–18 month window.
+4. **The niche is real.** Person-scoped *execution* calling is the one unoccupied band.
+   Shared-corpus Q&A, knowledge twins, and laptop-agent governance are all taken.
+5. **Viven is the direct competitor** — $35M seed, Eightfold founders, on-prem ready.
+   Live routing beats their indexing model on freshness, data residency, privacy
+   enforcement, and departure semantics. They beat us on availability and funding.
 
 ## Two things to keep in view
 
@@ -53,4 +65,6 @@ SEO aggregators or report-mill vendors, it is either cut or marked directional-o
 see the source-discipline section at the end of `market-outlook`.
 
 Where later research revised an earlier conclusion, the earlier doc carries an inline
-amendment pointing forward rather than being silently edited.
+amendment pointing forward rather than being silently edited. The reading order above
+puts most of those revisions before the doc they revise, but the pointers remain so the
+docs stay correct when read individually.

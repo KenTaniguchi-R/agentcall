@@ -1,5 +1,30 @@
 # Agent coordination landscape — competitive research
 
+> **⚠️ Recommendations superseded — the market map still stands.**
+>
+> This was written before two decisions taken the same day: the OS sandbox
+> (`@anthropic-ai/sandbox-runtime` / Seatbelt) was **removed**, and the product
+> direction moved from public person-to-person calling to **enterprise in-network
+> Q&A**. See [enterprise-pivot-research](./2026-07-31-enterprise-pivot-research.md).
+>
+> **No longer holds:** "lead with the sandbox" (TL;DR item 3, *What is not working*,
+> Conclusion item 3) — there is no sandbox to lead with; the security story is now
+> `resolveTask()` plus per-tool-call hooks, see
+> [claude-code-enforcement-surfaces](./2026-07-31-claude-code-enforcement-surfaces.md).
+> The `Sandbox` row of the Cotal comparison table is wrong for the same reason. The
+> callee-pays framing of the spend-ceiling item belongs to the consumer product,
+> though the underlying cost concern generalizes.
+>
+> **Reinforced, not superseded:** Conclusion item 4 (store-and-forward). The pivot
+> doc reaches the same place independently and harder — synchronous call → durable
+> mailbox.
+>
+> **Unaffected:** the competitive map itself (Blockit, the three tiers, Cotal,
+> Omnigent), the `agentcall.co` name collision, and the findings on standards,
+> prompt injection, and unit economics. Confidence tags apply as written.
+>
+> Read in sequence — see [README](./README.md); this is #3 of 5.
+
 **Date:** 2026-07-31
 **Question:** Who else is doing agent-to-agent coordination, and is anyone doing
 what agentcall does?

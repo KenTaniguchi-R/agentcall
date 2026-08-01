@@ -128,7 +128,11 @@ GDPR Article 35 DPIA and EU AI Act Article 26 deployer obligations run in parall
 
 ## 4. Why this is a tailwind for agentcall's architecture
 
-Viven's model — ingest email, Slack, and Docs into a per-employee twin — is close to
+**[Viven](https://viven.ai)** is the direct competitor — $35M seed, Eightfold founders,
+building a per-employee knowledge twin. Full introduction in
+[enterprise-pivot-research §1](./2026-07-31-enterprise-pivot-research.md#1-the-direct-competitor-viven).
+
+Their model — ingest email, Slack, and Docs into a per-employee twin — is close to
 the worst possible shape for a works council. Live routing is a materially easier
 conversation:
 
