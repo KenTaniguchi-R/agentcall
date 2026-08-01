@@ -2,10 +2,11 @@
 
 **Date:** 2026-08-01
 **Status:** Design agreed with Ryusei, revised twice against adversarial review by Codex.
-Not implemented. **One open decision blocks implementation — see
-[Queue depth](#queue-depth-the-open-decision).** A second, narrower one — whether A2A
-`messageId` deduplicates across contexts — resolves against the pinned spec during
-implementation and does not block starting; see [Idempotency](#idempotency).
+Not implemented. Spec approved by Ryusei 2026-08-01, including the queue-depth
+recommendation — **`maxPending: 0` is decided**, see [Queue depth](#queue-depth). One
+narrower question remains — whether A2A `messageId` deduplicates across contexts — which
+resolves against the pinned spec during implementation and does not block starting; see
+[Idempotency](#idempotency).
 **Predecessor:** [a2a-adoption-design](./2026-08-01-a2a-adoption-design.md) — the card
 surface shipped as `c94822b`. This is the second of that spec's three plans.
 **Sibling:** [durable-offline-delivery](./2026-08-01-durable-offline-delivery-requirements.md)
@@ -47,9 +48,11 @@ Offline submission still fails before task creation.
 
 ---
 
-## Queue depth — the open decision
+## Queue depth
 
-**This is the one thing to settle before implementing.**
+**Decided: `maxPending: 0`.** The listener refuses a new call while one is running.
+Rationale below; the alternatives are retained because they are what a future mailbox
+will have to choose between.
 
 The arithmetic: `AGENT_TIMEOUT_MS` is 300s, `RELAY_CALL_TIMEOUT_MS` is 360s from
 submission, and the listener queues `new SerialQueue(5)` — 1 running + 5 pending.
@@ -62,13 +65,13 @@ submission, and the listener queues `new SerialQueue(5)` — 1 running + 5 pendi
 An earlier draft proposed `maxPending: 1` and claimed it removed deadline propagation.
 That was wrong — it only deletes the unreachable positions.
 
-**Recommended: `maxPending: 0`.** Refuse while one task is running. It is the only value
-that is deadline-honest without propagation machinery, and it collapses cancellation
-phases, policy staleness, listener-restart ambiguity, and test surface. The durable
-mailbox introduces real queueing later, with an intentional contract.
+`maxPending: 0` is the only value that is deadline-honest without propagation machinery,
+and it collapses cancellation phases, policy staleness, listener-restart ambiguity, and
+test surface. The durable mailbox introduces real queueing later, with an intentional
+contract.
 
-The alternatives, if a pending slot is wanted anyway — each requires explicitly accepting
-its semantics, and none removes deadline propagation:
+The alternatives, **rejected here** but recorded because the mailbox will have to pick one
+— each requires explicitly accepting its semantics, and none removes deadline propagation:
 
 | Option | Semantics |
 |---|---|
