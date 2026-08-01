@@ -1,0 +1,85 @@
+name: Invariants
+
+# The rules in CLAUDE.md that nothing currently enforces. Deterministic checks
+# only -- no model, no secrets, no network. Runs read-only: findings surface as
+# GitHub annotations on the PR, which need no write permission.
+on:
+  pull_request:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: invariants-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          # Need the base branch to diff against.
+          fetch-depth: 0
+
+      - name: Protocol frames must live in packages/shared
+        run: |
+          # A frame is identifiable by its `type:` discriminator -- z.literal().
+          # Anywhere outside packages/shared that means a frame shape was
+          # redefined locally instead of imported from the single source of
+          # truth. Baseline at time of writing: zero occurrences.
+          hits=$(grep -rn 'z\.literal(' apps/relay/src packages/cli/src || true)
+          if [ -n "$hits" ]; then
+            echo "$hits" | while IFS=: read -r file line _; do
+              echo "::error file=$file,line=$line::Protocol frame defined outside packages/shared. Frame shapes are declared once in packages/shared/src/protocol.ts and imported -- see CLAUDE.md."
+            done
+            exit 1
+          fi
+          echo "OK: no frame shapes declared outside packages/shared"
+
+      - name: Historical docs are never revised
+        run: |
+          # Adding a new dated plan/spec is normal, and so is editing one while
+          # the work it describes is still in flight -- that is authoring, not
+          # revision. What the rule forbids is going back to an old record and
+          # updating it to match code that has since changed.
+          #
+          # These filenames carry their own date, so the two cases are
+          # distinguishable: only flag an edit to a doc dated well in the past.
+          GRACE_DAYS=14
+          today=$(date -u +%s)
+          modified=$(git diff --name-only --diff-filter=M \
+            "origin/${GITHUB_BASE_REF}...HEAD" \
+            -- 'docs/superpowers/**' 'docs/security/2026-07-16-security-review.md' || true)
+          for file in $modified; do
+            # Pull YYYY-MM-DD off the front of the basename.
+            stamp=$(basename "$file" | grep -oE '^[0-9]{4}-[0-9]{2}-[0-9]{2}' || true)
+            if [ -z "$stamp" ]; then
+              continue
+            fi
+            doc_date=$(date -u -d "$stamp" +%s 2>/dev/null || echo 0)
+            if [ "$doc_date" -eq 0 ]; then
+              continue
+            fi
+            age_days=$(( (today - doc_date) / 86400 ))
+            if [ "$age_days" -gt "$GRACE_DAYS" ]; then
+              echo "::warning file=$file::Revising a historical document (dated $stamp, ${age_days}d ago). These are dated records kept as written and are deliberately not updated when behavior changes -- correct README.md/CHANGELOG.md instead. Ignore this if you are fixing a typo."
+            fi
+          done
+          echo "OK: checked historical docs"
+
+      - name: Open work stays in GitHub Issues
+        run: |
+          # gh issue list is the status board. A markdown TODO drifts from it
+          # immediately and then quietly becomes wrong.
+          added=$(git diff --name-only --diff-filter=A \
+            "origin/${GITHUB_BASE_REF}...HEAD" || true)
+          for file in $added; do
+            case "$(basename "$file" | tr '[:upper:]' '[:lower:]')" in
+              todo.md|tasks.md|roadmap.md|backlog.md)
+                echo "::error file=$file::Open work is tracked in GitHub Issues, not in a file -- see CLAUDE.md."
+                exit 1
+                ;;
+            esac
+          done
+          echo "OK: no markdown task board reintroduced"
