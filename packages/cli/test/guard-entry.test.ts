@@ -23,6 +23,31 @@ function run(payload: object, home: string): { status: number; stdout: string } 
   }
 }
 
+function runRaw(raw: string, home: string): { status: number; stdout: string } {
+  try {
+    const stdout = execFileSync(process.execPath, [ENTRY], {
+      input: raw,
+      env: { ...process.env, AGENTCALL_HOME: home, AGENTCALL_CALL_ID: "call-abc" },
+      encoding: "utf8",
+    });
+    return { status: 0, stdout };
+  } catch (e) {
+    const err = e as { status: number; stdout: string };
+    return { status: err.status, stdout: err.stdout ?? "" };
+  }
+}
+
+function one(home: string, body: string): Promise<void> {
+  return new Promise<void>((ok, fail) => {
+    const child = execFile(
+      process.execPath, [ENTRY],
+      { env: { ...process.env, AGENTCALL_HOME: home, AGENTCALL_CALL_ID: "call-abc" } },
+      (err) => (err ? fail(err) : ok()),
+    );
+    child.stdin?.end(body);
+  });
+}
+
 describe("guard-entry as a real process", () => {
   it("allows an ordinary read and writes tools.log", () => {
     const home = mkdtempSync(join(tmpdir(), "guard-"));
@@ -44,7 +69,7 @@ describe("guard-entry as a real process", () => {
 
   it("exits 2 on unparseable input", () => {
     const home = mkdtempSync(join(tmpdir(), "guard-"));
-    const r = run("not json" as unknown as object, home);
+    const r = runRaw("{not json", home);
     expect(r.status).toBe(2);
   });
 
@@ -58,16 +83,8 @@ describe("guard-entry as a real process", () => {
     const body = JSON.stringify({
       tool_name: "Read", tool_input: { file_path: join(home, "a.ts") }, cwd: home,
     });
-    const one = () => new Promise<void>((ok, fail) => {
-      const child = execFile(
-        process.execPath, [ENTRY],
-        { env: { ...process.env, AGENTCALL_HOME: home, AGENTCALL_CALL_ID: "call-abc" } },
-        (err) => (err ? fail(err) : ok()),
-      );
-      child.stdin?.end(body);
-    });
     const started = Date.now();
-    await Promise.all(Array.from({ length: 8 }, one));
+    await Promise.all(Array.from({ length: 8 }, () => one(home, body)));
     expect(Date.now() - started).toBeLessThan(GUARD_TIMEOUT_S * 1000);
   });
 
@@ -76,15 +93,7 @@ describe("guard-entry as a real process", () => {
     const body = JSON.stringify({
       tool_name: "Read", tool_input: { file_path: join(home, "a.ts") }, cwd: home,
     });
-    const one = () => new Promise<void>((ok, fail) => {
-      const child = execFile(
-        process.execPath, [ENTRY],
-        { env: { ...process.env, AGENTCALL_HOME: home, AGENTCALL_CALL_ID: "call-abc" } },
-        (err) => (err ? fail(err) : ok()),
-      );
-      child.stdin?.end(body);
-    });
-    await Promise.all(Array.from({ length: 8 }, one));
+    await Promise.all(Array.from({ length: 8 }, () => one(home, body)));
     const lines = readFileSync(join(home, ".agentcall", "tools.log"), "utf8").trim().split("\n");
     expect(lines).toHaveLength(8);
     // Interleaved appends must still parse: a torn line means the audit trail
