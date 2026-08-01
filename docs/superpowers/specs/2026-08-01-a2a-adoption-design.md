@@ -444,11 +444,44 @@ proves the agent at that base URL is conformant; it does not prove conventional 
 discovery. That is exactly the gap a procurement reviewer probes, and it is the argument
 F4 warned about.
 
-**Therefore: Option 1 — per-handle origins (`https://ken.agents.acme.internal`) with
-wildcard DNS/TLS — is the recommended resolution.** It is the only candidate that is both
-clean and passes without a nested-well-known fudge, and wildcard certs on a Workers custom
-domain are native. Options 2 and 3 remain fallbacks if wildcard DNS proves impractical in
-customer environments.
+*Superseded by finding 4 below — the workaround is unnecessary.*
+
+### 4. A2A v1.0 has native multi-tenancy — the handle **is** a tenant
+
+The decisive finding, and it invalidates the recommendation immediately above. Every RPC
+in `a2a.proto` carries an `additional_binding` with `{tenant}` as the leading path
+segment:
+
+```
+POST /{tenant}/message:send          GET  /{tenant}/tasks/{id=*}
+POST /{tenant}/message:stream        GET  /{tenant}/tasks
+POST /{tenant}/tasks/{id=*}:cancel   GET  /{tenant}/tasks/{id=*}:subscribe
+GET  /{tenant}/extendedAgentCard     …plus the push-config variants
+```
+
+`AgentInterface.tenant` is documented as "Tenant ID to be used in the request when calling
+the agent," and `SendMessageRequest.tenant` as "Optional. Tenant ID, provided as a path
+parameter." `GetExtendedAgentCardRequest` and `TaskPushNotificationConfig` carry it too.
+
+**agentcall's `handle` maps directly onto A2A's `tenant`.** One origin, one relay, no
+wildcard DNS, no nested well-known path, no proprietary discovery — the multi-tenancy the
+first draft treated as an unsolved deviation is a first-class concept in the spec.
+
+This also explains why the TCK needs no `--card-url` flag: operation URLs come from the
+card's own `supportedInterfaces[].url` (`tests/compatibility/conftest.py:139`), which is
+independent of where the card was fetched. Setting that URL to `https://host/ken` makes
+the client hit `https://host/ken/message:send` — the tenant binding, with the tenant in
+the base.
+
+**Still open, and the reason this is not yet a closed decision:** exactly how origin-level
+card discovery composes with per-tenant interfaces. A single origin card declaring one
+`tenant` per interface does not obviously scale to many handles, and the spec text is
+thin here — `specification.md` mentions tenancy only once, in an authorization aside
+(line 3063), so the concept lives in the proto and bindings rather than in prose. Resolve
+by reading the REST binding section and the `GetExtendedAgentCard` flow before building
+the stub.
+
+Options 1–3 above are retained only as fallbacks if that resolution fails.
 
 ### 3. New concrete requirement the design missed
 
@@ -457,11 +490,37 @@ The card endpoint needs `Cache-Control` with `max-age` and an `ETag` (both **SHO
 `/v1/card/:handle` currently sets none of them — it returns a bare `c.json(...)`
 (`apps/relay/src/index.ts:148`). Cheap to add; worth doing so the report is clean.
 
+### Version pins established
+
+| Thing | Pin |
+|---|---|
+| TCK | `5996b79f9cefa6fc390980e383e358a66fb9e49e` (2026-06-29) |
+| A2A spec vendored in the TCK | v1.0.0 @ `173695755607e884aa9acf8ce4feed90e32727a1` |
+| Toolchain | Python 3.11+, `uv` |
+
+### REST surface the stub must serve
+
+From `tck/transport/http_json_client.py`, with `{tenant}` prefixes per finding 4:
+
+```
+POST /{tenant}/message:send          POST /{tenant}/message:stream      (SSE)
+GET  /{tenant}/tasks/{id}            GET  /{tenant}/tasks?contextId=
+POST /{tenant}/tasks/{id}:cancel     …:subscribe                        (SSE)
+POST|GET /{tenant}/tasks/{id}/pushNotificationConfigs[/{configId}]
+```
+
 ### Remaining work in Spike 1
 
-Build a minimal REST stub serving a card at the per-handle path and run
+Not done: the stub and the run. Finding 4 changed its shape mid-spike — a stub built for
+the per-handle-origin topology would have tested the wrong thing — so the tenant/discovery
+composition question above must be settled first.
+
+Then: minimal REST stub over the surface above, and
 `./run_tck.py --sut-host <stub> --transport http_json --level must`. That converts these
-inferences into a report, and produces the pinned baseline the CI gate will compare against.
+inferences into a report and produces the pinned baseline the CI gate compares against.
+Approximately 61 MUST requirements are in scope (`core_operations` 31, `data_model` 11,
+`agent_card` 10, `binding_http_json` 9); the stub is not expected to pass all of them —
+the report is the deliverable, not a green run.
 
 ## Sources
 
