@@ -93,6 +93,15 @@ describe("decide — scanning tools reach through a parent", () => {
     expect(v.allow).toBe(true);
   });
 
+  it("denies closed, not open, when `path` is present but not a string", () => {
+    // A non-string path must not silently fall back to cwd — that would let
+    // an array or a number sail past the root check entirely.
+    const v1 = decide(call("Grep", { path: ["/Users/owner/.ssh"], pattern: "x" }), HOME, id);
+    expect(v1.allow).toBe(false);
+    const v2 = decide(call("Grep", { path: 0, pattern: "x" }), HOME, id);
+    expect(v2.allow).toBe(false);
+  });
+
   it("denies LS of a denied directory — LS is granted by the read cap", () => {
     const v = decide(call("LS", { path: "/Users/owner/.ssh" }), HOME, id);
     expect(v.allow).toBe(false);
@@ -168,6 +177,74 @@ describe("decide — Glob carries its path in the pattern", () => {
     const v = decide(call("Glob", { pattern: "**/*.ts" }), HOME, id);
     expect(v.allow).toBe(true);
   });
+
+  it("denies closed, not open, when `pattern` is absent", () => {
+    // Unlike Grep's `glob`, Glob's `pattern` IS the path — there is no
+    // root-only check to fall back on, so absent must not mean "everything".
+    const v = decide(call("Glob", {}), HOME, id);
+    expect(v.allow).toBe(false);
+  });
+
+  it("denies closed, not open, when `pattern` is not a string", () => {
+    const v = decide(call("Glob", { pattern: 7 }), HOME, id);
+    expect(v.allow).toBe(false);
+  });
+});
+
+describe("decide — the guard protects its own installed code", () => {
+  // Synthetic root, not the machine's real install path: `guardRoot` is the
+  // 4th, overridable param. A fresh node process re-imports guard.js on every
+  // hook invocation, so a Write here neuters every check after it inside the
+  // SAME call — this is the finding that blocked the merge.
+  const GUARD_ROOT = "/Users/owner/coding/agentcall/packages/cli";
+
+  it("denies overwriting the guard's own entry point", () => {
+    const v = decide(call("Write", { file_path: `${GUARD_ROOT}/dist/guard-entry.js` }), HOME, id, GUARD_ROOT);
+    expect(v.allow).toBe(false);
+  });
+
+  it("denies overwriting guard.js itself", () => {
+    const v = decide(call("Write", { file_path: `${GUARD_ROOT}/dist/guard.js` }), HOME, id, GUARD_ROOT);
+    expect(v.allow).toBe(false);
+  });
+
+  it("still allows writes outside the guard root with the same override in place", () => {
+    const v = decide(call("Write", { file_path: "/Users/owner/proj/src/index.ts" }), HOME, id, GUARD_ROOT);
+    expect(v.allow).toBe(true);
+  });
+
+  it("denies a Grep rooted at the guard's package root", () => {
+    const v = decide(call("Grep", { path: GUARD_ROOT, pattern: "x" }), HOME, id, GUARD_ROOT);
+    expect(v.allow).toBe(false);
+  });
+});
+
+describe("decide — task envelopes and launch config are protected", () => {
+  it("denies writing a task's SKILL.md, which sets its capability envelope", () => {
+    const v = decide(call("Write", { file_path: "/Users/owner/AgentCall/tasks/ask/SKILL.md" }), HOME, id);
+    expect(v.allow).toBe(false);
+  });
+
+  it("denies a Grep rooted at the tasks directory", () => {
+    const v = decide(call("Grep", { path: "/Users/owner/AgentCall/tasks", pattern: "tools" }), HOME, id);
+    expect(v.allow).toBe(false);
+  });
+
+  it("denies writing a LaunchAgents plist, which controls how the listener is launched", () => {
+    const v = decide(
+      call("Write", { file_path: "/Users/owner/Library/LaunchAgents/com.agentcall.listener.plist" }),
+      HOME, id,
+    );
+    expect(v.allow).toBe(false);
+  });
+
+  it.each([".zshrc", ".zprofile", ".bashrc", ".bash_profile", ".profile"])(
+    "denies writing %s, a shell startup file",
+    (file) => {
+      const v = decide(call("Write", { file_path: `/Users/owner/${file}` }), HOME, id);
+      expect(v.allow).toBe(false);
+    },
+  );
 });
 
 describe("decide — a denied directory that is itself a symlink", () => {
@@ -223,6 +300,23 @@ describe("decide — Bash records but does not deny", () => {
     const v = decide(call("Bash", { command: "npm test" }), HOME, id);
     expect(v.allow).toBe(true);
     expect(v.allow === true && v.flag).toBeUndefined();
+  });
+});
+
+describe("decide — WebFetch is scheme-checked", () => {
+  it("allows an ordinary http(s) url", () => {
+    expect(decide(call("WebFetch", { url: "https://example.com" }), HOME, id).allow).toBe(true);
+    expect(decide(call("WebFetch", { url: "http://example.com" }), HOME, id).allow).toBe(true);
+  });
+
+  it("denies a file:// url, which would read the local filesystem", () => {
+    const v = decide(call("WebFetch", { url: "file:///Users/owner/.ssh/id_rsa" }), HOME, id);
+    expect(v.allow).toBe(false);
+  });
+
+  it("denies a non-string or missing url", () => {
+    expect(decide(call("WebFetch", { url: 7 }), HOME, id).allow).toBe(false);
+    expect(decide(call("WebFetch", {}), HOME, id).allow).toBe(false);
   });
 });
 

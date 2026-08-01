@@ -1,4 +1,5 @@
 import { basename, dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
+import { fileURLToPath } from "node:url";
 import type { Paths } from "./paths.js";
 
 export type GuardInput = {
@@ -24,10 +25,26 @@ const DENIED_DIRS = [
   ".ssh", ".gnupg", ".aws", ".config/gcloud", "Library/Keychains",
   ".agentcall",   // holds config.json and the relay token
   ".claude",      // executable configuration; cf. CVE-2025-59536
+  "AgentCall/tasks",       // task frontmatter sets the envelope's caps verbatim
+  "Library/LaunchAgents",  // how the listener itself gets launched
 ];
 
 // Home-relative single files.
-const DENIED_FILES = [".netrc", ".npmrc", ".docker/config.json", ".claude.json"];
+const DENIED_FILES = [
+  ".netrc", ".npmrc", ".docker/config.json", ".claude.json",
+  // Shell startup files: sourced on every new shell, so writing one is a
+  // persistence mechanism as durable as a LaunchAgent.
+  ".zshrc", ".zprofile", ".bashrc", ".bash_profile", ".profile",
+];
+
+// This module compiles to <package root>/dist/guard.js, one directory below
+// the installed package root — true both for a global npm install and for a
+// dev checkout run from the monorepo. Computed once at module scope:
+// import.meta.url is fixed for the process lifetime, so this is a constant,
+// not I/O, and decide() stays a pure function of its arguments even though
+// this value flows in as a default. Overridable via the `guardRoot` param so
+// tests can assert against a synthetic root instead of the machine's real one.
+const DEFAULT_PACKAGE_ROOT = dirname(dirname(fileURLToPath(import.meta.url)));
 
 // Basenames denied anywhere on disk. `.env.example` and friends are
 // deliberately excluded: they are not secrets, and denying them is the
@@ -49,8 +66,10 @@ const EXACT_TARGET: Record<string, string> = {
 // Tools whose `path` argument names a root that is then searched or listed.
 // `Glob` joins them below: its root is implicit, but it is checked the same way.
 const SCANNING_ROOT = new Set(["Grep", "LS"]);
-// Tools with no filesystem argument at all.
-const NO_PATH_SURFACE = new Set(["WebFetch", "WebSearch"]);
+// Tools with no filesystem argument at all. WebFetch is checked separately
+// below, not included here: its `url` can itself be a filesystem path via a
+// `file://` scheme, so it gets its own scheme check rather than a blanket allow.
+const NO_PATH_SURFACE = new Set(["WebSearch"]);
 // A glob selector is a path in disguise, and the root check never sees it:
 // Grep narrows its root with `glob`, Glob carries its whole path in `pattern`.
 // Both can name a denied basename under an otherwise permitted root, and both
@@ -67,9 +86,13 @@ const fold = (p: string) => p.toLowerCase();
 // a canonical target is never "inside" a lexical alias, so comparing the two
 // silently allows the read. Both forms are kept: the Bash branch matches this
 // list as text, where the literal ~/.aws is the form that appears in a command.
-function deniedPaths(home: string, realpath: (p: string) => string): string[] {
+// `extraRoots` are already absolute (the guard's own package root, not
+// home-relative) and are canonicalized the same way as the home-relative
+// table, for the same symlink reason.
+function deniedPaths(home: string, realpath: (p: string) => string, extraRoots: string[]): string[] {
   const lexical = [...DENIED_DIRS, ...DENIED_FILES].map((d) => resolve(home, d));
-  return [...new Set([...lexical, ...lexical.map((d) => canonical(d, home, home, realpath))])];
+  const roots = [...lexical, ...extraRoots];
+  return [...new Set([...roots, ...roots.map((d) => canonical(d, home, home, realpath))])];
 }
 
 function expandHome(p: string, home: string): string {
@@ -133,12 +156,13 @@ export function decide(
   input: GuardInput,
   home: string,
   realpath: (p: string) => string,
+  guardRoot: string = DEFAULT_PACKAGE_ROOT,
 ): GuardVerdict {
   const { tool_name: tool, tool_input: args, cwd } = input;
   if (args === null || typeof args !== "object" || Array.isArray(args)) {
     return { allow: false, rule: "unparseable-input", detail: tool };
   }
-  const denied = deniedPaths(home, realpath);
+  const denied = deniedPaths(home, realpath, [guardRoot]);
   const canon = (p: string) => canonical(p, cwd, home, realpath);
   const reached = (t: string, withAncestors: boolean) =>
     denied.find((d) => isInside(t, d) || (withAncestors && isAncestorOf(t, d)));
@@ -155,6 +179,16 @@ export function decide(
 
   if (NO_PATH_SURFACE.has(tool)) return { allow: true };
 
+  // WebFetch's `url` is safe to allow unread only if Claude Code itself
+  // rejects a non-http(s) scheme before this hook fires — an unstated
+  // external assumption a floor should not rest on. `file://…` would read
+  // the local filesystem through a tool this function otherwise never checks.
+  if (tool === "WebFetch") {
+    const url = args.url;
+    const ok = typeof url === "string" && (url.startsWith("http://") || url.startsWith("https://"));
+    return ok ? { allow: true } : { allow: false, rule: "unparseable-url", detail: tool };
+  }
+
   const key = EXACT_TARGET[tool];
   if (key !== undefined) {
     const raw = args[key];
@@ -167,6 +201,13 @@ export function decide(
   }
 
   if (SCANNING_ROOT.has(tool) || tool === "Glob") {
+    // Fail closed: a `path` that is present but not a string must not
+    // silently fall back to cwd. The branches on either side of this one
+    // already fail closed on an unparseable shape; this closes the gap
+    // between them.
+    if ("path" in args && typeof args.path !== "string") {
+      return { allow: false, rule: "unparseable-root", detail: tool };
+    }
     const rawRoot = typeof args.path === "string" && args.path !== "" ? args.path : cwd;
     const root = canon(rawRoot);
     if (basenameDenied(root)) return { allow: false, rule: "denied-basename", detail: root };
@@ -174,9 +215,14 @@ export function decide(
 
     const selectorKey = SELECTOR_KEY[tool];
     const selector = selectorKey === undefined ? undefined : args[selectorKey];
-    // LS has no selector, and an absent one only means "the whole root", which
-    // the check above already cleared.
-    if (selector === undefined) return { allow: true };
+    if (selector === undefined) {
+      // LS has no selector, and for Grep an absent one only means "the whole
+      // root", which the check above already cleared. Glob is different: its
+      // `pattern` IS the path — there is no root check to fall back on — so
+      // an absent pattern is unparseable, not "search everything".
+      if (tool === "Glob") return { allow: false, rule: "unparseable-selector", detail: tool };
+      return { allow: true };
+    }
     // Fail closed on a shape this function cannot read, as with an exact target.
     if (typeof selector !== "string") return { allow: false, rule: "unparseable-selector", detail: tool };
     // A selector that climbs out of its root defeats a root-only check.

@@ -224,14 +224,21 @@ instruction, never a boundary; see below.
   - Executable configuration surfaces (`~/.claude/CLAUDE.md`, `hooks`,
     `plugins`, `commands`, `agents`) are writable by an agent granted `write`,
     so a hostile prompt can persist beyond the call. On Claude, the tool guard
-    refuses `Write`/`Edit` to `~/.claude/**`; this risk remains live via
-    `exec` and on a Codex answering agent.
+    refuses `Write`/`Edit` to `~/.claude/**`, to its own installed package
+    root (so a write-only call cannot neuter the guard for the next tool call
+    in the same session — a fresh process re-imports it from disk on every
+    call), to `~/AgentCall/tasks` (so a write-only call cannot rewrite an
+    already-offered task's capability envelope, which is read verbatim from
+    frontmatter), to `~/Library/LaunchAgents`, and to shell startup files
+    (`.zshrc` and friends). This risk remains live via `exec` and on a Codex
+    answering agent, which has no read guard.
 
 **Tool guard.** Tool calls a caller's agent makes on your machine are checked before
 they run. File reads, writes, searches, and listings that reach credential paths
-(`~/.ssh`, `~/.aws`, `.env`, Keychains, `~/.agentcall`, `~/.claude`) are refused, and
-every tool call reaching the guard is recorded to `~/.agentcall/tools.log`.
-`agentcall doctor` verifies the guard is in force.
+(`~/.ssh`, `~/.aws`, `.env`, Keychains, `~/.agentcall`, `~/.claude`), the guard's own
+installed code, `~/AgentCall/tasks`, `~/Library/LaunchAgents`, and shell startup files
+are refused, and every tool call reaching the guard is recorded to
+`~/.agentcall/tools.log`. `agentcall doctor` verifies the guard is in force.
 
 Two limits, stated plainly:
 
