@@ -103,8 +103,7 @@ describe("buildSpawnSpec", () => {
     // The `-c` payload is asserted in "guard hook wiring" rather than pinned
     // here, so this stays a test of the spawn shape.
     expect(s.args.filter((a) => a !== guardCodexConfigArg())).toEqual([
-      "exec", "--ignore-user-config", "--dangerously-bypass-hook-trust",
-      "--sandbox", "workspace-write", "--cd", WORKDIR,
+      "exec", "--ignore-user-config", "--sandbox", "workspace-write", "--cd", WORKDIR,
       "--skip-git-repo-check", "--json", "-c", "PROMPT",
     ]);
     expect(s.cwd).toBe(WORKDIR);
@@ -338,27 +337,6 @@ describe("guard hook wiring", () => {
     expect(override).toContain("guard-entry.js");
     expect(override).toContain(`timeout=${GUARD_TIMEOUT_S}`);
     expect(spec.env?.AGENTCALL_CALL_ID).toBe("call-9");
-  });
-
-  // Registering a hook is not the same as running it. Codex gates hook
-  // execution on persisted trust (HookStateToml.trusted_hash), and an inline
-  // `-c` hook has no persisted trust, so codex skips it — silently. Verified
-  // against codex-cli 0.146.0 on 2026-08-01: the identical spawn logged zero
-  // tool_call lines without this flag and one with it, with no warning either
-  // way. Without it the observe-mode guard below is dead code.
-  it("bypasses codex hook trust, without which the guard never runs", () => {
-    const spec = buildSpawnSpec("codex", "hi", WORKDIR, () => "/bin/codex", FULL_ACCESS_ENVELOPE, "call-9");
-    expect(spec.args).toContain("--dangerously-bypass-hook-trust");
-  });
-
-  // The trust bypass must stay paired with --ignore-user-config. That flag drops
-  // $CODEX_HOME/config.toml, which is where codex records trusted project
-  // directories, so the cwd/tree/repo layers stay disabled and a .codex/hooks.json
-  // planted in the workspace is not loaded. Drop it and the bypass would start
-  // running hooks agentcall did not supply.
-  it("keeps --ignore-user-config, so the trust bypass cannot pick up planted hooks", () => {
-    const spec = buildSpawnSpec("codex", "hi", WORKDIR, () => "/bin/codex", FULL_ACCESS_ENVELOPE, "call-9");
-    expect(spec.args).toContain("--ignore-user-config");
   });
 
   // The guard is not codex's read boundary — codex's own deny_read is — so it

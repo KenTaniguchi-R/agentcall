@@ -6,22 +6,28 @@ which are released together.
 
 ## Unreleased
 
-### Fixed — the Codex guard was registered but never actually ran
+### Known issue — the Codex guard is registered but never runs (unfixed)
 
-- **`--dangerously-bypass-hook-trust` added to the Codex spawn.** Codex gates
-  hook execution on *persisted trust* — each hook carries a `trusted_hash`, and
-  a hook supplied inline via `-c` has never been trusted, so Codex skipped it.
-  Silently: no warning on stdout or stderr, no change to the exit code. The
-  observe-mode guard added below was therefore dead code from the moment it
-  shipped, and Codex spawns produced **no** `tools.log` telemetry at all.
-  Verified against codex-cli 0.146.0: the identical spawn logged zero
-  `tool_call` lines with the flag absent and one with it present.
-- The bypass is safe only because it stays paired with `--ignore-user-config`,
-  which drops `$CODEX_HOME/config.toml` — the file where Codex records trusted
-  project directories. With no trust list loaded, the cwd/tree/repo config
-  layers stay disabled and a `.codex/hooks.json` planted in the workspace is not
-  loaded. Verified by planting one: it did not run, while agentcall's own hook
-  did. A test now pins both flags together.
+- **Codex spawns produce no `tools.log` telemetry at all.** Codex gates hook
+  execution on *persisted trust* (`HookStateToml` carries a `trusted_hash`), and
+  the guard hook is supplied inline via `-c`, which has never been trusted — so
+  Codex skips it silently, with no warning on stdout or stderr and no change to
+  the exit code. Verified against codex-cli 0.146.0 by controlled A/B on the
+  exact `buildSpawnSpec` output. **The observe-mode guard described below has
+  therefore never recorded anything on the Codex side.**
+- `--dangerously-bypass-hook-trust` makes the guard run, and was tried and then
+  **backed out**. It is a *blanket* bypass: it grants execution to every
+  untrusted hook from every surviving config layer, not just agentcall's own.
+  `--ignore-user-config` does not contain it — Codex replaces the ignored
+  `config.toml` with an *empty user layer* rather than dropping the layer, and
+  loads `hooks.json` per-layer independently, so `$CODEX_HOME/hooks.json` still
+  runs. Confirmed by planting one: it executed. Hook commands run outside the
+  tool sandbox, so this is host-level execution.
+- The narrower fix is to trust only our own hook by supplying
+  `hooks.state.<id>.trusted_hash` inline (SHA-256 over the normalized hook
+  identity). It fails closed on mismatch but couples us to an undocumented
+  hashing scheme. **Not yet decided** — see
+  `docs/superpowers/specs/2026-08-01-codex-read-floor-design.md`.
 
 ### Fixed — the guard's fail-closed paths could fail open (security-relevant)
 
