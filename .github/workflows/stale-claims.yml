@@ -1,0 +1,36 @@
+name: Release stale claims
+
+on:
+  schedule:
+    - cron: '0 9 * * *'
+  workflow_dispatch:
+    inputs:
+      dry_run:
+        description: 'Report what would happen, without changing anything'
+        type: boolean
+        default: true
+      stale_days:
+        description: 'Days of inactivity before a claim is released (blank = 3)'
+        type: string
+        required: false
+
+permissions:
+  issues: write
+  contents: read
+
+jobs:
+  reap:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Release stale claims
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          REPO: ${{ github.repository }}
+          # A manual dispatch defaults to dry-run so poking at it is safe. The
+          # schedule supplies no inputs, so this must evaluate to 'false' there
+          # or the reaper never actually reaps — and the logs still look fine.
+          DRY_RUN: ${{ inputs.dry_run == true && 'true' || 'false' }}
+          # Left empty by the schedule; the script falls back to 3.
+          STALE_DAYS: ${{ inputs.stale_days }}
+        run: bash scripts/reap-stale-claims.sh
