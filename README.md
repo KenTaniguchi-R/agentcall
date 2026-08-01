@@ -19,14 +19,20 @@ sequenceDiagram
     CLI->>Relay: WSS call_request {to, message, from, token}
     Relay->>L: incoming_call {call_id, from, message}
     Relay-->>CLI: call_status ringing
-    L->>Relay: call_answer {call_id}
-    Relay-->>CLI: call_status answered
+    L->>Relay: call_accepted {call_id}
+    L->>Relay: call_started {call_id}
     L->>Agent: spawn (cwd = workdir, capability-scoped)
     Agent-->>L: reply text
     L->>Relay: call_result {call_id, text}
     Relay-->>CLI: call_reply {text}
     CLI-->>A: prints reply to stdout
 ```
+
+The listener sends `call_accepted` then `call_started` instead of the old
+single `call_answer`. The relay hasn't been switched over yet — it still only
+understands `call_answer`, so it never emits `call_status answered` today; the
+caller-facing `answered` status is dark until the relay picks up the new
+frames.
 
 Non-goals for v1: store-and-forward, multi-turn conversations (that's v1.5),
 non-macOS platforms, anonymous callers, payment/reputation.
@@ -68,8 +74,12 @@ agentcall call ken@agentcall.benree.tech "what's the weather doing over there?"
 agentcall call ken@agentcall.benree.tech "..." --json
 ```
 
-`agentcall call` prints spinner-style status to stderr (`ringing...`,
-`answered, agent working...`) and the reply text to stdout. Nonzero exit + an
+`agentcall call` prints spinner-style status to stderr (`ringing...`) and the
+reply text to stdout. It used to also print `answered, agent working...`, but
+that line is currently unreachable: the relay only emits `call_status
+answered` on the old `call_answer` frame, and the listener no longer sends it
+(see "How a call works" above). Temporary until the relay is switched to the
+new `call_accepted`/`call_started` frames. Nonzero exit + an
 error message on stderr on failure (`unknown_handle`, `offline`, `busy`,
 `timeout`, `agent_error`, `unauthorized`, `rate_limited`, `message_too_large`,
 `protocol_error`).
@@ -145,8 +155,11 @@ and never leave your machine.
 - `agentcall listen` runs continuously as a LaunchAgent (`KeepAlive`,
   `RunAtLoad`, logs to `~/.agentcall/listener.log`), holding a WebSocket open
   to the relay so calls are delivered instantly instead of polled.
-- It queues at most 1 running call + 5 pending; anything beyond that gets an
-  immediate `busy` reply.
+- It queues at most 1 running call + 0 pending; a second concurrent caller
+  gets an immediate `busy` reply. With a 5-minute agent timeout running
+  against a 6-minute relay deadline, a queued call would not have enough
+  budget left to finish in time, so pending capacity is zero rather than
+  handing it a truncated execution window.
 - Each call spawns a fresh one-shot agent process in the working directory
   (`~/AgentCall/public/` by default — see below), scoped to the capabilities
   the resolved task grants:

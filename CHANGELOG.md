@@ -62,6 +62,29 @@ which are released together.
   argument that put `~/.claude` there: it holds `auth.json` and a `config.toml`
   that routinely carries API keys in plaintext.
 
+### Changed — the callee side is now cancellable (relay not yet switched over)
+
+- **`call_answer` is split into `call_accepted` and `call_started`.** The
+  listener now sends the two separately instead of one combined
+  acknowledgement, so a future relay can distinguish "the listener has
+  admitted this call" from "the agent has actually started running." The
+  relay is deliberately untouched by this change and still only understands
+  `call_answer` — it never receives either new frame, so it never emits
+  `call_status answered`. **The caller-facing `answered` status is dark until
+  the relay is switched to the new frames in the next plan.**
+- **New `cancel_call` / `call_cancelled` / `call_not_cancelled` frames.** The
+  relay can ask the listener to cancel a call in flight; the listener
+  acknowledges only after the pending job is confirmed removed or the running
+  agent's process group is confirmed exited — never on signal-sent — and
+  reports `call_not_cancelled` when the `call_id` is unrecognized. (`reason`s
+  `too_late` and `already_terminal` are reserved for the next plan; see
+  `docs/superpowers/plans/2026-08-01-a2a-listener-protocol.md`.)
+- **`maxPending` changed from 5 to 0.** The listener now refuses a second
+  concurrent call outright instead of queuing it. With a 5-minute agent
+  timeout running against a 6-minute relay deadline measured from submission,
+  a queued call would not have enough budget left to finish in time, so
+  queuing it was never actually safe.
+
 ### Removed — the OS-level sandbox (breaking, security-relevant)
 
 - **Spawned agents are no longer wrapped in Seatbelt.** Every call used to run
