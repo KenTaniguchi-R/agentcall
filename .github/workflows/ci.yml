@@ -14,17 +14,22 @@ jobs:
   verify:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       # No version pin: reads packageManager from the root package.json, so the
       # lockfile and CI can never drift onto different pnpm majors.
-      - uses: pnpm/action-setup@v4
+      - uses: pnpm/action-setup@v6
 
       # 24 only. Not the `engines: >=20` floor -- pnpm 11.5.2 requires node
       # >=22.13, so the toolchain cannot install this repo on 20 at all, and
       # that floor is a promise to *consumers* of the published CLI which a
       # workspace build does not exercise anyway. See CLAUDE.md.
-      - uses: actions/setup-node@v4
+      #
+      # `cache: pnpm` stays explicit. setup-node v5 added automatic caching
+      # driven by the root `packageManager` field, and v6 narrowed that
+      # automatic path to npm only -- so on v6+ dropping this line would
+      # silently stop caching the pnpm store rather than keep working.
+      - uses: actions/setup-node@v7
         with:
           node-version: 24
           cache: pnpm
