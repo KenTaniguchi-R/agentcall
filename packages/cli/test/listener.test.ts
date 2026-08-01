@@ -207,10 +207,13 @@ describe("startListener acceptance and cancellation", () => {
 
   it("acknowledges cancellation of a running call only after the agent exits", async () => {
     let exited = false;
+    let paths!: ReturnType<typeof getPaths>;
     const relayReady = new Promise<WsSocket>((resolveWs) => {
       void fakeRelay((ws) => resolveWs(ws)).then((url) => {
+        const deps = baseDeps(url);
+        paths = deps.paths;
         stopper = startListener({
-          ...baseDeps(url),
+          ...deps,
           // Mirrors runAgent: settles only once teardown completes.
           run: (_k, _p, _w, _t, _s, _e, _c, signal?: AbortSignal) =>
             new Promise((_res, rej) => {
@@ -229,6 +232,8 @@ describe("startListener acceptance and cancellation", () => {
     const all = await got;
     expect(all.find((f) => f.type === "call_cancelled")).toMatchObject({ phase: "running" });
     expect(exited).toBe(true);
+    const audit = readFileSync(paths.callsLog, "utf8").trim().split("\n").map((l) => JSON.parse(l));
+    expect(audit[0]).toMatchObject({ call_id: "c1", from: "amy", status: "canceled" });
   });
 
   it("reports call_not_cancelled for an unknown call id", async () => {
