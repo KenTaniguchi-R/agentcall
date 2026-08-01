@@ -204,8 +204,11 @@ instruction, never a boundary; see below.
 - Known residual risks (accepted, not eliminated):
   - Prompt injection in a caller's message can burn the callee's tokens, and —
     within the granted capabilities — read or write anywhere the owner's own
-    agent could. Capability scoping bounds *what kind* of action is possible,
-    not *where*.
+    agent could via `exec` (shell commands are recorded, not blocked — see
+    Tool guard below) or on a Codex answering agent, which has no read guard.
+    On a Claude answering agent using `Read`/`Write`/`Edit`/`Glob`/`Grep`, the
+    tool guard below refuses the credential paths it covers. Capability
+    scoping bounds *what kind* of action is possible, not *where*.
   - The working directory is a prompt instruction, not an enforced boundary.
     An agent granted `read` can read outside it regardless of `workdir`.
   - The relay operator can read message plaintext — there's no end-to-end
@@ -214,11 +217,15 @@ instruction, never a boundary; see below.
     callee's Claude Code session history (`~/.claude/projects/*`, which can
     contain pasted secrets and private code), API keys in `~/.claude.json`'s
     `mcpServers` entries, `~/.ssh`, `~/.aws`, or the relay token in
-    `~/.agentcall/config.json`. **Only share your address with people you
-    would trust to run a read-only command in your home directory.**
+    `~/.agentcall/config.json`. The tool guard below refuses these paths for a
+    Claude answering agent's file-reading tools, but not for `exec`, and not
+    at all for a Codex answering agent. **Only share your address with people
+    you would trust to run a read-only command in your home directory.**
   - Executable configuration surfaces (`~/.claude/CLAUDE.md`, `hooks`,
     `plugins`, `commands`, `agents`) are writable by an agent granted `write`,
-    so a hostile prompt can persist beyond the call.
+    so a hostile prompt can persist beyond the call. On Claude, the tool guard
+    refuses `Write`/`Edit` to `~/.claude/**`; this risk remains live via
+    `exec` and on a Codex answering agent.
 
 **Tool guard.** Tool calls a caller's agent makes on your machine are checked before
 they run. File reads, writes, searches, and listings that reach credential paths

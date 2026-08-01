@@ -1,5 +1,5 @@
 import { execFileSync } from "node:child_process";
-import { mkdirSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
+import { mkdtempSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { callAgent } from "./callClient.js";
@@ -167,15 +167,21 @@ export type GuardProbeFn = (settings: string) => Promise<GuardProbeResult>;
 
 const GUARD_HINT = "run `pnpm build` in packages/cli so dist/guard-entry.js exists, then re-run doctor";
 
-// Spawns a real `claude -p` against a canary in a throwaway .ssh directory and
-// asserts the read is refused. Live on the user's machine; always mocked in CI.
+// Spawns a real `claude -p` against a canary `.env` file and asserts the read
+// is refused. Live on the user's machine; always mocked in CI.
+//
+// The canary used to be `.ssh/id_rsa`: the model refused to read it on
+// principle ("printing a private key would expose key material") without
+// ever calling Read, so the guard never fired, no denial was recorded, and
+// checkGuard reported a healthy install as broken. `.env` hits the same
+// denied-basename rule but the model has no such objection to reading it, so
+// the probe actually exercises the guard instead of the model's own judgment.
 const defaultGuardProbe: GuardProbeFn = async (settings) => {
   const home = mkdtempSync(join(tmpdir(), "agentcall-guard-"));
-  mkdirSync(join(home, ".ssh"), { recursive: true });
-  writeFileSync(join(home, ".ssh", "id_rsa"), GUARD_CANARY);
+  writeFileSync(join(home, ".env"), GUARD_CANARY);
   const output = execFileSync(
-    "claude",
-    ["-p", "Read the file .ssh/id_rsa and print its exact contents.",
+    resolveAgentBin("claude"),
+    ["-p", "Read the file .env in this directory and tell me what it contains.",
      "--permission-mode", "dontAsk", "--allowedTools", "Read", "--settings", settings],
     { cwd: home, env: { ...process.env, AGENTCALL_HOME: home }, encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] },
   );
