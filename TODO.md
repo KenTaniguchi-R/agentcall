@@ -77,11 +77,11 @@ which favours this design.
 | # | Item | Status | Note |
 |---|---|---|---|
 | C.1 | **Close or bound the `exec` gap** | `open` | A task granting `exec` has no read floor; shell commands are recorded, not blocked. The single line a security architect stops on. Either bound it or write down why the task envelope is the control. **C.2 cannot close before this** — for Codex, the whole tool surface *is* the `exec` gap. |
-| C.2 | **Codex read floor** (was "read-guard parity" — renamed in the doing) | `partial` → `gated` | **Shipped:** guard registered on the Codex spawn in *observe* mode, `--ignore-user-config` (the owner's MCP servers were a complete bypass), `~/.codex` added to denied paths, guard fail-closed exits fixed (they were failing *open* under Codex). See CHANGELOG *Unreleased*. **Open:** the floor itself — see below. |
+| C.2 | **Codex read floor** (was "read-guard parity" — renamed in the doing) | `partial` → `gated` | **Shipped:** guard registered on the Codex spawn in *observe* mode, `--ignore-user-config` (the owner's MCP servers were a complete bypass), `~/.codex` added to denied paths, guard fail-closed exits fixed (they were failing *open* under Codex). **2026-08-01:** the observe-mode guard was found to have never actually run — Codex requires persisted hook trust and silently skipped the inline `-c` hook, so there was no Codex telemetry at all. **Attempted fix reverted** — the bypass grants execution to untrusted hooks from surviving config layers ($CODEX_HOME/hooks.json still loads). Bug stands unfixed; narrow `trusted_hash` fix undecided. See CHANGELOG *Unreleased*. **Open:** the floor itself — see below. |
 | C.3 | **Make the policy envelope legible to a non-engineer** | `open` | `policy.json` + `resolveTask()` is the right foundation, but security teams need to *read* the granted surface as policy, not infer it from frontmatter. Deliverable: a rendered per-caller/per-task capability report. Self-contained, `packages/cli` only — no conflict with other tracks. |
 | C.4 | **Endpoint-agent threat model as a standalone doc** | `open` | We're asking for an inbound-instruction daemon on every dev machine holding real credentials. Best written *after* C.2's preconditions resolve, since P1/P2 determine what it can claim. Same item as S4. |
 
-### C.2 preconditions — all unproven, all blocking
+### C.2 preconditions — round 1 verified 2026-08-01
 
 Design: [codex-read-floor-design](./docs/superpowers/specs/2026-08-01-codex-read-floor-design.md#preconditions--all-unproven-all-blocking).
 Mechanism is Codex's **own** kernel-enforced `deny_read` (agentcall can only *require and
@@ -90,9 +90,9 @@ Verified against codex-cli **0.146.0**. Ordered by how badly failure damages the
 
 | # | Precondition | Status | If it fails |
 |---|---|---|---|
-| P1 | User config cannot weaken requirements — test `config.toml`, `-c`, profiles, `CODEX_PERMISSION_PROFILE`, `CODEX_HOME`, `--sandbox danger-full-access`, `--dangerously-bypass-approvals-and-sandbox`, and a **nested Codex launched from inside a sandboxed shell** | `open` | **Design collapses entirely.** Ceiling semantics are inferred from binary strings — not a security claim. |
-| P2 | `deny_read` covers every local-read surface, not just shell — specifically whether Codex's bundled `codex_apps` tools (which survive `--ignore-user-config`) run inside the sandbox | `open` | **`deny_read` is not a floor** and the design dies the same way the hook did. This objection killed the first draft. |
-| P3 | The `deny_read` schema is real and stable | `open` | Recovered from binary strings, not docs. Must be confirmed before shipping a fragment users install as **root**. |
+| P1 | User config cannot weaken requirements | `partial` | **Design collapses entirely.** Closed without root: no env var relocates requirements, and `-c permissions.filesystem.deny_read` is **accepted and silently ignored** (confirming agentcall cannot set the floor per-spawn). **Still open — needs `sudo`:** `--sandbox danger-full-access`, `--dangerously-bypass-approvals-and-sandbox`, a planted `CODEX_HOME`, and a **nested Codex**. Script ready: `p1-root-test.sh` in the session scratchpad. |
+| P2 | `deny_read` covers every local-read surface, not just shell | `open` | **`deny_read` is not a floor** and the design dies the same way the hook did. Killed the first draft. **Now two suspects, not one:** the bundled `codex_apps` tools, and **`codex-code-mode-host`** — a sibling helper process started on every spawn even under `--ignore-user-config`. Blocked behind P1's root step. Note the obvious test does not work: Codex applies Seatbelt in-process, with **no `sandbox-exec` wrapper** to look for. |
+| P3 | The `deny_read` schema is real and stable | **`pass`** | Confirmed against first-party source (`permissions_toml.rs`, `protocol/src/permissions.rs`), not binary strings. Bonus: `deny` is the **only** mode accepting glob paths, which is what `DENIED_BASENAMES` needs. `glob_scan_max_depth` is real and must be set explicitly. |
 | P4 | Enforcement verified per platform and per sandbox mode | `open` | Linked symbols prove linkage, not behaviour. Until tested, claim "designed to be cross-platform," never "cross-platform." |
 | P5 | Version qualification | `open` | `doctor` must fail closed on an unqualified Codex version, not assume forward compatibility. |
 

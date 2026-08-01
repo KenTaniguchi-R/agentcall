@@ -6,6 +6,29 @@ which are released together.
 
 ## Unreleased
 
+### Known issue — the Codex guard is registered but never runs (unfixed)
+
+- **Codex spawns produce no `tools.log` telemetry at all.** Codex gates hook
+  execution on *persisted trust* (`HookStateToml` carries a `trusted_hash`), and
+  the guard hook is supplied inline via `-c`, which has never been trusted — so
+  Codex skips it silently, with no warning on stdout or stderr and no change to
+  the exit code. Verified against codex-cli 0.146.0 by controlled A/B on the
+  exact `buildSpawnSpec` output. **The observe-mode guard described below has
+  therefore never recorded anything on the Codex side.**
+- `--dangerously-bypass-hook-trust` makes the guard run, and was tried and then
+  **backed out**. It is a *blanket* bypass: it grants execution to every
+  untrusted hook from every surviving config layer, not just agentcall's own.
+  `--ignore-user-config` does not contain it — Codex replaces the ignored
+  `config.toml` with an *empty user layer* rather than dropping the layer, and
+  loads `hooks.json` per-layer independently, so `$CODEX_HOME/hooks.json` still
+  runs. Confirmed by planting one: it executed. Hook commands run outside the
+  tool sandbox, so this is host-level execution.
+- The narrower fix is to trust only our own hook by supplying
+  `hooks.state.<id>.trusted_hash` inline (SHA-256 over the normalized hook
+  identity). It fails closed on mismatch but couples us to an undocumented
+  hashing scheme. **Not yet decided** — see
+  `docs/superpowers/specs/2026-08-01-codex-read-floor-design.md`.
+
 ### Fixed — the guard's fail-closed paths could fail open (security-relevant)
 
 - **Exit 2 now carries a reason on stderr.** Claude blocks on exit 2 regardless
