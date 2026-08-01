@@ -99,20 +99,11 @@ export function startListener(deps: ListenerDeps): { stop(): void } {
       // closure's first statement is what actually guarantees call_accepted
       // precedes call_started on the wire.
       const accepted = queue.tryEnqueue(call_id, async (signal) => {
-        // CAVEAT: with maxPending: 0 (today's only wired value — see the
-        // queue construction above) this closure never runs while another
-        // job is queued, so call_accepted and call_started always coincide
-        // at spawn time; there's no separate "admitted but waiting" moment
-        // to observe. If maxPending is ever raised above 0 and wired to a
-        // config surface, a job pushed while another runs sits in
-        // queue.jobs and this closure doesn't execute until drain() reaches
-        // it — so call_accepted stops meaning "admission" and starts
-        // meaning "your turn arrived", silently breaking the brief's
-        // "call_accepted on admission, call_started on spawn" contract.
-        // True admission-time signalling would need tryEnqueue to report
-        // the admit decision synchronously, independent of running the job
-        // body — SerialQueue doesn't expose that split today. Whoever wires
-        // maxPending up needs to revisit this.
+        // CAVEAT: this fires on the job's turn to run, not on admission —
+        // only harmless today because maxPending: 0 makes the two coincide.
+        // See "Deliberately NOT in this plan" in
+        // docs/superpowers/plans/2026-08-01-a2a-listener-protocol.md before
+        // raising maxPending.
         send({ type: "call_accepted", call_id });
         send({ type: "call_started", call_id });
         try {

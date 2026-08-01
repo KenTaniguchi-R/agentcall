@@ -37,6 +37,7 @@ This spec is too large for one plan. Five sequential sub-plans, each producing w
 
 - **Policy re-check when a job starts.** The spec called for it, but it existed to close a staleness window created by queue wait. With `maxPending: 0` there is no wait — `resolveTask` already runs immediately before the job starts — so re-checking would be dead code. Recorded here so the omission is visible rather than looking like a miss.
 - Any relay change. The relay still speaks `call_answer`; Plan 2b switches it.
+- **`call_accepted` "on admission" semantics.** The spec and this plan's own Task 4 interfaces both say `call_accepted` is emitted "on admission." What ships instead sends it from inside the job body — i.e. when the job's turn to run arrives, not when `tryEnqueue` accepts it. At `maxPending: 0` these two moments always coincide (a job never sits queued behind another), so the deviation is invisible today. The only record of it is a caveat comment at the send site in `packages/cli/src/listener.ts`. **If `maxPending` is ever raised above 0**, a job pushed while another runs will sit in `queue.jobs` and `call_accepted` will stop meaning "admitted" and start meaning "your turn arrived" — silently breaking the admission-vs-start contract this plan set out to build. The recommended structural fix, not implemented here: have `tryEnqueue` report the admit decision synchronously, independent of running the job body, so raising the queue depth can't silently change what `call_accepted` means. Whoever raises `maxPending` needs to make that change first.
 
 ---
 
@@ -671,3 +672,11 @@ git commit -m "feat(listener): report acceptance and start separately, and cance
 - **Relay changes.** The relay still sends `incoming_call` and expects `call_answer`; it ignores the new frames until Plan 2b. The listener sending `call_started` instead of `call_answer` means the relay's `answered` status stops firing during the overlap — acceptable because there are zero live installs and Plan 2b follows immediately.
 - Task store, A2A operations, SSE, CLI cutover, TCK baseline, cost spike — Plans 2b–2e.
 - Policy re-check at job start — see *Deliberately NOT in this plan*.
+
+### `call_not_cancelled` reasons `too_late` and `already_terminal`
+
+The schema in Task 1 defines three reasons for `call_not_cancelled`: `unknown`, `too_late`, and `already_terminal`. Only `unknown` has a producer in this plan. `too_late` and `already_terminal` are reserved for Plan 2b's task store and are not sent by anything built here.
+
+Concretely: if `cancel_call` loses the race against normal completion — `runAgent` has already resolved by the time the cancellation is processed — `onAbort` in `runner.ts` returns early (its `if (settled) return;` guard), and the listener's job body has already sent `call_result` (or `call_failed`) and nothing else. `queue.cancel` at that point returns `"unknown"` if the job finished a moment earlier and the queue has already forgotten it, which the listener turns into `call_not_cancelled {reason: "unknown"}` — not `"too_late"` or `"already_terminal"`. A cancellation that loses this race is not separately acknowledged as a cancellation failure; the caller-side resolution comes from the terminal frame (`call_result`/`call_failed`) that already went out.
+
+**The relay must not wait for a `call_not_cancelled {too_late}` or `{already_terminal}` that this listener will never send.** Whoever builds Plan 2b's cancel-handling should treat "a terminal frame arrived instead of any cancellation acknowledgement" as the losing-the-race case, rather than writing a handler for reasons that never fire against this listener.
