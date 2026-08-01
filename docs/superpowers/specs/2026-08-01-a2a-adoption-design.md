@@ -272,9 +272,10 @@ per-origin multiplicity.
 
 It is load-bearing because a reviewer may reasonably say the tested server is the
 *directory* agent while person-scoped endpoints use proprietary discovery — which
-directly attacks the procurement claim. Candidate resolutions, to be settled by Spike 1:
+directly attacks the procurement claim. Candidate resolutions — **Spike 1 recommends
+option 1**, see [its result](#spike-1-result--2026-08-01):
 
-1. Per-handle origins (`https://ken.agents.acme.internal`) with wildcard DNS/TLS.
+1. **Per-handle origins** (`https://ken.agents.acme.internal`) with wildcard DNS/TLS.
 2. A directory agent at the well-known URL plus separate A2A agents reached through a
    declared directory skill — honest, but custom discovery.
 3. Treat the per-handle card URL as configuration and narrow the claim to "conformant
@@ -339,7 +340,9 @@ decision.
 
 ## Spikes gating implementation
 
-1. Run the pinned TCK against the proposed per-handle URL and discovery topology.
+1. ~~Run the pinned TCK against the proposed per-handle URL and discovery topology.~~
+   **Partially done — see [Spike 1 result](#spike-1-result--2026-08-01).** Binding and
+   discovery questions answered by reading the suite; the run itself still needs a stub.
 2. Design the durable task store, delivery lease, retention, cancellation, and
    deduplication model (separate spec).
 3. Define A2A authentication → agentcall principal mapping.
@@ -394,6 +397,71 @@ approve an A2A compatibility spike, not this architecture as written."
 The objection to indefinitely-`SUBMITTED` tasks. Given the real state model, a long-lived
 `SUBMITTED` task is protocol-legitimate. What remains is that legitimacy is not delivery:
 see [the narrowed claim](#the-narrowed-offline-claim).
+
+## Spike 1 result — 2026-08-01
+
+**Method:** read the suite; did **not** run it. There is no SUT yet — agentcall has no
+A2A endpoint — so a run would only have proved the TCK starts. Reading it answers the two
+questions that gate design decisions, at a fraction of the cost. TCK pinned at
+`5996b79f9cefa6fc390980e383e358a66fb9e49e` (2026-06-29). Python 3.11+, uv.
+
+### 1. REST is not thin — keep it pinned
+
+Codex's caveat was to switch to JSON-RPC if the REST profile proved materially
+incomplete. It does not:
+
+| Suite | Tests |
+|---|---|
+| `core_operations` | 81, **parameterized over `ALL_TRANSPORTS`** |
+| `agent_card` | 10 |
+| transport-specific: `http_json` / `jsonrpc` / `grpc` | 14 / 15 / 11 |
+
+Because the 81 core requirement tests are parameterized across transports
+(`tests/compatibility/core_operations/test_requirements.py:150`), HTTP+JSON receives the
+full core requirement suite, not just its own 14. Against JSON-RPC's 15 transport-specific
+tests, that is parity. **The REST pin stands; the JSON-RPC fallback is not needed.**
+
+Transport selection is driven by the card's `supportedInterfaces`, so declaring only REST
+scopes the run to REST — which matches "advertise only REST initially."
+
+### 2. Discovery — the per-handle topology passes, but not cleanly
+
+The TCK hardcodes the card path and has **no `--card-url` flag**:
+
+```python
+# tests/compatibility/conftest.py:100
+url = f"{base}/.well-known/agent-card.json"
+```
+
+`base` is `--sut-host`, an arbitrary URL. So `--sut-host https://host/a2a/ken` resolves to
+`https://host/a2a/ken/.well-known/agent-card.json`, and every card test derives from that
+same base — nothing asserts origin-level discovery. **The proposed per-handle topology
+passes the TCK.**
+
+But it passes via a *nested* well-known path, and well-known URIs are origin-scoped under
+RFC 8615 — the TCK's own docstring cites "Per the A2A spec (Section 8.2)". So a green run
+proves the agent at that base URL is conformant; it does not prove conventional origin
+discovery. That is exactly the gap a procurement reviewer probes, and it is the argument
+F4 warned about.
+
+**Therefore: Option 1 — per-handle origins (`https://ken.agents.acme.internal`) with
+wildcard DNS/TLS — is the recommended resolution.** It is the only candidate that is both
+clean and passes without a nested-well-known fudge, and wildcard certs on a Workers custom
+domain are native. Options 2 and 3 remain fallbacks if wildcard DNS proves impractical in
+customer environments.
+
+### 3. New concrete requirement the design missed
+
+The card endpoint needs `Cache-Control` with `max-age` and an `ETag` (both **SHOULD** —
+`xfail`, so they do not block the compatibility claim) and `Last-Modified` (**MAY**).
+`/v1/card/:handle` currently sets none of them — it returns a bare `c.json(...)`
+(`apps/relay/src/index.ts:148`). Cheap to add; worth doing so the report is clean.
+
+### Remaining work in Spike 1
+
+Build a minimal REST stub serving a card at the per-handle path and run
+`./run_tck.py --sut-host <stub> --transport http_json --level must`. That converts these
+inferences into a report, and produces the pinned baseline the CI gate will compare against.
 
 ## Sources
 
