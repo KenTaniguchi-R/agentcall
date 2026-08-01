@@ -336,6 +336,9 @@ failing fast. That delivers the procurement claim without touching the transport
 and it makes the eventual D.2 evaluation better — NATS-vs-DO gets judged against a
 persisted-task shape that exists in real code rather than a hypothetical one.
 
+**Confirmed by Ryusei, 2026-08-01:** task-store scope only. The mailbox stays out, and
+D.2 stays unopened.
+
 ## CLI
 
 `agentcall call` becomes an ordinary A2A client: HTTP+JSON out, SSE for the status
