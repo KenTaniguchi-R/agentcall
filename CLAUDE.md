@@ -18,7 +18,8 @@ gh issue view <n>                                         # full context, incl. 
 
 **The assignee is the claim** — check it before starting, take it when you start,
 release it when you stop. Full protocol in
-[CONTRIBUTING.md](./CONTRIBUTING.md#claiming-work).
+[CONTRIBUTING.md](./CONTRIBUTING.md#claiming-work) (also summarized in
+[AGENTS.md](./AGENTS.md)).
 
 Labels: `area:*` groups by track (`security`, `a2a`, `deployment`, `enterprise`,
 `availability`, `positioning`, `product`, `debt`). `status:*` carries state —

@@ -506,11 +506,32 @@ be wrong; the workflow wrapper itself is only exercised after merge.
 
 Once merged, before trusting the schedule:
 
-1. Dispatch it with `dry_run: true`, `stale_days: 0` — expect it to report every
-   claimed issue and release none.
-2. Confirm the run's `DRY_RUN` env resolved to `true` in the logs, then dispatch
-   with the defaults and confirm the same.
-3. Leave the schedule to run. The first live run is at 09:00 UTC.
+1. **Confirm the merge landed on the default branch.** Scheduled workflows only
+   run from the default branch. Shipped on a long-lived branch, the cron is
+   inert and nothing says so.
+2. **Observe a real live reap — do not wait for 09:00 UTC to find out.** Assign
+   a low-stakes open issue to yourself, then dispatch the workflow with
+   `dry_run` UNCHECKED and `stale_days: 0`. Expect `dry_run=false` in the
+   settings line, a `stale: #N ...` line, a comment posted, and `released #N`.
+   This is the only step that exercises the `'false'` branch of the ternary
+   *and* proves `secrets.GITHUB_TOKEN` can write issues under
+   `permissions: issues: write`. Delete the comment and confirm the issue is
+   unassigned afterward.
+3. **Read the first line of the first scheduled run's log and assert it says
+   `dry_run=false`.** The script echoes its settings before doing anything, so
+   this holds even on a day with zero stale claims. Ten seconds, and it is the
+   single check separating a working reaper from one that will never reap and
+   look healthy forever. If it reads `true`, the ternary is inverted — fix
+   before any claim ages past 3 days.
+4. **In that same line, check `cutoff` is exactly 3 days before the run
+   timestamp.** This confirms the GNU `date -d` fallback fired on
+   ubuntu-latest; only the BSD `date -v` form has ever executed.
+5. **Confirm the schedule armed:** a `schedule`-triggered run should appear
+   within 24h. GitHub silently drops cron on repos it considers inactive.
+   Absence of a run is itself the finding.
+6. **Keep the original dry-run steps as the safety check before item 2** —
+   dispatch with `dry_run: true`, `stale_days: 0`, confirm it reports and
+   releases nothing. Necessary, just not sufficient alone.
 
 There is one residual risk worth stating: nothing forces anyone to *check* before
 starting. This design makes the collision visible and cheap to avoid, not

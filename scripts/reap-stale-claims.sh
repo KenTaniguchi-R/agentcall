@@ -21,6 +21,9 @@ cutoff="$(date -u -v-"${STALE_DAYS}"d +%Y-%m-%dT%H:%M:%SZ 2>/dev/null \
 
 echo "repo=${REPO} stale_days=${STALE_DAYS} cutoff=${cutoff} dry_run=${DRY_RUN}"
 
+# `gh issue list` excludes pull requests, so an open PR's assignee (usually a
+# reviewer, not a work claim) is never stripped by this loop. Load-bearing —
+# don't "improve" this into `gh api` or a search that includes PRs.
 stale="$(gh issue list --repo "$REPO" --search "is:open assignee:* sort:updated-asc" \
   --json number,updatedAt,assignees --limit 200 |
   jq -r --arg cutoff "$cutoff" '
@@ -61,18 +64,23 @@ The protocol is in CONTRIBUTING.md, at the repo root."; then
     failed=1
     continue
   fi
-  unassign_failed=0
+  released=0
+  failed_here=0
   for login in $logins; do
-    if ! gh issue edit "$number" --repo "$REPO" --remove-assignee "$login" < /dev/null; then
+    if gh issue edit "$number" --repo "$REPO" --remove-assignee "$login" < /dev/null; then
+      released=$((released + 1))
+    else
       echo "WARNING: could not unassign ${login} from #${number}"
       failed=1
-      unassign_failed=1
+      failed_here=1
     fi
   done
-  if [ "$unassign_failed" = "1" ]; then
-    echo "partially released #${number}"
-  else
+  if [ "$failed_here" = "0" ]; then
     echo "released #${number}"
+  elif [ "$released" = "0" ]; then
+    echo "NOT released #${number} — every unassign failed, the claim stands"
+  else
+    echo "partially released #${number}"
   fi
 done <<< "$stale"
 
