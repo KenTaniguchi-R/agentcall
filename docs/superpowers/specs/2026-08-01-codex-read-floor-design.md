@@ -356,27 +356,42 @@ So §4 above — "the hook stays in observe mode. Already shipped. It remains at
 telemetry" — described telemetry that did not exist. There was no Codex-side `tools.log`
 data at all.
 
-Fixed in `fix(guard): the codex guard was registered but never ran`. The bypass is safe
-only paired with `--ignore-user-config`, which drops `$CODEX_HOME/config.toml` — where
-Codex records trusted project directories as `[projects."<path>"] trust_level = "trusted"`
-— so with no trust list loaded the project config layers stay disabled and a
-`.codex/hooks.json` planted in the workspace by a caller holding the write cap is not
-loaded.
+**Attempted with `--dangerously-bypass-hook-trust`, then reverted (`1779ae5`). The bug
+stands, unfixed.**
 
-**The first version of this test was invalid, and the corrected one matters.** Planting a
-hook in a scratch directory proves nothing: an untrusted directory's hooks are skipped
-regardless, so the test had no power to detect the failure it was supposed to rule out.
-Re-run against a genuinely *trusted* project (declared via a controlled `CODEX_HOME`):
+The safety case for the bypass was that `--ignore-user-config` leaves agentcall's inline
+hook as the only hook Codex can see. Adversarial review by Codex falsified it, and the
+mechanism reproduced on the first try: **Codex replaces the ignored `config.toml` with an
+*empty user layer* rather than dropping the layer, and discovers `hooks.json` per-layer
+independently of `config.toml`.** A `hooks.json` planted in a controlled `$CODEX_HOME`
+executed under the bypass. Hook commands run *outside* the tool sandbox, so this is
+host-level execution.
 
-| Arm | Planted project hook | agentcall's own guard |
-|---|---|---|
-| Trusted workspace, bypass on, **without** `--ignore-user-config` | **RAN** | — |
-| Trusted workspace, bypass on, **with** `--ignore-user-config` | did **not** run | fired |
+Two things about how that was found are worth keeping:
 
-The control establishes the test can detect a planted hook executing; the treatment shows
-agentcall's actual spawn shape blocks it. **Dropping `--ignore-user-config` while keeping
-the bypass would convert this into arbitrary caller-supplied code execution on the owner's
-machine**, so the two flags are pinned together by a test.
+- **The project-hook test was run twice — once invalidly, once properly — and neither run
+  could have caught this.** The first planted a hook in a scratch directory, which is
+  untrusted, so it was skipped regardless and the test had no power. The second used a
+  genuinely trusted workspace and produced a clean control/treatment split (control,
+  without `--ignore-user-config`: planted hook **ran**; treatment, with it: did **not**).
+  That result is still true. It is simply about the *project* layer, and the failure was
+  in the *user* layer — a question not asked.
+- **The remaining case cannot be tested on this machine and matters most where this design
+  is aimed.** A workspace trusted via a **system or MDM layer** keeps its project hooks,
+  and `--ignore-user-config` does not drop those layers. `/etc/codex` is exactly what
+  enterprise IT installs, so caller-plants-`.codex/hooks.json` is live precisely in the
+  target deployment.
+
+**Open decision, deliberately not made unattended.** The narrower fix is to trust only our
+own hook by supplying `hooks.state.<id>.trusted_hash` inline — SHA-256 over the normalized
+hook identity (event name, matcher group, normalized command handler). It fails closed on
+mismatch and grants nothing to user, project or plugin hooks, but couples agentcall to an
+undocumented hashing scheme and a synthetic source path that may move between versions.
+Getting it subtly wrong fails open in exactly the place the change was meant to protect.
+`bypass_hook_trust=true` is not an alternative — it is the same blanket bypass.
+
+Note for whoever picks this up: a test asserting argv shape will pass while foreign hooks
+execute. Any fix here needs a behavioural test.
 
 ### `allow_managed_hooks_only` would silently disable that same guard
 
