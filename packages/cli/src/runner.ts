@@ -23,6 +23,12 @@ const MAX_STDERR_BYTES = 1 * 1024 * 1024;
 // process group (on timeout or stdout overflow).
 const KILL_GRACE_MS = 10_000;
 
+// Timeout for the PreToolUse guard hook. Biased long on purpose: timeout expiry
+// fails OPEN (the tool runs), so all risk is on the too-short side. A hung guard
+// stalls one call (safe and visible); an abandoned one is neither. Measured cost
+// is ~33ms.
+export const GUARD_TIMEOUT_S = 30;
+
 // Cap -> Claude Code tool names, used with --allowedTools + --permission-mode
 // dontAsk: listed tools are pre-approved, everything else is denied instead
 // of prompting (headless -p can't prompt). "read" is always included — an
