@@ -5,6 +5,8 @@
 **Layer:** #3 of the defence model in
 [claude-code-enforcement-surfaces §7](../../research/2026-07-31-claude-code-enforcement-surfaces.md),
 the one marked "Gap — the work".
+**Also draws on:** [lessons-from-composio](../../research/2026-07-31-lessons-from-composio.md)
+§3–§6 — fail-closed inversion, the injected-context contract, and the plugin boundary.
 
 ---
 
@@ -57,6 +59,16 @@ Any path covered by a deny rule is therefore enforced **silently**, producing no
 `[]` — no error, no warning. A control whose misconfiguration is indistinguishable from
 success is not a good floor to build on.
 
+**4. The deny reason is relayed to the caller, in the model's own words.**
+Whatever the hook returns as its reason is read by the model, and the model is the thing
+composing the reply that goes back over the relay. In test 1 the exit-2 stderr text was
+quoted verbatim into the answer. The reason string is therefore caller-facing output, not
+an internal diagnostic, and has to be written that way.
+
+Structured deny (`permissionDecision: "deny"` with `permissionDecisionReason`, exit 0)
+produces a better rendering than exit 2 — "the read was blocked" rather than
+"PreToolUse:Read hook error" — so it is the mechanism for ordinary denials.
+
 ## Architecture
 
 One catch-all `PreToolUse` hook, registered through inline `--settings` JSON at spawn
@@ -75,14 +87,30 @@ claude -p    decides a tool call
      ↓
 guard.ts     decide(input, home, realpath) → verdict
      ↓
-     allow → exit 0                deny → append calls.log, stderr reason, exit 2
-                                          ↓
-                                   model continues, answers without that tool
+     allow → exit 0           deny → append calls.log + generic reason, exit 0
+                                     ↓
+                              model continues, answers without that tool
 ```
 
 Nothing is installed into `~/.claude`. The settings are a JSON string on the command
 line, scoped to the one spawn, gone when the process exits. The owner's own interactive
 sessions are untouched.
+
+### Why not the plugin
+
+[lessons-from-composio §6](../../research/2026-07-31-lessons-from-composio.md) proposes a
+plugin carrying `hooks.json`, and its action table lists `PreToolUse` among the hooks it
+would ship. That is the right vehicle for the *owner-facing* surface — the SessionStart
+nudge, `UserPromptSubmit` routing, slash commands — and the wrong one here.
+
+A plugin installs into `~/.claude` and fires on every session the owner runs, including
+their own work. This guard is scoped to the agent agentcall spawns to answer somebody
+else's call; applying it to the owner's own editing would be both wrong and unwelcome.
+Two audiences, two delivery mechanisms, no conflict.
+
+The plugin's own stated principle points the same way — *the plugin stays thin;
+capability lives in the CLI*. Keeping `decide()` in `agentcall` is that principle, and it
+is why Codex parity later is an adapter rather than a second copy of the policy.
 
 **No `matcher` and no `if` field.** Both narrow which calls reach the hook, and the
 matcher parser fails *open* — an argument it cannot evaluate runs the tool anyway. For
@@ -93,7 +121,7 @@ call reaches `decide()`; `decide()` alone decides.
 
 | File | Responsibility |
 |---|---|
-| `packages/cli/src/guard.ts` **(new)** | `decide()` — pure, agent-agnostic, no I/O. The denied-path table. Plus `runGuard()`, which reads the payload, calls `decide()`, writes the audit line, and returns an exit code. |
+| `packages/cli/src/guard.ts` **(new)** | `decide()` — pure, agent-agnostic, no I/O. The denied-path table. Plus `runGuard()`, which reads the payload, calls `decide()`, writes the audit line, emits the structured deny on stdout, and returns an exit code. |
 | `packages/cli/src/index.ts` | Hidden `_guard` command — a thin wire to `runGuard()`, matching how the other commands stay thin. |
 | `packages/cli/src/runner.ts` | `--settings` JSON, `AGENTCALL_CALL_ID` in spawn env, `SpawnSpec.env`. |
 | `packages/cli/src/doctor.ts` | Live self-test that the guard actually blocks. |
@@ -102,6 +130,11 @@ call reaches `decide()`; `decide()` alone decides.
 
 ```ts
 export type GuardInput = { tool_name: string; tool_input: Record<string, unknown> };
+
+// `rule` and `detail` are audit-only — they name the matched rule and the
+// resolved path, and MUST NOT reach permissionDecisionReason. The caller-facing
+// reason is a single fixed string with no per-denial content; see the reason
+// contract below. Keeping it constant is what makes the contract testable.
 export type GuardVerdict =
   | { allow: true }
   | { allow: false; rule: string; detail: string };
@@ -146,14 +179,34 @@ that the real control is the owner writing the tasks that grant it.
 
 ### Failure behaviour
 
-Inside the guard, **fail closed**: unparseable stdin, a malformed payload, or a throw
-from `decide()` all exit 2. The guard never allows because it failed to decide.
+Two exit paths, deliberately different:
 
-Around the guard, Claude **fails open**: a hook exiting with anything other than 0 or 2
-is a non-blocking error and the tool runs. If the binary cannot be resolved, there is no
-guard and nothing announces it.
+- **Ordinary denial** — exit 0 with `permissionDecision: "deny"`. Reads as a policy
+  decision to the model rather than a malfunction.
+- **Guard failure** — unparseable stdin, malformed payload, or a throw from `decide()`
+  exit **2**, which blocks bluntly. The guard never allows because it failed to decide.
 
-That is covered at setup time, not runtime, by a `doctor` check that spawns a throwaway
+Around the guard, Claude **fails open** in three ways, and each needs its own answer:
+
+| Failure | Result | Answer |
+|---|---|---|
+| Binary unresolvable | hook never runs, tool proceeds | `doctor` canary check |
+| Exit code not 0 or 2 | non-blocking error, tool proceeds | fail-closed exit 2 above |
+| **Hook exceeds its timeout** | **abandoned, tool proceeds** | explicit `timeout`, hot path stays cheap |
+
+The timeout case is the one most easily missed. GitHub Copilot CLI has it as a
+[documented bug](https://github.com/github/copilot-cli/issues/2893) — under parallel tool
+calls the timeout expires, the CLI stops waiting, and the tool executes anyway. A guard
+that is merely *slow* is a guard that is not there.
+
+So the hot path is a hard constraint, not a performance goal: `decide()` does no network
+I/O, reads no config file, and touches the filesystem only for `realpath`. The hook
+registration carries an explicit `timeout`, and a test asserts a decision returns well
+inside it. If the guard ever needs state, the Composio split applies — warm a cache on
+`SessionStart`, never fetch on the hot path
+([lessons-from-composio §3](../../research/2026-07-31-lessons-from-composio.md)).
+
+The binary case is covered at setup time by a `doctor` check that spawns a throwaway
 `claude -p` against a canary file and asserts the read is refused. It converts a silent
 runtime hole into a loud, diagnosable setup failure — the same job `verify.ts` does for
 PATH and auth. Being a live spawn it runs only on the user's machine; per CLAUDE.md no
@@ -176,9 +229,32 @@ today, so this costs nothing now and is worth fixing whenever one is written.
 
 Denials only. Logging every allowed tool call would bury the signal.
 
-The caller sees nothing: the reason goes to the model, the record goes to the owner. A
-degraded answer is returned rather than an error, and no information about the owner's
-filesystem crosses the boundary.
+### What the caller learns — the reason is a contract
+
+An earlier draft of this spec claimed the caller sees nothing. That is false, and the
+experiments show it: the reason reaches the model, and the model writes the reply that
+goes back over the relay. The caller *will* learn a refusal happened.
+
+What is actually achievable is narrower, and it is the thing worth guaranteeing:
+
+> **The guard tells the caller nothing the model did not already know.**
+
+The model knows the filename because it chose the tool call from the caller's own
+request; that much is unavoidable and harmless. What must never cross the boundary is
+what only the *guard* knows — the resolved absolute path, the rule that matched, or
+anything implying the shape of the denied-path table.
+
+So `permissionDecisionReason` is caller-facing output under test, in the manner of
+[lessons-from-composio §4](../../research/2026-07-31-lessons-from-composio.md):
+
+- **Required:** states that the action is not permitted by the owner's policy.
+- **Forbidden:** any absolute path, any `~/`-prefixed path, any rule identifier, the word
+  `.ssh`, or any other denied-path fragment.
+- **Bounded:** one sentence.
+
+The specifics stay in `calls.log`, which only the owner reads. A test enforces both
+halves — the reason is generic, the audit line is not — because these are exactly the
+strings a later edit makes "more helpful" without noticing what it leaks.
 
 ## Testing
 
@@ -189,7 +265,14 @@ Test-first, per CLAUDE.md.
   unknown tool names allowed; malformed input denied. No fs, no spawn.
 - **`test/runner.test.ts`** — `buildSpawnSpec` emits `--settings` containing the hook and
   an absolute interpreter path; `AGENTCALL_CALL_ID` reaches `SpawnSpec.env`; codex spawn
-  is unchanged.
+  is unchanged. Plus an **exact-hook-set assertion**: the generated settings register
+  `PreToolUse` and nothing else, so no hook can be added to a security-carrying payload
+  without deliberately editing a test that says so.
+- **Reason-text contract** — required phrase present, forbidden fragments absent (no
+  absolute path, no `~/`, no rule name, no `.ssh`), one sentence. Asserted over every
+  denial case in the table, not on a single hand-picked example.
+- **Timeout budget** — a decision returns well inside the registered `timeout`, so the
+  fail-open-on-slow path stays unreachable.
 - **`test/guard.test.ts`** — also covers `runGuard()` against a temp `AGENTCALL_HOME`:
   exits 0 vs 2, and writes exactly one audit line on deny, none on allow.
 - **`test/doctor.test.ts`** — the self-test reports pass/fail correctly against a mocked
