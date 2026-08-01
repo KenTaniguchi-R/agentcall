@@ -74,17 +74,35 @@ cd packages/cli && pnpm test    # vitest, mocked ws/fs — no live agent spawn
 `apps/relay && pnpm dev` runs the Worker locally against `wrangler dev` for manual
 testing (WS auth, register, status).
 
-Before calling any task done: `pnpm -r test && pnpm -r typecheck && pnpm -r build`
-must all pass at the repo root.
+Before calling any task done: `pnpm -r build && pnpm -r typecheck && pnpm -r test`
+must all pass at the repo root. **Build first** — `packages/cli` typechecks against
+`packages/shared`'s built `dist`, so running build last checks the *previous* run's
+types. `.github/workflows/ci.yml` runs exactly this order on every push and PR.
 
-**`typecheck` does not cover the test files** — each package's `tsconfig.json` has
-`"include": ["src"]`. Change a function's signature and `pnpm typecheck` stays green
-while every stale call site in `test/` compiles fine and fails at runtime instead. So
-`pnpm -r test` is the only thing that catches it: never take a green typecheck as
-proof a refactor is complete. (Worth fixing with a `tsconfig.test.json`.)
+`typecheck` covers `src` *and* `test`. `shared` and `cli` each carry a
+`tsconfig.test.json` (`include: ["src", "test"]`, `noEmit`) that their `typecheck`
+script runs after the src pass; `apps/relay` already had `test` in its main
+`tsconfig.json`. Keep it that way: without it, changing a function signature leaves
+`pnpm typecheck` green while every stale call site in `test/` fails at runtime
+instead — vitest strips types without checking them.
 
-`packages/cli` depends on the *built* `packages/shared`, so run `pnpm -r build` after
-editing a shared schema or the CLI will typecheck against stale `dist` types.
+### CI runs node 24 only, not the `engines` floor
+
+`packages/cli` declares `engines: { node: ">=20" }`, but **pnpm 11.5.2 requires node
+>=22.13**, so the toolchain cannot install or build this repo on node 20 at all. CI
+pins 24, the version the repo is developed on. So CI does *not* verify the promise
+`engines` makes to people installing the published CLI on older node — that needs a
+job installing the built tarball, not a workspace build.
+
+### `apps/relay/test/register.test.ts` has a known flake
+
+The burst test registers 5 handles from one IP and expects the 6th to 429.
+`REGISTER_RL` is `{ limit: 5, period: 60 }`, so it only holds if all six requests
+land inside the same 60s window. On a slow runner they don't, and the 6th comes back
+200. Seen failing on a GitHub runner while the same commit passed locally. It is
+wall-clock dependent, not node-version dependent — pinning CI to one node version
+lowers the odds but does not fix it. The fix is to make the window explicit rather
+than ambient.
 
 ## TDD
 
