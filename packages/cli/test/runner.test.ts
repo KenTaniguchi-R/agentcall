@@ -68,12 +68,12 @@ describe("buildSpawnSpec", () => {
   it("spawns claude directly with the resolved absolute agent path", () => {
     const s = buildSpawnSpec("claude", "PROMPT", WORKDIR, () => "/abs/path/to/claude");
     expect(s.cmd).toBe("/abs/path/to/claude");
-    expect(s.args.slice(0, 6)).toEqual([
+    expect(s.args).toEqual([
       "-p", "PROMPT", "--output-format", "json",
       "--permission-mode", "dontAsk",
+      "--allowedTools", "Read,Grep,Glob,LS,Write,Edit,WebFetch,WebSearch,Bash",
+      "--settings", guardSettingsJson(),
     ]);
-    const toolsIdx = s.args.indexOf("--allowedTools");
-    expect(s.args[toolsIdx + 1]).toBe("Read,Grep,Glob,LS,Write,Edit,WebFetch,WebSearch,Bash");
     expect(s.cwd).toBe(WORKDIR);
     // Default callId, when the caller (e.g. a test) doesn't pass one.
     expect(s.env?.AGENTCALL_CALL_ID).toBe("unknown");
