@@ -42,6 +42,22 @@ which are released together.
 - When `workdir` is set, the prompt no longer instructs the agent to stay
   inside its working directory.
 
+### Removed — the `tier` field
+
+- Task frontmatter, the `Task` type, and the `CardTask` protocol schema all
+  carried a `tier` of `"T1" | "T2"`, with T2 reserved for approval-gated tasks.
+  Nothing ever branched on it and the approval gate isn't being built, so it's
+  gone. `tier` in an existing `SKILL.md` or in a card already stored on the
+  relay is ignored rather than rejected, and `agentcall card` no longer prints
+  a `[T1]` marker next to each task.
+
+### Changed — platform-specific listener code is isolated
+
+- `launchd.ts` is now the only module that knows the background listener is a
+  macOS LaunchAgent. `Paths.plistFile` is gone; callers use
+  `isLaunchAgentInstalled(paths)` instead of testing for a plist. Groundwork
+  for a non-macOS listener — no behavior change.
+
 ### Fixed
 
 - `agentcall --version` reported `0.2.0` on a `0.3.0` package.
