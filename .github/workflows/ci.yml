@@ -13,15 +13,6 @@ concurrency:
 jobs:
   verify:
     runs-on: ubuntu-latest
-    strategy:
-      fail-fast: false
-      matrix:
-        # 22, not the `engines: >=20` floor: pnpm 11.5.2 itself requires node
-        # >=22.13, so the toolchain cannot build this repo on 20 at all. The
-        # engines floor is a promise to *consumers* of the published CLI, which
-        # this matrix does not currently verify -- see the note in CLAUDE.md.
-        node: [22, 24]
-
     steps:
       - uses: actions/checkout@v4
 
@@ -29,9 +20,13 @@ jobs:
       # lockfile and CI can never drift onto different pnpm majors.
       - uses: pnpm/action-setup@v4
 
+      # 24 only. Not the `engines: >=20` floor -- pnpm 11.5.2 requires node
+      # >=22.13, so the toolchain cannot install this repo on 20 at all, and
+      # that floor is a promise to *consumers* of the published CLI which a
+      # workspace build does not exercise anyway. See CLAUDE.md.
       - uses: actions/setup-node@v4
         with:
-          node-version: ${{ matrix.node }}
+          node-version: 24
           cache: pnpm
 
       - run: pnpm install --frozen-lockfile
