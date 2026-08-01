@@ -269,7 +269,14 @@ authorized."
 1. **`blocked` and `unknown_handle` collapse to an identical `404`.** The earlier table
    returned `403` for blocked, which tells a blocked caller that the handle exists and
    that they specifically were refused. Both must now be indistinguishable. This is a
-   behavior change from today's protocol, which returns a distinct `blocked` code.
+   behavior change from today's protocol, which returns a distinct `blocked` code —
+   **confirmed and accepted by Ryusei, 2026-08-01.**
+
+   Indistinguishable **to the caller only.** The callee's `calls.log` must still record
+   the real reason, so the audit trail distinguishes "someone I blocked tried to call"
+   from "nobody called." Losing that would be a genuine regression: the block signal is
+   most useful to the person who set it. The `blocked` code therefore survives on the
+   private relay↔listener link and in the log; only the public response is flattened.
 2. **`task_not_offered` must not confirm the task exists.** It maps to
    `UnsupportedOperationError` (`400`) and returns only the caller's own `offered[]` —
    what they *are* entitled to — never an acknowledgement of what they asked for.
