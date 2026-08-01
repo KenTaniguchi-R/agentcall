@@ -7,7 +7,7 @@ import { afterEach, describe, expect, it } from "vitest";
 import { startListener } from "../src/listener.js";
 import { getPaths } from "../src/paths.js";
 import { AgentRunError } from "../src/runner.js";
-import type { Config } from "../src/config.js";
+import type { CallableConfig } from "../src/config.js";
 
 let httpServer: Server;
 let stopper: { stop(): void } | undefined;
@@ -30,7 +30,10 @@ function fakeRelay(onConn: (ws: WsSocket) => void): Promise<string> {
   });
 }
 
-const cfg: Config = { handle: "ken", token: "tok", agent_kind: "claude", relay: "unused" };
+// CallableConfig, not Config: `startListener` only accepts a config that has
+// already passed `assertCallableConfig`, and annotating the fixture as the
+// wider `Config` widens agent_kind back to optional at every spread site.
+const cfg: CallableConfig = { handle: "ken", token: "tok", agent_kind: "claude", relay: "unused" };
 
 function frames(ws: WsSocket, n: number): Promise<any[]> {
   return new Promise((resolve) => {
