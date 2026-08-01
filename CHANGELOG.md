@@ -4,6 +4,35 @@ All notable changes to agentcall are recorded here. Versions apply to both
 `@benree/agentcall` (the CLI) and `@benree/agentcall-shared` (protocol schemas),
 which are released together.
 
+## Unreleased
+
+### Removed — the OS-level sandbox (breaking, security-relevant)
+
+- **Spawned agents are no longer wrapped in Seatbelt.** Every call used to run
+  under `npx @anthropic-ai/sandbox-runtime --settings <file>`, with
+  deny-by-default reads and a network allowlist. That wrapper is gone: the
+  answering agent is meant to be the owner's real agent with the owner's real
+  context, which a confined fresh spawn cannot be. Enforcement is now
+  capability scoping (`--allowedTools` for claude, `--sandbox` level for codex)
+  plus pre-prompt task resolution. **Within a granted capability, nothing
+  constrains where the agent reads or writes** — see the security model in the
+  README before sharing your address.
+- `~/.agentcall/srt.json` is no longer written or read. Existing files are
+  inert and can be deleted; `agentcall uninstall --purge` removes them.
+- `~/AgentCall/public` as the working directory is now a prompt instruction
+  rather than an enforced boundary.
+
+### Removed — `write_paths` and `network` task frontmatter
+
+- Both fields existed only to populate the sandbox's `allowWrite` and
+  `allowedDomains` lists, so they no longer grant anything. They are ignored if
+  present in an existing `SKILL.md`, which keeps old task files loading. Task
+  capabilities are now expressed by `tools:` alone.
+
+### Fixed
+
+- `agentcall --version` reported `0.2.0` on a `0.3.0` package.
+
 ## 0.2.0 — 2026-07-16
 
 Two headline features: **task menus** (owners scope what callers may do) and
