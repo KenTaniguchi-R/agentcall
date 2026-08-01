@@ -6,6 +6,23 @@ which are released together.
 
 ## Unreleased
 
+### Fixed — the Codex guard was registered but never actually ran
+
+- **`--dangerously-bypass-hook-trust` added to the Codex spawn.** Codex gates
+  hook execution on *persisted trust* — each hook carries a `trusted_hash`, and
+  a hook supplied inline via `-c` has never been trusted, so Codex skipped it.
+  Silently: no warning on stdout or stderr, no change to the exit code. The
+  observe-mode guard added below was therefore dead code from the moment it
+  shipped, and Codex spawns produced **no** `tools.log` telemetry at all.
+  Verified against codex-cli 0.146.0: the identical spawn logged zero
+  `tool_call` lines with the flag absent and one with it present.
+- The bypass is safe only because it stays paired with `--ignore-user-config`,
+  which drops `$CODEX_HOME/config.toml` — the file where Codex records trusted
+  project directories. With no trust list loaded, the cwd/tree/repo config
+  layers stay disabled and a `.codex/hooks.json` planted in the workspace is not
+  loaded. Verified by planting one: it did not run, while agentcall's own hook
+  did. A test now pins both flags together.
+
 ### Fixed — the guard's fail-closed paths could fail open (security-relevant)
 
 - **Exit 2 now carries a reason on stderr.** Claude blocks on exit 2 regardless

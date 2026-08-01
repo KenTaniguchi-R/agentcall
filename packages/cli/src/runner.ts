@@ -130,7 +130,26 @@ export function buildSpawnSpec(
     // an allowlist that `mcp__*` names never match; codex has no equivalent,
     // so not loading them is the only lever. The prompt stays last: codex
     // takes the final positional as the prompt.
-    args: ["exec", "--ignore-user-config", "--sandbox", sandbox, "--cd", workdir,
+    //
+    // --dangerously-bypass-hook-trust is required for the guard to run AT ALL.
+    // Codex gates hook execution on *persisted trust* (HookStateToml carries a
+    // trusted_hash), and a hook supplied inline via -c has never been trusted, so
+    // codex skips it — silently, with no warning on stdout or stderr and no
+    // change to the exit code. Without this flag the observe-mode guard is dead
+    // code. Verified against codex-cli 0.146.0 on 2026-08-01: the identical spawn
+    // logged zero tool_call lines with the flag absent (twice, each having really
+    // executed a shell command) and one line with it present.
+    //
+    // The flag's name is about *other people's* hooks, which is the case it is
+    // dangerous for. The only hook codex can see here is the one on the next
+    // line, whose path agentcall controls. --ignore-user-config already drops
+    // $CODEX_HOME/config.toml, and that file is where codex records which project
+    // directories are trusted — so the cwd/tree/repo config layers stay disabled,
+    // and a .codex/hooks.json planted in the workspace by a caller with write
+    // access is never loaded. Verified by planting one: it did not run, while
+    // this hook did.
+    args: ["exec", "--ignore-user-config", "--dangerously-bypass-hook-trust",
+      "--sandbox", sandbox, "--cd", workdir,
       "--skip-git-repo-check", "--json", "-c", guardCodexConfigArg(), prompt],
     cwd: workdir,
     env: { ...process.env, AGENTCALL_CALL_ID: callId, AGENTCALL_GUARD_MODE: "observe" },
