@@ -104,6 +104,45 @@ describe("decide — scanning tools reach through a parent", () => {
   });
 });
 
+describe("decide — Grep's glob selects paths the root check never sees", () => {
+  // NOTE: these close a targeted selector, NOT the boundary. `glob` only
+  // narrows a root Grep is already allowed to search, so omitting it reads
+  // MORE, not less: Grep(path: <project>, output_mode: "content") still
+  // returns matching lines from a .env sitting in that project. A PreToolUse
+  // hook can only allow or deny a whole call, so per-file filtering for Grep
+  // has no home here yet. Denying an explicit `glob: ".env"` is worth doing on
+  // its own — it is an unambiguous targeting attempt, and it gets logged.
+  it("denies a glob naming a denied basename under an allowed root", () => {
+    const v = decide(call("Grep", { path: "/Users/owner/proj", glob: ".env", pattern: ".+" }), HOME, id);
+    expect(v.allow).toBe(false);
+  });
+
+  it("denies a glob enumerating keys under an allowed root", () => {
+    const v = decide(call("Grep", { path: "/Users/owner/proj", glob: "**/*.pem", pattern: ".+" }), HOME, id);
+    expect(v.allow).toBe(false);
+  });
+
+  it("denies a glob that climbs out of its root", () => {
+    const v = decide(call("Grep", { path: "/Users/owner/proj", glob: "../../.ssh/*", pattern: ".+" }), HOME, id);
+    expect(v.allow).toBe(false);
+  });
+
+  it("denies an absolute glob into a denied directory", () => {
+    const v = decide(call("Grep", { path: "/Users/owner/proj", glob: "/Users/owner/.ssh/*", pattern: ".+" }), HOME, id);
+    expect(v.allow).toBe(false);
+  });
+
+  it("allows an ordinary source-file glob", () => {
+    const v = decide(call("Grep", { path: "/Users/owner/proj", glob: "**/*.ts", pattern: "TODO" }), HOME, id);
+    expect(v.allow).toBe(true);
+  });
+
+  it("denies a glob that is not a string", () => {
+    const v = decide(call("Grep", { path: "/Users/owner/proj", glob: 7, pattern: "x" }), HOME, id);
+    expect(v.allow).toBe(false);
+  });
+});
+
 describe("decide — Glob carries its path in the pattern", () => {
   it("denies an absolute pattern into a denied directory", () => {
     const v = decide(call("Glob", { pattern: "/Users/owner/.ssh/*" }), HOME, id);
@@ -128,6 +167,35 @@ describe("decide — Glob carries its path in the pattern", () => {
   it("allows an ordinary source glob under cwd", () => {
     const v = decide(call("Glob", { pattern: "**/*.ts" }), HOME, id);
     expect(v.allow).toBe(true);
+  });
+});
+
+describe("decide — a denied directory that is itself a symlink", () => {
+  // ~/.aws is a symlink onto an encrypted volume. Targets get canonicalized;
+  // if the denied roots do not, the canonical target is compared against an
+  // alias it can never be inside, and the read is allowed.
+  const realpath = (p: string) =>
+    p.startsWith("/Users/owner/.aws") ? p.replace("/Users/owner/.aws", "/Volumes/private/aws") : p;
+
+  it("denies the canonical path behind the symlink", () => {
+    const v = decide(call("Read", { file_path: "/Volumes/private/aws/credentials" }), HOME, realpath);
+    expect(v.allow).toBe(false);
+  });
+
+  it("denies the path through the symlink itself", () => {
+    const v = decide(call("Read", { file_path: "/Users/owner/.aws/credentials" }), HOME, realpath);
+    expect(v.allow).toBe(false);
+  });
+
+  it("denies a Grep rooted at the canonical directory", () => {
+    const v = decide(call("Grep", { path: "/Volumes/private/aws", pattern: "aws_secret" }), HOME, realpath);
+    expect(v.allow).toBe(false);
+  });
+
+  it("keeps flagging a Bash command that names the symlink — the lexical form survives", () => {
+    const v = decide(call("Bash", { command: "cat ~/.aws/credentials" }), HOME, realpath);
+    expect(v.allow).toBe(true);
+    expect(v.allow === true && v.flag?.rule).toBeTruthy();
   });
 });
 

@@ -47,18 +47,29 @@ const EXACT_TARGET: Record<string, string> = {
   Read: "file_path", Write: "file_path", Edit: "file_path", NotebookEdit: "notebook_path",
 };
 // Tools whose `path` argument names a root that is then searched or listed.
+// `Glob` joins them below: its root is implicit, but it is checked the same way.
 const SCANNING_ROOT = new Set(["Grep", "LS"]);
 // Tools with no filesystem argument at all.
 const NO_PATH_SURFACE = new Set(["WebFetch", "WebSearch"]);
-// `Glob` is handled separately: its path lives in `pattern`, not `path`.
+// A glob selector is a path in disguise, and the root check never sees it:
+// Grep narrows its root with `glob`, Glob carries its whole path in `pattern`.
+// Both can name a denied basename under an otherwise permitted root, and both
+// can climb out of that root entirely. LS has no selector.
+const SELECTOR_KEY: Record<string, string> = { Grep: "glob", Glob: "pattern" };
 
 // package.json pins os: ["darwin"], and the default macOS filesystem is
 // case-INsensitive — ~/.SSH opens ~/.ssh. Folding can over-deny on a
 // case-sensitive volume, which is the safe direction for a floor.
 const fold = (p: string) => p.toLowerCase();
 
-function deniedPaths(home: string): string[] {
-  return [...DENIED_DIRS, ...DENIED_FILES].map((d) => resolve(home, d));
+// Denied roots are canonicalized alongside the targets they get compared with.
+// A denied root can itself be a symlink — ~/.aws onto an encrypted volume — and
+// a canonical target is never "inside" a lexical alias, so comparing the two
+// silently allows the read. Both forms are kept: the Bash branch matches this
+// list as text, where the literal ~/.aws is the form that appears in a command.
+function deniedPaths(home: string, realpath: (p: string) => string): string[] {
+  const lexical = [...DENIED_DIRS, ...DENIED_FILES].map((d) => resolve(home, d));
+  return [...new Set([...lexical, ...lexical.map((d) => canonical(d, home, home, realpath))])];
 }
 
 function expandHome(p: string, home: string): string {
@@ -127,7 +138,7 @@ export function decide(
   if (args === null || typeof args !== "object" || Array.isArray(args)) {
     return { allow: false, rule: "unparseable-input", detail: tool };
   }
-  const denied = deniedPaths(home);
+  const denied = deniedPaths(home, realpath);
   const canon = (p: string) => canonical(p, cwd, home, realpath);
   const reached = (t: string, withAncestors: boolean) =>
     denied.find((d) => isInside(t, d) || (withAncestors && isAncestorOf(t, d)));
@@ -155,26 +166,28 @@ export function decide(
     return hit ? { allow: false, rule: "inside-denied-path", detail: target } : { allow: true };
   }
 
-  if (SCANNING_ROOT.has(tool)) {
+  if (SCANNING_ROOT.has(tool) || tool === "Glob") {
     const rawRoot = typeof args.path === "string" && args.path !== "" ? args.path : cwd;
     const root = canon(rawRoot);
     if (basenameDenied(root)) return { allow: false, rule: "denied-basename", detail: root };
-    const hit = reached(root, true);
-    return hit ? { allow: false, rule: "root-reaches-denied-path", detail: root } : { allow: true };
-  }
+    if (reached(root, true)) return { allow: false, rule: "root-reaches-denied-path", detail: root };
 
-  if (tool === "Glob") {
-    const pattern = typeof args.pattern === "string" ? args.pattern : "";
-    // A pattern that climbs out of its root defeats a root-only check.
-    if (pattern.split("/").includes("..")) return { allow: false, rule: "escaping-pattern", detail: pattern };
+    const selectorKey = SELECTOR_KEY[tool];
+    const selector = selectorKey === undefined ? undefined : args[selectorKey];
+    // LS has no selector, and an absent one only means "the whole root", which
+    // the check above already cleared.
+    if (selector === undefined) return { allow: true };
+    // Fail closed on a shape this function cannot read, as with an exact target.
+    if (typeof selector !== "string") return { allow: false, rule: "unparseable-selector", detail: tool };
+    // A selector that climbs out of its root defeats a root-only check.
+    if (selector.split("/").includes("..")) return { allow: false, rule: "escaping-pattern", detail: selector };
     // "**/.env" and "**/*.pem" enumerate denied basenames under a permitted root.
-    if (basenameDenied(pattern)) return { allow: false, rule: "denied-basename-pattern", detail: pattern };
-    const prefix = globLiteralPrefix(pattern);
-    const rawRoot = typeof args.path === "string" && args.path !== "" ? args.path : cwd;
-    const root = canon(prefix === "" ? rawRoot
-      : isAbsolute(expandHome(prefix, home)) ? prefix : join(rawRoot, prefix));
-    const hit = reached(root, true);
-    return hit ? { allow: false, rule: "root-reaches-denied-path", detail: root } : { allow: true };
+    if (basenameDenied(selector)) return { allow: false, rule: "denied-basename-pattern", detail: selector };
+    const prefix = globLiteralPrefix(selector);
+    if (prefix === "") return { allow: true };
+    const selectorRoot = canon(isAbsolute(expandHome(prefix, home)) ? prefix : join(rawRoot, prefix));
+    const hit = reached(selectorRoot, true);
+    return hit ? { allow: false, rule: "root-reaches-denied-path", detail: selectorRoot } : { allow: true };
   }
 
   // Unclassified tool. Deny — an argument shape this function has never seen
