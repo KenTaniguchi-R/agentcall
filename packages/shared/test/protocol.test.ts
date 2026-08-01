@@ -3,6 +3,7 @@ import {
   CallRequest, CallerFrame, RelayToCallerFrame, ListenerToRelayFrame,
   HANDLE_RE, RESERVED_HANDLES, MAX_MESSAGE_BYTES, MAX_SESSION_ID_LENGTH, parseAddress, safeParseFrame,
   RegisterRequest, CallReply, IncomingCall, CallError, MAX_DETAIL_LENGTH, sanitizeDetail,
+  CallAccepted, CallStarted, CancelCall, CallCancelled, CallNotCancelled, RelayToListenerFrame,
 } from "../src/index.js";
 
 describe("handle rules", () => {
@@ -131,5 +132,44 @@ describe("RegisterRequest", () => {
   });
   it("still rejects invalid agent kinds", () => {
     expect(RegisterRequest.safeParse({ handle: "ken", agent_kind: "vim" }).success).toBe(false);
+  });
+});
+
+describe("cancellation and acknowledgement frames", () => {
+  it("accepts the acknowledgement frames", () => {
+    expect(CallAccepted.safeParse({ type: "call_accepted", call_id: "c1" }).success).toBe(true);
+    expect(CallStarted.safeParse({ type: "call_started", call_id: "c1" }).success).toBe(true);
+  });
+
+  it("accepts cancel_call from the relay", () => {
+    expect(CancelCall.safeParse({ type: "cancel_call", call_id: "c1" }).success).toBe(true);
+  });
+
+  it("requires a phase on call_cancelled", () => {
+    expect(CallCancelled.safeParse({ type: "call_cancelled", call_id: "c1", phase: "running" }).success).toBe(true);
+    expect(CallCancelled.safeParse({ type: "call_cancelled", call_id: "c1", phase: "pending" }).success).toBe(true);
+    expect(CallCancelled.safeParse({ type: "call_cancelled", call_id: "c1" }).success).toBe(false);
+    expect(CallCancelled.safeParse({ type: "call_cancelled", call_id: "c1", phase: "elsewhere" }).success).toBe(false);
+  });
+
+  it("constrains call_not_cancelled reasons", () => {
+    for (const reason of ["already_terminal", "unknown", "too_late"]) {
+      expect(CallNotCancelled.safeParse({ type: "call_not_cancelled", call_id: "c1", reason }).success).toBe(true);
+    }
+    expect(CallNotCancelled.safeParse({ type: "call_not_cancelled", call_id: "c1", reason: "because" }).success).toBe(false);
+  });
+
+  it("routes the new frames through the right unions", () => {
+    for (const f of [
+      { type: "call_accepted", call_id: "c1" },
+      { type: "call_started", call_id: "c1" },
+      { type: "call_cancelled", call_id: "c1", phase: "running" },
+      { type: "call_not_cancelled", call_id: "c1", reason: "too_late" },
+    ]) {
+      expect(ListenerToRelayFrame.safeParse(f).success, JSON.stringify(f)).toBe(true);
+      expect(RelayToListenerFrame.safeParse(f).success, JSON.stringify(f)).toBe(false);
+    }
+    expect(RelayToListenerFrame.safeParse({ type: "cancel_call", call_id: "c1" }).success).toBe(true);
+    expect(ListenerToRelayFrame.safeParse({ type: "cancel_call", call_id: "c1" }).success).toBe(false);
   });
 });

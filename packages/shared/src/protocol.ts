@@ -90,10 +90,37 @@ export const CallFailed = z.object({
   offered: z.array(z.string().regex(TASK_ID_RE)).max(MAX_OFFERED_TASKS).optional(),
 });
 
+// Acknowledgement splits in two because `call_answer` fired when the job
+// STARTED, which left the relay unable to distinguish "frame never arrived"
+// from "listener owns it but hasn't spawned yet". The task store needs that
+// distinction to map SUBMITTED vs WORKING and to decide whether a cancel
+// request must be negotiated with the listener at all.
+export const CallAccepted = z.object({ type: z.literal("call_accepted"), call_id: z.string() });
+export const CallStarted = z.object({ type: z.literal("call_started"), call_id: z.string() });
+
+export const CancelCall = z.object({ type: z.literal("cancel_call"), call_id: z.string() });
+
+// Sent ONLY after the pending closure was definitely removed, or the process
+// group was observed exited. Acknowledging on signal-sent would let the relay
+// publish a CANCELED task whose agent is still running on the callee's machine.
+export const CallCancelled = z.object({
+  type: z.literal("call_cancelled"),
+  call_id: z.string(),
+  phase: z.enum(["pending", "running"]),
+});
+export const CallNotCancelled = z.object({
+  type: z.literal("call_not_cancelled"),
+  call_id: z.string(),
+  reason: z.enum(["already_terminal", "unknown", "too_late"]),
+});
+
 export const CallerFrame = z.discriminatedUnion("type", [CallRequest]);
-export const ListenerToRelayFrame = z.discriminatedUnion("type", [CallAnswer, CallResult, CallFailed]);
+export const ListenerToRelayFrame = z.discriminatedUnion("type", [
+  CallAnswer, CallResult, CallFailed,
+  CallAccepted, CallStarted, CallCancelled, CallNotCancelled,
+]);
 export const RelayToCallerFrame = z.discriminatedUnion("type", [CallStatus, CallReply, CallError]);
-export const RelayToListenerFrame = z.discriminatedUnion("type", [IncomingCall]);
+export const RelayToListenerFrame = z.discriminatedUnion("type", [IncomingCall, CancelCall]);
 
 export const RegisterRequest = z.object({
   handle: z.string().regex(HANDLE_RE),
@@ -111,6 +138,11 @@ export type IncomingCallType = z.infer<typeof IncomingCall>;
 export type CallAnswerType = z.infer<typeof CallAnswer>;
 export type CallResultType = z.infer<typeof CallResult>;
 export type CallFailedType = z.infer<typeof CallFailed>;
+export type CallAcceptedType = z.infer<typeof CallAccepted>;
+export type CallStartedType = z.infer<typeof CallStarted>;
+export type CancelCallType = z.infer<typeof CancelCall>;
+export type CallCancelledType = z.infer<typeof CallCancelled>;
+export type CallNotCancelledType = z.infer<typeof CallNotCancelled>;
 export type RegisterRequestType = z.infer<typeof RegisterRequest>;
 export type RegisterResponseType = z.infer<typeof RegisterResponse>;
 export type CallerFrameType = z.infer<typeof CallerFrame>;

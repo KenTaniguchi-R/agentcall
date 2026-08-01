@@ -9,7 +9,7 @@ export interface SpawnSpec { cmd: string; args: string[]; cwd: string; env?: Nod
 export interface AgentOutput { text: string; session_id?: string }
 
 export class AgentRunError extends Error {
-  constructor(message: string, public code: "timeout" | "agent_error") { super(message); }
+  constructor(message: string, public code: "timeout" | "agent_error" | "canceled") { super(message); }
 }
 
 // Cap on accumulated stdout while an agent is running, independent of the
@@ -179,7 +179,7 @@ export function truncateUtf8(text: string, maxBytes: number): string {
 
 export function runAgent(
   kind: AgentKind, prompt: string, workdir: string, timeoutMs: number = AGENT_TIMEOUT_MS, specOverride?: SpawnSpec,
-  envelope: Envelope = FULL_ACCESS_ENVELOPE, callId: string = "unknown",
+  envelope: Envelope = FULL_ACCESS_ENVELOPE, callId: string = "unknown", signal?: AbortSignal,
 ): Promise<AgentOutput> {
   const spec = specOverride ?? buildSpawnSpec(kind, prompt, workdir, resolveAgentBin, envelope, callId);
   return new Promise<AgentOutput>((resolve, reject) => {
@@ -200,18 +200,34 @@ export function runAgent(
     let stderrBytes = 0;
     let timedOut = false;
     let overflowed = false;
+    let canceled = false;
     let settled = false;
     let killTimer: NodeJS.Timeout | undefined;
 
-    const killGroup = (signal: NodeJS.Signals) => {
+    const killGroup = (sig: NodeJS.Signals) => {
       if (child.pid === undefined) return;
-      try { process.kill(-child.pid, signal); } catch { /* group may already be gone */ }
+      try { process.kill(-child.pid, sig); } catch { /* group may already be gone */ }
     };
     const escalate = () => {
+      if (killTimer) clearTimeout(killTimer);
       killGroup("SIGTERM");
       killTimer = setTimeout(() => killGroup("SIGKILL"), KILL_GRACE_MS);
       killTimer.unref();
     };
+
+    // Cancellation reuses the existing teardown path: SIGTERM, grace, SIGKILL
+    // against the whole process group. The promise still settles from the
+    // `exit` handler below, which is what makes "cancelled" mean the process
+    // is actually gone rather than that a signal was sent.
+    const onAbort = () => {
+      if (settled) return;
+      canceled = true;
+      escalate();
+    };
+    if (signal) {
+      if (signal.aborted) queueMicrotask(onAbort);
+      else signal.addEventListener("abort", onAbort, { once: true });
+    }
 
     child.stdout.on("data", (d: Buffer) => {
       stdoutBytes += d.length;
@@ -236,6 +252,7 @@ export function runAgent(
       settled = true;
       clearTimeout(timer);
       if (killTimer) clearTimeout(killTimer);
+      if (signal) signal.removeEventListener("abort", onAbort);
       reject(new AgentRunError(String(e), "agent_error"));
     });
     // Settle on `exit`, not `close`: `close` waits for the stdio streams to
@@ -249,6 +266,8 @@ export function runAgent(
       settled = true;
       clearTimeout(timer);
       if (killTimer) clearTimeout(killTimer);
+      if (signal) signal.removeEventListener("abort", onAbort);
+      if (canceled) return reject(new AgentRunError("canceled", "canceled"));
       if (timedOut) return reject(new AgentRunError(`agent timed out after ${timeoutMs}ms`, "timeout"));
       if (overflowed) return reject(new AgentRunError(`agent stdout exceeded ${MAX_STDOUT_BYTES} bytes`, "agent_error"));
       // Decoded once here, not incrementally in the `data` handlers, so a

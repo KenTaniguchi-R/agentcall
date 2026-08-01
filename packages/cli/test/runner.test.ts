@@ -159,6 +159,46 @@ describe("truncateUtf8", () => {
 });
 
 describe("runAgent (with a fake agent binary)", () => {
+  // A child that never exits on its own, so only teardown can settle it.
+  const hangingSpec = () => ({
+    cmd: "node", args: ["-e", "setInterval(() => {}, 1000)"], cwd: "/tmp", env: process.env,
+  });
+  // A child that prints one claude-shaped result and exits immediately.
+  const okSpec = (text: string) => ({
+    cmd: "node",
+    args: ["-e", `console.log(${JSON.stringify(JSON.stringify({ type: "result", result: text, session_id: "s" }))})`],
+    cwd: "/tmp", env: process.env,
+  });
+
+  it("rejects with canceled when the signal aborts", async () => {
+    const ac = new AbortController();
+    const p = runAgent("claude", "p", WORKDIR, 60_000, hangingSpec(), FULL_ACCESS_ENVELOPE, "c1", ac.signal);
+    ac.abort();
+    await expect(p).rejects.toMatchObject({ code: "canceled" });
+  });
+
+  it("only settles after the process has actually exited", async () => {
+    const ac = new AbortController();
+    const p = runAgent("claude", "p", WORKDIR, 60_000, hangingSpec(), FULL_ACCESS_ENVELOPE, "c1", ac.signal);
+    let settled = false;
+    void p.catch(() => { settled = true; });
+    await new Promise((r) => setTimeout(r, 20));
+    expect(settled).toBe(false);
+    ac.abort();
+    await p.catch(() => {});
+    // Settling is driven by the child's `exit` event, so by the time the promise
+    // rejects the spawned process is gone. That is what makes the listener's
+    // cancellation acknowledgement honest.
+    expect(settled).toBe(true);
+  });
+
+  it("ignores an abort that arrives after the agent already finished", async () => {
+    const ac = new AbortController();
+    const out = await runAgent("claude", "p", WORKDIR, 60_000, okSpec("done"), FULL_ACCESS_ENVELOPE, "c1", ac.signal);
+    expect(out.text).toBe("done");
+    ac.abort();                            // must not throw or produce an unhandled rejection
+  });
+
   it("times out a hung process", async () => {
     // fake spec via kind override: use claude spec but point PATH at a script? Simpler:
     // runAgent accepts an optional spawnSpec override for tests.

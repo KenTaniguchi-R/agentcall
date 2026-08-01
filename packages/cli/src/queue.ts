@@ -1,18 +1,35 @@
+type Job = { key: string; run: (signal: AbortSignal) => Promise<void> };
+
 export class SerialQueue {
-  private jobs: Array<() => Promise<void>> = [];
+  private jobs: Job[] = [];
   private active = false;
   private idleResolvers: Array<() => void> = [];
+  private runningKey: string | undefined;
+  private runningAbort: AbortController | undefined;
 
   constructor(private maxPending: number) {}
 
   get pending(): number { return this.jobs.length; }
   get running(): boolean { return this.active; }
 
-  tryEnqueue(job: () => Promise<void>): boolean {
+  tryEnqueue(key: string, run: (signal: AbortSignal) => Promise<void>): boolean {
     if (this.active && this.jobs.length >= this.maxPending) return false;
-    this.jobs.push(job);
+    this.jobs.push({ key, run });
     void this.drain();
     return true;
+  }
+
+  /**
+   * Pending jobs are dropped outright — they never spawned, so there is
+   * nothing to confirm. A running job is only *signalled* here; the caller
+   * must wait for the job's own promise to settle before telling anyone the
+   * work is cancelled, because the process is not gone until then.
+   */
+  cancel(key: string): "pending" | "running" | "unknown" {
+    const i = this.jobs.findIndex((j) => j.key === key);
+    if (i >= 0) { this.jobs.splice(i, 1); return "pending"; }
+    if (this.runningKey === key) { this.runningAbort?.abort(); return "running"; }
+    return "unknown";
   }
 
   onIdle(): Promise<void> {
@@ -25,7 +42,11 @@ export class SerialQueue {
     this.active = true;
     while (this.jobs.length > 0) {
       const job = this.jobs.shift()!;
-      try { await job(); } catch { /* job errors are the job's problem */ }
+      this.runningKey = job.key;
+      this.runningAbort = new AbortController();
+      try { await job.run(this.runningAbort.signal); } catch { /* job errors are the job's problem */ }
+      this.runningKey = undefined;
+      this.runningAbort = undefined;
     }
     this.active = false;
     for (const r of this.idleResolvers.splice(0)) r();

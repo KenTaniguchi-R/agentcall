@@ -27,7 +27,7 @@ export function startListener(deps: ListenerDeps): { stop(): void } {
   // `agentcall listen` with a clear message, not fail every inbound call
   // individually. Changing it therefore needs a listener restart.
   const workdir = resolveWorkdir(deps.config, deps.paths);
-  const queue = new SerialQueue(deps.maxPending ?? 5);
+  const queue = new SerialQueue(deps.maxPending ?? 0);
   const backoff = deps.backoffMs ?? ((n) => Math.min(1000 * 2 ** n, 60_000) + Math.random() * 500);
   let stopped = false;
   let attempt = 0;
@@ -54,9 +54,24 @@ export function startListener(deps: ListenerDeps): { stop(): void } {
       if (s === "pong") return;
       const frame = safeParseFrame(RelayToListenerFrame, s);
       if (!frame) return;
+      const send = (obj: unknown) => { try { ws?.send(JSON.stringify(obj)); } catch { /* dead */ } };
+
+      if (frame.type === "cancel_call") {
+        const outcome = queue.cancel(frame.call_id);
+        // A pending job never spawned, so removal IS the confirmation. A
+        // running job is only signalled here — its own catch path sends
+        // call_cancelled once runAgent settles, which happens on the child's
+        // exit event.
+        if (outcome === "pending") {
+          send({ type: "call_cancelled", call_id: frame.call_id, phase: "pending" });
+        } else if (outcome === "unknown") {
+          send({ type: "call_not_cancelled", call_id: frame.call_id, reason: "unknown" });
+        }
+        return;
+      }
+
       const { call_id, from, message, task: requestedTask } = frame;
       const started = Date.now();
-      const send = (obj: unknown) => { try { ws?.send(JSON.stringify(obj)); } catch { /* dead */ } };
 
       // Resolve caller -> task -> envelope BEFORE the message is placed in any
       // prompt (see policy.ts). Refusals never enqueue and never spawn: no
@@ -77,8 +92,20 @@ export function startListener(deps: ListenerDeps): { stop(): void } {
       const task = resolution.task;
       const timeoutMs = task.timeout_s !== undefined ? task.timeout_s * 1000 : AGENT_TIMEOUT_MS;
 
-      const accepted = queue.tryEnqueue(async () => {
-        send({ type: "call_answer", call_id });
+      // call_accepted is sent from *inside* the job, not after tryEnqueue
+      // returns: tryEnqueue drains synchronously when the queue is idle, so
+      // this closure's body (up to its first await) already ran by the time
+      // tryEnqueue's return value is available out here. Sending it as this
+      // closure's first statement is what actually guarantees call_accepted
+      // precedes call_started on the wire.
+      const accepted = queue.tryEnqueue(call_id, async (signal) => {
+        // CAVEAT: this fires on the job's turn to run, not on admission —
+        // only harmless today because maxPending: 0 makes the two coincide.
+        // See "Deliberately NOT in this plan" in
+        // docs/superpowers/plans/2026-08-01-a2a-listener-protocol.md before
+        // raising maxPending.
+        send({ type: "call_accepted", call_id });
+        send({ type: "call_started", call_id });
         try {
           const out = await run(
             deps.config.agent_kind,
@@ -88,11 +115,19 @@ export function startListener(deps: ListenerDeps): { stop(): void } {
             undefined,
             task.envelope,
             call_id,
+            signal,
           );
           send({ type: "call_result", call_id, text: out.text, session_id: out.session_id, task: task.id });
           audit({ call_id, from, message: message.slice(0, 500), task: task.id, status: "ok", duration_ms: Date.now() - started });
         } catch (e) {
           const code = e instanceof AgentRunError ? e.code : "agent_error";
+          // runAgent settles from the child's exit handler, so reaching here
+          // with "canceled" means the process group is actually gone.
+          if (code === "canceled") {
+            send({ type: "call_cancelled", call_id, phase: "running" });
+            audit({ call_id, from, message: message.slice(0, 500), task: task.id, status: "canceled", duration_ms: Date.now() - started });
+            return;
+          }
           send({ type: "call_failed", call_id, code, detail: "The agent hit an internal error while answering." });
           audit({
             call_id, from, message: message.slice(0, 500), task: task.id, status: code,
