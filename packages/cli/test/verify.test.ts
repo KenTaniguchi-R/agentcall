@@ -1,3 +1,6 @@
+import { mkdirSync, mkdtempSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 import { getPaths } from "../src/paths.js";
 import { AgentRunError } from "../src/runner.js";
@@ -5,6 +8,7 @@ import { ASK_TASK } from "../src/tasks.js";
 import {
   checkAgentBinary,
   checkCodexAuth,
+  checkGuard,
   checkRelaySelfCall,
   checkAgentSpawn,
   classifyAgentFailure,
@@ -223,5 +227,43 @@ describe("checkRelaySelfCall", () => {
     });
     expect(c.ok).toBe(false);
     expect(c.hint).toContain("listener");
+  });
+});
+
+// A temp home whose calls.log already contains a denial, as a real guard run
+// would have left behind.
+function homeWithDenial(): string {
+  const home = mkdtempSync(join(tmpdir(), "guardcheck-"));
+  mkdirSync(join(home, ".agentcall"), { recursive: true });
+  writeFileSync(join(home, ".agentcall", "calls.log"),
+    JSON.stringify({ ts: "2026-07-31T00:00:00.000Z", type: "tool_denied", tool: "Read" }) + "\n");
+  return home;
+}
+
+describe("checkGuard", () => {
+  it("passes when the read was refused AND a denial was recorded", async () => {
+    const probe = async () => ({ output: "I could not read it.", home: homeWithDenial() });
+    expect((await checkGuard(probe)).ok).toBe(true);
+  });
+
+  it("fails when the canary comes back — the guard is not in force", async () => {
+    const probe = async () => ({ output: "It contains AGENTCALL-GUARD-CANARY", home: homeWithDenial() });
+    const c = await checkGuard(probe);
+    expect(c.ok).toBe(false);
+    expect(c.hint).toBeTruthy();
+  });
+
+  it("fails when nothing was denied, even though the canary is absent", async () => {
+    // The model simply never called Read. A clean transcript is not evidence
+    // that the guard is working.
+    const probe = async () => ({ output: "Sure, what would you like to know?", home: mkdtempSync(join(tmpdir(), "empty-")) });
+    const c = await checkGuard(probe);
+    expect(c.ok).toBe(false);
+    expect(c.detail).toContain("no denial was recorded");
+  });
+
+  it("fails when the probe throws", async () => {
+    const probe = async () => { throw new Error("claude not found"); };
+    expect((await checkGuard(probe)).ok).toBe(false);
   });
 });

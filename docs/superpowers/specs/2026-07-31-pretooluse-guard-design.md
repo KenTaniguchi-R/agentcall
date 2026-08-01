@@ -360,8 +360,12 @@ A denial appears in both. The signal stays sparse without the record being lossy
 **The precise claim is "every tool call that reaches the guard", not "every tool call".**
 Calls rejected by `--allowedTools` never fire a hook, so an attempt to use an MCP tool or
 spawn a subagent is refused by Claude and leaves no line here. Nor does a call whose hook
-process fails to start. Writing this down matters because the looser phrasing is the one
-that would end up in a compliance conversation, and it would not survive scrutiny.
+process fails to start. Nor does a call whose payload fails to parse (`runGuard` returns
+exit 2 before either log write, on the same fail-closed reasoning as a hook-start
+failure — writing to disk before the payload is understood would be recording data this
+function never actually decided on). Writing this down matters because the looser
+phrasing is the one that would end up in a compliance conversation, and it would not
+survive scrutiny.
 
 ### What the caller learns — the reason is a contract
 

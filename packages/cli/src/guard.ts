@@ -1,0 +1,310 @@
+import { basename, dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
+import { fileURLToPath } from "node:url";
+import type { Paths } from "./paths.js";
+
+export type GuardInput = {
+  tool_name: string;
+  tool_input: Record<string, unknown>;
+  cwd: string;
+};
+
+// `rule` and `detail` are audit-only. They name the matched rule and the
+// resolved path, and MUST NOT reach permissionDecisionReason — the caller-facing
+// reason is DENY_REASON, a fixed string with no per-denial content. See the
+// reason contract in the design spec.
+export type GuardVerdict =
+  | { allow: true; flag?: { rule: string; detail: string } }
+  | { allow: false; rule: string; detail: string };
+
+// Caller-facing. One sentence, no path, no rule name. Under test.
+export const DENY_REASON =
+  "This action is not permitted by the answering agent's policy.";
+
+// Home-relative directories. Everything beneath them is denied.
+const DENIED_DIRS = [
+  ".ssh", ".gnupg", ".aws", ".config/gcloud", "Library/Keychains",
+  ".agentcall",   // holds config.json and the relay token
+  ".claude",      // executable configuration; cf. CVE-2025-59536
+  "AgentCall/tasks",       // task frontmatter sets the envelope's caps verbatim
+  "Library/LaunchAgents",  // how the listener itself gets launched
+];
+
+// Home-relative single files.
+const DENIED_FILES = [
+  ".netrc", ".npmrc", ".docker/config.json", ".claude.json",
+  // Shell startup files: sourced on every new shell, so writing one is a
+  // persistence mechanism as durable as a LaunchAgent.
+  ".zshrc", ".zprofile", ".bashrc", ".bash_profile", ".profile",
+];
+
+// This module compiles to <package root>/dist/guard.js, one directory below
+// the installed package root — true both for a global npm install and for a
+// dev checkout run from the monorepo. Computed once at module scope:
+// import.meta.url is fixed for the process lifetime, so this is a constant,
+// not I/O, and decide() stays a pure function of its arguments even though
+// this value flows in as a default. Overridable via the `guardRoot` param so
+// tests can assert against a synthetic root instead of the machine's real one.
+const DEFAULT_PACKAGE_ROOT = dirname(dirname(fileURLToPath(import.meta.url)));
+
+// Basenames denied anywhere on disk. `.env.example` and friends are
+// deliberately excluded: they are not secrets, and denying them is the
+// false-positive failure the spec warns about.
+const DENIED_BASENAMES: RegExp[] = [
+  /^\.env$/,
+  /^\.env\.(?!example$|sample$|template$)/,
+  /^id_rsa$/, /^id_ed25519$/, /^id_ecdsa$/,
+  /\.pem$/, /\.p12$/, /\.pfx$/,
+];
+
+// Every tool the envelope can grant (see CLAUDE_TOOLS in runner.ts). A tool
+// absent from all four groups is DENIED, not allowed: an unclassified tool has
+// an argument shape this function cannot inspect. `LS` was missed exactly that
+// way in an earlier draft and fell through to allow.
+const EXACT_TARGET: Record<string, string> = {
+  Read: "file_path", Write: "file_path", Edit: "file_path", NotebookEdit: "notebook_path",
+};
+// Tools whose `path` argument names a root that is then searched or listed.
+// `Glob` joins them below: its root is implicit, but it is checked the same way.
+const SCANNING_ROOT = new Set(["Grep", "LS"]);
+// Tools with no filesystem argument at all. WebFetch is checked separately
+// below, not included here: its `url` can itself be a filesystem path via a
+// `file://` scheme, so it gets its own scheme check rather than a blanket allow.
+const NO_PATH_SURFACE = new Set(["WebSearch"]);
+// A glob selector is a path in disguise, and the root check never sees it:
+// Grep narrows its root with `glob`, Glob carries its whole path in `pattern`.
+// Both can name a denied basename under an otherwise permitted root, and both
+// can climb out of that root entirely. LS has no selector.
+const SELECTOR_KEY: Record<string, string> = { Grep: "glob", Glob: "pattern" };
+
+// package.json pins os: ["darwin"], and the default macOS filesystem is
+// case-INsensitive — ~/.SSH opens ~/.ssh. Folding can over-deny on a
+// case-sensitive volume, which is the safe direction for a floor.
+const fold = (p: string) => p.toLowerCase();
+
+// Denied roots are canonicalized alongside the targets they get compared with.
+// A denied root can itself be a symlink — ~/.aws onto an encrypted volume — and
+// a canonical target is never "inside" a lexical alias, so comparing the two
+// silently allows the read. Both forms are kept: the Bash branch matches this
+// list as text, where the literal ~/.aws is the form that appears in a command.
+// `extraRoots` are already absolute (the guard's own package root, not
+// home-relative) and are canonicalized the same way as the home-relative
+// table, for the same symlink reason.
+function deniedPaths(home: string, realpath: (p: string) => string, extraRoots: string[]): string[] {
+  const lexical = [...DENIED_DIRS, ...DENIED_FILES].map((d) => resolve(home, d));
+  const roots = [...lexical, ...extraRoots];
+  return [...new Set([...roots, ...roots.map((d) => canonical(d, home, home, realpath))])];
+}
+
+function expandHome(p: string, home: string): string {
+  if (p === "~") return home;
+  if (p.startsWith("~/")) return join(home, p.slice(2));
+  return p;
+}
+
+// realpath throws on a path that does not exist yet — a Write target, a
+// dangling symlink. Resolving the longest EXISTING ancestor and re-appending
+// the unresolved tail is what stops `/tmp/link/new_key` (link -> ~/.ssh) from
+// being compared as text and allowed.
+function canonical(p: string, cwd: string, home: string, realpath: (p: string) => string): string {
+  const expanded = expandHome(p, home);
+  const abs = isAbsolute(expanded) ? resolve(expanded) : resolve(cwd, expanded);
+  const tail: string[] = [];
+  let cur = abs;
+  for (;;) {
+    try {
+      return resolve(realpath(cur), ...[...tail].reverse());
+    } catch {
+      const parent = dirname(cur);
+      if (parent === cur) return abs;   // reached the root, nothing resolvable
+      tail.push(basename(cur));
+      cur = parent;
+    }
+  }
+}
+
+// relative() rather than startsWith(): resolve("/") is "/", so "/" + sep is
+// "//", which prefixes nothing — a prefix compare silently permits a search
+// rooted at the filesystem root.
+function isInside(target: string, denied: string): boolean {
+  const rel = relative(fold(denied), fold(target));
+  return rel === "" || (!rel.startsWith("..") && !isAbsolute(rel));
+}
+
+// A search rooted at `target` reaches `denied` when `target` is above it.
+// This is what stops Grep(path: "~") and Grep(path: "/").
+function isAncestorOf(target: string, denied: string): boolean {
+  const rel = relative(fold(target), fold(denied));
+  return rel !== "" && !rel.startsWith("..") && !isAbsolute(rel);
+}
+
+function basenameDenied(p: string): boolean {
+  const b = fold(basename(p));
+  return DENIED_BASENAMES.some((re) => re.test(b));
+}
+
+// Everything before the first magic character, trimmed back to a directory.
+// Glob carries its path inside `pattern`, so "/Users/o/.ssh/*" must be checked
+// even when `path` is absent entirely.
+function globLiteralPrefix(pattern: string): string {
+  const magic = pattern.search(/[*?[{]/);
+  const head = magic === -1 ? pattern : pattern.slice(0, magic);
+  const cut = head.lastIndexOf(sep);
+  return cut === -1 ? "" : head.slice(0, cut) || sep;
+}
+
+export function decide(
+  input: GuardInput,
+  home: string,
+  realpath: (p: string) => string,
+  guardRoot: string = DEFAULT_PACKAGE_ROOT,
+): GuardVerdict {
+  const { tool_name: tool, tool_input: args, cwd } = input;
+  if (args === null || typeof args !== "object" || Array.isArray(args)) {
+    return { allow: false, rule: "unparseable-input", detail: tool };
+  }
+  const denied = deniedPaths(home, realpath, [guardRoot]);
+  const canon = (p: string) => canonical(p, cwd, home, realpath);
+  const reached = (t: string, withAncestors: boolean) =>
+    denied.find((d) => isInside(t, d) || (withAncestors && isAncestorOf(t, d)));
+
+  if (tool === "Bash") {
+    const command = typeof args.command === "string" ? args.command : "";
+    const hit = denied.find((d) =>
+      fold(command).includes(fold(d)) || fold(command).includes(fold(d.replace(home, "~"))));
+    // Record and allow: string matching is too weak to be a boundary and too
+    // eager to be harmless. See the spec's Bash section — and note this means
+    // an `exec`-granted task has NO read floor.
+    return hit ? { allow: true, flag: { rule: "bash-references-denied-path", detail: hit } } : { allow: true };
+  }
+
+  if (NO_PATH_SURFACE.has(tool)) return { allow: true };
+
+  // WebFetch's `url` is safe to allow unread only if Claude Code itself
+  // rejects a non-http(s) scheme before this hook fires — an unstated
+  // external assumption a floor should not rest on. `file://…` would read
+  // the local filesystem through a tool this function otherwise never checks.
+  if (tool === "WebFetch") {
+    const url = args.url;
+    const ok = typeof url === "string" && (url.startsWith("http://") || url.startsWith("https://"));
+    return ok ? { allow: true } : { allow: false, rule: "unparseable-url", detail: tool };
+  }
+
+  const key = EXACT_TARGET[tool];
+  if (key !== undefined) {
+    const raw = args[key];
+    // Fail closed: a path-shaped tool with no usable path is not understood.
+    if (typeof raw !== "string" || raw === "") return { allow: false, rule: "unparseable-target", detail: String(raw) };
+    const target = canon(raw);
+    if (basenameDenied(target)) return { allow: false, rule: "denied-basename", detail: target };
+    const hit = reached(target, false);
+    return hit ? { allow: false, rule: "inside-denied-path", detail: target } : { allow: true };
+  }
+
+  if (SCANNING_ROOT.has(tool) || tool === "Glob") {
+    // Fail closed: a `path` that is present but not a string must not
+    // silently fall back to cwd. The branches on either side of this one
+    // already fail closed on an unparseable shape; this closes the gap
+    // between them.
+    if ("path" in args && typeof args.path !== "string") {
+      return { allow: false, rule: "unparseable-root", detail: tool };
+    }
+    const rawRoot = typeof args.path === "string" && args.path !== "" ? args.path : cwd;
+    const root = canon(rawRoot);
+    if (basenameDenied(root)) return { allow: false, rule: "denied-basename", detail: root };
+    if (reached(root, true)) return { allow: false, rule: "root-reaches-denied-path", detail: root };
+
+    const selectorKey = SELECTOR_KEY[tool];
+    const selector = selectorKey === undefined ? undefined : args[selectorKey];
+    if (selector === undefined) {
+      // LS has no selector, and for Grep an absent one only means "the whole
+      // root", which the check above already cleared. Glob is different: its
+      // `pattern` IS the path — there is no root check to fall back on — so
+      // an absent pattern is unparseable, not "search everything".
+      if (tool === "Glob") return { allow: false, rule: "unparseable-selector", detail: tool };
+      return { allow: true };
+    }
+    // Fail closed on a shape this function cannot read, as with an exact target.
+    if (typeof selector !== "string") return { allow: false, rule: "unparseable-selector", detail: tool };
+    // A selector that climbs out of its root defeats a root-only check.
+    if (selector.split("/").includes("..")) return { allow: false, rule: "escaping-pattern", detail: selector };
+    // "**/.env" and "**/*.pem" enumerate denied basenames under a permitted root.
+    if (basenameDenied(selector)) return { allow: false, rule: "denied-basename-pattern", detail: selector };
+    const prefix = globLiteralPrefix(selector);
+    if (prefix === "") return { allow: true };
+    const selectorRoot = canon(isAbsolute(expandHome(prefix, home)) ? prefix : join(rawRoot, prefix));
+    const hit = reached(selectorRoot, true);
+    return hit ? { allow: false, rule: "root-reaches-denied-path", detail: selectorRoot } : { allow: true };
+  }
+
+  // Unclassified tool. Deny — an argument shape this function has never seen
+  // cannot be inspected, and allowing it is how LS became a hole.
+  return { allow: false, rule: "unclassified-tool", detail: tool };
+}
+
+export interface GuardDeps {
+  paths: Paths;
+  callId: string;
+  now: () => string;
+  realpath: (p: string) => string;
+  appendLine: (file: string, line: string) => void;
+}
+
+// calls.log stays sparse and owner-facing; tools.log carries every call so the
+// audit-trail claim is true. A denial appears in both.
+export function runGuard(raw: string, deps: GuardDeps): { exitCode: number; stdout: string } {
+  let input: GuardInput;
+  try {
+    const parsed = JSON.parse(raw) as Partial<GuardInput>;
+    if (typeof parsed.tool_name !== "string" || parsed.tool_name === "") throw new Error("no tool_name");
+    input = {
+      tool_name: parsed.tool_name,
+      tool_input: (parsed.tool_input ?? {}) as Record<string, unknown>,
+      cwd: typeof parsed.cwd === "string" ? parsed.cwd : deps.paths.home,
+    };
+  } catch {
+    // Exit 2 blocks bluntly. The guard never allows because it failed to decide.
+    return { exitCode: 2, stdout: "" };
+  }
+
+  // EVERYTHING below is inside the failure boundary, including the log writes.
+  // An exception escaping this function exits the process 1, and Claude treats
+  // any exit other than 0 or 2 as a non-blocking error — so a full disk or a
+  // read-only home would silently turn the guard off. Fail closed instead.
+  try {
+    const verdict = decide(input, deps.paths.home, deps.realpath);
+    const ts = deps.now();
+    const write = (file: string, obj: Record<string, unknown>) =>
+      deps.appendLine(file, JSON.stringify({ ts, ...obj }));
+
+    write(deps.paths.toolsLog, {
+      type: "tool_call", call_id: deps.callId, tool: input.tool_name, allowed: verdict.allow,
+    });
+
+    if (!verdict.allow) {
+      write(deps.paths.callsLog, {
+        type: "tool_denied", call_id: deps.callId, tool: input.tool_name,
+        rule: verdict.rule, detail: verdict.detail,
+      });
+      return {
+        exitCode: 0,
+        stdout: JSON.stringify({
+          hookSpecificOutput: {
+            hookEventName: "PreToolUse",
+            permissionDecision: "deny",
+            permissionDecisionReason: DENY_REASON,
+          },
+        }),
+      };
+    }
+
+    if (verdict.flag) {
+      write(deps.paths.callsLog, {
+        type: "tool_flagged", call_id: deps.callId, tool: input.tool_name,
+        rule: verdict.flag.rule, detail: verdict.flag.detail,
+      });
+    }
+    return { exitCode: 0, stdout: "" };
+  } catch {
+    return { exitCode: 2, stdout: "" };
+  }
+}

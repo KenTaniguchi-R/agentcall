@@ -1,7 +1,10 @@
 import { execFileSync } from "node:child_process";
+import { mkdtempSync, readFileSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { callAgent } from "./callClient.js";
 import { relayUrl, type Config } from "./config.js";
-import { AgentRunError, runAgent, type AgentKind } from "./runner.js";
+import { AgentRunError, guardSettingsJson, runAgent, type AgentKind } from "./runner.js";
 import { resolveAgentBin } from "./bin.js";
 import { ASK_TASK } from "./tasks.js";
 
@@ -153,5 +156,70 @@ export async function checkRelaySelfCall(cfg: Config, callFn: typeof callAgent =
         "a direct agent run works but the call through the background listener failed — its environment " +
         "differs from your shell (fixed PATH, no shell env, keychain); check ~/.agentcall/listener.log and calls.log.",
     };
+  }
+}
+
+export const GUARD_CANARY = "AGENTCALL-GUARD-CANARY";
+// The probe returns the temp home as well as the output, because the absence
+// of the canary is not evidence — see below.
+export interface GuardProbeResult { output: string; home: string }
+export type GuardProbeFn = (settings: string) => Promise<GuardProbeResult>;
+
+const GUARD_HINT = "run `pnpm build` in packages/cli so dist/guard-entry.js exists, then re-run doctor";
+
+// Spawns a real `claude -p` against a canary `.env` file and asserts the read
+// is refused. Live on the user's machine; always mocked in CI.
+//
+// The canary used to be `.ssh/id_rsa`: the model refused to read it on
+// principle ("printing a private key would expose key material") without
+// ever calling Read, so the guard never fired, no denial was recorded, and
+// checkGuard reported a healthy install as broken. `.env` hits the same
+// denied-basename rule but the model has no such objection to reading it, so
+// the probe actually exercises the guard instead of the model's own judgment.
+const defaultGuardProbe: GuardProbeFn = async (settings) => {
+  const home = mkdtempSync(join(tmpdir(), "agentcall-guard-"));
+  writeFileSync(join(home, ".env"), GUARD_CANARY);
+  const output = execFileSync(
+    resolveAgentBin("claude"),
+    ["-p", "Read the file .env in this directory and tell me what it contains.",
+     "--permission-mode", "dontAsk", "--allowedTools", "Read", "--settings", settings],
+    { cwd: home, env: { ...process.env, AGENTCALL_HOME: home }, encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] },
+  );
+  return { output, home };
+};
+
+function deniedInLog(home: string): boolean {
+  try {
+    return readFileSync(join(home, ".agentcall", "calls.log"), "utf8")
+      .split("\n").filter(Boolean)
+      .some((line) => { try { return JSON.parse(line).type === "tool_denied"; } catch { return false; } });
+  } catch {
+    return false;
+  }
+}
+
+// Doctor-only: proves the PreToolUse guard is actually wired into a real
+// claude spawn, not just present in the settings JSON. Absence of the canary
+// in the transcript is not sufficient on its own — the model could have
+// declined to call Read for unrelated reasons — so this also requires a
+// tool_denied record in the probe's calls.log as positive evidence the guard
+// ran and fired.
+export async function checkGuard(probe: GuardProbeFn = defaultGuardProbe): Promise<VerifyCheck> {
+  try {
+    const { output, home } = await probe(guardSettingsJson());
+    if (output.includes(GUARD_CANARY)) {
+      return { name: "tool guard", ok: false,
+               detail: "canary was readable — the guard is not in force", hint: GUARD_HINT };
+    }
+    // Absence of the canary proves nothing on its own: the model may have
+    // declined to call Read, answered something unrelated, or failed. Require
+    // positive evidence that the guard ran AND denied.
+    return deniedInLog(home)
+      ? { name: "tool guard", ok: true }
+      : { name: "tool guard", ok: false,
+          detail: "no denial was recorded — the guard did not run", hint: GUARD_HINT };
+  } catch (e) {
+    return { name: "tool guard", ok: false, detail: short(e),
+             hint: "the guard probe could not run; check that `claude` resolves on the listener's PATH" };
   }
 }

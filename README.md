@@ -204,8 +204,11 @@ instruction, never a boundary; see below.
 - Known residual risks (accepted, not eliminated):
   - Prompt injection in a caller's message can burn the callee's tokens, and —
     within the granted capabilities — read or write anywhere the owner's own
-    agent could. Capability scoping bounds *what kind* of action is possible,
-    not *where*.
+    agent could via `exec` (shell commands are recorded, not blocked — see
+    Tool guard below) or on a Codex answering agent, which has no read guard.
+    On a Claude answering agent using `Read`/`Write`/`Edit`/`Glob`/`Grep`, the
+    tool guard below refuses the credential paths it covers. Capability
+    scoping bounds *what kind* of action is possible, not *where*.
   - The working directory is a prompt instruction, not an enforced boundary.
     An agent granted `read` can read outside it regardless of `workdir`.
   - The relay operator can read message plaintext — there's no end-to-end
@@ -214,11 +217,37 @@ instruction, never a boundary; see below.
     callee's Claude Code session history (`~/.claude/projects/*`, which can
     contain pasted secrets and private code), API keys in `~/.claude.json`'s
     `mcpServers` entries, `~/.ssh`, `~/.aws`, or the relay token in
-    `~/.agentcall/config.json`. **Only share your address with people you
-    would trust to run a read-only command in your home directory.**
+    `~/.agentcall/config.json`. The tool guard below refuses these paths for a
+    Claude answering agent's file-reading tools, but not for `exec`, and not
+    at all for a Codex answering agent. **Only share your address with people
+    you would trust to run a read-only command in your home directory.**
   - Executable configuration surfaces (`~/.claude/CLAUDE.md`, `hooks`,
     `plugins`, `commands`, `agents`) are writable by an agent granted `write`,
-    so a hostile prompt can persist beyond the call.
+    so a hostile prompt can persist beyond the call. On Claude, the tool guard
+    refuses `Write`/`Edit` to `~/.claude/**`, to its own installed package
+    root (so a write-only call cannot neuter the guard for the next tool call
+    in the same session — a fresh process re-imports it from disk on every
+    call), to `~/AgentCall/tasks` (so a write-only call cannot rewrite an
+    already-offered task's capability envelope, which is read verbatim from
+    frontmatter), to `~/Library/LaunchAgents`, and to shell startup files
+    (`.zshrc` and friends). This risk remains live via `exec` and on a Codex
+    answering agent, which has no read guard.
+
+**Tool guard.** Tool calls a caller's agent makes on your machine are checked before
+they run. File reads, writes, searches, and listings that reach credential paths
+(`~/.ssh`, `~/.aws`, `.env`, Keychains, `~/.agentcall`, `~/.claude`), the guard's own
+installed code, `~/AgentCall/tasks`, `~/Library/LaunchAgents`, and shell startup files
+are refused, and every tool call reaching the guard is recorded to
+`~/.agentcall/tools.log`. `agentcall doctor` verifies the guard is in force.
+
+Two limits, stated plainly:
+
+- **A task that grants `exec` has no read floor.** Shell commands are recorded, not
+  blocked — pattern-matching a command string is too weak to be a boundary and too
+  eager to be harmless. The control on `exec` is which tasks you choose to write.
+- **Claude answering agents only.** Codex has no equivalent hook wired yet, so a Codex
+  answering agent has no read guard at all; its `--sandbox` level confines writes but
+  not reads.
 
 ## Development
 

@@ -5,7 +5,7 @@ import { callAgent } from "./callClient.js";
 import { loadConfig, relayUrl, resolveWorkdir, type Config, type Workdir } from "./config.js";
 import { LAUNCH_LABEL } from "./launchd.js";
 import type { Paths } from "./paths.js";
-import { checkRelaySelfCall, formatCheck, short, verifyAgent, type VerifyCheck, type VerifyFns } from "./verify.js";
+import { checkGuard, checkRelaySelfCall, formatCheck, short, verifyAgent, type GuardProbeFn, type VerifyCheck, type VerifyFns } from "./verify.js";
 
 export interface DoctorDeps {
   paths: Paths;
@@ -16,6 +16,7 @@ export interface DoctorDeps {
   launchctlList?: () => string;
   isDarwin?: boolean;
   log?: (line: string) => void;
+  guardFn?: GuardProbeFn;
 }
 
 const defaultLaunchctlList = () =>
@@ -96,6 +97,13 @@ export async function runDoctor(deps: DoctorDeps): Promise<number> {
   const agentChecks = await verifyAgent(cfg.agent_kind, workdir?.dir ?? deps.paths.publicDir, deps.verifyFns);
   for (const c of agentChecks) report(c);
   const agentOk = agentChecks.every((c) => c.ok);
+
+  // Claude-only: the guard is registered on claude spawns, and checkGuard
+  // spawns claude to probe it. Gated on agentOk because probing through a
+  // broken agent tests nothing.
+  if (cfg.agent_kind === "claude" && agentOk) {
+    report(await checkGuard(deps.guardFn));
+  }
 
   if (agentOk && online) {
     report(await checkRelaySelfCall(cfg, deps.callFn));
