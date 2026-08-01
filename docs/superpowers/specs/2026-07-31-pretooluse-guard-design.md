@@ -448,10 +448,41 @@ test run.
    not.** See finding 5.
 3. ~~Hook process cost per tool call.~~ **Resolved — ~33 ms standalone, ~78 ms through
    command dispatch.** See finding 6.
-4. **Behaviour under genuinely parallel tool calls.** Findings 1–4 each exercised one
-   tool call at a time. Copilot's fail-open bug is specifically a *parallel* one, so the
-   contention case is measured but not yet observed. Worth a deliberate multi-call test
-   during implementation rather than another gate now.
+4. ~~Behaviour under genuinely parallel tool calls.~~ **Resolved during implementation** —
+   `guard-entry.test.ts` spawns 8 concurrent hook processes and asserts both the timeout
+   budget and that `tools.log` receives exactly 8 parseable lines with none lost or torn.
+
+## Follow-ups after implementation
+
+Carried out of the final review, deliberately not fixed before merge. Each has a ruling.
+
+5. **The `Bash` flag misses relative paths.** It matches only absolute or `~`-prefixed
+   denied paths, so `cat .ssh/id_rsa` is neither blocked nor flagged. Observed live: after
+   its `Read` was denied, the model attempted exactly that shape twice.
+   *Ruling: defer.* Matching relative paths would strengthen the **observer** without
+   strengthening the **control**, which is the failure mode the Bash section above is most
+   careful to avoid, and it revives the false positives (`cat .env.example`) that motivated
+   record-don't-deny. But the flag is the owner's only visibility on `exec`, and the gap
+   correlates with adversarial behaviour — exactly when the log line matters most. The
+   right fix is to match denied *basenames* anywhere in a command, flag-only, never deny.
+
+6. **The guard's own package root is read-denied, where only write is dangerous.** In a
+   dev checkout the root is `packages/cli`, so a caller cannot read `src/guard.ts` or
+   `package.json`. The rest of the repo stays readable, and a normal install puts the root
+   in `node_modules` where nobody would look.
+   *Ruling: defer.* Safe direction, dev-only, and splitting the table into read-denied and
+   write-denied shapes costs real complexity for one case. Recorded because it does cut
+   against [lessons-from-composio §7](../../research/2026-07-31-lessons-from-composio.md) —
+   when trust is the product, being readable is part of the product.
+
+7. **A shared `packages/cli/test/helpers.ts` is now wanted.** `homeWithDenial()` is
+   duplicated across `verify.test.ts` and `doctor.test.ts`; `payload()` duplicates `call()`
+   in `guard.test.ts`. Second and third signals for one module. *Ruling: defer, cosmetic.*
+
+Verified during the final review and **not** issues: `guardRoot` resolves to the package
+root (covering `dist/`, `bin/`, `package.json`) for both a global install and a dev
+checkout; a symlinked install cannot evade it, because Node resolves `import.meta.url`
+through `realpath` and `canonical()` realpaths the target, so both sides agree.
 
 ---
 
