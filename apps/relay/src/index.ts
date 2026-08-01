@@ -1,5 +1,6 @@
 import { Hono } from "hono";
 import { CardUpload, RegisterRequest, RESERVED_HANDLES } from "@benree/agentcall-shared";
+import { mountA2A } from "./a2a.js";
 import { generateToken, sha256Hex, verifyHandleToken } from "./auth.js";
 import { INSTALL_SH } from "./install-sh.js";
 
@@ -23,6 +24,7 @@ export type Env = {
 const RELAY_HOST = "agentcall.benree.tech";
 
 const app = new Hono<{ Bindings: Env }>();
+mountA2A(app);
 
 async function handleExists(db: D1Database, handle: string): Promise<boolean> {
   return !!(await db.prepare("SELECT 1 FROM handles WHERE handle = ?").bind(handle).first());
