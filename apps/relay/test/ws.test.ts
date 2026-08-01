@@ -13,16 +13,17 @@ describe("listener attach + status", () => {
 
   it("status flips online when a listener attaches", async () => {
     const token = await registerHandle("carol");
-    let status = await SELF.fetch("https://relay.test/v1/status/carol");
+    let status = await SELF.fetch("https://relay.test/v1/status/carol", { headers: wsAuth("carol", token) });
     expect((await status.json<{ online: boolean }>()).online).toBe(false);
 
     await openWs("/v1/ws?role=listen", wsAuth("carol", token));
-    status = await SELF.fetch("https://relay.test/v1/status/carol");
+    status = await SELF.fetch("https://relay.test/v1/status/carol", { headers: wsAuth("carol", token) });
     expect((await status.json<{ online: boolean }>()).online).toBe(true);
   });
 
   it("404s status for unknown handle", async () => {
-    const res = await SELF.fetch("https://relay.test/v1/status/nobody");
+    const token = await registerHandle("nobody-asker");
+    const res = await SELF.fetch("https://relay.test/v1/status/nobody", { headers: wsAuth("nobody-asker", token) });
     expect(res.status).toBe(404);
   });
 
@@ -76,5 +77,46 @@ describe("listener attach + status", () => {
     const frame = await incoming;
     expect(frame.type).toBe("incoming_call");
     expect(frame.from).toBe("solo2");
+  });
+  // /v1/status was anonymous and unthrottled, which made it a presence
+  // oracle: 404-vs-200 enumerates registered handles (the namespace is
+  // first-name shaped), and polling `online` gives anyone a live "is this
+  // person at their desk" feed. Callers already need a token to place a call,
+  // so requiring one to observe presence costs a legitimate caller nothing.
+  it("401s an anonymous status probe", async () => {
+    await registerHandle("s-target");
+    expect((await SELF.fetch("https://relay.test/v1/status/s-target")).status).toBe(401);
+  });
+
+  it("401s a status probe bearing a bad token", async () => {
+    await registerHandle("s-target2");
+    const res = await SELF.fetch("https://relay.test/v1/status/s-target2", { headers: wsAuth("s-target2", "wrong") });
+    expect(res.status).toBe(401);
+  });
+
+  it("serves a registered caller asking about someone else", async () => {
+    await registerHandle("s-target3");
+    const viewer = await registerHandle("s-viewer");
+    const res = await SELF.fetch("https://relay.test/v1/status/s-target3", { headers: wsAuth("s-viewer", viewer) });
+    expect(res.status).toBe(200);
+    expect((await res.json<{ online: boolean }>()).online).toBe(false);
+  });
+
+  // Existence must not leak to an unauthenticated prober: a 404 here would
+  // still answer "does this handle exist?" without any credential.
+  it("401s rather than 404s when the probed handle does not exist", async () => {
+    expect((await SELF.fetch("https://relay.test/v1/status/never-registered")).status).toBe(401);
+  });
+
+  // Probes an unregistered handle on purpose: the limiter runs before the
+  // existence check, so this exercises it without waking a Durable Object 60
+  // times over (which blows vitest-pool-workers isolated storage).
+  it("throttles status reads from one source past the burst limit", async () => {
+    const token = await registerHandle("rl-reader");
+    const headers = { ...wsAuth("rl-reader", token), "cf-connecting-ip": "203.0.113.9" };
+    for (let i = 0; i < 60; i++) {
+      expect((await SELF.fetch("https://relay.test/v1/status/rl-absent", { headers })).status).toBe(404);
+    }
+    expect((await SELF.fetch("https://relay.test/v1/status/rl-absent", { headers })).status).toBe(429);
   });
 });

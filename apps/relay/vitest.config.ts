@@ -17,6 +17,7 @@ export default defineWorkersConfig(async () => {
             ratelimits: {
               REGISTER_RL: { namespace_id: "1001", simple: { limit: 5, period: 60 } },
               CARD_RL: { namespace_id: "1002", simple: { limit: 20, period: 60 } },
+              READ_RL: { namespace_id: "1003", simple: { limit: 60, period: 60 } },
             },
           },
         },

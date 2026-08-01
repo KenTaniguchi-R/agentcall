@@ -95,12 +95,10 @@ program
   .argument("<address>", "contact name or handle@host to check")
   .action(async (address: string) => {
     const paths = getPaths();
-    let cfgRelay: string;
-    try {
-      cfgRelay = relayUrl(loadConfig(paths));
-    } catch {
-      cfgRelay = relayUrl(undefined);
-    }
+    // Presence is caller-only on the relay, so status now needs credentials —
+    // this used to fall back to the default relay with no config at all.
+    const cfg = loadConfig(paths);
+    const cfgRelay = relayUrl(cfg);
     const parsed = resolveAddress(paths, address, cfgRelay);
     if (!parsed.ok) {
       console.error(parsed.error);
@@ -109,7 +107,7 @@ program
     }
     if (parsed.warning) console.error(parsed.warning);
     try {
-      const { online } = await getStatus(cfgRelay, parsed.handle);
+      const { online } = await getStatus(cfgRelay, parsed.handle, { handle: cfg.handle, token: cfg.token });
       console.log(online ? "online" : "offline");
       process.exitCode = online ? 0 : 2;
     } catch (e) {

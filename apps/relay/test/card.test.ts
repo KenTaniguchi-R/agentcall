@@ -102,6 +102,16 @@ describe("GET /v1/card/:handle", () => {
     expect(card.tasks.map((t) => t.id)).toEqual(["ask"]);
   });
 
+  it("throttles anonymous card reads from one source past the burst limit", async () => {
+    const token = await registerHandle("rlcard");
+    await putCard("rlcard", token);
+    const headers = { "cf-connecting-ip": "203.0.113.10" };
+    for (let i = 0; i < 60; i++) {
+      expect((await SELF.fetch("https://relay.test/v1/card/rlcard", { headers })).status).toBe(200);
+    }
+    expect((await SELF.fetch("https://relay.test/v1/card/rlcard", { headers })).status).toBe(429);
+  });
+
   it("401s when auth headers are present but invalid", async () => {
     const token = await registerHandle("ext3");
     await putCard("ext3", token);

@@ -10,6 +10,11 @@ export type Env = {
   HANDLE_DO: DurableObjectNamespace;
   REGISTER_RL: RateLimit;
   CARD_RL: RateLimit;
+  // Shared ceiling for the two cheap read endpoints (status + card GET),
+  // keyed by source IP. Neither was throttled at all, which left the handle
+  // namespace scrapeable for free and every probe waking a Durable Object at
+  // the operator's expense.
+  READ_RL: RateLimit;
 };
 // Not exported: workerd treats every named export of the entry module as a
 // potential WorkerEntrypoint and rejects non-handler values outright
@@ -43,7 +48,21 @@ app.post("/v1/register", async (c) => {
   return c.json({ token, address: `${handle}@${RELAY_HOST}` });
 });
 
+// Presence is caller-only. Anonymous, this endpoint was an oracle: 404-vs-200
+// enumerated registered handles (the namespace is first-name shaped, so a name
+// dictionary walks it in seconds) and polling `online` gave anyone a live "is
+// this person at their desk" feed. Placing a call already requires a token, so
+// requiring one to observe presence costs a legitimate caller nothing.
+//
+// Auth runs before the existence check — deliberately. A 404 to an
+// unauthenticated prober would still answer "does this handle exist?" without
+// any credential, which is most of what the oracle was worth.
 app.get("/v1/status/:handle", async (c) => {
+  const viewer = c.req.header("X-AgentCall-Handle") ?? "";
+  const token = (c.req.header("Authorization") ?? "").replace(/^Bearer\s+/i, "");
+  if (!(await verifyHandleToken(c.env.DB, viewer, token))) return c.json({ error: "unauthorized" }, 401);
+  const ip = c.req.header("cf-connecting-ip") ?? "unknown";
+  if (!(await c.env.READ_RL.limit({ key: ip })).success) return c.json({ error: "rate limited" }, 429);
   const handle = c.req.param("handle");
   if (!(await handleExists(c.env.DB, handle))) return c.json({ error: "unknown handle" }, 404);
   const stub = c.env.HANDLE_DO.get(c.env.HANDLE_DO.idFromName(handle));
@@ -65,6 +84,12 @@ app.put("/v1/card", async (c) => {
 });
 
 app.get("/v1/card/:handle", async (c) => {
+  // Throttled before anything else, unlike /v1/status above: card reads stay
+  // deliberately anonymous (the extended-card view below is designed for an
+  // unauthenticated viewer), so a per-IP cost ceiling is the only thing
+  // bounding someone scraping the whole handle namespace through them.
+  const ip = c.req.header("cf-connecting-ip") ?? "unknown";
+  if (!(await c.env.READ_RL.limit({ key: ip })).success) return c.json({ error: "rate limited" }, 429);
   const handle = c.req.param("handle");
   const row = await c.env.DB.prepare("SELECT card_json, updated_at FROM cards WHERE handle = ?")
     .bind(handle).first<{ card_json: string; updated_at: number }>();

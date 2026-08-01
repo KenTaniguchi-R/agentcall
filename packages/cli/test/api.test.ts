@@ -80,17 +80,49 @@ describe("api client", () => {
   });
   it("status times out with a clear error when the relay never responds", async () => {
     const relay = await serveNever();
-    await expect(getStatus(relay, "ken", { timeoutMs: 100 })).rejects.toMatchObject({
+    await expect(getStatus(relay, "ken", { handle: "me", token: "tok" }, { timeoutMs: 100 })).rejects.toMatchObject({
       code: "network",
       message: expect.stringMatching(/did not respond/),
     });
   });
   it("gets status and maps 404", async () => {
     const relay = await serve(200, { online: true });
-    expect(await getStatus(relay, "ken")).toEqual({ online: true });
+    expect(await getStatus(relay, "ken", { handle: "me", token: "tok" })).toEqual({ online: true });
     const relay2 = await serve(404, { error: "unknown handle" });
-    await expect(getStatus(relay2, "ghost")).rejects.toMatchObject({ code: "unknown_handle" });
+    await expect(getStatus(relay2, "ghost", { handle: "me", token: "tok" })).rejects.toMatchObject({ code: "unknown_handle" });
   });
+  // The relay stopped serving presence anonymously (it was an enumeration and
+  // "is this person at their desk" oracle), so every status check must carry
+  // the caller's own credentials.
+  it("sends caller credentials on a status check", async () => {
+    let headers: IncomingMessage["headers"] | undefined;
+    const relay = await new Promise<string>((resolve) => {
+      server = createServer((req, res) => {
+        headers = req.headers;
+        res.writeHead(200, { "content-type": "application/json" });
+        res.end(JSON.stringify({ online: true }));
+      });
+      server.listen(0, "127.0.0.1", () => resolve(`http://127.0.0.1:${(server.address() as { port: number }).port}`));
+    });
+    await getStatus(relay, "ken", { handle: "me", token: "tok" });
+    expect(headers?.authorization).toBe("Bearer tok");
+    expect(headers?.["x-agentcall-handle"]).toBe("me");
+  });
+
+  it("maps a rejected status check to a re-run-setup message", async () => {
+    const relay = await serve(401, { error: "unauthorized" });
+    await expect(getStatus(relay, "ken", { handle: "me", token: "bad" })).rejects.toMatchObject({
+      message: expect.stringMatching(/agentcall setup/),
+    });
+  });
+
+  it("maps a throttled status check to its own message rather than a generic failure", async () => {
+    const relay = await serve(429, { error: "rate limited" });
+    await expect(getStatus(relay, "ken", { handle: "me", token: "tok" })).rejects.toMatchObject({
+      message: expect.stringMatching(/too many/i),
+    });
+  });
+
   it("registers caller-only: omits agent_kind from the request body entirely", async () => {
     const captured: unknown[] = [];
     const relay = await serveCapturing(200, { token: "tok", address: "solo@agentcall.benree.tech" }, captured);

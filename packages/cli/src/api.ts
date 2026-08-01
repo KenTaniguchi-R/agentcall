@@ -56,10 +56,20 @@ export async function registerHandle(
   return (await res.json()) as { token: string; address: string };
 }
 
+// Presence is caller-only on the relay now, so this always authenticates —
+// `auth` is required rather than optional to make that a compile-time fact
+// instead of a runtime 401.
 export async function getStatus(
-  relay: string, handle: string, opts: { timeoutMs?: number } = {},
+  relay: string, handle: string, auth: { handle: string; token: string }, opts: { timeoutMs?: number } = {},
 ): Promise<{ online: boolean }> {
-  const res = await relayFetch(relay, `/v1/status/${handle}`, {}, opts.timeoutMs ?? RELAY_TIMEOUT_MS);
+  const res = await relayFetch(
+    relay,
+    `/v1/status/${handle}`,
+    { headers: { Authorization: `Bearer ${auth.token}`, "X-AgentCall-Handle": auth.handle } },
+    opts.timeoutMs ?? RELAY_TIMEOUT_MS,
+  );
+  if (res.status === 401) throw new ApiError("Your credentials were rejected. Re-run `agentcall setup`.", "invalid");
+  if (res.status === 429) throw new ApiError("Too many status checks — try again in a minute.", "network");
   if (res.status === 404) throw new ApiError(`No agent registered as "${handle}".`, "unknown_handle");
   if (!res.ok) throw new ApiError(`Status check failed (${res.status}).`, "network");
   return (await res.json()) as { online: boolean };
