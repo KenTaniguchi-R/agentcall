@@ -17,7 +17,7 @@
 - **Stale threshold is 3 days** of no `updated_at` activity.
 - **`dry_run` defaults to `true` for manual dispatch, but must be `false` on the schedule.** Backwards, and the reaper never reaps while looking healthy in its logs.
 - **Stage files explicitly** — `git add <file> <file>`, never `git add -A` or `git add .` (repo rule, `CLAUDE.md`).
-- **Nothing here touches `packages/` or `apps/`.** The test suites are unaffected, but `pnpm -r test && pnpm -r typecheck && pnpm -r build` still run clean before the final commit.
+- **Nothing here touches `packages/` or `apps/`.** The test suites are unaffected, but `pnpm -r build && pnpm -r typecheck && pnpm -r test` still run clean before the final commit. Build first — `packages/cli` typechecks against `packages/shared`'s built `dist`.
 
 ## Plan-level refinement to the spec
 
