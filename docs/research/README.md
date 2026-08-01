@@ -3,8 +3,8 @@
 Market and competitive research for agentcall. **These are research notes, not
 decisions.** No implementation follows from them without a separate call.
 
-All five docs date from 2026-07-31 and were produced together; read them as one body
-of work rather than five independent studies.
+All six docs date from 2026-07-31 and were produced together; read them as one body
+of work rather than six independent studies.
 
 ## Reading order
 
@@ -20,8 +20,9 @@ produced in. Later research revised earlier conclusions, so the production order
 | 3 | [agent-coordination-landscape](./2026-07-31-agent-coordination-landscape.md) | Who else is in this market? Where is the gap? |
 | 4 | [enterprise-pivot-research](./2026-07-31-enterprise-pivot-research.md) | Who is the direct competitor, and how should the enterprise version work? |
 | 5 | [claude-code-enforcement-surfaces](./2026-07-31-claude-code-enforcement-surfaces.md) | With the OS sandbox gone, what can actually enforce policy — and what can't? |
+| 6 | [lessons-from-composio](./2026-07-31-lessons-from-composio.md) | How does a shipping Claude Code plugin do this, and what should we copy? |
 
-Two notes on the sequence:
+Three notes on the sequence:
 
 - **#3 predates two decisions made the same day.** `agent-coordination-landscape` was
   written before the sandbox was dropped and before Q&A-first was chosen. Its
@@ -32,6 +33,10 @@ Two notes on the sequence:
   constrains #4: `ask` rules error under `claude -p`, so the draft-then-approve flow
   recommended there cannot be built on Claude's own permission mechanism and has to live
   in our protocol. Read it in sequence, not on demand.
+- **#6 found a gap the other five missed.** `agentcall search` — resolving *who* to ask.
+  Every other doc assumes the caller already knows the address. In a 500-person company
+  they do not, and that is the asker's half of the #2 pain in #1. Discovery is a
+  separate problem from calling, and only calling is built.
 
 ## The five findings that matter
 
