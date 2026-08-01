@@ -352,9 +352,25 @@ data at all.
 
 Fixed in `fix(guard): the codex guard was registered but never ran`. The bypass is safe
 only paired with `--ignore-user-config`, which drops `$CODEX_HOME/config.toml` — where
-Codex records trusted project directories — so the cwd/tree/repo layers stay disabled and
-a `.codex/hooks.json` planted in the workspace by a caller holding the write cap is not
-loaded. Verified by planting one: it did not run, while agentcall's own hook did.
+Codex records trusted project directories as `[projects."<path>"] trust_level = "trusted"`
+— so with no trust list loaded the project config layers stay disabled and a
+`.codex/hooks.json` planted in the workspace by a caller holding the write cap is not
+loaded.
+
+**The first version of this test was invalid, and the corrected one matters.** Planting a
+hook in a scratch directory proves nothing: an untrusted directory's hooks are skipped
+regardless, so the test had no power to detect the failure it was supposed to rule out.
+Re-run against a genuinely *trusted* project (declared via a controlled `CODEX_HOME`):
+
+| Arm | Planted project hook | agentcall's own guard |
+|---|---|---|
+| Trusted workspace, bypass on, **without** `--ignore-user-config` | **RAN** | — |
+| Trusted workspace, bypass on, **with** `--ignore-user-config` | did **not** run | fired |
+
+The control establishes the test can detect a planted hook executing; the treatment shows
+agentcall's actual spawn shape blocks it. **Dropping `--ignore-user-config` while keeping
+the bypass would convert this into arbitrary caller-supplied code execution on the owner's
+machine**, so the two flags are pinned together by a test.
 
 ### `allow_managed_hooks_only` would silently disable that same guard
 

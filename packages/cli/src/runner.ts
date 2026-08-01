@@ -144,10 +144,19 @@ export function buildSpawnSpec(
     // dangerous for. The only hook codex can see here is the one on the next
     // line, whose path agentcall controls. --ignore-user-config already drops
     // $CODEX_HOME/config.toml, and that file is where codex records which project
-    // directories are trusted — so the cwd/tree/repo config layers stay disabled,
-    // and a .codex/hooks.json planted in the workspace by a caller with write
-    // access is never loaded. Verified by planting one: it did not run, while
-    // this hook did.
+    // directories are trusted (`[projects."<path>"] trust_level = "trusted"`), so
+    // with no trust list loaded the project config layers stay disabled and a
+    // .codex/hooks.json planted in the workspace by a caller holding the write
+    // cap is never loaded.
+    //
+    // That pairing is load-bearing, so it was tested against a *trusted* project
+    // rather than a scratch directory — in an untrusted directory the planted
+    // hook is skipped anyway and the test proves nothing. Control (trusted
+    // workspace, bypass on, WITHOUT --ignore-user-config): the planted hook RAN.
+    // Treatment (same, WITH --ignore-user-config, i.e. the spawn below): the
+    // planted hook did NOT run, while this hook did. Removing
+    // --ignore-user-config would therefore turn this flag into arbitrary
+    // caller-supplied code execution; the test above it pins them together.
     args: ["exec", "--ignore-user-config", "--dangerously-bypass-hook-trust",
       "--sandbox", sandbox, "--cd", workdir,
       "--skip-git-repo-check", "--json", "-c", guardCodexConfigArg(), prompt],
