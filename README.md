@@ -266,19 +266,29 @@ Two limits, stated plainly:
   eager to be harmless. The control on `exec` is which tasks you choose to write.
 - **A Codex answering agent is observed, not guarded.** The same hook is registered on
   the Codex spawn, but in *observe* mode: it records every tool attempt to
-  `tools.log` and never blocks. That is deliberate rather than provisional — Codex has
-  no `Read`/`Grep`/`Glob` tools and reaches the filesystem entirely through `Bash`
-  (`sed -n '1,200p' file`), which is exactly the surface the point above says cannot be
-  bounded by matching command strings. Its `--sandbox` level confines writes but not
-  reads: `codex exec --sandbox read-only` still reads `~/.ssh`. **A Codex answering
-  agent therefore has no read floor, and `tools.log` for one is a record of attempts,
-  not of what was permitted.**
+  `tools.log` and never blocks. Codex has no `Read`/`Grep`/`Glob` tools, and most of
+  what it does reach the filesystem with is `Bash` (`sed -n '1,200p' file`) — exactly
+  the surface the point above says cannot be bounded by matching command strings. Its
+  `--sandbox` level confines writes but not reads: `codex exec --sandbox read-only`
+  still reads `~/.ssh`. **A Codex answering agent therefore has no read floor, and
+  `tools.log` for one is a record of attempts, not of what was permitted.**
+- **Codex does not reach the filesystem only through `Bash`, and the non-shell routes
+  are not recorded at all.** `view_image` reads any absolute path and returns the raw
+  bytes — it does not check that the file is an image, so it is a general file-read
+  primitive — and `apply_patch` reads a file to verify patch context. Both are
+  reachable in the spawn shape above, and neither emits an event that `agentcall`
+  parses, so a read through them appears in **no** log: not `tools.log`, not
+  `calls.log`. Verified against codex-cli 0.146.0; see
+  [issue #29](https://github.com/KenTaniguchi-R/agentcall/issues/29).
 - **The Codex spawn does not load your `~/.codex`.** It runs with
   `--ignore-user-config`, so a caller cannot reach your MCP servers, plugins, or apps.
   Those run as separate processes outside Codex's sandbox, and a filesystem MCP server
   — or `claude mcp serve`, which re-exposes `Read` and `Bash` — would otherwise route
   around every control here. Codex's own bundled `codex_apps` tools are not removed by
-  that flag and remain reachable.
+  that flag and remain reachable — including a site deploy surface that can publish
+  content and set environment variables
+  ([issue #30](https://github.com/KenTaniguchi-R/agentcall/issues/30)). No read floor
+  constrains those, because they do not read: they send.
 
 ## Development
 
