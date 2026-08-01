@@ -50,7 +50,9 @@ describe("GET /v1/a2a/:handle/agent-card.json", () => {
     expect(card.name).toBe("ken");
     expect(card.skills.map((s: any) => s.id)).toEqual(["ask"]);
     expect(card.supportedInterfaces[0].url).toBe(`${ORIGIN}/v1/a2a/ken`);
-    expect(card.supportedInterfaces[0].tenant).toBe("ken");
+    // The handle is already the leading path segment of `url`; `tenant`
+    // would double-specify it, so it must be absent.
+    expect(card.supportedInterfaces[0].tenant).toBeUndefined();
   });
 
   it("never exposes grants or agent_kind", async () => {
