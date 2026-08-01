@@ -1,4 +1,4 @@
-import { mkdtempSync, writeFileSync } from "node:fs";
+import { mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
@@ -30,12 +30,11 @@ describe("runDoctor", () => {
   it("exits 0 and runs every check including the relay self-call when all pass", async () => {
     const p = freshPaths();
     saveConfig(p, { handle: "ken", token: "t", agent_kind: "claude", relay: "https://relay.example" });
-    writeFileSync(p.srtFile, "{}\n");
     const lines: string[] = [];
     const code = await runDoctor({ ...baseDeps, paths: p, log: (l) => lines.push(l) });
     expect(code).toBe(0);
     const out = lines.join("\n");
-    for (const name of ["config", "srt.json", "background listener", "relay status", "agent binary", "sandboxed agent run", "relay self-call"]) {
+    for (const name of ["config", "background listener", "relay status", "agent binary", "agent run", "relay self-call"]) {
       expect(out).toContain(`✓ ${name}`);
     }
   });
@@ -60,7 +59,6 @@ describe("runDoctor", () => {
   it("skips the relay self-call (but still runs agent checks) when the handle is offline", async () => {
     const p = freshPaths();
     saveConfig(p, { handle: "ken", token: "t", agent_kind: "claude", relay: "https://relay.example" });
-    writeFileSync(p.srtFile, "{}\n");
     const lines: string[] = [];
     let selfCalled = false;
     const code = await runDoctor({
@@ -76,14 +74,13 @@ describe("runDoctor", () => {
     expect(code).toBe(1);
     expect(selfCalled).toBe(false);
     const out = lines.join("\n");
-    expect(out).toContain("✓ sandboxed agent run");
+    expect(out).toContain("✓ agent run");
     expect(out).toContain("skipping relay self-call");
   });
 
   it("skips spawn and self-call after a failed codex auth check", async () => {
     const p = freshPaths();
     saveConfig(p, { handle: "ken", token: "t", agent_kind: "codex", relay: "https://relay.example" });
-    writeFileSync(p.srtFile, "{}\n");
     let spawned = false;
     const lines: string[] = [];
     const code = await runDoctor({
@@ -109,12 +106,11 @@ describe("runDoctor", () => {
   it("reports the launchd listener as not loaded without blocking agent checks", async () => {
     const p = freshPaths();
     saveConfig(p, { handle: "ken", token: "t", agent_kind: "claude", relay: "https://relay.example" });
-    writeFileSync(p.srtFile, "{}\n");
     const lines: string[] = [];
     const code = await runDoctor({ ...baseDeps, paths: p, launchctlList: () => "nothing here\n", log: (l) => lines.push(l) });
     expect(code).toBe(1);
     const out = lines.join("\n");
     expect(out).toContain("✗ background listener");
-    expect(out).toContain("✓ sandboxed agent run");
+    expect(out).toContain("✓ agent run");
   });
 });

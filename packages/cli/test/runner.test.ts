@@ -20,7 +20,7 @@ describe("buildPrompt", () => {
   it("embeds the task name, id, and SKILL.md content when a non-ask task is given", () => {
     const task: Task = {
       id: "schedule-meeting", name: "Schedule a meeting", description: "Book a time.",
-      examples: [], tier: "T1", envelope: { caps: ["read"], write_paths: [], network: [] },
+      examples: [], tier: "T1", envelope: { caps: ["read"] },
       skill: "# Steps\nCheck the calendar first.",
     };
     const out = buildPrompt("ken", "shusaku", "next tue?", task);
@@ -37,53 +37,51 @@ describe("buildPrompt", () => {
 });
 
 describe("buildSpawnSpec", () => {
-  // A bare "claude"/"codex" arg fails inside srt's sandboxed shell (it can't
-  // resolve PATH the way an interactive shell does — "command not found",
-  // exit 127, confirmed against a real sandboxed spawn). buildSpawnSpec must
-  // pass the agent's resolved absolute path instead, via an injectable
+  // The agent binary is spawned directly. buildSpawnSpec passes its resolved
+  // absolute path rather than a bare "claude"/"codex", via an injectable
   // resolver (production default is resolveAgentBin; tests inject a fake so
-  // they don't depend on claude/codex actually being installed).
-  it("wraps claude in srt with settings file, using the resolved absolute agent path", () => {
+  // they don't depend on claude/codex actually being installed) — the
+  // listener runs under launchd's fixed PATH, where a bare name can fail to
+  // resolve even though an interactive shell finds it.
+  it("spawns claude directly with the resolved absolute agent path", () => {
     const s = buildSpawnSpec("claude", "PROMPT", p, () => "/abs/path/to/claude");
-    expect(s.cmd).toBe("npx");
+    expect(s.cmd).toBe("/abs/path/to/claude");
     expect(s.args).toEqual([
-      "-y", "@anthropic-ai/sandbox-runtime@0.0.65", "--settings", p.srtFile, "--",
-      "/abs/path/to/claude", "-p", "PROMPT", "--output-format", "json",
+      "-p", "PROMPT", "--output-format", "json",
       "--permission-mode", "dontAsk",
       "--allowedTools", "Read,Grep,Glob,LS,Write,Edit,WebFetch,WebSearch,Bash",
     ]);
     expect(s.cwd).toBe(p.publicDir);
   });
-  // runAgent hands buildSpawnSpec a private per-call settings file (see
-  // srt.ts's writeCallSrtSettings) so a concurrent setup/doctor rewriting the
-  // shared srt.json can't change what this spawn enforces.
-  it("passes through an explicit settings file instead of the shared srt.json", () => {
-    const s = buildSpawnSpec("claude", "PROMPT", p, () => "/abs/claude", FULL_ACCESS_ENVELOPE, "/tmp/percall/settings.json");
-    expect(s.args).toContain("/tmp/percall/settings.json");
-    expect(s.args).not.toContain(p.srtFile);
-    expect(s.args[s.args.indexOf("--settings") + 1]).toBe("/tmp/percall/settings.json");
-  });
-  it("defaults to the shared srt.json when no settings file is given", () => {
-    const s = buildSpawnSpec("codex", "PROMPT", p, () => "/abs/codex");
-    expect(s.args[s.args.indexOf("--settings") + 1]).toBe(p.srtFile);
+
+  // Regression: every spawn used to be wrapped in `npx
+  // @anthropic-ai/sandbox-runtime --settings <file>`. That OS sandbox is gone
+  // — the answering agent is meant to be the owner's real agent with their
+  // real context — so no spawn should reach for npx or a settings file.
+  it("does not wrap the spawn in the sandbox runtime", () => {
+    for (const kind of ["claude", "codex"] as const) {
+      const s = buildSpawnSpec(kind, "PROMPT", p, () => `/abs/${kind}`);
+      expect(s.cmd).not.toBe("npx");
+      expect(s.args).not.toContain("--settings");
+      expect(s.args.join(" ")).not.toContain("sandbox-runtime");
+    }
   });
 
-  it("wraps codex in srt too, so reads are protected even though codex's own sandbox only confines writes", () => {
+  it("spawns codex directly, keeping its native sandbox level as the write cap", () => {
     const s = buildSpawnSpec("codex", "PROMPT", p, () => "/abs/path/to/codex");
-    expect(s.cmd).toBe("npx");
+    expect(s.cmd).toBe("/abs/path/to/codex");
     expect(s.args).toEqual([
-      "-y", "@anthropic-ai/sandbox-runtime@0.0.65", "--settings", p.srtFile, "--",
-      "/abs/path/to/codex", "exec", "--sandbox", "workspace-write", "--cd", p.publicDir, "--skip-git-repo-check", "--json", "PROMPT",
+      "exec", "--sandbox", "workspace-write", "--cd", p.publicDir, "--skip-git-repo-check", "--json", "PROMPT",
     ]);
     expect(s.cwd).toBe(p.publicDir);
   });
+
   it("resolves an absolute path by default, not a bare binary name", () => {
     // "node" stands in for a real agent kind: guaranteed to be on PATH
     // wherever this suite runs, so the production default resolver
     // (resolveAgentBin) can be exercised without claude/codex installed.
     const s = buildSpawnSpec("node" as unknown as "claude" | "codex", "PROMPT", p);
-    const idx = s.args.indexOf("--");
-    expect(isAbsolute(s.args[idx + 1])).toBe(true);
+    expect(isAbsolute(s.cmd)).toBe(true);
   });
 });
 
@@ -217,11 +215,11 @@ describe("runAgent (with a fake agent binary)", () => {
 });
 
 describe("envelope-scoped spawn spec", () => {
-  const READ_ONLY: Envelope = { caps: ["read"], write_paths: [], network: [] };
+  const READ_ONLY: Envelope = { caps: ["read"] };
 
   it("claudeAllowedTools maps caps to tool lists, read always included, CAPS order", () => {
     expect(claudeAllowedTools(READ_ONLY)).toBe("Read,Grep,Glob,LS");
-    expect(claudeAllowedTools({ caps: ["fetch"], write_paths: [], network: [] })).toBe("Read,Grep,Glob,LS,WebFetch,WebSearch");
+    expect(claudeAllowedTools({ caps: ["fetch"] })).toBe("Read,Grep,Glob,LS,WebFetch,WebSearch");
     expect(claudeAllowedTools(FULL_ACCESS_ENVELOPE)).toBe("Read,Grep,Glob,LS,Write,Edit,WebFetch,WebSearch,Bash");
   });
 

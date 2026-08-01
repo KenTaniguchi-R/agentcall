@@ -59,17 +59,25 @@ describe("splitFrontmatter", () => {
 });
 
 describe("SkillFrontmatter", () => {
-  it("applies defaults (read-only, no writes, no network, T1)", () => {
+  it("applies defaults (read-only, T1)", () => {
     const m = SkillFrontmatter.parse({ description: "Introduce the owner." });
-    expect(m).toMatchObject({ tier: "T1", tools: ["read"], write_paths: [], network: [], examples: [] });
+    expect(m).toMatchObject({ tier: "T1", tools: ["read"], examples: [] });
     expect(m.name).toBeUndefined();
   });
   it("requires description", () => {
     expect(SkillFrontmatter.safeParse({ name: "X" }).success).toBe(false);
   });
-  it("rejects write_paths outside public and timeouts above 300", () => {
-    expect(SkillFrontmatter.safeParse({ description: "d", write_paths: ["inbox"] }).success).toBe(false);
+  it("rejects timeouts above 300", () => {
     expect(SkillFrontmatter.safeParse({ description: "d", timeout_s: 999 }).success).toBe(false);
+  });
+  // write_paths/network were srt allowWrite/allowedDomains inputs. With the
+  // sandbox gone they grant nothing, so they're no longer part of the
+  // frontmatter contract — an unknown key is ignored rather than honoured.
+  it("ignores the removed write_paths and network keys", () => {
+    const m = SkillFrontmatter.parse({ description: "d", write_paths: ["public/inbox"], network: ["evil.com"] }) as
+      Record<string, unknown>;
+    expect(m.write_paths).toBeUndefined();
+    expect(m.network).toBeUndefined();
   });
 });
 
@@ -93,7 +101,7 @@ describe("loadTasks", () => {
     const tasks = loadTasks(getPaths(home), () => {});
     const t = tasks.find((x) => x.id === "schedule-meeting")!;
     expect(t.name).toBe("schedule-meeting");
-    expect(t.envelope).toEqual({ caps: ["read", "fetch"], write_paths: [], network: ["calendar.google.com"] });
+    expect(t.envelope).toEqual({ caps: ["read", "fetch"] });
     expect(t.skill).toContain("Check the calendar");
     expect(t.timeout_s).toBe(120);
   });
@@ -137,7 +145,7 @@ describe("scaffoldTask", () => {
     expect(warnings).toEqual([]);
     const t = tasks.find((x) => x.id === "schedule-meeting")!;
     expect(t.description).toContain("TODO");
-    expect(t.envelope).toEqual({ caps: ["read"], write_paths: [], network: [] });
+    expect(t.envelope).toEqual({ caps: ["read"] });
   });
   it("refuses invalid ids, the reserved ask id, and existing directories", () => {
     const p = getPaths(tempHome());
@@ -150,8 +158,6 @@ describe("scaffoldTask", () => {
 
 describe("FULL_ACCESS_ENVELOPE", () => {
   it("matches today's single-tier behavior", () => {
-    expect(FULL_ACCESS_ENVELOPE).toEqual({
-      caps: ["read", "write", "fetch", "exec"], write_paths: ["public"], network: [],
-    });
+    expect(FULL_ACCESS_ENVELOPE).toEqual({ caps: ["read", "write", "fetch", "exec"] });
   });
 });

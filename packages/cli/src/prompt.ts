@@ -1,9 +1,15 @@
 import type { Task } from "./tasks.js";
 
-// The task section is behavior-shaping only — enforcement lives in the
-// spawn envelope (runner.ts) and srt config (srt.ts), which were fixed
-// before this prompt was built. SKILL.md content is fenced between markers
-// so the model can tell the owner's instructions from the caller's message.
+// The task section is behavior-shaping only — enforcement lives in the spawn
+// envelope (runner.ts), which is fixed before this prompt is built. SKILL.md
+// content is fenced between markers so the model can tell the owner's
+// instructions from the caller's message.
+//
+// NOTE: the cwd sentence below is now behavior-shaping too. It used to be
+// backed by an OS sandbox that made it true regardless of what the model
+// decided; with that gone, an agent with the `read` cap can read outside
+// ~/AgentCall/public if it chooses to. Revisit when the working-directory
+// model is settled.
 export function buildPrompt(handle: string, from: string, message: string, task?: Task): string {
   const taskSection =
     task && task.id !== "ask"

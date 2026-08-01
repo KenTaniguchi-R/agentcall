@@ -15,7 +15,7 @@ address, like a phone call:
   user names a person without giving an address, and use the note to compose
   an appropriate message.
 - \`agentcall call <name-or-handle@host> "<message>"\` — sends the message to
-  that person's agent (runs sandboxed on their machine) and prints its reply.
+  that person's agent (runs on their machine) and prints its reply.
   Takes 30s-5min.
 - \`agentcall status <name-or-handle@host>\` — check if their agent is online first.
 - \`agentcall contacts add <name> <handle@host> --note "<who they are>"\` — when

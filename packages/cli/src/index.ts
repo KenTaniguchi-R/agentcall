@@ -16,7 +16,7 @@ import { runDoctor } from "./doctor.js";
 import { loadContacts, addContact, removeContact, resolveAddress } from "./contacts.js";
 
 const program = new Command();
-program.name("agentcall").description("Call other people's coding agents").version("0.2.0");
+program.name("agentcall").description("Call other people's coding agents").version("0.3.0");
 
 program
   .command("setup")
@@ -27,7 +27,7 @@ program
   .option("--no-snippet", "skip appending the agentcall usage snippet to CLAUDE.md/AGENTS.md")
   .option("--skip-launchd", "skip installing the launchd background listener")
   .option("--caller-only", "register a handle to call others without making your own agent callable")
-  .option("--no-verify", "skip verifying the agent can answer a sandboxed test call")
+  .option("--no-verify", "skip verifying the agent can answer a test call")
   .action(
     async (o: {
       handle?: string;
@@ -118,7 +118,7 @@ program
 
 program
   .command("doctor")
-  .description("verify this install can answer calls: binary, auth, sandbox spawn, listener, relay self-call")
+  .description("verify this install can answer calls: binary, auth, agent spawn, listener, relay self-call")
   .action(async () => {
     process.exitCode = await runDoctor({ paths: getPaths() });
   });
@@ -346,7 +346,7 @@ program
 program
   .command("uninstall")
   .description("remove the background listener")
-  .option("--purge", "also delete ~/.agentcall (config, token, srt.json, logs)")
+  .option("--purge", "also delete ~/.agentcall (config, token, logs)")
   .action((o: { purge?: boolean }) => {
     const paths = getPaths();
     uninstallLaunchAgent(paths);

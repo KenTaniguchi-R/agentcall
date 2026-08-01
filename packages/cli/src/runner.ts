@@ -1,6 +1,6 @@
 import { spawn } from "node:child_process";
 import { AGENT_TIMEOUT_MS, MAX_REPLY_BYTES } from "@benree/agentcall-shared";
-import { ensureDenyWriteTargetsExist, resolveAgentBin, writeCallSrtSettings, type CallSrtSettings } from "./srt.js";
+import { resolveAgentBin } from "./bin.js";
 import { CAPS, FULL_ACCESS_ENVELOPE, type Cap, type Envelope } from "./tasks.js";
 import type { Paths } from "./paths.js";
 
@@ -24,12 +24,6 @@ const MAX_STDERR_BYTES = 1 * 1024 * 1024;
 // process group (on timeout or stdout overflow).
 const KILL_GRACE_MS = 10_000;
 
-// resolveBin is injectable for tests (default resolveAgentBin resolves the
-// real binary via PATH). Production callers should leave it as the default:
-// a bare "claude"/"codex" arg fails inside srt's sandboxed shell, which
-// can't resolve PATH the way an interactive shell does ("command not
-// found", exit 127, confirmed against a real sandboxed spawn) — the
-// resolved absolute path sidesteps that entirely.
 // Cap -> Claude Code tool names, used with --allowedTools + --permission-mode
 // dontAsk: listed tools are pre-approved, everything else is denied instead
 // of prompting (headless -p can't prompt). "read" is always included — an
@@ -46,44 +40,39 @@ export function claudeAllowedTools(envelope: Envelope): string {
   return CAPS.filter((c) => caps.has(c)).flatMap((c) => CLAUDE_TOOLS[c]).join(",");
 }
 
-// settingsFile is the srt config this spawn enforces. Production callers pass
-// runAgent's private per-call file (see srt.ts's writeCallSrtSettings); the
-// p.srtFile default is the shared, inspectable copy and exists so callers that
-// don't care about isolation keep working.
+// resolveBin is injectable for tests (the default resolves the real binary
+// via PATH). Production callers should leave it as the default: the listener
+// runs under launchd's fixed PATH with no shell rc, so a bare
+// "claude"/"codex" can fail to resolve there even though it works in an
+// interactive shell — the absolute path sidesteps that entirely.
+//
+// The envelope is enforced by the agent's own permission flags, which is the
+// whole of it now: this used to additionally wrap every spawn in
+// `npx @anthropic-ai/sandbox-runtime --settings <file>`, confining reads and
+// writes at the OS level. That boundary is deliberately gone — the answering
+// agent is meant to be the owner's real working agent with their real
+// context, which a fresh confined spawn can't be. Capability scoping (below)
+// plus pre-prompt task resolution (policy.ts/listener.ts) is what stands
+// between a caller and the machine.
 export function buildSpawnSpec(
   kind: AgentKind, prompt: string, p: Paths, resolveBin: (kind: AgentKind) => string = resolveAgentBin,
-  envelope: Envelope = FULL_ACCESS_ENVELOPE, settingsFile: string = p.srtFile,
+  envelope: Envelope = FULL_ACCESS_ENVELOPE,
 ): SpawnSpec {
   if (kind === "claude") {
     return {
-      cmd: "npx",
-      // Pinned, not `npx -y @anthropic-ai/sandbox-runtime` (latest): this is
-      // the security boundary between a hostile prompt and the rest of the
-      // machine, and its deny/allow behaviors (srt.ts's comments) were
-      // verified against this exact version. Letting it float on `latest`
-      // means a future release could silently change enforcement semantics
-      // out from under every existing srt.json.
-      args: ["-y", "@anthropic-ai/sandbox-runtime@0.0.65", "--settings", settingsFile, "--",
-        resolveBin(kind), "-p", prompt, "--output-format", "json",
+      cmd: resolveBin(kind),
+      args: ["-p", prompt, "--output-format", "json",
         "--permission-mode", "dontAsk", "--allowedTools", claudeAllowedTools(envelope)],
       cwd: p.publicDir,
     };
   }
-  // codex's own --sandbox only confines writes, not reads — without srt a
-  // malicious prompt could read ~/.agentcall/config.json (the relay token)
-  // or ~/.ssh and exfiltrate it via the reply. Wrap codex in srt too so both
-  // agent kinds get the same read protection; codex's native sandbox still
-  // handles write confinement inside publicDir.
-  // Codex has no per-tool granularity; the envelope's write cap maps onto
-  // its sandbox level, and srt (see srt.ts) still enforces the exact write
-  // paths and network domains underneath.
+  // Codex has no per-tool granularity, so the envelope's write cap maps onto
+  // its native sandbox level instead — the codex-side analogue of claude's
+  // --allowedTools, and now the only thing confining its writes.
   const sandbox = envelope.caps.includes("write") ? "workspace-write" : "read-only";
   return {
-    cmd: "npx",
-    // Pinned for the same reason as the claude spec above: srt's deny/allow
-    // behaviors were verified against this exact version.
-    args: ["-y", "@anthropic-ai/sandbox-runtime@0.0.65", "--settings", settingsFile, "--",
-      resolveBin(kind), "exec", "--sandbox", sandbox, "--cd", p.publicDir, "--skip-git-repo-check", "--json", prompt],
+    cmd: resolveBin(kind),
+    args: ["exec", "--sandbox", sandbox, "--cd", p.publicDir, "--skip-git-repo-check", "--json", prompt],
     cwd: p.publicDir,
   };
 }
@@ -132,26 +121,11 @@ export function runAgent(
   kind: AgentKind, prompt: string, p: Paths, timeoutMs: number = AGENT_TIMEOUT_MS, specOverride?: SpawnSpec,
   envelope: Envelope = FULL_ACCESS_ENVELOPE,
 ): Promise<AgentOutput> {
-  // Real spawn (no test override): make sure srt's denyWrite targets exist
-  // before the sandbox starts — see srt.ts, denyWrite silently no-ops for
-  // paths that aren't there yet — and write this call's own srt settings with
-  // the current toolchain's read dirs (see srt.ts's toolchainReadDirs) so a
-  // node/npm-manager upgrade since `setup` doesn't leave a stale allowlist
-  // that denies the sandboxed process its own binary. The settings go to a
-  // private per-call file rather than the shared srt.json, so a concurrent
-  // `agentcall setup`/`doctor` in another process cannot alter what this
-  // spawn enforces (see writeCallSrtSettings). Both skipped for specOverride
-  // so unit tests never touch the real ~/.claude or srt.json.
-  let callSettings: CallSrtSettings | undefined;
-  if (!specOverride) {
-    ensureDenyWriteTargetsExist(kind);
-    callSettings = writeCallSrtSettings(p, kind, envelope);
-  }
-  const spec = specOverride ?? buildSpawnSpec(kind, prompt, p, resolveAgentBin, envelope, callSettings!.file);
-  const running = new Promise<AgentOutput>((resolve, reject) => {
+  const spec = specOverride ?? buildSpawnSpec(kind, prompt, p, resolveAgentBin, envelope);
+  return new Promise<AgentOutput>((resolve, reject) => {
     // detached: true makes the child its own process group leader, so any
-    // grandchildren it forks (sandbox-exec, the actual claude/codex
-    // process, ...) share its process group unless they detach themselves.
+    // grandchildren it forks share its process group unless they detach
+    // themselves.
     // That lets us tear down the whole tree with one signal to -pid instead
     // of leaving orphans that hold the stdout pipe open or keep running
     // past the timeout.
@@ -239,10 +213,4 @@ export function runAgent(
       }
     });
   });
-  // .finally, not a cleanup call per settle path: the promise above rejects
-  // from several places (spawn error, timeout, overflow, nonzero exit, parse
-  // failure) and every one of them must still remove the per-call settings
-  // file. Note the file only needs to outlive srt's startup read, not the
-  // whole agent run, so this is comfortably late enough.
-  return callSettings ? running.finally(() => callSettings.cleanup()) : running;
 }

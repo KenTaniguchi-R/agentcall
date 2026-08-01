@@ -181,7 +181,7 @@ describe("startListener task resolution", () => {
     expect(result).toMatchObject({ type: "call_result", call_id: "c3", text: "booked", task: "schedule-meeting" });
     expect(seen.prompt).toContain("check the calendar");
     expect(seen.timeout).toBe(60_000);
-    expect(seen.envelope).toEqual({ caps: ["read", "fetch"], write_paths: [], network: ["calendar.google.com"] });
+    expect(seen.envelope).toEqual({ caps: ["read", "fetch"] });
     const audit = readFileSync(paths.callsLog, "utf8").trim().split("\n").map((l) => JSON.parse(l));
     expect(audit[0]).toMatchObject({ call_id: "c3", task: "schedule-meeting", status: "ok" });
   });
@@ -202,7 +202,7 @@ describe("startListener task resolution", () => {
     ws.send(JSON.stringify({ type: "incoming_call", call_id: "c4", from: "anyone", message: "q?" }));
     const [, result] = await expectFrames;
     expect(result).toMatchObject({ type: "call_result", task: "ask" });
-    expect(seen.envelope).toEqual({ caps: ["read"], write_paths: [], network: [] });
+    expect(seen.envelope).toEqual({ caps: ["read"] });
   });
 
   it("maps a corrupt policy file to call_failed agent_error without spawning, and without leaking the parse error", async () => {

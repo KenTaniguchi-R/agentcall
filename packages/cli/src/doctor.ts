@@ -50,14 +50,6 @@ export async function runDoctor(deps: DoctorDeps): Promise<number> {
     return 0;
   }
 
-  // runAgent rewrites srt.json before every spawn, so a missing file is a
-  // sign setup didn't finish rather than a blocker — report and continue.
-  report({
-    name: "srt.json",
-    ok: existsSync(deps.paths.srtFile),
-    hint: existsSync(deps.paths.srtFile) ? undefined : "re-run `agentcall setup` to seed the sandbox settings",
-  });
-
   if (deps.isDarwin ?? process.platform === "darwin") {
     let loaded = false;
     try {

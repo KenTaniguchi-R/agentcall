@@ -6,7 +6,7 @@ import {
   checkAgentBinary,
   checkCodexAuth,
   checkRelaySelfCall,
-  checkSandboxSpawn,
+  checkAgentSpawn,
   classifyAgentFailure,
   formatCheck,
   HINTS,
@@ -84,8 +84,8 @@ describe("formatCheck", () => {
   });
 
   it("prints ✗ and the fix hint on a second line for failing checks", () => {
-    expect(formatCheck({ name: "sandboxed agent run", ok: false, detail: "boom", hint: "do X" })).toBe(
-      "✗ sandboxed agent run — boom\n  fix: do X",
+    expect(formatCheck({ name: "agent run", ok: false, detail: "boom", hint: "do X" })).toBe(
+      "✗ agent run — boom\n  fix: do X",
     );
   });
 });
@@ -126,15 +126,15 @@ describe("checkCodexAuth", () => {
 
 const fakePaths = getPaths("/tmp/agentcall-verify-test-home");
 
-describe("checkSandboxSpawn", () => {
+describe("checkAgentSpawn", () => {
   it("passes when runFn resolves, without asserting reply text", async () => {
-    const c = await checkSandboxSpawn("claude", fakePaths, async () => ({ text: "OK, got it!" }));
-    expect(c).toMatchObject({ name: "sandboxed agent run", ok: true });
+    const c = await checkAgentSpawn("claude", fakePaths, async () => ({ text: "OK, got it!" }));
+    expect(c).toMatchObject({ name: "agent run", ok: true });
   });
 
   it("invokes runFn with the verify prompt, timeout, and the read-only ask envelope", async () => {
     const seen: unknown[] = [];
-    await checkSandboxSpawn("claude", fakePaths, async (kind, prompt, _p, timeoutMs, _specOverride, envelope) => {
+    await checkAgentSpawn("claude", fakePaths, async (kind, prompt, _p, timeoutMs, _specOverride, envelope) => {
       seen.push(kind, prompt, timeoutMs, envelope);
       return { text: "OK" };
     });
@@ -142,7 +142,7 @@ describe("checkSandboxSpawn", () => {
   });
 
   it("classifies an auth failure into a hint", async () => {
-    const c = await checkSandboxSpawn("claude", fakePaths, async () => {
+    const c = await checkAgentSpawn("claude", fakePaths, async () => {
       throw new AgentRunError("could not parse agent output: Error: claude reported an error: Invalid API key · Please run /login", "agent_error");
     });
     expect(c.ok).toBe(false);
@@ -157,7 +157,7 @@ describe("verifyAgent", () => {
       resolveBin: () => "/fake/bin/claude",
       runFn: async () => ({ text: "OK" }),
     });
-    expect(checks.map((c) => c.name)).toEqual(["agent binary", "sandboxed agent run"]);
+    expect(checks.map((c) => c.name)).toEqual(["agent binary", "agent run"]);
     expect(checks.every((c) => c.ok)).toBe(true);
   });
 
@@ -167,7 +167,7 @@ describe("verifyAgent", () => {
       execFn: () => {},
       runFn: async () => ({ text: "OK" }),
     });
-    expect(checks.map((c) => c.name)).toEqual(["agent binary", "codex auth", "sandboxed agent run"]);
+    expect(checks.map((c) => c.name)).toEqual(["agent binary", "codex auth", "agent run"]);
   });
 
   it("stops the ladder at the first failure (no spawn after failed codex auth)", async () => {

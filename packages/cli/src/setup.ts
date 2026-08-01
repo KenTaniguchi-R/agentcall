@@ -8,17 +8,10 @@ import { loadConfig, saveConfig, relayUrl, type Config } from "./config.js";
 import { registerHandle } from "./api.js";
 import { publishCard } from "./card.js";
 import { DEFAULT_POLICY } from "./policy.js";
-import { isEphemeralDir, preferDurableBin, srtSettings, toolchainReadDirs } from "./srt.js";
+import { isEphemeralDir, preferDurableBin } from "./bin.js";
 import { appendSnippet } from "./snippet.js";
 import { installLaunchAgent } from "./launchd.js";
 import { formatCheck, verifyAgent, type VerifyCheck, type VerifyFns } from "./verify.js";
-
-// Re-exported for test-import compatibility (test/setup.test.ts imports
-// these from setup.js) — the actual definitions now live in srt.ts
-// alongside resolveOnPath, which needs the same durable-vs-ephemeral logic
-// to resolve the runner's agent binary past session shims (see srt.ts's
-// resolveOnPath comment).
-export { isEphemeralDir, preferDurableBin } from "./srt.js";
 
 // Directories launchd's fixed PATH (see launchd.ts's plistContent) actually
 // searches. If claude/codex/npx resolve outside of these, the background
@@ -213,24 +206,10 @@ export async function runSetup(opts: SetupOpts): Promise<{ ready: boolean }> {
   }
 
   // Everything below the config is listener-side (callee) machinery: a
-  // caller-only install (no agent_kind) has no sandbox to seed, no tasks or
-  // card to publish, and no listener to install, so it needs none of it.
+  // caller-only install (no agent_kind) has no tasks or card to publish and
+  // no listener to install, so it needs none of it.
   let verifyFailure: VerifyCheck | undefined;
   if (cfg.agent_kind) {
-    // Seed srt.json with the current toolchain's read dirs (see srt.ts's
-    // toolchainReadDirs) so the sandboxed agent can execute node/npx/itself
-    // from first call, not just after runAgent's first real spawn rewrites
-    // it. If resolution throws (an odd PATH during setup), fall back to the
-    // base allowlist rather than failing setup outright — runAgent rewrites
-    // srt.json before every real spawn anyway, so this only affects the
-    // file's content between `setup` and the first real call.
-    let extraReadDirs: string[] = [];
-    try {
-      extraReadDirs = toolchainReadDirs(cfg.agent_kind);
-    } catch {
-      /* fall back to srtSettings(paths, cfg.agent_kind) below */
-    }
-    writeFileSync(paths.srtFile, JSON.stringify(srtSettings(paths, cfg.agent_kind, extraReadDirs), null, 2) + "\n");
     mkdirSync(paths.publicDir, { recursive: true });
     mkdirSync(paths.tasksDir, { recursive: true });
     if (!existsSync(paths.policyFile)) {
@@ -252,7 +231,7 @@ export async function runSetup(opts: SetupOpts): Promise<{ ready: boolean }> {
     }
 
     if (opts.verify !== false) {
-      console.log(`\nVerifying ${cfg.agent_kind} can answer a sandboxed test call (takes ~10-30s)...`);
+      console.log(`\nVerifying ${cfg.agent_kind} can answer a test call (takes ~10-30s)...`);
       const checks = await verifyAgent(cfg.agent_kind, paths, opts.verifyFns);
       for (const c of checks) console.log(formatCheck(c));
       verifyFailure = checks.find((c) => !c.ok);
@@ -280,7 +259,7 @@ export async function runSetup(opts: SetupOpts): Promise<{ ready: boolean }> {
   if (cfg.agent_kind) {
     console.log(
       `\nagentcall is set up.\n` +
-        (opts.verify !== false ? `  ✓ agent verified (${cfg.agent_kind} answered a sandboxed test call)\n` : "") +
+        (opts.verify !== false ? `  ✓ agent verified (${cfg.agent_kind} answered a test call)\n` : "") +
         `  Handle:  ${cfg.handle}\n` +
         `  Agent:   ${cfg.agent_kind}\n` +
         `  Relay:   ${cfg.relay}\n` +

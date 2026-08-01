@@ -3,7 +3,7 @@ import { callAgent } from "./callClient.js";
 import { relayUrl, type Config } from "./config.js";
 import type { Paths } from "./paths.js";
 import { AgentRunError, runAgent, type AgentKind } from "./runner.js";
-import { resolveAgentBin } from "./srt.js";
+import { resolveAgentBin } from "./bin.js";
 import { ASK_TASK } from "./tasks.js";
 
 // One row of verification output, shared by `setup` and `agentcall doctor`.
@@ -20,9 +20,9 @@ export const HINTS = {
     "(or run `claude setup-token`, or set ANTHROPIC_API_KEY).",
   codexAuth: "codex is not authenticated — run `codex login` (on a headless machine: `codex login --device-auth`).",
   pathMissing:
-    "the agent binary wasn't found inside the sandbox — see setup's PATH warning: " +
+    "the agent binary wasn't found when spawned — see setup's PATH warning: " +
     "symlink the binary into /opt/homebrew/bin so the background listener can find it.",
-  timeout: "the agent started but didn't finish in time — check srt.json's network allowlist, then try again.",
+  timeout: "the agent started but didn't finish in time — check your network, then try again.",
 } as const;
 
 // Maps a runAgent failure to an actionable fix. Auth failures reach us in
@@ -65,7 +65,7 @@ const defaultExec: ExecFn = (cmd, args) => {
 // codex-only fast path: `codex login status` is free (no model call) and
 // exits nonzero when logged out, so codex users learn about missing auth
 // without burning a spawn. claude has no equivalent — its auth failures are
-// caught by checkSandboxSpawn.
+// caught by checkAgentSpawn.
 export function checkCodexAuth(execFn: ExecFn = defaultExec): VerifyCheck {
   try {
     execFn("codex", ["login", "status"]);
@@ -85,20 +85,20 @@ export const VERIFY_PROMPT = "Reply with exactly: OK";
 // a verification hang should fail in 2 minutes, not 5.
 export const VERIFY_TIMEOUT_MS = 120_000;
 
-// The real thing: the byte-identical sandboxed spawn path an inbound call
-// uses. A successfully parsed reply is the pass signal — the reply text is
-// NOT asserted, since chatty models don't reliably echo "OK" verbatim. Runs
+// The real thing: the byte-identical spawn path an inbound call uses. A
+// successfully parsed reply is the pass signal — the reply text is NOT
+// asserted, since chatty models don't reliably echo "OK" verbatim. Runs
 // under the same read-only "ask" envelope a real inbound plain call gets —
 // not the FULL_ACCESS_ENVELOPE default — since verification must not exercise
 // more capability than an untrusted caller would actually be granted.
-export async function checkSandboxSpawn(
+export async function checkAgentSpawn(
   kind: AgentKind, paths: Paths, runFn: typeof runAgent = runAgent,
 ): Promise<VerifyCheck> {
   try {
     await runFn(kind, VERIFY_PROMPT, paths, VERIFY_TIMEOUT_MS, undefined, ASK_TASK.envelope);
-    return { name: "sandboxed agent run", ok: true };
+    return { name: "agent run", ok: true };
   } catch (e) {
-    return { name: "sandboxed agent run", ok: false, detail: short(e), hint: classifyAgentFailure(kind, e) };
+    return { name: "agent run", ok: false, detail: short(e), hint: classifyAgentFailure(kind, e) };
   }
 }
 
@@ -110,7 +110,7 @@ export interface VerifyFns {
   resolveBin?: (kind: AgentKind) => string;
 }
 
-// The binary -> codex-auth -> sandbox-spawn ladder shared by setup and
+// The binary -> codex-auth -> agent-spawn ladder shared by setup and
 // doctor. Stops at the first failure: a failed pre-check must not burn a
 // model call, and the user should see the first broken layer, not a cascade.
 export async function verifyAgent(kind: AgentKind, paths: Paths, fns: VerifyFns = {}): Promise<VerifyCheck[]> {
@@ -121,14 +121,14 @@ export async function verifyAgent(kind: AgentKind, paths: Paths, fns: VerifyFns 
     checks.push(auth);
     if (!auth.ok) return checks;
   }
-  checks.push(await checkSandboxSpawn(kind, paths, fns.runFn));
+  checks.push(await checkAgentSpawn(kind, paths, fns.runFn));
   return checks;
 }
 
 // Doctor-only, end-to-end: a real call to our own address through the relay
 // and the launchd-spawned listener. This is the only check that exercises
 // the listener's environment (fixed PATH, no shell rc, possibly locked
-// keychain) — a direct checkSandboxSpawn from an interactive shell can pass
+// keychain) — a direct checkAgentSpawn from an interactive shell can pass
 // while this fails. Works under the default policy because the built-in
 // "ask" task always exists.
 export async function checkRelaySelfCall(cfg: Config, callFn: typeof callAgent = callAgent): Promise<VerifyCheck> {
@@ -139,7 +139,7 @@ export async function checkRelaySelfCall(cfg: Config, callFn: typeof callAgent =
       token: cfg.token,
       to: cfg.handle,
       message: "agentcall doctor self-test: reply briefly",
-      // Bound below callAgent's 420s default: sandbox spawn budget plus a
+      // Bound below callAgent's 420s default: the spawn budget plus a
       // margin for relay round-trip, so a stuck self-call fails promptly
       // instead of hanging the whole doctor run.
       timeoutMs: VERIFY_TIMEOUT_MS + 30_000,
@@ -151,7 +151,7 @@ export async function checkRelaySelfCall(cfg: Config, callFn: typeof callAgent =
       ok: false,
       detail: short(e),
       hint:
-        "a direct sandboxed run works but the call through the background listener failed — its environment " +
+        "a direct agent run works but the call through the background listener failed — its environment " +
         "differs from your shell (fixed PATH, no shell env, keychain); check ~/.agentcall/listener.log and calls.log.",
     };
   }

@@ -8,32 +8,24 @@ import type { Paths } from "./paths.js";
 export const CAPS = ["read", "write", "fetch", "exec"] as const;
 export type Cap = (typeof CAPS)[number];
 
+// What a caller is granted for one call. `caps` is the whole envelope: it
+// maps to claude's --allowedTools and codex's --sandbox level (see
+// runner.ts), which is the only place a grant is actually enforced.
+//
+// This used to also carry `write_paths` and `network`, which existed solely
+// to populate the OS sandbox's allowWrite/allowedDomains lists. With the
+// sandbox gone they would grant nothing while still reading like a
+// restriction on the owner's card, so they're gone too — a decorative
+// permission is worse than no permission.
 export interface Envelope {
   caps: Cap[];
-  write_paths: string[];
-  network: string[];
 }
 
-// Today's single-tier behavior; the default envelope for call sites that
-// predate task scoping (runner/srt defaults) so nothing changes until a
-// resolved task passes a narrower one.
+// The default envelope for call sites that predate task scoping (the runner
+// default) so nothing changes until a resolved task passes a narrower one.
 export const FULL_ACCESS_ENVELOPE: Envelope = {
   caps: ["read", "write", "fetch", "exec"],
-  write_paths: ["public"],
-  network: [],
 };
-
-// write_paths are relative to ~/AgentCall. Phase 1 allows only "public" or
-// subpaths of it: dirs outside publicDir would be readable-never (srt's
-// denyRead ~, see srt.ts) so writes there can't work with Read-before-Edit
-// agents — a write_paths entry outside public is a broken grant that would
-// silently no-op, so it's made inexpressible here rather than left for an
-// owner to discover at call time. The character set still forbids "." so
-// "../" traversal can't be expressed at all, and a leading "/" is rejected
-// by the first-character class.
-const WRITE_PATH_RE = /^public(?:\/[a-z0-9][a-z0-9\/_-]*)?$/;
-// Hostnames for srt allowedDomains ("*.example.com" wildcards allowed).
-const DOMAIN_RE = /^(\*\.)?[a-z0-9][a-z0-9.-]*\.[a-z]{2,}$/;
 
 // A SKILL.md is YAML frontmatter between --- fences, then the skill body.
 // Returns null when the file has no leading fence or no closing fence.
@@ -53,8 +45,6 @@ export const SkillFrontmatter = z.object({
   examples: z.array(z.string().max(500)).max(10).default([]),
   tier: z.enum(["T1", "T2"]).default("T1"),
   tools: z.array(z.enum(CAPS)).default(["read"]),
-  write_paths: z.array(z.string().regex(WRITE_PATH_RE)).default([]),
-  network: z.array(z.string().regex(DOMAIN_RE)).default([]),
   timeout_s: z.number().int().positive().max(300).optional(),
 });
 export type SkillFrontmatterType = z.infer<typeof SkillFrontmatter>;
@@ -76,7 +66,7 @@ export const ASK_TASK: Task = {
   description: "Answer questions using the files in the public directory.",
   examples: [],
   tier: "T1",
-  envelope: { caps: ["read"], write_paths: [], network: [] },
+  envelope: { caps: ["read"] },
   skill: "",
 };
 
@@ -123,7 +113,7 @@ export function loadTasks(p: Paths, warn: (msg: string) => void = console.error)
       description: fm.description,
       examples: fm.examples,
       tier: fm.tier,
-      envelope: { caps: fm.tools, write_paths: fm.write_paths, network: fm.network },
+      envelope: { caps: fm.tools },
       timeout_s: fm.timeout_s,
       skill: body,
     });
@@ -140,8 +130,6 @@ description: TODO — one line callers will see on your card
 # name: defaults to the directory name
 # tier: T1                # T1 runs immediately; T2 reserved for approval gates
 # tools: [read]           # read | write | fetch | exec
-# write_paths: []         # e.g. [public/inbox] — must be public or under it
-# network: []             # extra allowed domains, e.g. [calendar.google.com]
 # timeout_s: 300
 # examples:
 #   - An example message a caller might send

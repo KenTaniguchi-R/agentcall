@@ -3,7 +3,7 @@ import { createServer, type Server } from "node:http";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { isEphemeralDir, preferDurableBin, resolveExtraPathDirs, runSetup, warnIfOutsideLaunchdPath } from "../src/setup.js";
+import { resolveExtraPathDirs, runSetup, warnIfOutsideLaunchdPath } from "../src/setup.js";
 import { getPaths } from "../src/paths.js";
 import { AgentRunError } from "../src/runner.js";
 
@@ -61,7 +61,7 @@ function fakeRelayRecording(requests: { method?: string; url?: string; body?: st
 }
 
 describe("runSetup", () => {
-  it("registers, writes config + srt.json, creates public dir (non-interactive)", async () => {
+  it("registers, writes config, creates public dir (non-interactive)", async () => {
     const home = mkdtempSync(join(tmpdir(), "agentcall-setup-"));
     process.env.AGENTCALL_HOME = home;
     try {
@@ -70,14 +70,7 @@ describe("runSetup", () => {
       const p = getPaths(home);
       const cfg = JSON.parse(readFileSync(p.configFile, "utf8"));
       expect(cfg).toMatchObject({ handle: "ken", token: "tok-123", agent_kind: "claude", relay });
-      expect(existsSync(p.srtFile)).toBe(true);
       expect(existsSync(p.publicDir)).toBe(true);
-      const srt = JSON.parse(readFileSync(p.srtFile, "utf8"));
-      // srt.ts denies reads to the whole home dir by default and re-allows
-      // only specific paths (see srt.ts's rationale comment), so ~/.ssh is
-      // protected implicitly rather than by being named in a denylist.
-      expect(srt.filesystem.denyRead).toContain("~");
-      expect(JSON.stringify(srt.filesystem.allowRead)).not.toContain(".ssh");
     } finally {
       delete process.env.AGENTCALL_HOME;
     }
@@ -101,7 +94,6 @@ describe("runSetup", () => {
       const secondCfg = JSON.parse(readFileSync(p.configFile, "utf8"));
       expect(secondCfg).toEqual(firstCfg);
       expect(secondCfg.token).toBe("tok-123");
-      expect(existsSync(p.srtFile)).toBe(true);
       expect(existsSync(p.publicDir)).toBe(true);
     } finally {
       delete process.env.AGENTCALL_HOME;
@@ -337,44 +329,8 @@ describe("resolveExtraPathDirs", () => {
   });
 });
 
-describe("isEphemeralDir", () => {
-  it("flags dirs under the OS temp root and the macOS per-user temp tree", () => {
-    expect(isEphemeralDir(join(tmpdir(), "cmux-cli-shims", "AA8B8E91"))).toBe(true);
-    expect(isEphemeralDir("/var/folders/89/xx/T/cmux-cli-shims/AA8B8E91")).toBe(true);
-    expect(isEphemeralDir("/private/var/folders/89/xx/T/anything")).toBe(true);
-    expect(isEphemeralDir("/tmp/some-bin")).toBe(true);
-    expect(isEphemeralDir("/private/tmp/some-bin")).toBe(true);
-  });
-  it("leaves durable install dirs alone", () => {
-    expect(isEphemeralDir("/Users/x/.local/bin")).toBe(false);
-    expect(isEphemeralDir("/opt/homebrew/bin")).toBe(false);
-    expect(isEphemeralDir("/usr/local/bin")).toBe(false);
-    // "/tmpfoo" must not match a "/tmp" prefix check done without a separator
-    expect(isEphemeralDir("/tmpfoo/bin")).toBe(false);
-  });
-});
-
-describe("preferDurableBin", () => {
-  it("skips ephemeral matches and returns the first durable one", () => {
-    expect(
-      preferDurableBin([
-        "/var/folders/89/xx/T/cmux-cli-shims/AA8B8E91/claude",
-        "/Users/x/.local/bin/claude",
-      ]),
-    ).toBe("/Users/x/.local/bin/claude");
-  });
-  it("falls back to the first match when every candidate is ephemeral", () => {
-    expect(preferDurableBin(["/var/folders/89/xx/T/cmux-cli-shims/AA8B8E91/claude"])).toBe(
-      "/var/folders/89/xx/T/cmux-cli-shims/AA8B8E91/claude",
-    );
-  });
-  it("returns null for no candidates", () => {
-    expect(preferDurableBin([])).toBe(null);
-  });
-});
-
 describe("caller-only setup", () => {
-  it("--caller-only registers without agent_kind and skips srt/publicDir/launchd", async () => {
+  it("--caller-only registers without agent_kind and skips publicDir/launchd", async () => {
     const home = mkdtempSync(join(tmpdir(), "agentcall-setup-"));
     process.env.AGENTCALL_HOME = home;
     try {
@@ -394,7 +350,6 @@ describe("caller-only setup", () => {
       const p = getPaths(home);
       const cfg = JSON.parse(readFileSync(p.configFile, "utf8"));
       expect(cfg).toEqual({ handle: "solo", token: "tok-123", relay });
-      expect(existsSync(p.srtFile)).toBe(false);
       expect(existsSync(p.publicDir)).toBe(false);
       expect(launchdCalled).toBe(false);
     } finally {
@@ -443,7 +398,6 @@ describe("caller-only setup", () => {
       });
       expect(asked).toEqual([]);
       expect(JSON.parse(readFileSync(p.configFile, "utf8"))).toEqual(firstCfg);
-      expect(existsSync(p.srtFile)).toBe(false);
     } finally {
       delete process.env.AGENTCALL_HOME;
     }
@@ -469,7 +423,6 @@ describe("caller-only setup", () => {
       const p = getPaths(home);
       const cfg = JSON.parse(readFileSync(p.configFile, "utf8"));
       expect(cfg.agent_kind).toBeUndefined();
-      expect(existsSync(p.srtFile)).toBe(false);
       expect(launchdCalled).toBe(false);
     } finally {
       delete process.env.AGENTCALL_HOME;
@@ -493,7 +446,7 @@ describe("caller-only setup", () => {
       const p = getPaths(home);
       const cfg = JSON.parse(readFileSync(p.configFile, "utf8"));
       expect(cfg.agent_kind).toBe("claude");
-      expect(existsSync(p.srtFile)).toBe(true);
+      expect(existsSync(p.publicDir)).toBe(true);
     } finally {
       delete process.env.AGENTCALL_HOME;
     }
@@ -524,7 +477,7 @@ describe("caller-only setup", () => {
       expect(cfg.handle).toBe("upg");
       expect(cfg.token).toBe("tok-123");
       expect(cfg.agent_kind).toBe("claude");
-      expect(existsSync(p.srtFile)).toBe(true);
+      expect(existsSync(p.publicDir)).toBe(true);
       expect(existsSync(p.publicDir)).toBe(true);
       expect(launchdCalled).toBe(true);
     } finally {
