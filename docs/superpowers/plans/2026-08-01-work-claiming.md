@@ -479,8 +479,12 @@ Expected: `yaml ok`
 
 Unaffected by this change, but the repo rule is that they pass before anything is called done:
 
+Build first — `packages/cli` typechecks against the *built* `packages/shared`, so
+on a fresh worktree `pnpm -r test` alone fails with "Failed to resolve entry for
+@benree/agentcall-shared". That is a missing `dist/`, not a regression.
+
 ```bash
-pnpm -r test && pnpm -r typecheck && pnpm -r build
+pnpm -r build && pnpm -r typecheck && pnpm -r test
 ```
 
 Expected: all green.
