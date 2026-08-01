@@ -294,9 +294,15 @@ a planted `CODEX_HOME`, or a **nested codex** launched from inside a sandboxed s
 the case argv ownership does not cover. None can be tested without first installing
 `/etc/codex/requirements.toml`, which is root-owned and machine-wide.
 
-A ready-to-run script covering all four cases plus a baseline is written and waiting:
-`p1-root-test.sh` in the session scratchpad. It backs up and restores any existing
-requirements file and exits non-zero naming the case that bypassed the floor.
+A ready-to-run script covering all four cases plus a baseline is committed at
+[`scripts/verify-codex-deny-read.sh`](../../../scripts/verify-codex-deny-read.sh). It
+backs up and restores any existing requirements file and exits non-zero naming the case
+that bypassed the floor. Run it as `sudo -v && bash scripts/verify-codex-deny-read.sh`.
+
+It is committed rather than left as spike scratch because P5 requires re-qualifying
+`deny_read` behaviour on **every Codex version bump** — this is a recurring check, not a
+one-off. Read it before running: step 1 writes a machine-wide file that constrains every
+Codex invocation on the box.
 
 **Deliberately not run.** Installing a machine-wide file that constrains every Codex
 invocation on the owner's laptop — including their own interactive sessions — is not a
