@@ -297,9 +297,11 @@ describe("startListener task resolution", () => {
 
   it("runs a granted task with its envelope and timeout, echoing task in call_result", async () => {
     const seen: { prompt?: string; timeout?: number; envelope?: unknown } = {};
+    let paths!: ReturnType<typeof getPaths>;
     const relayReady = new Promise<WsSocket>((resolveWs) => {
       void fakeRelay((ws) => resolveWs(ws)).then((url) => {
         const deps = baseDeps(url);
+        paths = deps.paths;
         seedTask(deps.paths, "schedule-meeting", [
           "description: d",
           "tools: [read, fetch]",
@@ -324,6 +326,8 @@ describe("startListener task resolution", () => {
     expect(seen.prompt).toContain("check the calendar");
     expect(seen.timeout).toBe(60_000);
     expect(seen.envelope).toEqual({ caps: ["read", "fetch"] });
+    const audit = readFileSync(paths.callsLog, "utf8").trim().split("\n").map((l) => JSON.parse(l));
+    expect(audit[0]).toMatchObject({ call_id: "c3", task: "schedule-meeting", status: "ok" });
   });
 
   it("falls back to the ask task (read-only envelope) for a plain message", async () => {
