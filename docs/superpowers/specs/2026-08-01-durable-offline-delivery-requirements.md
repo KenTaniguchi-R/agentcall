@@ -11,6 +11,17 @@ draft claimed the mailbox fell out of A2A conformance for free. It does not.
 
 ---
 
+## Scope boundary — what is *not* here
+
+A2A conformance forces a **task store** (a task retrievable by ID for its lifetime, so
+`GetTask` / `ListTasks` / `CancelTask` work when a caller's connection drops mid-call).
+That is in the [A2A spec](./2026-08-01-a2a-adoption-design.md#task-store--durable-mailbox),
+buildable on the current Cloudflare stack, and **not** blocked on the transport decision.
+
+This document is only about extending that lifetime from minutes to days so a call
+survives a sleeping laptop. That is what drags in storage substrate, retention, quotas,
+and delivery leases — and it is the only half that waits on companion item D.2.
+
 ## Why this is a separate document
 
 The A2A spec's first draft mapped an offline callee to `TASK_STATE_SUBMITTED` and

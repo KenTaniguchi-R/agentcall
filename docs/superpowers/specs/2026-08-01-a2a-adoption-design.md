@@ -314,6 +314,28 @@ stale-authority, offboarding, and caller-expectation problems.
 Everything else about it moves to
 [durable-offline-delivery](./2026-08-01-durable-offline-delivery-requirements.md).
 
+### Task store ≠ durable mailbox
+
+The two were briefly conflated, which made this spec look blocked on the transport
+decision (companion item D.2). It is not. They separate cleanly:
+
+| | **Task store** — in scope here | **Durable mailbox** — the other spec |
+|---|---|---|
+| Forced by | A2A conformance alone | the product decision to survive an offline callee |
+| Lifetime | today's `RELAY_CALL_TIMEOUT_MS` (6 min) | days |
+| Why needed | `GetTask` / `ListTasks` / `CancelTask` require retrieval by ID — a caller whose connection drops mid-call must be able to poll back | a callee's laptop is asleep |
+| Drags in | a persisted task record and caller-independent lookup | storage substrate, retention, quotas, delivery leases, redelivery, dedup |
+| Blocked on D.2 | **no** | **yes** |
+
+So conformance requires replacing today's socket-scoped model with a task retrievable by
+ID for its lifetime — that much is unavoidable and buildable on the current Cloudflare
+stack. Extending that lifetime from minutes to days is the separate decision.
+
+**Sequencing consequence:** build all of this on Cloudflare as-is, with `offline` still
+failing fast. That delivers the procurement claim without touching the transport question,
+and it makes the eventual D.2 evaluation better — NATS-vs-DO gets judged against a
+persisted-task shape that exists in real code rather than a hypothetical one.
+
 ## CLI
 
 `agentcall call` becomes an ordinary A2A client: HTTP+JSON out, SSE for the status
