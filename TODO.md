@@ -5,7 +5,7 @@ along it is*, never *why* or *how* — that lives in the linked docs, which stay
 unrevised per the repo's doc conventions. When work lands, update the status here and
 add a forward-pointer in the source doc rather than editing its checkboxes.
 
-Last reviewed: **2026-08-01**
+Last reviewed: **2026-08-01** — after `deny_read` verification rounds 1–2 and the A2A card-surface merge.
 
 | Status | Means |
 |---|---|
@@ -28,7 +28,7 @@ not effort — preserved here.
 
 | Item | Status | Note |
 |---|---|---|
-| [A2A track](#a2a-conformance-track) | `designing` | **Owned by a separate session.** Don't pick up S2–S4 without checking. |
+| [A2A track](#a2a-conformance-track) | `in progress` | **Owned by a separate session.** Plan 1 of 3 (card surface) is **merged** (`c94822b`). Plans 2–3 pending. Don't pick up S2–S4 without checking. |
 | [C.2 — Codex read floor](#c-endpoint-security--the-argument-to-win) | `gated` | P1 and P3 now **pass**, P4 partial. **P2 is the sole remaining fatal precondition** and is the critical path — it needs its own experiment design, not another run of the script. |
 
 ---
@@ -44,6 +44,15 @@ Binding pinned to **REST**; TCK pinned at `5996b79`; A2A spec pinned at **v1.0.0
 | S2 | **Task store** — a task retrievable by ID for the current call lifetime | `open` | Forced by A2A conformance alone: `GetTask` / `ListTasks` / `CancelTask` must work when a caller's connection drops mid-call. Replaces today's socket-scoped model, but only for the existing ~6-minute lifetime, and **builds on the current Cloudflare stack** — *not* blocked on [D.2](#d-availability--parity-with-cotal). Scope confirmed 2026-08-01: task store only, mailbox stays out. |
 | S3 | A2A principal → agentcall caller identity mapping | `open` | Missing from the first draft entirely. Identity today is a bearer token + `X-AgentCall-Handle` (`apps/relay/src/index.ts:154`). Until this exists the policy engine cannot make its defining decision. |
 | S4 | Endpoint security + threat model as a hard release gate | `open` | Same work as [C.4](#c-endpoint-security--the-argument-to-win). |
+
+**Shipped 2026-08-01 (plan 1 of 3).** Relay serves A2A agent cards at the well-known and
+registry paths; cards conform to the A2A v1.0 schema; `A2A-Version` validated; §5.4 error
+table and AIP-193 envelope transcribed. TCK card-suite run is pinned and scripted
+(`tck.sh`), with a recorded baseline. **Caveat carried in the spec:** the TCK fixture always
+fetches `{sut_host}/.well-known/agent-card.json`, which this relay wires to the *directory*
+card, never the per-handle card that is the actual product surface — there is no TCK flag
+to redirect it, so `packages/shared/test/a2a-card.test.ts` stands in as proof for the
+per-handle card.
 
 **Release gate.** A2A implementation may proceed behind a non-production flag. **Public
 or enterprise deployment is blocked on C.1–C.4** *and* on S3. A passing TCK says nothing
@@ -86,7 +95,7 @@ which favours this design.
 Design: [codex-read-floor-design](./docs/superpowers/specs/2026-08-01-codex-read-floor-design.md#preconditions--all-unproven-all-blocking).
 Mechanism is Codex's **own** kernel-enforced `deny_read` (agentcall can only *require and
 verify* it, never set it — it lives in root-owned `/etc/codex/requirements.toml`).
-Verified against codex-cli **0.146.0**. Ordered by how badly failure damages the design.
+Verified against codex-cli **0.146.0** (macOS/arm64). Round 1 read the binary and ran the spawn; round 2 ran [`scripts/verify-codex-deny-read.sh`](./scripts/verify-codex-deny-read.sh) with root — **7 denied / 0 bypassed**. Ordered by how badly failure damages the design.
 
 | # | Precondition | Status | If it fails |
 |---|---|---|---|
@@ -96,10 +105,46 @@ Verified against codex-cli **0.146.0**. Ordered by how badly failure damages the
 | P4 | Enforcement verified per platform and per sandbox mode | `partial` | **macOS/arm64 now verified** — the round-2 baseline is the first direct evidence `deny_read` enforces at all; everything prior was linked symbols. Linux and Windows unverified, so claim "verified on macOS, designed to be cross-platform." |
 | P5 | Version qualification | `open` | 0.146.0 is now a qualified version, and `scripts/verify-codex-deny-read.sh` makes re-qualification a repeatable check. `doctor` must still fail closed on any version not on the list. |
 
-Implementation, once cleared: (1) `agentcall codex-requirements` prints a fragment for an
+### ▶ Next task — design and run the P2 experiment
+
+**P2 is the only thing between C.2 and implementation.** It cannot be closed by re-running
+`scripts/verify-codex-deny-read.sh`: that script proves the floor via a shell `cat`, and
+neither P2 suspect reads through the shell, so the sentinel is never touched.
+
+What the experiment has to do — the two hard parts are (2) and (3):
+
+1. **Install the floor** — same step 1 as the existing script (`sudo`, `/etc/codex/requirements.toml`), denying a sentinel directory.
+2. **Make each suspect attempt a read of the sentinel**, which is the unsolved part:
+   - **`codex-code-mode-host`** — a sibling helper started as a direct child of `codex exec` on *every* run, even under `--ignore-user-config`. Find what makes it read a file (code mode executing model-authored code is the obvious lever) and whether that read is mediated.
+   - **`codex_apps` tools** — bundled connectors that survive `--ignore-user-config`. First establish which are actually reachable in the agentcall spawn shape; the design names `sites_deploy_site_version` and `plugin_management_uninstall_app` as outward-facing examples.
+3. **Distinguish "denied" from "never attempted."** A tool that silently declines to read proves nothing. Each case needs positive evidence the read was *attempted* and *refused* — otherwise the result is "inconclusive," not "pass." This is the trap that makes P2 harder than P1.
+
+Useful facts already established: Codex applies Seatbelt **in-process**, so there is no
+`sandbox-exec` wrapper to grep for — process-tree inspection cannot answer this. Under
+`--sandbox read-only`, shell writes outside the workspace fail with `Operation not
+permitted` while reads succeed, so the write path is a usable *positive control* for
+whether a given surface sits inside the sandbox at all.
+
+If P2 fails, `deny_read` is not a floor and the design dies the way the hook design did —
+so treat a negative result as the expected outcome worth finding fast.
+
+### Also open on C.2
+
+- **P1 residual:** confirm malformed `requirements.toml` **stops startup** rather than
+  being silently skipped. A skipped bad file is fail-open with the same shape as
+  everything else found on 2026-08-01. One more case in the script.
+- **The guard hook still never runs** (see C.2 row) — decide the narrow
+  `hooks.state.<id>.trusted_hash` fix or accept no Codex telemetry. Any fix needs a
+  *behavioural* test; an argv-shape assertion passes while foreign hooks execute.
+- **`allow_managed_hooks_only`** would silently disable agentcall's own guard, so the
+  emitted fragment must carry the hook too, or `doctor` must fail when that flag is set.
+
+Implementation, once P2 clears: (1) `agentcall codex-requirements` prints a fragment for an
 admin to install — agentcall never writes `/etc`; (2) `doctor` proves the floor with a
 **behavioural canary**, distinguishing `configured` / `effective` / `enforced` — only
-`enforced` counts; (3) `agentcall listen` refuses Codex-routed calls absent `enforced`;
+`enforced` counts, and it must read `effective` from the app-server's
+`configRequirements/read` (requirements can arrive via MDM or a cloud bundle, not just the
+local file); (3) `agentcall listen` refuses Codex-routed calls absent `enforced`;
 (4) the hook stays in observe mode.
 
 **Honest-claim ceiling:** even when enforced, this is a *credential floor for the paths
@@ -117,7 +162,7 @@ and env vars stay readable.
 
 | # | Item | Status | Note |
 |---|---|---|---|
-| E.1 | **Adopt the A2A `AgentCard` shape for `agentcall card`** | `designing` | Superseded in scope by the [A2A track](#a2a-conformance-track), which goes further than the card. |
+| E.1 | **Adopt the A2A `AgentCard` shape for `agentcall card`** | `partial` | **Largely delivered** by plan 1 of the [A2A track](#a2a-conformance-track) — cards are projected to A2A `AgentCard` and schema-conformance tested. Remaining scope lives in that track, not here. |
 | E.2 | **Reconcile GTM sequencing with the differentiator** | `open` | Demand doc sequences non-EU, non-unionised 100–500 person orgs first; our sharpest differentiator ("we don't ingest your employees' data") is worth most to the EU-exposed, regulated buyers that sequencing defers. One of the two should move. Confidence: **medium** — inference from two docs, not new research. |
 
 ---
