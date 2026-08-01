@@ -487,6 +487,44 @@ and untestable by the TCK — which is why it stays a non-goal, on better reason
 The TCK vendors v1.0.0 (`1736957`). Keep the run pinned there so the baseline stays
 comparable; revisit when the TCK itself moves to v1.0.1 or later.
 
+## Watching
+
+**Do not set up spec-watching.** Four months post-1.0 the entire `specification/` diff is
+29 lines clarifying one field, and `docs/roadmap.md` plans no protocol work at all —
+near-term is extensions and community process, longer-term is governance, validation,
+SDKs, and best practices. Reading diffs by hand would mostly surface changes that do not
+affect us.
+
+**The pinned TCK in CI is the change detector**, and a better one: bump the pin, and a red
+build means the protocol moved in a way that breaks *this* implementation specifically.
+That is a side effect of the gate we already want, not a process to build.
+
+### The one thing that needs a human
+
+**The A2A extension registry** — see `docs/topics/extension-and-binding-governance.md` and
+the community registry. Extensions are the designated evolution path ("continue to support
+additional A2A extensions with SDK support" is the roadmap's actual near-term item), so
+future capability arrives there rather than in the core.
+
+That is where this design's stated residual risk lives: **a standardized policy or
+authorization extension would erase the expression half of the differentiator.** It would
+not break the build — CI stays green — so it is the one change class no automation will
+surface.
+
+| | |
+|---|---|
+| Watch | A2A extension registry, for a policy / authorization / delegated-authority extension |
+| Cadence | Quarterly. It is a positioning signal, not an engineering one |
+| If it appears | Adopt the standard expression; keep enforcement. A standard can specify how to express a grant; it cannot ship the thing that refuses the read |
+
+### Deferred reading
+
+`docs/topics/streaming-and-async.md` was skipped — not load-bearing here, but likely
+load-bearing for
+[durable-offline-delivery](./2026-08-01-durable-offline-delivery-requirements.md), whose
+open questions are stream reconnection, async delivery, and disconnected clients. Read it
+against that spec's real questions rather than skimming it now.
+
 ## Codex review — 2026-08-01
 
 Adversarial review of the first draft, read-only, grounded in the repo. Twelve findings.
