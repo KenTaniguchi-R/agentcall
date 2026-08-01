@@ -264,14 +264,19 @@ Two limits, stated plainly:
 - **A task that grants `exec` has no read floor.** Shell commands are recorded, not
   blocked — pattern-matching a command string is too weak to be a boundary and too
   eager to be harmless. The control on `exec` is which tasks you choose to write.
-- **A Codex answering agent is observed, not guarded.** The same hook is registered on
-  the Codex spawn, but in *observe* mode: it records every tool attempt to
-  `tools.log` and never blocks. Codex has no `Read`/`Grep`/`Glob` tools, and most of
+- **A Codex answering agent is neither guarded nor, today, observed.** The same hook is
+  registered on the Codex spawn in *observe* mode — record, never block — but Codex
+  gates hooks on persisted trust and agentcall supplies its hook inline via `-c`, which
+  has never been trusted, so **Codex skips it silently and the Codex spawn produces no
+  `tools.log` telemetry at all** ([issue #4](https://github.com/KenTaniguchi-R/agentcall/issues/4)).
+  The mechanism itself is sound: forced to run, the guard does see the whole surface,
+  including bundled MCP calls such as `mcp__codex_apps__sites__list_sites`. It is the
+  trust gate, not the guard, that is missing. Codex has no `Read`/`Grep`/`Glob` tools, and most of
   what it does reach the filesystem with is `Bash` (`sed -n '1,200p' file`) — exactly
   the surface the point above says cannot be bounded by matching command strings. Its
   `--sandbox` level confines writes but not reads: `codex exec --sandbox read-only`
-  still reads `~/.ssh`. **A Codex answering agent therefore has no read floor, and
-  `tools.log` for one is a record of attempts, not of what was permitted.**
+  still reads `~/.ssh`. **A Codex answering agent therefore has no read floor — and
+  until #4 is fixed, no record of what it did either.**
 - **Codex does not reach the filesystem only through `Bash`, and the non-shell routes
   are not recorded at all.** `view_image` reads any absolute path and returns the raw
   bytes — it does not check that the file is an image, so it is a general file-read
@@ -280,15 +285,24 @@ Two limits, stated plainly:
   parses, so a read through them appears in **no** log: not `tools.log`, not
   `calls.log`. Verified against codex-cli 0.146.0; see
   [issue #29](https://github.com/KenTaniguchi-R/agentcall/issues/29).
-- **The Codex spawn does not load your `~/.codex`.** It runs with
-  `--ignore-user-config`, so a caller cannot reach your MCP servers, plugins, or apps.
-  Those run as separate processes outside Codex's sandbox, and a filesystem MCP server
-  — or `claude mcp serve`, which re-exposes `Read` and `Bash` — would otherwise route
-  around every control here. Codex's own bundled `codex_apps` tools are not removed by
-  that flag and remain reachable — including a site deploy surface that can publish
-  content and set environment variables
-  ([issue #30](https://github.com/KenTaniguchi-R/agentcall/issues/30)). No read floor
-  constrains those, because they do not read: they send.
+- **The Codex spawn does not load your `~/.codex` — but that does not disarm Codex's
+  own bundled tools.** It runs with `--ignore-user-config`, so a caller cannot reach
+  *your* MCP servers, plugins, or apps. Those run as separate processes outside Codex's
+  sandbox, and a filesystem MCP server — or `claude mcp serve`, which re-exposes `Read`
+  and `Bash` — would otherwise route around every control here. What that flag does not
+  drop is Codex's own bundled `codex_apps` connector, 28 tools on codex-cli 0.146.0.
+  **These are not merely reachable — they work.** In the exact spawn shape above,
+  `sites_list_sites` returns a normal `isError:false` result and
+  `hotline_get_local_hotline` returns real content fetched from the ChatGPT backend;
+  nothing returns the connector's documented auth-failure envelope. The same authenticated
+  surface carries `sites_deploy_site_version`, `sites_update_environment_variables`,
+  `sites_update_site_access` and `sites_generate_siwc_bypass_token`. **So a remote caller
+  can read something in your workspace and publish it to the internet without crossing a
+  single denied path.** No read floor touches that, because those tools do not read: they
+  send. `--sandbox` does not touch it either — it confines the *shell*, and this traffic
+  is not the shell's. Verified against codex-cli 0.146.0 by
+  [`scripts/verify-codex-apps-surface.sh`](./scripts/verify-codex-apps-surface.sh); see
+  [issue #30](https://github.com/KenTaniguchi-R/agentcall/issues/30).
 
 ## Development
 
