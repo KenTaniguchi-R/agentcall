@@ -297,6 +297,15 @@ capabilities to A, an injection cannot exceed those three.
 1. **Q&A first, positioned as live routing rather than indexing.** Same category as
    Viven, different architecture, and the difference is defensible on freshness, data
    residency, and departure semantics.
+
+   > **Amended by later research** — see
+   > [market-outlook §6](./2026-07-31-market-outlook.md#6-what-this-means-for-the-qa-first-decision).
+   > Pure Q&A is *feature-shaped* and therefore the most absorbable configuration:
+   > Slack is shipping a rebuilt Slackbot as a native employee agent with A2A support,
+   > and Microsoft's Copilot persistent memory reaches GA in November 2026. Jasper went
+   > from $120M to a forecast $55M in under 18 months on exactly this dynamic. Q&A
+   > remains valid as a *wedge* toward something workflow-shaped; it is not viable as a
+   > destination.
 2. **Synchronous call → asynchronous mailbox**, with presence and human fallback.
 3. **No approval gate.** Autonomy per (task × caller), post-hoc digest, query-history
    transparency. The fatigue research and Viven's shipped design independently reach
