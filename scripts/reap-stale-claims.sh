@@ -2,8 +2,8 @@
 # Release work claims that have gone stale.
 #
 # A claim is a GitHub assignee (see CONTRIBUTING.md). A claim nobody releases
-# would freeze an issue forever, so this unassigns any open issue whose holder
-# has not touched it in STALE_DAYS days, and says so in a comment.
+# would freeze an issue forever, so this unassigns any open issue where
+# nobody has touched it in STALE_DAYS days, and says so in a comment.
 #
 # Design: docs/superpowers/specs/2026-08-01-work-claiming-design.md
 #
@@ -21,7 +21,7 @@ cutoff="$(date -u -v-"${STALE_DAYS}"d +%Y-%m-%dT%H:%M:%SZ 2>/dev/null \
 
 echo "repo=${REPO} stale_days=${STALE_DAYS} cutoff=${cutoff} dry_run=${DRY_RUN}"
 
-stale="$(gh issue list --repo "$REPO" --search "is:open assignee:*" \
+stale="$(gh issue list --repo "$REPO" --search "is:open assignee:* sort:updated-asc" \
   --json number,updatedAt,assignees --limit 200 |
   jq -r --arg cutoff "$cutoff" '
     .[] | select(.updatedAt < $cutoff)
@@ -32,17 +32,18 @@ if [ -z "$stale" ]; then
   exit 0
 fi
 
+failed=0
 while IFS=$'\t' read -r number updated logins; do
   echo "stale: #${number} last active ${updated}, held by ${logins}"
-  # NOTE: `[ x ] && continue` would return non-zero on the last loop iteration
-  # and kill the script under `set -e`. Use an if-block.
+  # An if-block, not `[ x ] && continue`, purely for readability here.
   if [ "$DRY_RUN" = "true" ]; then
     continue
   fi
-  for login in $logins; do
-    gh issue edit "$number" --repo "$REPO" --remove-assignee "$login" < /dev/null
-  done
-  gh issue comment "$number" --repo "$REPO" < /dev/null --body \
+  # Comment BEFORE unassigning: if this fails the claim survives with a
+  # spurious note, which is recoverable. Unassigning first and then failing
+  # strips the claim with no explanation — the exact harm this comment exists
+  # to prevent.
+  if ! gh issue comment "$number" --repo "$REPO" < /dev/null --body \
 "Claim released — no activity on this issue for ${STALE_DAYS} days.
 
 If you are still working on this, take it again:
@@ -51,6 +52,18 @@ If you are still working on this, take it again:
 gh issue edit ${number} --add-assignee @me
 \`\`\`
 
-The protocol is in CONTRIBUTING.md, at the repo root."
+The protocol is in CONTRIBUTING.md, at the repo root."; then
+    echo "WARNING: could not comment on #${number}; leaving the claim in place"
+    failed=1
+    continue
+  fi
+  for login in $logins; do
+    if ! gh issue edit "$number" --repo "$REPO" --remove-assignee "$login" < /dev/null; then
+      echo "WARNING: could not unassign ${login} from #${number}"
+      failed=1
+    fi
+  done
   echo "released #${number}"
 done <<< "$stale"
+
+exit "$failed"
