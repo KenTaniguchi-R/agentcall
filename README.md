@@ -75,7 +75,19 @@ error message on stderr on failure (`unknown_handle`, `offline`, `busy`,
 `timeout`, `agent_error`, `unauthorized`, `rate_limited`, `message_too_large`,
 `protocol_error`).
 `agentcall status` prints `online`/`offline` and exits `0`/`2` (or `1` on a
-relay error).
+relay error). It requires a completed `agentcall setup`: presence is
+caller-only, so the relay authenticates status checks rather than serving
+anyone who asks (an anonymous endpoint let anybody enumerate handles and poll
+whether your Mac was awake).
+
+```bash
+# Replace your relay token if it may have leaked
+agentcall rotate
+```
+
+`agentcall rotate` swaps this install's token for a fresh one, immediately
+invalidating the old one, and restarts the background listener so it picks the
+new one up. Releasing a handle entirely isn't supported yet — see Limitations.
 
 ```bash
 # Check your own install is healthy
@@ -228,6 +240,12 @@ See [CLAUDE.md](./CLAUDE.md) for dev conventions.
 - **The relay operator sees message plaintext.** Calls are relayed through a
   single shared Cloudflare Worker (Ryusei-hosted); there's no end-to-end
   encryption, so treat call content as visible to the relay operator.
+- **Handles can't be released.** `agentcall rotate` replaces a token, but
+  there's no way to give a handle back: the Durable Object is addressed by
+  handle name, so a re-registered handle would inherit the previous owner's
+  relay-side state, and every saved contact pointing at it would silently
+  resolve to a different person. Reclaimability needs a decision before this
+  can ship, so for now a handle is yours permanently.
 - **`~/.claude.json` write access is a known residual risk.** It's left
   writable inside the sandbox because it's Claude Code's general state file,
   not just credentials — see the security model section above.

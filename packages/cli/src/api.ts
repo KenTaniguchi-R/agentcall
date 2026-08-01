@@ -75,6 +75,27 @@ export async function getStatus(
   return (await res.json()) as { online: boolean };
 }
 
+// Replaces this install's relay token. The relay authenticates with the
+// current token and returns a fresh one, so a leaked token stops being a
+// permanent liability.
+export async function rotateToken(
+  relay: string, auth: { handle: string; token: string }, opts: { timeoutMs?: number } = {},
+): Promise<{ token: string }> {
+  const res = await relayFetch(
+    relay,
+    "/v1/token/rotate",
+    {
+      method: "POST",
+      headers: { Authorization: `Bearer ${auth.token}`, "X-AgentCall-Handle": auth.handle },
+    },
+    opts.timeoutMs ?? RELAY_TIMEOUT_MS,
+  );
+  if (res.status === 401) throw new ApiError("Your credentials were rejected. Re-run `agentcall setup`.", "invalid");
+  if (res.status === 429) throw new ApiError("Too many rotations — try again in a minute.", "network");
+  if (!res.ok) throw new ApiError(`Token rotation failed (${res.status}).`, "network");
+  return (await res.json()) as { token: string };
+}
+
 export async function pushCard(
   relay: string, auth: { handle: string; token: string }, upload: CardUploadType,
   opts: { timeoutMs?: number } = {},

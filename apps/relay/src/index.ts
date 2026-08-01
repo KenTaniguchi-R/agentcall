@@ -57,6 +57,34 @@ app.post("/v1/register", async (c) => {
 // Auth runs before the existence check — deliberately. A 404 to an
 // unauthenticated prober would still answer "does this handle exist?" without
 // any credential, which is most of what the oracle was worth.
+// Until this existed, a leaked token was permanent: register was the only
+// write to `handles` in the whole codebase, and `agentcall uninstall --purge`
+// clears the local copy while the relay row and its hash live on forever.
+//
+// Rotation only — releasing a handle is deliberately not implemented. The
+// Durable Object is addressed by idFromName(handle), so a re-registered handle
+// would inherit the previous owner's DO storage (rate-limit stamps, stale call
+// records) and every saved contact pointing at it would silently resolve to a
+// different person. That needs a decision about reclaimability, not just code.
+//
+// Reuses REGISTER_RL rather than adding a binding: 5/min is the right ceiling
+// for an operation a human runs once in a blue moon, and the distinct key
+// prefix keeps it from sharing a budget with actual registrations.
+app.post("/v1/token/rotate", async (c) => {
+  const handle = c.req.header("X-AgentCall-Handle") ?? "";
+  const token = (c.req.header("Authorization") ?? "").replace(/^Bearer\s+/i, "");
+  if (!(await verifyHandleToken(c.env.DB, handle, token))) return c.json({ error: "unauthorized" }, 401);
+  if (!(await c.env.REGISTER_RL.limit({ key: `rotate:${handle}` })).success) {
+    return c.json({ error: "rate limited" }, 429);
+  }
+  const next = generateToken();
+  // UPDATE, never INSERT: an unregistered handle can't reach here (it fails
+  // the auth check above), so this must not be able to conjure a row.
+  await c.env.DB.prepare("UPDATE handles SET token_hash = ? WHERE handle = ?")
+    .bind(await sha256Hex(next), handle).run();
+  return c.json({ token: next });
+});
+
 app.get("/v1/status/:handle", async (c) => {
   const viewer = c.req.header("X-AgentCall-Handle") ?? "";
   const token = (c.req.header("Authorization") ?? "").replace(/^Bearer\s+/i, "");

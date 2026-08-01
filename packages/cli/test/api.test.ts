@@ -1,6 +1,6 @@
 import { createServer, type Server, type IncomingMessage, type ServerResponse } from "node:http";
 import { afterEach, describe, expect, it } from "vitest";
-import { registerHandle, getStatus, fetchCard, pushCard } from "../src/api.js";
+import { registerHandle, getStatus, fetchCard, pushCard, rotateToken } from "../src/api.js";
 
 let server: Server;
 afterEach(() => {
@@ -119,6 +119,38 @@ describe("api client", () => {
   it("maps a throttled status check to its own message rather than a generic failure", async () => {
     const relay = await serve(429, { error: "rate limited" });
     await expect(getStatus(relay, "ken", { handle: "me", token: "tok" })).rejects.toMatchObject({
+      message: expect.stringMatching(/too many/i),
+    });
+  });
+
+  it("rotates a token, sending the current credentials", async () => {
+    let headers: IncomingMessage["headers"] | undefined;
+    let method: string | undefined;
+    const relay = await new Promise<string>((resolve) => {
+      server = createServer((req, res) => {
+        headers = req.headers;
+        method = req.method;
+        res.writeHead(200, { "content-type": "application/json" });
+        res.end(JSON.stringify({ token: "fresh-token" }));
+      });
+      server.listen(0, "127.0.0.1", () => resolve(`http://127.0.0.1:${(server.address() as { port: number }).port}`));
+    });
+    expect(await rotateToken(relay, { handle: "me", token: "old" })).toEqual({ token: "fresh-token" });
+    expect(method).toBe("POST");
+    expect(headers?.authorization).toBe("Bearer old");
+    expect(headers?.["x-agentcall-handle"]).toBe("me");
+  });
+
+  it("maps a rejected rotation to a re-run-setup message", async () => {
+    const relay = await serve(401, { error: "unauthorized" });
+    await expect(rotateToken(relay, { handle: "me", token: "bad" })).rejects.toMatchObject({
+      message: expect.stringMatching(/agentcall setup/),
+    });
+  });
+
+  it("maps a throttled rotation to its own message", async () => {
+    const relay = await serve(429, { error: "rate limited" });
+    await expect(rotateToken(relay, { handle: "me", token: "tok" })).rejects.toMatchObject({
       message: expect.stringMatching(/too many/i),
     });
   });

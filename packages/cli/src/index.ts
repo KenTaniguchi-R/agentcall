@@ -1,12 +1,12 @@
-import { rmSync } from "node:fs";
+import { existsSync, rmSync } from "node:fs";
 import { Command } from "commander";
 import { getPaths } from "./paths.js";
-import { loadConfig, relayUrl, assertCallableConfig } from "./config.js";
+import { loadConfig, saveConfig, relayUrl, assertCallableConfig } from "./config.js";
 import { callAgent, CallError } from "./callClient.js";
-import { getStatus, fetchCard, ApiError } from "./api.js";
+import { getStatus, fetchCard, rotateToken, ApiError } from "./api.js";
 import { startListener } from "./listener.js";
 import { runSetup } from "./setup.js";
-import { uninstallLaunchAgent } from "./launchd.js";
+import { installLaunchAgent, uninstallLaunchAgent } from "./launchd.js";
 import { publishCard } from "./card.js";
 import { loadPolicy, savePolicy } from "./policy.js";
 import { loadTasks, scaffoldTask } from "./tasks.js";
@@ -315,6 +315,32 @@ program
     });
     // Keep the process alive without a busy loop; setInterval's max delay.
     setInterval(() => {}, 1 << 30);
+  });
+
+program
+  .command("rotate")
+  .description("replace this install's relay token (use if it may have leaked)")
+  .action(async () => {
+    const paths = getPaths();
+    const cfg = loadConfig(paths);
+    try {
+      const { token } = await rotateToken(relayUrl(cfg), { handle: cfg.handle, token: cfg.token });
+      saveConfig(paths, { ...cfg, token });
+      console.log(`Token rotated for ${cfg.handle}. The old token no longer works.`);
+      // The background listener read the old token at startup and holds it in
+      // memory, so without a restart it reconnects with a dead credential and
+      // 401s forever. Only restart a listener that's actually installed —
+      // installLaunchAgent would otherwise create one the owner opted out of.
+      if (existsSync(paths.plistFile)) {
+        installLaunchAgent(paths);
+        console.log("Background listener restarted with the new token.");
+      } else if (cfg.agent_kind) {
+        console.log("Restart `agentcall listen` so it picks up the new token.");
+      }
+    } catch (e) {
+      console.error(e instanceof ApiError ? e.message : String(e));
+      process.exitCode = 1;
+    }
   });
 
 program
