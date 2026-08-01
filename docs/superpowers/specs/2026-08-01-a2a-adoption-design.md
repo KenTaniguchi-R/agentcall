@@ -113,8 +113,9 @@ enterprise fleets. Being both ours removes third-party compatibility obligations
 compatibility *requirements*. The link keeps its zod schemas, tests, a compatibility
 policy, and a version/capability handshake.
 
-A2A v1.0 has no WebSocket binding (roadmapped 1.1+). Irrelevant: HTTP is needed only
-outward.
+A2A defines no *core* WebSocket binding. Irrelevant here: HTTP is needed only outward.
+(An earlier draft said this was "roadmapped for v1.1+". That was wrong — see
+[upstream check](#upstream-spec-check--2026-08-01).)
 
 Transport-agnostic, and therefore decidable before the open transport questions
 (self-hostable relay, own-the-wire vs ride-a-mesh).
@@ -365,7 +366,12 @@ refactor is complete.
 - **Real cross-vendor interop.** Not designed for, not claimed.
 - **A custom A2A transport binding (§12).** Fails both drivers: still a spec to maintain,
   and the TCK covers only JSON-RPC / gRPC / HTTP+JSON.
-- **WebSocket binding.** Wait for v1.1.
+- **WebSocket binding.** Not because it is coming in v1.1 — it is not on the roadmap at
+  all. A documented **custom protocol binding** path exists, with a canonical URI
+  (`https://a2a-protocol.org/bindings/websocket`) and `wss://` examples. It stays a
+  non-goal because the TCK covers only the three core bindings, so a WS binding is
+  untestable and therefore cannot carry the conformance claim. Optional and additive
+  later, never the primary interface.
 - **Push notifications.** The four-method config surface is not free — it needs callback
   URL validation, private/link-local/metadata blocking, DNS-rebinding defense, redirect
   policy, delivery auth, secret storage and rotation, retry/backoff/dead-letter, quotas,
@@ -408,6 +414,78 @@ decision.
 4. Complete endpoint security and the threat model as a hard public-release gate.
 
 ---
+
+## Upstream spec check — 2026-08-01
+
+Checked `a2aproject/A2A` `main` (`2cdf197`, 2026-07-31) against the v1.0.0 tag the TCK
+vendors, to see whether anything in flight changes this design. Tags now include
+**v1.0.1**; there is no v1.1 tag or branch.
+
+### The only normative change since v1.0.0 is a `tenant` clarification
+
+The entire `specification/` diff v1.0.0 → main is 29 insertions in `a2a.proto`, almost all
+of it rewording `tenant`:
+
+> "An **opaque string** used for routing requests to a specific agent or tenant **when
+> multiple agents are served behind a single A2A endpoint**. When set, clients MUST
+> include this value in the `tenant` field of all request messages sent to this interface.
+> The server is responsible for interpreting the value and routing requests accordingly;
+> **the protocol does not define its format or semantics**."
+
+That is agentcall's deployment described verbatim, and it removes any doubt that a
+`handle` is a legal tenant value — the protocol imposes no format. The spec authors spent
+their only post-1.0 normative change clarifying the exact mechanism this design depends
+on.
+
+### A new topic doc sanctions three routing approaches
+
+`docs/topics/multi-tenancy.md` did not exist in the vendored copy. It gives three
+non-exclusive approaches for "several agents behind a single host or reverse-proxy":
+
+1. **URL-based (sub-path)** — each agent advertises its own `url`. Called out as "the
+   simplest approach and requires no special client awareness beyond reading the Agent
+   Card."
+2. **Auth-header-based** — the gateway routes on credentials already in the request.
+3. **Body-based `tenant`** — the opaque discriminator above.
+
+**Refinement to finding 4:** approach 1 is what the Spike 1 stub actually used
+(`https://localhost:9999/ken`) and what passed the TCK; its `tenant` declaration was
+decorative, since the stub routed on path. So the recommendation is **URL-based routing
+as primary**, optionally also setting `tenant` for gateways that route on it. "The handle
+is a tenant" was right in spirit; "the handle is a URL sub-path, and may also be a tenant"
+is more precise.
+
+Note the normative client rule (§8.3.2): a client **MUST** echo `tenant` when the
+interface sets it and **MUST** omit it when the interface does not.
+
+### Per-handle cards confirmed
+
+> "When multiple agents are deployed behind a shared domain, each agent **SHOULD** have
+> its own Agent Card published at an appropriate location. Clients retrieve each agent's
+> card independently."
+
+That is finding 5's registry conclusion, stated upstream.
+
+### Correction: the WebSocket claim was wrong
+
+This spec said twice that A2A's WebSocket binding was "roadmapped for v1.1+". **There is
+no such roadmap item.** `docs/roadmap.md` (updated 2026-03-10) lists near-term: the 1.0
+release, extension support, community process; longer-term: governance, validation (TCK
+and Inspector), SDKs, best practices. No transport work at all.
+
+The claim came from the Exa research sweep and was propagated into the design without
+being checked against the repo. Corrected in both places above.
+
+What *does* exist is `docs/topics/custom-protocol-bindings.md`, which treats WebSockets as
+the worked example of a custom binding and assigns it a canonical URI
+(`https://a2a-protocol.org/bindings/websocket`). So a WS binding is available, documented,
+and untestable by the TCK — which is why it stays a non-goal, on better reasoning than
+"wait for v1.1."
+
+### Version pin
+
+The TCK vendors v1.0.0 (`1736957`). Keep the run pinned there so the baseline stays
+comparable; revisit when the TCK itself moves to v1.0.1 or later.
 
 ## Codex review — 2026-08-01
 
