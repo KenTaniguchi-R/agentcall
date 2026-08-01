@@ -2,9 +2,36 @@
 
 Dev guide for working in this repo. **[README.md](./README.md) is the authority on
 current behavior**, with [CHANGELOG.md](./CHANGELOG.md) for what changed when and
-**[TODO.md](./TODO.md) for what is still open** — TODO.md is the single place task
-status is tracked, so update it there rather than editing checkboxes in the docs it
-links to.
+**GitHub Issues for what is still open.**
+
+## Where work is tracked
+
+**Open work lives in GitHub Issues, not in a file.** `gh issue list` is the status
+board; check it before starting anything, and don't reintroduce a markdown TODO.
+
+```bash
+gh issue list                          # everything open
+gh issue list --label status:next      # what to pick up
+gh issue view <n>                      # full context, incl. dependencies
+```
+
+Labels: `area:*` groups by track (`security`, `a2a`, `deployment`, `enterprise`,
+`availability`, `positioning`, `product`, `debt`). `status:*` carries state —
+`next` (pick this up), `gated` (blocked on a stated precondition, **do not start
+coding**), `blocked` (waiting on another issue), `deferred` (deliberately not being
+worked on *by decision* — reopen the decision before touching it). `kind:*` marks
+`decision`, `experiment`, `bug`.
+
+Dependencies are written into issue bodies as "Blocked by #n" — GitHub has no native
+dependency field, so keep them there when you add an issue.
+
+Two standing constraints that aren't any single issue's property:
+
+- **Public or enterprise deployment is blocked on #1–#8 (the C track) and #10.** A
+  passing TCK says nothing about safe prompt execution.
+- **Some issues collide in `apps/relay`.** #16 touches Durable Object addressing, which
+  the A2A track is actively changing. Coordinate, and prefer a git worktree per working
+  session — two sessions sharing one checkout has already cost uncommitted work here.
 
 Everything under `docs/superpowers/` is a **historical** design/implementation
 record, dated and never revised — useful for *why* a decision was made, wrong about

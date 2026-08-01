@@ -66,10 +66,13 @@ Ordered by how hard each one blocks a deal, not by effort. Items in **A** kill
 deployments outright; **B** stalls procurement; **C** is the argument to win in security
 review; **D** is competitive parity; **E** is positioning.
 
-> **Status now lives in [`TODO.md`](../../TODO.md).** The checkboxes below are a snapshot
-> as of this doc's date and are not maintained — this doc keeps the *reasoning* for each
-> item, `TODO.md` keeps how far along it is. The item lettering is shared, so `C.2` here
-> is `C.2` there.
+> **Status now lives in GitHub Issues** (`gh issue list`). The checkboxes below are a
+> snapshot as of this doc's date and are not maintained — this doc keeps the *reasoning*
+> for each item, the issues keep how far along it is. The lettering is preserved in issue
+> titles, so `C.2` here is the issue titled "C.2 — …".
+>
+> (A `TODO.md` briefly held this role on 2026-08-01 and was retired the same day, to avoid
+> tracking the same work in two places.)
 
 ### A. Deployment surface — deal blockers
 
