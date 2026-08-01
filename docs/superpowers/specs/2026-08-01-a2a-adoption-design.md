@@ -341,8 +341,9 @@ decision.
 ## Spikes gating implementation
 
 1. ~~Run the pinned TCK against the proposed per-handle URL and discovery topology.~~
-   **Partially done — see [Spike 1 result](#spike-1-result--2026-08-01).** Binding and
-   discovery questions answered by reading the suite; the run itself still needs a stub.
+   **Done — see [Spike 1 result](#spike-1-result--2026-08-01).** Binding pinned to REST,
+   topology validated against the real suite (47 MUST passing, 69.8%), six missed
+   normative requirements surfaced.
 2. Design the durable task store, delivery lease, retention, cancellation, and
    deduplication model (separate spec).
 3. Define A2A authentication → agentcall principal mapping.
@@ -551,18 +552,55 @@ POST /{tenant}/tasks/{id}:cancel     …:subscribe                        (SSE)
 POST|GET /{tenant}/tasks/{id}/pushNotificationConfigs[/{configId}]
 ```
 
+### 7. Baseline established — the TCK was run, and the topology holds
+
+A ~200-line dependency-free Node stub was built over the surface above and the suite run
+against it:
+
+```
+./run_tck.py --sut-host http://localhost:9999 --transport http_json --level must
+→ 47 passed, 16 failed, 172 skipped
+```
+
+| Level | Compatibility |
+|---|---|
+| MUST | **69.8%** |
+| SHOULD | 100% |
+| MAY | 100% |
+
+**The resolved topology is validated empirically, not just by reading.** The TCK fetched
+the card from the origin well-known path, followed `supportedInterfaces[0].url` to the
+tenant path `/ken`, and executed operations there. Findings 4 and 5 hold against the real
+suite.
+
+100% SHOULD confirms finding 3: setting `Cache-Control`, `ETag`, and `Last-Modified` on
+the card endpoint passes those checks.
+
+### 8. Normative requirements the design missed
+
+Every one of these came from a failure, and none was in the design:
+
+| Requirement | Detail |
+|---|---|
+| **AIP-193 error format** | REST error bodies must follow Google's AIP-193 — `error.code` is a **number**, not a string. The stub's `"NOT_FOUND"` failed with `invalid literal for int()`. Spec §11.6 |
+| **Normative error→status mapping** | Spec §5.4 defines the mapping. The lifecycle table in this doc invented 404/429/401/403/413 — it must defer to §5.4 instead. Concretely: push-not-supported is **400**, not the 501 the stub returned |
+| **`A2A-Version` header** | The server MUST validate it and return `VersionNotSupportedError` (400) when unsupported. Not mentioned anywhere in the design |
+| **Terminal-state guards** | `CancelTask` and `SubscribeToTask` must error on an already-terminal task |
+| **`SendMessage` may return a bare `Message`** | Not always a `Task`. `SendMessageResponse` is a `{message?, task?}` wrapper |
+| **Artifact part shapes** | text / file / file-url / data artifact variants are individually checked |
+
+The §5.4 mapping is the significant one — it replaces hand-reasoning in the lifecycle
+table with a normative table, and it should be transcribed before implementation rather
+than re-derived.
+
 ### Remaining work in Spike 1
 
-Not done: the stub and the run. Findings 4 and 5 changed its shape mid-spike — a stub
-built for the per-handle-origin topology would have tested the wrong thing. The topology
-is now settled, so the stub is unblocked.
+None. The spike is complete: binding pinned, topology validated against the real suite,
+baseline recorded, and six missed requirements surfaced.
 
-Next: minimal REST stub over the surface above, and
-`./run_tck.py --sut-host <stub> --transport http_json --level must`. That converts these
-inferences into a report and produces the pinned baseline the CI gate compares against.
-Approximately 61 MUST requirements are in scope (`core_operations` 31, `data_model` 11,
-`agent_card` 10, `binding_http_json` 9); the stub is not expected to pass all of them —
-the report is the deliverable, not a green run.
+The stub lives in the session scratchpad and is **not** committed — it is throwaway spike
+code. If the baseline needs to be reproducible for the CI gate, it should be rebuilt
+inside the repo as a proper fixture rather than resurrected from scratch.
 
 ## Sources
 
