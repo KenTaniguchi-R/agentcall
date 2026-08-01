@@ -435,7 +435,7 @@ export function decide(
 - [ ] **Step 4: Run the test to verify it passes**
 
 Run: `cd packages/cli && pnpm vitest run test/guard.test.ts`
-Expected: PASS, 31 tests. This exact implementation and this exact test set were executed together before the plan was committed — if any case fails, the implementation was transcribed wrongly, not mis-specified.
+Expected: PASS, 30 tests. This exact implementation and this exact test set were executed together before the plan was committed — if any case fails, the implementation was transcribed wrongly, not mis-specified.
 
 - [ ] **Step 5: Commit**
 
