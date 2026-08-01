@@ -14,6 +14,19 @@ on:
         type: string
         required: false
 
+# The 09:00 schedule and a manual dispatch can otherwise overlap, which would
+# comment "claim released" twice on the same issue. Serialize rather than
+# cancel: `cancel-in-progress: true` could kill the job between the comment and
+# the unassign — or partway through a multi-assignee issue — leaving a claim
+# that stands under a note saying it was released.
+#
+# Not a queue. GitHub keeps one running and one *pending* run per group, and a
+# newer trigger replaces the pending one, so a dispatch can supersede a waiting
+# scheduled sweep. A sweep can therefore be skipped; it can never overlap.
+concurrency:
+  group: stale-claims
+  cancel-in-progress: false
+
 permissions:
   issues: write
   contents: read
