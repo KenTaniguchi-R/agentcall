@@ -1,10 +1,11 @@
 # PreToolUse guard — design
 
 **Date:** 2026-07-31
-**Status:** Design approved. **Both review gates resolved** by measurement on 2026-07-31
-— see findings 5 and 6. Gate 1 came back negative, so the full scope stands; gate 2
-produced the timeout parameter and one architecture change. Ready for an implementation
-plan.
+**Status:** Design approved, plan revised. Both review gates resolved by measurement (see
+findings 5 and 6), then the plan was reviewed adversarially by Codex — 17 findings, six
+critical, all verified and addressed. See [Second review](#second-review--codex-2026-07-31).
+`decide()` was rebuilt on canonical path resolution and its 31 tests were **executed**,
+not just written. Ready to implement.
 **Layer:** #3 of the defence model in
 [claude-code-enforcement-surfaces §7](../../research/2026-07-31-claude-code-enforcement-surfaces.md),
 the one marked "Gap — the work".
@@ -199,9 +200,26 @@ three tool shapes are treated differently:
 
 | Shape | Tools | Rule |
 |---|---|---|
-| Exact target | `Read`, `Write`, `Edit` | deny if the resolved target is inside a denied path |
-| Scanning root | `Grep`, `Glob` | deny if the root is inside a denied path **or is an ancestor of one** |
+| Exact target | `Read`, `Write`, `Edit`, `NotebookEdit` | deny if the resolved target is inside a denied path, or its basename is denied |
+| Scanning root | `Grep`, **`LS`** | deny if the root is inside a denied path **or is an ancestor of one** |
+| Pattern-carried path | `Glob` | its path lives in `pattern`, not `path` — deny on the pattern's literal prefix, on a denied basename in the pattern, or on `..` |
+| No filesystem surface | `WebFetch`, `WebSearch` | allow |
 | Opaque string | `Bash` | see below |
+| **Anything else** | — | **deny** |
+
+The last row is load-bearing. An earlier draft allowed unclassified tools, and `LS` —
+granted unconditionally by the `read` capability at `runner.ts:31` — fell straight
+through it, listing private-key filenames. A tool this function has never been taught
+has an argument shape it cannot inspect, so it must not be waved through.
+
+Comparison is by canonical path, not string prefix. Three reasons, each a bug that was
+found by running the code rather than reading it: `resolve("/") + sep` is `"//"` and
+prefixes nothing, so a search rooted at `/` was permitted; the supported platform's
+default filesystem is case-**in**sensitive, so `~/.SSH` reached `~/.ssh`; and `realpath`
+throws on a path that does not exist yet, so a `Write` to `/tmp/link/new_key` where
+`link → ~/.ssh` was compared as text and allowed. Resolution therefore walks up to the
+longest *existing* ancestor, re-appends the tail, folds case, and compares with
+`path.relative()`.
 
 The ancestor clause is what stops `Grep(path: "~")` and `Glob` from a broad root: `~` is
 an ancestor of `~/.ssh`, so it is refused, while `Grep(path: "~/project")` is not an
@@ -242,7 +260,20 @@ and it is consistent with this spec's own position that the real control on `exe
 which tasks the owner writes to grant it.
 
 The honest claim is therefore narrow: the guard is a boundary for path-shaped tool
-arguments, and an observer for `Bash`.
+arguments, and an observer for `Bash`. **A task granting `exec` has no read floor** —
+`cat ~/.ssh/id_rsa` is recorded and permitted. Calling this a "global safety floor"
+without that sentence oversells it, and the README must carry the caveat too.
+
+### Residual: `Grep` over an allowed root
+
+`Grep(path: "<workdir>", pattern: "BEGIN OPENSSH PRIVATE KEY")` is permitted, and can
+return content from a `.env` or `*.pem` that lives inside the workdir. The root is not
+denied and the denied thing is in the *results*, which a pre-call hook cannot filter.
+
+Closing it would need either post-call filtering (a `PostToolUse` hook cannot unsend a
+result) or refusing `Grep` outright, which removes most of the value of a Q&A agent over
+a codebase. It stays open, and it is stated here rather than discovered later. The
+mitigation that does exist is the owner's choice of `workdir`.
 
 ### Failure behaviour
 
@@ -320,10 +351,17 @@ So:
 - **`calls.log`** — call records as today, plus one `tool_denied` line per denial and one
   `tool_flagged` line per `Bash` pattern match. Sparse, owner-facing, the thing worth
   reading.
-- **`tools.log`** *(new, added to `paths.ts`)* — every tool call, allowed or not. Dense,
-  machine-facing, the audit trail. Nothing parses it yet; it exists so the claim is true.
+- **`tools.log`** *(new, added to `paths.ts`)* — every tool call **that reaches the
+  guard**, allowed or not. Dense, machine-facing, the audit trail. Nothing parses it yet;
+  it exists so the claim is true.
 
 A denial appears in both. The signal stays sparse without the record being lossy.
+
+**The precise claim is "every tool call that reaches the guard", not "every tool call".**
+Calls rejected by `--allowedTools` never fire a hook, so an attempt to use an MCP tool or
+spawn a subagent is refused by Claude and leaves no line here. Nor does a call whose hook
+process fails to start. Writing this down matters because the looser phrasing is the one
+that would end up in a compliance conversation, and it would not survive scrutiny.
 
 ### What the caller learns — the reason is a contract
 
@@ -351,6 +389,14 @@ So `permissionDecisionReason` is caller-facing output under test, in the manner 
 The specifics stay in `calls.log`, which only the owner reads. A test enforces both
 halves — the reason is generic, the audit line is not — because these are exactly the
 strings a later edit makes "more helpful" without noticing what it leaks.
+
+**The residual, which the generic reason does not remove: a denial is an oracle.**
+Reading `/tmp/x` succeeds if it is an ordinary file and is refused if it resolves into a
+protected directory, so the *fact* of refusal tells the caller something about the
+owner's filesystem that neither they nor the model knew. Repeated probing maps the
+denied-path table and reveals symlink structure. What is enforced is generic denial
+*text*; the stronger information-flow property does not hold, and pre-call inspection
+cannot deliver it — refusing to answer at all is the only thing that would.
 
 ## Testing
 
@@ -537,3 +583,41 @@ places where the spec asserted a property ("matching is exact", "the caller sees
 nothing") that read as obviously true and was not checked. The pattern to carry into
 implementation is that the confident sentences are the ones that need a test, not the
 hedged ones.
+
+---
+
+## Second review — Codex, 2026-07-31
+
+The implementation plan was reviewed adversarially by Codex before any code was written.
+It returned 17 findings, six of them critical. Every claim reported here was verified
+independently — by running the path logic, checking `runner.ts`, and testing the
+filesystem's case sensitivity — rather than accepted as written.
+
+**Eight were real bugs in the plan's own code, and they shared one cause.** `decide()`
+compared unnormalised paths with `startsWith`. That single wrong primitive produced: `~`
+never expanded, so `Read("~/.ssh/id_rsa")` was allowed; scanning tools never checking
+denied basenames; `Glob` matched on `path` when its path actually lives in `pattern`, so
+`Glob("/Users/o/.ssh/*")` enumerated the directory; `LS` unclassified and waved through;
+`isAncestorOf("/")` comparing against `"//"`; the `realpath` fallback allowing a write
+through a symlink with a nonexistent leaf; and case-sensitive comparison on a
+case-insensitive filesystem. Patching eight symptoms would have left a ninth, so the
+function was rebuilt on canonical resolution. The rewritten version was then executed
+against the plan's tests — 31 of 31 pass, including every bypass Codex named.
+
+**One was the reverse of a fail-closed claim.** The audit writes sat outside the
+try/catch, so a full disk would throw, exit the process 1, and — because a non-0/2 exit
+is a non-blocking error — let the tool run. The failure mode of the audit trail was to
+silently disable the guard.
+
+**Three findings were claims the spec could not support**, and are now narrowed above:
+the `exec` read floor, the denial oracle, and "every tool call" versus "every tool call
+that reaches the guard."
+
+**One design disagreement, resolved against Codex.** It called `Bash` record-don't-deny a
+design error. The decision stands — denying on string match blocks `cat .env.example`
+while a one-character change defeats it — but it was right that the *claim* was false.
+The wording changed, not the design.
+
+Worth recording: Codex found what a spec review and a self-review both missed, and it
+found it by tracing code rather than reading prose. The two review passes were not
+redundant — the first caught wrong reasoning, the second caught wrong code.

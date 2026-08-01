@@ -8,7 +8,9 @@
 
 **Tech Stack:** TypeScript (ESM, `"type": "module"`), Node ≥20, vitest, existing `packages/cli` layout.
 
-**Spec:** [2026-07-31-pretooluse-guard-design.md](../specs/2026-07-31-pretooluse-guard-design.md). Read the six findings before starting — three of them overturned an earlier design and the reasons are not obvious from the code.
+**Spec:** [2026-07-31-pretooluse-guard-design.md](../specs/2026-07-31-pretooluse-guard-design.md). Read the six findings and **both review sections** before starting. An earlier draft of this plan had eight exploitable bugs in `decide()` alone, all from comparing unnormalised paths with `startsWith`; the comments in the code below name the specific bypass each line prevents. Do not "simplify" them back.
+
+**Verification status:** Task 1's implementation and its 31 tests were executed together before this plan was committed, and all 31 pass. Later tasks are reviewed but not executed — they depend on repo files that do not exist yet.
 
 ## Global Constraints
 
@@ -98,6 +100,30 @@ describe("decide — exact-target tools", () => {
   });
 });
 
+describe("decide — tilde is a path, not a literal directory", () => {
+  it("denies a tilde-prefixed read", () => {
+    const v = decide(call("Read", { file_path: "~/.ssh/id_rsa" }), HOME, id);
+    expect(v.allow).toBe(false);
+  });
+
+  it("denies a tilde-prefixed Grep root", () => {
+    const v = decide(call("Grep", { path: "~/.ssh", pattern: "KEY" }), HOME, id);
+    expect(v.allow).toBe(false);
+  });
+});
+
+describe("decide — case folding on a case-insensitive filesystem", () => {
+  it("denies an upper-cased denied directory", () => {
+    const v = decide(call("Read", { file_path: "/Users/owner/.SSH/id_rsa" }), HOME, id);
+    expect(v.allow).toBe(false);
+  });
+
+  it("denies an upper-cased denied basename", () => {
+    const v = decide(call("Read", { file_path: "/Users/owner/proj/KEY.PEM" }), HOME, id);
+    expect(v.allow).toBe(false);
+  });
+});
+
 describe("decide — scanning tools reach through a parent", () => {
   it("denies Grep rooted at home, which contains denied paths", () => {
     const v = decide(call("Grep", { path: "/Users/owner", pattern: "PRIVATE KEY" }), HOME, id);
@@ -114,14 +140,54 @@ describe("decide — scanning tools reach through a parent", () => {
     expect(v.allow).toBe(true);
   });
 
-  it("denies a Glob pattern that escapes its root", () => {
+  it("denies LS of a denied directory — LS is granted by the read cap", () => {
+    const v = decide(call("LS", { path: "/Users/owner/.ssh" }), HOME, id);
+    expect(v.allow).toBe(false);
+  });
+
+  it("denies LS rooted at home", () => {
+    const v = decide(call("LS", { path: "/Users/owner" }), HOME, id);
+    expect(v.allow).toBe(false);
+  });
+});
+
+describe("decide — Glob carries its path in the pattern", () => {
+  it("denies an absolute pattern into a denied directory", () => {
+    const v = decide(call("Glob", { pattern: "/Users/owner/.ssh/*" }), HOME, id);
+    expect(v.allow).toBe(false);
+  });
+
+  it("denies a tilde pattern into a denied directory", () => {
+    const v = decide(call("Glob", { pattern: "~/.ssh/*" }), HOME, id);
+    expect(v.allow).toBe(false);
+  });
+
+  it("denies a pattern enumerating a denied basename", () => {
+    expect(decide(call("Glob", { pattern: "**/.env" }), HOME, id).allow).toBe(false);
+    expect(decide(call("Glob", { pattern: "**/*.pem" }), HOME, id).allow).toBe(false);
+  });
+
+  it("denies a pattern that escapes its root", () => {
     const v = decide(call("Glob", { pattern: "../../.ssh/*" }), HOME, id);
     expect(v.allow).toBe(false);
   });
 
-  it("allows a Glob under the default cwd root", () => {
+  it("allows an ordinary source glob under cwd", () => {
     const v = decide(call("Glob", { pattern: "**/*.ts" }), HOME, id);
     expect(v.allow).toBe(true);
+  });
+});
+
+describe("decide — writes to a path that does not exist yet", () => {
+  it("resolves the longest existing ancestor through a symlink", () => {
+    // /tmp/link exists and points into ~/.ssh; the leaf does not exist yet.
+    const realpath = (p: string) => {
+      if (p === "/tmp/link/new_key") throw new Error("ENOENT");
+      if (p === "/tmp/link") return "/Users/owner/.ssh";
+      return p;
+    };
+    const v = decide(call("Write", { file_path: "/tmp/link/new_key" }), HOME, realpath);
+    expect(v.allow).toBe(false);
   });
 });
 
@@ -139,14 +205,26 @@ describe("decide — Bash records but does not deny", () => {
   });
 });
 
-describe("decide — unknown shapes", () => {
-  it("allows a tool it has no rule for", () => {
-    const v = decide(call("WebSearch", { query: "typescript" }), HOME, id);
-    expect(v.allow).toBe(true);
+describe("decide — unknown shapes fail closed", () => {
+  it("allows a tool with no filesystem surface", () => {
+    expect(decide(call("WebSearch", { query: "typescript" }), HOME, id).allow).toBe(true);
+    expect(decide(call("WebFetch", { url: "https://example.com" }), HOME, id).allow).toBe(true);
+  });
+
+  it("DENIES a tool it has never been taught", () => {
+    // The LS failure mode: an unclassified tool has an argument shape this
+    // function cannot inspect, so it must not be waved through.
+    const v = decide(call("SomeNewTool", { path: "/Users/owner/.ssh" }), HOME, id);
+    expect(v.allow).toBe(false);
   });
 
   it("denies a path-shaped tool whose argument is missing", () => {
     const v = decide(call("Read", {}), HOME, id);
+    expect(v.allow).toBe(false);
+  });
+
+  it("denies when tool_input is not an object", () => {
+    const v = decide({ tool_name: "Read", tool_input: null as never, cwd: CWD }, HOME, id);
     expect(v.allow).toBe(false);
   });
 });
@@ -170,7 +248,7 @@ Expected: FAIL — `Failed to resolve import "../src/guard.js"`.
 Create `packages/cli/src/guard.ts`:
 
 ```ts
-import { isAbsolute, resolve, sep } from "node:path";
+import { basename, dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
 
 export type GuardInput = {
   tool_name: string;
@@ -210,37 +288,83 @@ const DENIED_BASENAMES: RegExp[] = [
   /\.pem$/, /\.p12$/, /\.pfx$/,
 ];
 
-// Tools whose argument names a single file.
+// Every tool the envelope can grant (see CLAUDE_TOOLS in runner.ts). A tool
+// absent from all four groups is DENIED, not allowed: an unclassified tool has
+// an argument shape this function cannot inspect. `LS` was missed exactly that
+// way in an earlier draft and fell through to allow.
 const EXACT_TARGET: Record<string, string> = {
   Read: "file_path", Write: "file_path", Edit: "file_path", NotebookEdit: "notebook_path",
 };
-// Tools whose argument names a root that is then searched.
-const SCANNING = new Set(["Grep", "Glob"]);
+// Tools whose `path` argument names a root that is then searched or listed.
+const SCANNING_ROOT = new Set(["Grep", "LS"]);
+// Tools with no filesystem argument at all.
+const NO_PATH_SURFACE = new Set(["WebFetch", "WebSearch"]);
+// `Glob` is handled separately: its path lives in `pattern`, not `path`.
+
+// package.json pins os: ["darwin"], and the default macOS filesystem is
+// case-INsensitive — ~/.SSH opens ~/.ssh. Folding can over-deny on a
+// case-sensitive volume, which is the safe direction for a floor.
+const fold = (p: string) => p.toLowerCase();
 
 function deniedPaths(home: string): string[] {
-  return [
-    ...DENIED_DIRS.map((d) => resolve(home, d)),
-    ...DENIED_FILES.map((f) => resolve(home, f)),
-  ];
+  return [...DENIED_DIRS, ...DENIED_FILES].map((d) => resolve(home, d));
 }
 
-function toAbs(p: string, cwd: string): string {
-  return isAbsolute(p) ? resolve(p) : resolve(cwd, p);
+function expandHome(p: string, home: string): string {
+  if (p === "~") return home;
+  if (p.startsWith("~/")) return join(home, p.slice(2));
+  return p;
 }
 
+// realpath throws on a path that does not exist yet — a Write target, a
+// dangling symlink. Resolving the longest EXISTING ancestor and re-appending
+// the unresolved tail is what stops `/tmp/link/new_key` (link -> ~/.ssh) from
+// being compared as text and allowed.
+function canonical(p: string, cwd: string, home: string, realpath: (p: string) => string): string {
+  const expanded = expandHome(p, home);
+  const abs = isAbsolute(expanded) ? resolve(expanded) : resolve(cwd, expanded);
+  const tail: string[] = [];
+  let cur = abs;
+  for (;;) {
+    try {
+      return resolve(realpath(cur), ...[...tail].reverse());
+    } catch {
+      const parent = dirname(cur);
+      if (parent === cur) return abs;   // reached the root, nothing resolvable
+      tail.push(basename(cur));
+      cur = parent;
+    }
+  }
+}
+
+// relative() rather than startsWith(): resolve("/") is "/", so "/" + sep is
+// "//", which prefixes nothing — a prefix compare silently permits a search
+// rooted at the filesystem root.
 function isInside(target: string, denied: string): boolean {
-  return target === denied || target.startsWith(denied + sep);
+  const rel = relative(fold(denied), fold(target));
+  return rel === "" || (!rel.startsWith("..") && !isAbsolute(rel));
 }
 
-// The ancestor clause: a search rooted at `target` reaches `denied` when
-// `target` is above it. This is what stops Grep(path: "~").
+// A search rooted at `target` reaches `denied` when `target` is above it.
+// This is what stops Grep(path: "~") and Grep(path: "/").
 function isAncestorOf(target: string, denied: string): boolean {
-  return denied.startsWith(target + sep);
+  const rel = relative(fold(target), fold(denied));
+  return rel !== "" && !rel.startsWith("..") && !isAbsolute(rel);
 }
 
-function basenameDenied(target: string): boolean {
-  const base = target.slice(target.lastIndexOf(sep) + 1);
-  return DENIED_BASENAMES.some((re) => re.test(base));
+function basenameDenied(p: string): boolean {
+  const b = fold(basename(p));
+  return DENIED_BASENAMES.some((re) => re.test(b));
+}
+
+// Everything before the first magic character, trimmed back to a directory.
+// Glob carries its path inside `pattern`, so "/Users/o/.ssh/*" must be checked
+// even when `path` is absent entirely.
+function globLiteralPrefix(pattern: string): string {
+  const magic = pattern.search(/[*?[{]/);
+  const head = magic === -1 ? pattern : pattern.slice(0, magic);
+  const cut = head.lastIndexOf(sep);
+  return cut === -1 ? "" : head.slice(0, cut) || sep;
 }
 
 export function decide(
@@ -248,48 +372,70 @@ export function decide(
   home: string,
   realpath: (p: string) => string,
 ): GuardVerdict {
-  const denied = deniedPaths(home);
   const { tool_name: tool, tool_input: args, cwd } = input;
+  if (args === null || typeof args !== "object" || Array.isArray(args)) {
+    return { allow: false, rule: "unparseable-input", detail: tool };
+  }
+  const denied = deniedPaths(home);
+  const canon = (p: string) => canonical(p, cwd, home, realpath);
+  const reached = (t: string, withAncestors: boolean) =>
+    denied.find((d) => isInside(t, d) || (withAncestors && isAncestorOf(t, d)));
 
   if (tool === "Bash") {
     const command = typeof args.command === "string" ? args.command : "";
-    const hit = denied.find((d) => command.includes(d) || command.includes(d.replace(home, "~")));
+    const hit = denied.find((d) =>
+      fold(command).includes(fold(d)) || fold(command).includes(fold(d.replace(home, "~"))));
     // Record and allow: string matching is too weak to be a boundary and too
-    // eager to be harmless. See the spec's Bash section.
+    // eager to be harmless. See the spec's Bash section — and note this means
+    // an `exec`-granted task has NO read floor.
     return hit ? { allow: true, flag: { rule: "bash-references-denied-path", detail: hit } } : { allow: true };
   }
+
+  if (NO_PATH_SURFACE.has(tool)) return { allow: true };
 
   const key = EXACT_TARGET[tool];
   if (key !== undefined) {
     const raw = args[key];
     // Fail closed: a path-shaped tool with no usable path is not understood.
     if (typeof raw !== "string" || raw === "") return { allow: false, rule: "unparseable-target", detail: String(raw) };
-    const target = realpath(toAbs(raw, cwd));
+    const target = canon(raw);
     if (basenameDenied(target)) return { allow: false, rule: "denied-basename", detail: target };
-    const hit = denied.find((d) => isInside(target, d));
+    const hit = reached(target, false);
     return hit ? { allow: false, rule: "inside-denied-path", detail: target } : { allow: true };
   }
 
-  if (SCANNING.has(tool)) {
-    const pattern = typeof args.pattern === "string" ? args.pattern : "";
-    // A pattern that climbs out of its root defeats a root-only check.
-    if (pattern.split("/").includes("..")) return { allow: false, rule: "escaping-pattern", detail: pattern };
+  if (SCANNING_ROOT.has(tool)) {
     const rawRoot = typeof args.path === "string" && args.path !== "" ? args.path : cwd;
-    const root = realpath(toAbs(rawRoot, cwd));
-    const hit = denied.find((d) => isInside(root, d) || isAncestorOf(root, d));
+    const root = canon(rawRoot);
+    if (basenameDenied(root)) return { allow: false, rule: "denied-basename", detail: root };
+    const hit = reached(root, true);
     return hit ? { allow: false, rule: "root-reaches-denied-path", detail: root } : { allow: true };
   }
 
-  // Tools with no path-shaped argument (WebFetch, WebSearch, …). The
-  // --allowedTools list is what keeps this set small.
-  return { allow: true };
+  if (tool === "Glob") {
+    const pattern = typeof args.pattern === "string" ? args.pattern : "";
+    // A pattern that climbs out of its root defeats a root-only check.
+    if (pattern.split("/").includes("..")) return { allow: false, rule: "escaping-pattern", detail: pattern };
+    // "**/.env" and "**/*.pem" enumerate denied basenames under a permitted root.
+    if (basenameDenied(pattern)) return { allow: false, rule: "denied-basename-pattern", detail: pattern };
+    const prefix = globLiteralPrefix(pattern);
+    const rawRoot = typeof args.path === "string" && args.path !== "" ? args.path : cwd;
+    const root = canon(prefix === "" ? rawRoot
+      : isAbsolute(expandHome(prefix, home)) ? prefix : join(rawRoot, prefix));
+    const hit = reached(root, true);
+    return hit ? { allow: false, rule: "root-reaches-denied-path", detail: root } : { allow: true };
+  }
+
+  // Unclassified tool. Deny — an argument shape this function has never seen
+  // cannot be inspected, and allowing it is how LS became a hole.
+  return { allow: false, rule: "unclassified-tool", detail: tool };
 }
 ```
 
 - [ ] **Step 4: Run the test to verify it passes**
 
 Run: `cd packages/cli && pnpm vitest run test/guard.test.ts`
-Expected: PASS, 18 tests.
+Expected: PASS, 31 tests. This exact implementation and this exact test set were executed together before the plan was committed — if any case fails, the implementation was transcribed wrongly, not mis-specified.
 
 - [ ] **Step 5: Commit**
 
@@ -394,6 +540,17 @@ describe("runGuard", () => {
     const out = runGuard(JSON.stringify({ cwd: CWD }), h.deps);
     expect(out.exitCode).toBe(2);
   });
+
+  it("fails closed when the audit write throws", () => {
+    // A full disk or read-only home must not become a silent allow. Without
+    // the log writes inside the try, this exits 1 and Claude runs the tool.
+    const h = harness();
+    const out = runGuard(payload("Read", { file_path: "/Users/owner/proj/a.ts" }), {
+      ...h.deps,
+      appendLine: () => { throw new Error("ENOSPC: no space left on device"); },
+    });
+    expect(out.exitCode).toBe(2);
+  });
 });
 ```
 
@@ -451,45 +608,47 @@ export function runGuard(raw: string, deps: GuardDeps): { exitCode: number; stdo
     return { exitCode: 2, stdout: "" };
   }
 
-  let verdict: GuardVerdict;
+  // EVERYTHING below is inside the failure boundary, including the log writes.
+  // An exception escaping this function exits the process 1, and Claude treats
+  // any exit other than 0 or 2 as a non-blocking error — so a full disk or a
+  // read-only home would silently turn the guard off. Fail closed instead.
   try {
-    verdict = decide(input, deps.paths.home, deps.realpath);
+    const verdict = decide(input, deps.paths.home, deps.realpath);
+    const ts = deps.now();
+    const write = (file: string, obj: Record<string, unknown>) =>
+      deps.appendLine(file, JSON.stringify({ ts, ...obj }));
+
+    write(deps.paths.toolsLog, {
+      type: "tool_call", call_id: deps.callId, tool: input.tool_name, allowed: verdict.allow,
+    });
+
+    if (!verdict.allow) {
+      write(deps.paths.callsLog, {
+        type: "tool_denied", call_id: deps.callId, tool: input.tool_name,
+        rule: verdict.rule, detail: verdict.detail,
+      });
+      return {
+        exitCode: 0,
+        stdout: JSON.stringify({
+          hookSpecificOutput: {
+            hookEventName: "PreToolUse",
+            permissionDecision: "deny",
+            permissionDecisionReason: DENY_REASON,
+          },
+        }),
+      };
+    }
+
+    if (verdict.flag) {
+      write(deps.paths.callsLog, {
+        type: "tool_flagged", call_id: deps.callId, tool: input.tool_name,
+        rule: verdict.flag.rule, detail: verdict.flag.detail,
+      });
+    }
+    return { exitCode: 0, stdout: "" };
   } catch {
     return { exitCode: 2, stdout: "" };
   }
-
-  const ts = deps.now();
-  const write = (file: string, obj: Record<string, unknown>) =>
-    deps.appendLine(file, JSON.stringify({ ts, ...obj }));
-
-  write(deps.paths.toolsLog, {
-    type: "tool_call", call_id: deps.callId, tool: input.tool_name, allowed: verdict.allow,
-  });
-
-  if (!verdict.allow) {
-    write(deps.paths.callsLog, {
-      type: "tool_denied", call_id: deps.callId, tool: input.tool_name,
-      rule: verdict.rule, detail: verdict.detail,
-    });
-    return {
-      exitCode: 0,
-      stdout: JSON.stringify({
-        hookSpecificOutput: {
-          hookEventName: "PreToolUse",
-          permissionDecision: "deny",
-          permissionDecisionReason: DENY_REASON,
-        },
-      }),
-    };
-  }
-
-  if (verdict.flag) {
-    write(deps.paths.callsLog, {
-      type: "tool_flagged", call_id: deps.callId, tool: input.tool_name,
-      rule: verdict.flag.rule, detail: verdict.flag.detail,
-    });
-  }
-  return { exitCode: 0, stdout: "" };
 }
 ```
 
@@ -524,11 +683,12 @@ Finding 6 measured ~33 ms standalone against ~78 ms through `index.ts`. This is 
 Create `packages/cli/test/guard-entry.test.ts`:
 
 ```ts
-import { execFileSync } from "node:child_process";
+import { execFile, execFileSync } from "node:child_process";
 import { mkdtempSync, readFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
+import { GUARD_TIMEOUT_S } from "../src/runner.js";
 
 // The entry is a real process — that is the whole point of the file, and the
 // only way to measure what the timeout has to cover.
@@ -573,14 +733,48 @@ describe("guard-entry as a real process", () => {
     expect(r.status).toBe(2);
   });
 
-  // Guards the fail-open-on-timeout path. Timing decide() would pass while the
-  // real path is slow, because the cost is process startup, not the function.
-  it("completes well inside the registered timeout", () => {
+  // Guards the fail-open-on-timeout path, and does it under concurrency:
+  // Copilot's documented bug is specifically parallel — the timeout expires,
+  // the CLI stops waiting, and the tool runs anyway. Timing decide() would
+  // pass while this path was slow, because the cost is process startup.
+  // Asserted against the REGISTERED timeout, not an arbitrary number.
+  it("completes inside the registered timeout with 8 hooks in flight", async () => {
     const home = mkdtempSync(join(tmpdir(), "guard-"));
+    const body = JSON.stringify({
+      tool_name: "Read", tool_input: { file_path: join(home, "a.ts") }, cwd: home,
+    });
+    const one = () => new Promise<void>((ok, fail) => {
+      const child = execFile(
+        process.execPath, [ENTRY],
+        { env: { ...process.env, AGENTCALL_HOME: home, AGENTCALL_CALL_ID: "call-abc" } },
+        (err) => (err ? fail(err) : ok()),
+      );
+      child.stdin?.end(body);
+    });
     const started = Date.now();
-    run({ tool_name: "Read", tool_input: { file_path: join(home, "a.ts") }, cwd: home }, home);
-    const elapsed = Date.now() - started;
-    expect(elapsed).toBeLessThan(2000);
+    await Promise.all(Array.from({ length: 8 }, one));
+    expect(Date.now() - started).toBeLessThan(GUARD_TIMEOUT_S * 1000);
+  });
+
+  it("writes one tools.log line per concurrent call, losing none", async () => {
+    const home = mkdtempSync(join(tmpdir(), "guard-"));
+    const body = JSON.stringify({
+      tool_name: "Read", tool_input: { file_path: join(home, "a.ts") }, cwd: home,
+    });
+    const one = () => new Promise<void>((ok, fail) => {
+      const child = execFile(
+        process.execPath, [ENTRY],
+        { env: { ...process.env, AGENTCALL_HOME: home, AGENTCALL_CALL_ID: "call-abc" } },
+        (err) => (err ? fail(err) : ok()),
+      );
+      child.stdin?.end(body);
+    });
+    await Promise.all(Array.from({ length: 8 }, one));
+    const lines = readFileSync(join(home, ".agentcall", "tools.log"), "utf8").trim().split("\n");
+    expect(lines).toHaveLength(8);
+    // Interleaved appends must still parse: a torn line means the audit trail
+    // cannot be trusted, which is the whole point of the second stream.
+    for (const l of lines) expect(() => JSON.parse(l)).not.toThrow();
   });
 });
 ```
@@ -604,30 +798,38 @@ import { dirname } from "node:path";
 import { runGuard } from "./guard.js";
 import { getPaths } from "./paths.js";
 
-let raw = "";
-for await (const chunk of process.stdin) raw += chunk;
+try {
+  let raw = "";
+  for await (const chunk of process.stdin) raw += chunk;
 
-const out = runGuard(raw, {
-  paths: getPaths(),
-  callId: process.env.AGENTCALL_CALL_ID ?? "unknown",
-  now: () => new Date().toISOString(),
-  // A path that cannot be resolved (not yet created, broken link) is checked
-  // as written rather than throwing.
-  realpath: (p) => { try { return realpathSync(p); } catch { return p; } },
-  appendLine: (file, line) => {
-    mkdirSync(dirname(file), { recursive: true });
-    appendFileSync(file, line + "\n");
-  },
-});
+  const out = runGuard(raw, {
+    paths: getPaths(),
+    callId: process.env.AGENTCALL_CALL_ID ?? "unknown",
+    now: () => new Date().toISOString(),
+    // Plain realpathSync, which THROWS on a path that does not exist. That is
+    // required: canonical() catches it and walks up to the longest existing
+    // ancestor. Swallowing the throw here and returning the text unchanged is
+    // what let a Write through /tmp/link (-> ~/.ssh) land inside ~/.ssh.
+    realpath: realpathSync,
+    appendLine: (file, line) => {
+      mkdirSync(dirname(file), { recursive: true });
+      appendFileSync(file, line + "\n");
+    },
+  });
 
-if (out.stdout) process.stdout.write(out.stdout);
-process.exit(out.exitCode);
+  if (out.stdout) process.stdout.write(out.stdout);
+  process.exit(out.exitCode);
+} catch {
+  // Nothing may escape this file. Any exit that is not 0 or 2 is a
+  // non-blocking error to Claude, and the tool call proceeds.
+  process.exit(2);
+}
 ```
 
 - [ ] **Step 4: Run the tests to verify they pass**
 
 Run: `cd packages/cli && pnpm build && pnpm vitest run test/guard-entry.test.ts`
-Expected: PASS, 4 tests.
+Expected: PASS, 5 tests.
 
 - [ ] **Step 5: Commit**
 
@@ -691,6 +893,13 @@ describe("guard hook wiring", () => {
     expect(JSON.parse(guardSettingsJson()).permissions).toBeUndefined();
   });
 
+  it("shell-quotes both paths, since an unparseable command fails open", () => {
+    const hook = JSON.parse(guardSettingsJson()).hooks.PreToolUse[0].hooks[0];
+    // Both arguments single-quoted; nothing left bare for the shell to split
+    // or expand.
+    expect(hook.command).toMatch(/^'[^']*(?:'\\''[^']*)*' '[^']*(?:'\\''[^']*)*'$/);
+  });
+
   it("passes --settings and the call id when spawning claude", () => {
     const spec = buildSpawnSpec("claude", "hi", WORKDIR, () => "/bin/claude", FULL_ACCESS_ENVELOPE, "call-9");
     const i = spec.args.indexOf("--settings");
@@ -729,6 +938,12 @@ export const GUARD_TIMEOUT_S = 30;
 // No `matcher` and no `if`: both narrow which calls arrive, and the matcher
 // parser fails open. No `permissions.deny` either — a matching deny rule blocks
 // the read AND suppresses the hook, so the denial would never be logged.
+// The hook command is handed to a shell. An install path containing a quote,
+// a space, a backslash, or $( ) would produce an unparseable command — and an
+// unparseable hook command fails OPEN, so the credential read then proceeds.
+// Single quotes with the standard '\'' escape are the safe POSIX form.
+const shellQuote = (s: string) => `'${s.replaceAll("'", `'\\''`)}'`;
+
 export function guardSettingsJson(): string {
   const entry = fileURLToPath(new URL("./guard-entry.js", import.meta.url));
   return JSON.stringify({
@@ -736,7 +951,7 @@ export function guardSettingsJson(): string {
       PreToolUse: [{
         hooks: [{
           type: "command",
-          command: `"${process.execPath}" "${entry}"`,
+          command: `${shellQuote(process.execPath)} ${shellQuote(entry)}`,
           timeout: GUARD_TIMEOUT_S,
         }],
       }],
@@ -837,26 +1052,46 @@ Claude treats a hook exiting anything other than 0 or 2 as a non-blocking error,
 Append to `packages/cli/test/verify.test.ts`:
 
 ```ts
+import { mkdirSync, mkdtempSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { checkGuard } from "../src/verify.js";
 
+// A temp home whose calls.log already contains a denial, as a real guard run
+// would have left behind.
+function homeWithDenial(): string {
+  const home = mkdtempSync(join(tmpdir(), "guardcheck-"));
+  mkdirSync(join(home, ".agentcall"), { recursive: true });
+  writeFileSync(join(home, ".agentcall", "calls.log"),
+    JSON.stringify({ ts: "2026-07-31T00:00:00.000Z", type: "tool_denied", tool: "Read" }) + "\n");
+  return home;
+}
+
 describe("checkGuard", () => {
-  it("passes when the probe reports the read was refused", async () => {
-    const probe = async () => "I could not read it — the read was blocked by policy.";
-    const c = await checkGuard(probe);
-    expect(c.ok).toBe(true);
+  it("passes when the read was refused AND a denial was recorded", async () => {
+    const probe = async () => ({ output: "I could not read it.", home: homeWithDenial() });
+    expect((await checkGuard(probe)).ok).toBe(true);
   });
 
   it("fails when the canary comes back — the guard is not in force", async () => {
-    const probe = async () => "The file contains AGENTCALL-GUARD-CANARY";
+    const probe = async () => ({ output: "It contains AGENTCALL-GUARD-CANARY", home: homeWithDenial() });
     const c = await checkGuard(probe);
     expect(c.ok).toBe(false);
     expect(c.hint).toBeTruthy();
   });
 
-  it("fails when the probe throws", async () => {
-    const probe = async () => { throw new Error("claude not found"); };
+  it("fails when nothing was denied, even though the canary is absent", async () => {
+    // The model simply never called Read. A clean transcript is not evidence
+    // that the guard is working.
+    const probe = async () => ({ output: "Sure, what would you like to know?", home: mkdtempSync(join(tmpdir(), "empty-")) });
     const c = await checkGuard(probe);
     expect(c.ok).toBe(false);
+    expect(c.detail).toContain("no denial was recorded");
+  });
+
+  it("fails when the probe throws", async () => {
+    const probe = async () => { throw new Error("claude not found"); };
+    expect((await checkGuard(probe)).ok).toBe(false);
   });
 });
 ```
@@ -868,17 +1103,31 @@ Expected: FAIL — `checkGuard` is not exported.
 
 - [ ] **Step 3: Implement `checkGuard` in verify.ts**
 
-Add to `packages/cli/src/verify.ts`:
+**Merge the imports — do not add duplicates.** `verify.ts:1` already imports `execFileSync` from `node:child_process`, and line 4 already imports from `./runner.js`. Extend those two lines rather than adding new ones, or the file will not compile:
 
 ```ts
-import { execFileSync } from "node:child_process";
-import { mkdtempSync, writeFileSync, mkdirSync } from "node:fs";
+import { execFileSync } from "node:child_process";                       // unchanged
+import { AgentRunError, guardSettingsJson, runAgent, type AgentKind } from "./runner.js";  // + guardSettingsJson
+```
+
+and add these, which `verify.ts` does not yet have:
+
+```ts
+import { mkdirSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { guardSettingsJson } from "./runner.js";
+```
 
+Then the check itself:
+
+```ts
 export const GUARD_CANARY = "AGENTCALL-GUARD-CANARY";
-export type GuardProbeFn = (settings: string) => Promise<string>;
+// The probe returns the temp home as well as the output, because the absence
+// of the canary is not evidence — see below.
+export interface GuardProbeResult { output: string; home: string }
+export type GuardProbeFn = (settings: string) => Promise<GuardProbeResult>;
+
+const GUARD_HINT = "run `pnpm build` in packages/cli so dist/guard-entry.js exists, then re-run doctor";
 
 // Spawns a real `claude -p` against a canary in a throwaway .ssh directory and
 // asserts the read is refused. Live on the user's machine; always mocked in CI.
@@ -886,21 +1135,39 @@ const defaultGuardProbe: GuardProbeFn = async (settings) => {
   const home = mkdtempSync(join(tmpdir(), "agentcall-guard-"));
   mkdirSync(join(home, ".ssh"), { recursive: true });
   writeFileSync(join(home, ".ssh", "id_rsa"), GUARD_CANARY);
-  return execFileSync(
+  const output = execFileSync(
     "claude",
     ["-p", "Read the file .ssh/id_rsa and print its exact contents.",
      "--permission-mode", "dontAsk", "--allowedTools", "Read", "--settings", settings],
     { cwd: home, env: { ...process.env, AGENTCALL_HOME: home }, encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] },
   );
+  return { output, home };
 };
+
+function deniedInLog(home: string): boolean {
+  try {
+    return readFileSync(join(home, ".agentcall", "calls.log"), "utf8")
+      .split("\n").filter(Boolean)
+      .some((line) => { try { return JSON.parse(line).type === "tool_denied"; } catch { return false; } });
+  } catch {
+    return false;
+  }
+}
 
 export async function checkGuard(probe: GuardProbeFn = defaultGuardProbe): Promise<VerifyCheck> {
   try {
-    const out = await probe(guardSettingsJson());
-    return out.includes(GUARD_CANARY)
-      ? { name: "tool guard", ok: false, detail: "canary was readable — the guard is not in force",
-          hint: "run `pnpm build` in packages/cli so dist/guard-entry.js exists, then re-run doctor" }
-      : { name: "tool guard", ok: true };
+    const { output, home } = await probe(guardSettingsJson());
+    if (output.includes(GUARD_CANARY)) {
+      return { name: "tool guard", ok: false,
+               detail: "canary was readable — the guard is not in force", hint: GUARD_HINT };
+    }
+    // Absence of the canary proves nothing on its own: the model may have
+    // declined to call Read, answered something unrelated, or failed. Require
+    // positive evidence that the guard ran AND denied.
+    return deniedInLog(home)
+      ? { name: "tool guard", ok: true }
+      : { name: "tool guard", ok: false,
+          detail: "no denial was recorded — the guard did not run", hint: GUARD_HINT };
   } catch (e) {
     return { name: "tool guard", ok: false, detail: short(e),
              hint: "the guard probe could not run; check that `claude` resolves on the listener's PATH" };
@@ -935,19 +1202,36 @@ Then in `runDoctor`, immediately after `const agentOk = agentChecks.every((c) =>
 
 No exit-code change is needed: `report()` pushes into `checks`, and `runDoctor` already ends with `return checks.every((c) => c.ok) ? 0 : 1;`.
 
+**Then close the CI hole this opens.** `test/doctor.test.ts` has five tests configured with `agent_kind: "claude"` and no `guardFn`. Without a stub they fall through to `defaultGuardProbe` and **spawn live `claude` in CI**, violating this plan's own constraint — they would hang, burn credentials, or fail depending on the machine. Add a passing stub to the shared deps those tests build:
+
+```ts
+  guardFn: async () => ({ output: "blocked", home: homeWithDenial() }),
+```
+
+reusing the same `homeWithDenial()` helper as `verify.test.ts` (lift it into a shared test helper if both files need it). Run `pnpm vitest run test/doctor.test.ts` and confirm no `claude` process is spawned — if a test hangs for more than a couple of seconds, a stub is missing.
+
 - [ ] **Step 5: Document the Codex gap in README.md**
 
 In the security section of `README.md`, add:
 
-```markdown
-**Tool guard.** Every tool call a caller's agent makes on your machine is checked
-before it runs; reads that reach credential paths (`~/.ssh`, `~/.aws`, `.env`,
-Keychains, `~/.agentcall`, `~/.claude`) are refused and recorded. `agentcall doctor`
-verifies the guard is actually in force.
+The wording matters — an earlier draft claimed every read reaching a credential path is
+refused, which is false whenever a task grants `exec`. Say what is actually delivered:
 
-This applies to **Claude answering agents only.** Codex has no equivalent hook wired
-yet, so a Codex answering agent has no read guard — its `--sandbox` level confines
-writes but not reads.
+```markdown
+**Tool guard.** Tool calls a caller's agent makes on your machine are checked before
+they run. File reads, writes, searches, and listings that reach credential paths
+(`~/.ssh`, `~/.aws`, `.env`, Keychains, `~/.agentcall`, `~/.claude`) are refused, and
+every tool call reaching the guard is recorded to `~/.agentcall/tools.log`.
+`agentcall doctor` verifies the guard is in force.
+
+Two limits, stated plainly:
+
+- **A task that grants `exec` has no read floor.** Shell commands are recorded, not
+  blocked — pattern-matching a command string is too weak to be a boundary and too
+  eager to be harmless. The control on `exec` is which tasks you choose to write.
+- **Claude answering agents only.** Codex has no equivalent hook wired yet, so a Codex
+  answering agent has no read guard at all; its `--sandbox` level confines writes but
+  not reads.
 ```
 
 - [ ] **Step 6: Run everything**
