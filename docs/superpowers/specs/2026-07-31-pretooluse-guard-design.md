@@ -474,9 +474,21 @@ Carried out of the final review, deliberately not fixed before merge. Each has a
    dev checkout the root is `packages/cli`, so a caller cannot read `src/guard.ts` or
    `package.json`. The rest of the repo stays readable, and a normal install puts the root
    in `node_modules` where nobody would look.
-   *Ruling: defer.* Safe direction, dev-only, and splitting the table into read-denied and
-   write-denied shapes costs real complexity for one case. Recorded because it does cut
-   against [lessons-from-composio §7](../../research/2026-07-31-lessons-from-composio.md) —
+   *Ruling: defer, but do it.* The final re-review supplied the decisive argument: the
+   README already publishes the complete denylist in prose, so there is no secret left in
+   `guard.ts` — denying reads buys nothing and costs exactly the inspectability a caller
+   would want in order to verify what protects them. The threat is re-import-after-tamper,
+   which only a **write** can cause.
+
+   Apply the write-only carve-out to the guard root **and** `AgentCall/tasks` and
+   `Library/LaunchAgents`, whose risk is likewise rewrite-persistence rather than
+   confidentiality. Do **not** extend it to the shell startup files: `.zshrc` and friends
+   routinely hold `export API_KEY=…`, so read-denial there protects a real and separate
+   secret. Deferred only because today's behaviour is over-protective rather than
+   under-protective, and splitting `deniedPaths()`/`reached()` into read+write and
+   write-only categories is a design change rather than a one-line patch. Recorded because
+   it cuts against
+   [lessons-from-composio §7](../../research/2026-07-31-lessons-from-composio.md) —
    when trust is the product, being readable is part of the product.
 
 7. **A shared `packages/cli/test/helpers.ts` is now wanted.** `homeWithDenial()` is

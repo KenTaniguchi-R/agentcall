@@ -194,8 +194,9 @@ instruction, never a boundary; see below.
   capability scoping (`--allowedTools` / codex's `--sandbox` level) plus
   pre-prompt task resolution: which task a caller may invoke is decided from
   `policy.json` *before* their message is placed in any prompt, so the message
-  cannot influence what it is allowed to do. Within a granted capability,
-  nothing constrains where the agent reads.
+  cannot influence what it is allowed to do. Within a granted capability, the
+  only thing constraining *where* the agent reads and writes is the tool guard
+  below — and it covers file-shaped tool arguments, not `exec`.
   (An earlier version wrapped every spawn in Seatbelt via `sandbox-runtime`.
   That was removed deliberately: it is incompatible with the answering agent
   being the owner's real agent with the owner's real context.)
