@@ -209,6 +209,7 @@ export function runAgent(
       try { process.kill(-child.pid, sig); } catch { /* group may already be gone */ }
     };
     const escalate = () => {
+      if (killTimer) clearTimeout(killTimer);
       killGroup("SIGTERM");
       killTimer = setTimeout(() => killGroup("SIGKILL"), KILL_GRACE_MS);
       killTimer.unref();
