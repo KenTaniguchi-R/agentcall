@@ -14,6 +14,7 @@ Last reviewed: **2026-08-01**
 | `gated` | Design exists and is complete, but implementation is **blocked** on a stated precondition. Do not start coding. |
 | `in progress` | Being implemented. |
 | `partial` | Some of it shipped; the rest is still open. Read the item. |
+| `deferred` | Deliberately not being worked on, by a recorded decision. **Not** the same as `open` — don't pick it up without reopening the decision. |
 | `done` | Shipped, or the question is answered. |
 
 Item IDs (`A.1`, `C.2`, …) match the backlog in
@@ -40,7 +41,7 @@ Binding pinned to **REST**; TCK pinned at `5996b79`; A2A spec pinned at **v1.0.0
 | # | Spike | Status | Note |
 |---|---|---|---|
 | S1 | Run the pinned TCK against the per-handle URL + discovery topology | `done` | Topology validated against the real suite. **69.8% MUST / 100% SHOULD / 100% MAY** baseline. Six missed normative requirements surfaced (AIP-193 numeric `error.code`, §5.4 error mapping, `A2A-Version` validation, terminal-state guards, bare-`Message` returns, artifact part shapes). Stub was throwaway and is **not** committed. |
-| S2 | Durable task store — delivery lease, retention, cancellation, dedup | `open` | Requirements only, no design: [durable-offline-delivery-requirements](./docs/superpowers/specs/2026-08-01-durable-offline-delivery-requirements.md). *"Do not implement from this."* Needs its own brainstorm. Overlaps [D.1](#d-availability--parity-with-cotal) and should probably settle [D.2](#d-availability--parity-with-cotal) inside it. |
+| S2 | **Task store** — a task retrievable by ID for the current call lifetime | `open` | Forced by A2A conformance alone: `GetTask` / `ListTasks` / `CancelTask` must work when a caller's connection drops mid-call. Replaces today's socket-scoped model, but only for the existing ~6-minute lifetime, and **builds on the current Cloudflare stack** — *not* blocked on [D.2](#d-availability--parity-with-cotal). Scope confirmed 2026-08-01: task store only, mailbox stays out. |
 | S3 | A2A principal → agentcall caller identity mapping | `open` | Missing from the first draft entirely. Identity today is a bearer token + `X-AgentCall-Handle` (`apps/relay/src/index.ts:154`). Until this exists the policy engine cannot make its defining decision. |
 | S4 | Endpoint security + threat model as a hard release gate | `open` | Same work as [C.4](#c-endpoint-security--the-argument-to-win). |
 
@@ -109,8 +110,8 @@ and env vars stay readable.
 
 | # | Item | Status | Note |
 |---|---|---|---|
-| D.1 | **Synchronous call → durable mailbox**, with presence and fall-back-to-human | `open` | The conclusion of two prior docs; Cotal shipping it makes this parity, not roadmap. Requirements captured under [S2](#a2a-conformance-track). |
-| D.2 | **Decide: own the wire, or ride a mesh** | `open` | If durable delivery + presence + roster is the destination, NATS/JetStream gives all three free and we're otherwise rebuilding them on DO + D1. **Evaluate before building S2/D.1.** |
+| D.1 | **Synchronous call → durable mailbox**, with presence and fall-back-to-human | `deferred` | The conclusion of two prior docs; Cotal shipping it makes this parity, not roadmap. Requirements: [durable-offline-delivery-requirements](./docs/superpowers/specs/2026-08-01-durable-offline-delivery-requirements.md) — *"Do not implement from this,"* it states what must be decided. This is the **separate** half from [S2](#a2a-conformance-track): extending a task's lifetime from minutes to days so a call survives a sleeping laptop. That is what drags in storage substrate, retention, quotas and delivery leases, and it waits on D.2. |
+| D.2 | **Decide: own the wire, or ride a mesh** | `deferred` | If durable delivery + presence + roster is the destination, NATS/JetStream gives all three free and we're otherwise rebuilding them on DO + D1. **Deliberately unopened as of 2026-08-01.** Build the A2A work on Cloudflare as-is with offline still failing fast — that delivers the procurement claim without touching the transport question, and makes the eventual evaluation better, since NATS-vs-DO gets judged against a persisted-task shape that exists in real code. |
 
 ## E. Positioning
 
