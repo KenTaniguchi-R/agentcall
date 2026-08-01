@@ -1,0 +1,46 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+# A new push to the same branch supersedes the run in flight.
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        # 22, not the `engines: >=20` floor: pnpm 11.5.2 itself requires node
+        # >=22.13, so the toolchain cannot build this repo on 20 at all. The
+        # engines floor is a promise to *consumers* of the published CLI, which
+        # this matrix does not currently verify -- see the note in CLAUDE.md.
+        node: [22, 24]
+
+    steps:
+      - uses: actions/checkout@v4
+
+      # No version pin: reads packageManager from the root package.json, so the
+      # lockfile and CI can never drift onto different pnpm majors.
+      - uses: pnpm/action-setup@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ matrix.node }}
+          cache: pnpm
+
+      - run: pnpm install --frozen-lockfile
+
+      # Build first: packages/cli typechecks against packages/shared's built
+      # dist, so a build after typecheck would check the previous run's types.
+      - run: pnpm -r build
+
+      # Covers src *and* test — see tsconfig.test.json in shared/ and cli/.
+      - run: pnpm -r typecheck
+
+      - run: pnpm -r test
