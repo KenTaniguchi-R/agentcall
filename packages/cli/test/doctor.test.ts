@@ -1,4 +1,4 @@
-import { mkdtempSync } from "node:fs";
+import { mkdirSync, mkdtempSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
@@ -10,6 +10,16 @@ import { LAUNCH_LABEL } from "../src/launchd.js";
 function freshPaths() {
   const home = mkdtempSync(join(tmpdir(), "agentcall-doctor-"));
   return getPaths(home);
+}
+
+// A temp home whose calls.log already contains a denial, as a real guard run
+// would have left behind. Shared with verify.test.ts's checkGuard tests.
+function homeWithDenial(): string {
+  const home = mkdtempSync(join(tmpdir(), "guardcheck-"));
+  mkdirSync(join(home, ".agentcall"), { recursive: true });
+  writeFileSync(join(home, ".agentcall", "calls.log"),
+    JSON.stringify({ ts: "2026-07-31T00:00:00.000Z", type: "tool_denied", tool: "Read" }) + "\n");
+  return home;
 }
 
 const okVerifyFns = {
@@ -24,6 +34,10 @@ const baseDeps = {
   getStatusFn: async () => ({ online: true }),
   verifyFns: okVerifyFns,
   callFn: async () => ({ type: "call_reply", call_id: "c1", text: "hi", task: "ask" }) as never,
+  // Never spawn a real `claude` in tests: checkGuard's default probe does
+  // that on a real machine, and every test below with agent_kind "claude"
+  // would otherwise fall through to it and hang/burn credentials in CI.
+  guardFn: async () => ({ output: "blocked", home: homeWithDenial() }),
 };
 
 describe("runDoctor", () => {

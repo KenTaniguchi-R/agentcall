@@ -220,6 +220,21 @@ instruction, never a boundary; see below.
     `plugins`, `commands`, `agents`) are writable by an agent granted `write`,
     so a hostile prompt can persist beyond the call.
 
+**Tool guard.** Tool calls a caller's agent makes on your machine are checked before
+they run. File reads, writes, searches, and listings that reach credential paths
+(`~/.ssh`, `~/.aws`, `.env`, Keychains, `~/.agentcall`, `~/.claude`) are refused, and
+every tool call reaching the guard is recorded to `~/.agentcall/tools.log`.
+`agentcall doctor` verifies the guard is in force.
+
+Two limits, stated plainly:
+
+- **A task that grants `exec` has no read floor.** Shell commands are recorded, not
+  blocked — pattern-matching a command string is too weak to be a boundary and too
+  eager to be harmless. The control on `exec` is which tasks you choose to write.
+- **Claude answering agents only.** Codex has no equivalent hook wired yet, so a Codex
+  answering agent has no read guard at all; its `--sandbox` level confines writes but
+  not reads.
+
 ## Development
 
 ```bash
