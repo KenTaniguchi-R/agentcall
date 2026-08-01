@@ -43,6 +43,10 @@ while IFS=$'\t' read -r number updated logins; do
   # spurious note, which is recoverable. Unassigning first and then failing
   # strips the claim with no explanation — the exact harm this comment exists
   # to prevent.
+  #
+  # `< /dev/null` on this and every other gh call in the loop: without it,
+  # gh reads from stdin and consumes bytes out of the `while` loop's
+  # herestring, so the next stale issue in `$stale` is silently skipped.
   if ! gh issue comment "$number" --repo "$REPO" < /dev/null --body \
 "Claim released — no activity on this issue for ${STALE_DAYS} days.
 
@@ -57,13 +61,19 @@ The protocol is in CONTRIBUTING.md, at the repo root."; then
     failed=1
     continue
   fi
+  unassign_failed=0
   for login in $logins; do
     if ! gh issue edit "$number" --repo "$REPO" --remove-assignee "$login" < /dev/null; then
       echo "WARNING: could not unassign ${login} from #${number}"
       failed=1
+      unassign_failed=1
     fi
   done
-  echo "released #${number}"
+  if [ "$unassign_failed" = "1" ]; then
+    echo "partially released #${number}"
+  else
+    echo "released #${number}"
+  fi
 done <<< "$stale"
 
 exit "$failed"
