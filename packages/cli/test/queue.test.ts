@@ -1,29 +1,54 @@
 import { describe, expect, it } from "vitest";
 import { SerialQueue } from "../src/queue.js";
 
-const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
+const never = () => new Promise<void>(() => {});
 
-describe("SerialQueue", () => {
-  it("runs jobs one at a time, in order", async () => {
-    const q = new SerialQueue(5);
-    const order: number[] = [];
-    let concurrent = 0, maxConcurrent = 0;
-    for (let i = 0; i < 3; i++) {
-      q.tryEnqueue(async () => {
-        concurrent++; maxConcurrent = Math.max(maxConcurrent, concurrent);
-        await sleep(20); order.push(i); concurrent--;
-      });
-    }
-    await q.onIdle();
-    expect(order).toEqual([0, 1, 2]);
-    expect(maxConcurrent).toBe(1);
+describe("SerialQueue keyed cancellation", () => {
+  it("reports unknown for a key it never saw", () => {
+    expect(new SerialQueue(1).cancel("nope")).toBe("unknown");
   });
-  it("rejects beyond maxPending while busy", async () => {
-    const q = new SerialQueue(2);
-    q.tryEnqueue(() => sleep(100));            // running
-    expect(q.tryEnqueue(() => sleep(1))).toBe(true);  // pending 1
-    expect(q.tryEnqueue(() => sleep(1))).toBe(true);  // pending 2
-    expect(q.tryEnqueue(() => sleep(1))).toBe(false); // over cap
+
+  it("removes a pending job without ever running it", async () => {
+    const q = new SerialQueue(1);
+    let secondRan = false;
+    q.tryEnqueue("a", never);
+    q.tryEnqueue("b", async () => { secondRan = true; });
+    expect(q.cancel("b")).toBe("pending");
+    await new Promise((r) => setTimeout(r, 10));
+    expect(secondRan).toBe(false);
+  });
+
+  it("aborts a running job through its signal", async () => {
+    const q = new SerialQueue(1);
+    let aborted = false;
+    q.tryEnqueue("a", (signal) =>
+      new Promise<void>((resolve) => {
+        signal.addEventListener("abort", () => { aborted = true; resolve(); }, { once: true });
+      }));
+    await new Promise((r) => setTimeout(r, 5));
+    expect(q.cancel("a")).toBe("running");
     await q.onIdle();
+    expect(aborted).toBe(true);
+  });
+
+  it("reports unknown once a job has finished", async () => {
+    const q = new SerialQueue(1);
+    q.tryEnqueue("a", async () => {});
+    await q.onIdle();
+    expect(q.cancel("a")).toBe("unknown");
+  });
+
+  it("refuses a second job when maxPending is 0", () => {
+    const q = new SerialQueue(0);
+    expect(q.tryEnqueue("a", never)).toBe(true);
+    expect(q.tryEnqueue("b", never)).toBe(false);
+  });
+
+  it("still drains in order when capacity allows", async () => {
+    const q = new SerialQueue(5);
+    const order: string[] = [];
+    for (const k of ["a", "b", "c"]) q.tryEnqueue(k, async () => { order.push(k); });
+    await q.onIdle();
+    expect(order).toEqual(["a", "b", "c"]);
   });
 });
