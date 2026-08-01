@@ -1,8 +1,14 @@
 # CLAUDE.md
 
-Dev guide for working in this repo. See [README.md](./README.md) for what agentcall
-is and how it works; see `docs/superpowers/specs/2026-07-13-agentcall-design.md` for
-the full design spec.
+Dev guide for working in this repo. **[README.md](./README.md) is the authority on
+current behavior**, with [CHANGELOG.md](./CHANGELOG.md) for what changed when.
+
+Everything under `docs/superpowers/` is a **historical** design/implementation
+record, dated and never revised — useful for *why* a decision was made, wrong about
+*what the code does now*. Each file carries a banner saying so. Don't derive current
+behavior from them, and don't "fix" them to match the code. Same for
+`docs/security/2026-07-16-security-review.md`, which reviews a sandbox layer that was
+removed on 2026-07-31.
 
 ## Monorepo layout
 
@@ -40,6 +46,15 @@ testing (WS auth, register, status).
 
 Before calling any task done: `pnpm -r test && pnpm -r typecheck && pnpm -r build`
 must all pass at the repo root.
+
+**`typecheck` does not cover the test files** — each package's `tsconfig.json` has
+`"include": ["src"]`. Change a function's signature and `pnpm typecheck` stays green
+while every stale call site in `test/` compiles fine and fails at runtime instead. So
+`pnpm -r test` is the only thing that catches it: never take a green typecheck as
+proof a refactor is complete. (Worth fixing with a `tsconfig.test.json`.)
+
+`packages/cli` depends on the *built* `packages/shared`, so run `pnpm -r build` after
+editing a shared schema or the CLI will typecheck against stale `dist` types.
 
 ## TDD
 

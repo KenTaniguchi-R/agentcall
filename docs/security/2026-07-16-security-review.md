@@ -1,5 +1,23 @@
 # Security review — relay, CLI, and sandbox layer
 
+> **⚠️ Superseded in part — the sandbox layer this reviews no longer exists.**
+>
+> On **2026-07-31** the OS-level sandbox (`@anthropic-ai/sandbox-runtime` /
+> Seatbelt, `~/.agentcall/srt.json`) was removed deliberately: the answering
+> agent is meant to be the owner's real agent with their real context, which a
+> confined fresh spawn cannot be. Every finding, mitigation, and residual-risk
+> statement below that depends on `denyRead`/`denyWrite`, the network
+> allowlist, or write confinement to `~/AgentCall/public` **no longer holds**.
+>
+> What remains as enforcement: capability scoping (`--allowedTools` for claude,
+> `--sandbox` level for codex) and pre-prompt task resolution. Within a granted
+> capability, nothing constrains where the agent reads or writes.
+>
+> The relay-side and CLI-side findings here are unaffected and still apply.
+> For the current posture see the security model section of
+> [README.md](../../README.md). **A fresh review of the post-sandbox design has
+> not been done.**
+
 **Date:** 2026-07-16
 **Status:** Findings documented, fixes not yet implemented
 **Scope:** Full manual read of `apps/relay/src`, `packages/cli/src`, `packages/shared/src`

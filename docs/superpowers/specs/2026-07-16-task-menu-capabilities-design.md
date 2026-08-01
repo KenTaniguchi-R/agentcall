@@ -1,5 +1,16 @@
 # agentcall — task-menu capabilities & agent cards
 
+> **Historical document — not current documentation.** This is a dated
+> design/implementation record, kept as written. It describes the codebase as
+> of its own date and is deliberately *not* updated when behavior changes.
+> For how agentcall works today see [README.md](../../../README.md) and
+> [CHANGELOG.md](../../../CHANGELOG.md).
+>
+> Known divergence since this was written: the OS sandbox (`sandbox-runtime` /
+> Seatbelt, `~/.agentcall/srt.json`), task `write_paths` and `network`, and the
+> T1/T2 task tier were all **removed on 2026-07-31**. The working directory is
+> now configurable via `workdir` and is no longer an enforced boundary.
+
 Date: 2026-07-16
 Status: draft from brainstorming session (Ryusei + Claude); not yet approved
 Builds on: [2026-07-13-agentcall-design.md](./2026-07-13-agentcall-design.md)
