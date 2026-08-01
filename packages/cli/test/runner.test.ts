@@ -3,7 +3,10 @@ import { tmpdir } from "node:os";
 import { isAbsolute, join } from "node:path";
 import { describe, expect, it } from "vitest";
 import { buildPrompt } from "../src/prompt.js";
-import { buildSpawnSpec, claudeAllowedTools, parseClaudeJson, parseCodexJsonl, runAgent, truncateUtf8 } from "../src/runner.js";
+import {
+  buildSpawnSpec, claudeAllowedTools, guardSettingsJson, GUARD_TIMEOUT_S,
+  parseClaudeJson, parseCodexJsonl, runAgent, truncateUtf8,
+} from "../src/runner.js";
 import { getPaths } from "../src/paths.js";
 import { ASK_TASK, FULL_ACCESS_ENVELOPE, type Envelope, type Task } from "../src/tasks.js";
 
@@ -65,25 +68,33 @@ describe("buildSpawnSpec", () => {
   it("spawns claude directly with the resolved absolute agent path", () => {
     const s = buildSpawnSpec("claude", "PROMPT", WORKDIR, () => "/abs/path/to/claude");
     expect(s.cmd).toBe("/abs/path/to/claude");
-    expect(s.args).toEqual([
+    expect(s.args.slice(0, 6)).toEqual([
       "-p", "PROMPT", "--output-format", "json",
       "--permission-mode", "dontAsk",
-      "--allowedTools", "Read,Grep,Glob,LS,Write,Edit,WebFetch,WebSearch,Bash",
     ]);
+    const toolsIdx = s.args.indexOf("--allowedTools");
+    expect(s.args[toolsIdx + 1]).toBe("Read,Grep,Glob,LS,Write,Edit,WebFetch,WebSearch,Bash");
     expect(s.cwd).toBe(WORKDIR);
+    // Default callId, when the caller (e.g. a test) doesn't pass one.
+    expect(s.env?.AGENTCALL_CALL_ID).toBe("unknown");
   });
 
   // Regression: every spawn used to be wrapped in `npx
   // @anthropic-ai/sandbox-runtime --settings <file>`. That OS sandbox is gone
   // — the answering agent is meant to be the owner's real agent with their
-  // real context — so no spawn should reach for npx or a settings file.
+  // real context — so no spawn should reach for npx or that sandbox package.
+  // claude's spawn does now carry its own --settings (the PreToolUse guard
+  // hook, added in buildSpawnSpec's claude branch) — a different mechanism
+  // for a different purpose, so it's excluded from this regression check.
   it("does not wrap the spawn in the sandbox runtime", () => {
     for (const kind of ["claude", "codex"] as const) {
       const s = buildSpawnSpec(kind, "PROMPT", WORKDIR, () => `/abs/${kind}`);
       expect(s.cmd).not.toBe("npx");
-      expect(s.args).not.toContain("--settings");
       expect(s.args.join(" ")).not.toContain("sandbox-runtime");
+      expect(s.args.join(" ")).not.toContain("@anthropic-ai/sandbox-runtime");
     }
+    const codex = buildSpawnSpec("codex", "PROMPT", WORKDIR, () => "/abs/codex");
+    expect(codex.args).not.toContain("--settings");
   });
 
   it("spawns codex directly, keeping its native sandbox level as the write cap", () => {
@@ -259,5 +270,54 @@ describe("envelope-scoped spawn spec", () => {
     const s = buildSpawnSpec("codex", "PROMPT", WORKDIR, () => "/abs/codex", FULL_ACCESS_ENVELOPE);
     const idx = s.args.indexOf("--sandbox");
     expect(s.args[idx + 1]).toBe("workspace-write");
+  });
+});
+
+describe("guard hook wiring", () => {
+  it("registers exactly one PreToolUse hook and nothing else", () => {
+    const settings = JSON.parse(guardSettingsJson());
+    // Scope guard: a hook cannot be added to a security-carrying payload
+    // without deliberately editing this assertion.
+    expect(Object.keys(settings.hooks)).toEqual(["PreToolUse"]);
+    expect(settings.hooks.PreToolUse).toHaveLength(1);
+    expect(settings.hooks.PreToolUse[0].hooks).toHaveLength(1);
+  });
+
+  it("uses no matcher, so every tool call reaches the guard", () => {
+    const entry = JSON.parse(guardSettingsJson()).hooks.PreToolUse[0];
+    expect(entry.matcher).toBeUndefined();
+    expect(entry.if).toBeUndefined();
+  });
+
+  it("invokes an absolute interpreter and an absolute entry path", () => {
+    const hook = JSON.parse(guardSettingsJson()).hooks.PreToolUse[0].hooks[0];
+    expect(hook.type).toBe("command");
+    expect(hook.command).toContain(process.execPath);
+    expect(hook.command).toContain("guard-entry.js");
+    expect(hook.timeout).toBe(GUARD_TIMEOUT_S);
+  });
+
+  it("declares no permissions.deny — deny rules suppress the hook", () => {
+    expect(JSON.parse(guardSettingsJson()).permissions).toBeUndefined();
+  });
+
+  it("shell-quotes both paths, since an unparseable command fails open", () => {
+    const hook = JSON.parse(guardSettingsJson()).hooks.PreToolUse[0].hooks[0];
+    // Both arguments single-quoted; nothing left bare for the shell to split
+    // or expand.
+    expect(hook.command).toMatch(/^'[^']*(?:'\\''[^']*)*' '[^']*(?:'\\''[^']*)*'$/);
+  });
+
+  it("passes --settings and the call id when spawning claude", () => {
+    const spec = buildSpawnSpec("claude", "hi", WORKDIR, () => "/bin/claude", FULL_ACCESS_ENVELOPE, "call-9");
+    const i = spec.args.indexOf("--settings");
+    expect(i).toBeGreaterThan(-1);
+    expect(JSON.parse(spec.args[i + 1]!).hooks.PreToolUse).toBeDefined();
+    expect(spec.env?.AGENTCALL_CALL_ID).toBe("call-9");
+  });
+
+  it("leaves the codex spawn untouched", () => {
+    const spec = buildSpawnSpec("codex", "hi", WORKDIR, () => "/bin/codex", FULL_ACCESS_ENVELOPE, "call-9");
+    expect(spec.args).not.toContain("--settings");
   });
 });

@@ -1,10 +1,11 @@
 import { spawn } from "node:child_process";
+import { fileURLToPath } from "node:url";
 import { AGENT_TIMEOUT_MS, MAX_REPLY_BYTES } from "@benree/agentcall-shared";
 import { resolveAgentBin } from "./bin.js";
 import { CAPS, FULL_ACCESS_ENVELOPE, type Cap, type Envelope } from "./tasks.js";
 
 export type AgentKind = "claude" | "codex";
-export interface SpawnSpec { cmd: string; args: string[]; cwd: string }
+export interface SpawnSpec { cmd: string; args: string[]; cwd: string; env?: NodeJS.ProcessEnv }
 export interface AgentOutput { text: string; session_id?: string }
 
 export class AgentRunError extends Error {
@@ -28,6 +29,33 @@ const KILL_GRACE_MS = 10_000;
 // stalls one call (safe and visible); an abandoned one is neither. Measured cost
 // is ~33ms.
 export const GUARD_TIMEOUT_S = 30;
+
+// Inline settings, not a plugin and not a file: scoped to this spawn, gone when
+// the process exits, and the owner's own ~/.claude is untouched.
+//
+// No `matcher` and no `if`: both narrow which calls arrive, and the matcher
+// parser fails open. No `permissions.deny` either — a matching deny rule blocks
+// the read AND suppresses the hook, so the denial would never be logged.
+// The hook command is handed to a shell. An install path containing a quote,
+// a space, a backslash, or $( ) would produce an unparseable command — and an
+// unparseable hook command fails OPEN, so the credential read then proceeds.
+// Single quotes with the standard '\'' escape are the safe POSIX form.
+const shellQuote = (s: string) => `'${s.replaceAll("'", `'\\''`)}'`;
+
+export function guardSettingsJson(): string {
+  const entry = fileURLToPath(new URL("./guard-entry.js", import.meta.url));
+  return JSON.stringify({
+    hooks: {
+      PreToolUse: [{
+        hooks: [{
+          type: "command",
+          command: `${shellQuote(process.execPath)} ${shellQuote(entry)}`,
+          timeout: GUARD_TIMEOUT_S,
+        }],
+      }],
+    },
+  });
+}
 
 // Cap -> Claude Code tool names, used with --allowedTools + --permission-mode
 // dontAsk: listed tools are pre-approved, everything else is denied instead
@@ -61,14 +89,16 @@ export function claudeAllowedTools(envelope: Envelope): string {
 // between a caller and the machine.
 export function buildSpawnSpec(
   kind: AgentKind, prompt: string, workdir: string, resolveBin: (kind: AgentKind) => string = resolveAgentBin,
-  envelope: Envelope = FULL_ACCESS_ENVELOPE,
+  envelope: Envelope = FULL_ACCESS_ENVELOPE, callId: string = "unknown",
 ): SpawnSpec {
   if (kind === "claude") {
     return {
       cmd: resolveBin(kind),
       args: ["-p", prompt, "--output-format", "json",
-        "--permission-mode", "dontAsk", "--allowedTools", claudeAllowedTools(envelope)],
+        "--permission-mode", "dontAsk", "--allowedTools", claudeAllowedTools(envelope),
+        "--settings", guardSettingsJson()],
       cwd: workdir,
+      env: { ...process.env, AGENTCALL_CALL_ID: callId },
     };
   }
   // Codex has no per-tool granularity, so the envelope's write cap maps onto
@@ -124,9 +154,9 @@ export function truncateUtf8(text: string, maxBytes: number): string {
 
 export function runAgent(
   kind: AgentKind, prompt: string, workdir: string, timeoutMs: number = AGENT_TIMEOUT_MS, specOverride?: SpawnSpec,
-  envelope: Envelope = FULL_ACCESS_ENVELOPE,
+  envelope: Envelope = FULL_ACCESS_ENVELOPE, callId: string = "unknown",
 ): Promise<AgentOutput> {
-  const spec = specOverride ?? buildSpawnSpec(kind, prompt, workdir, resolveAgentBin, envelope);
+  const spec = specOverride ?? buildSpawnSpec(kind, prompt, workdir, resolveAgentBin, envelope, callId);
   return new Promise<AgentOutput>((resolve, reject) => {
     // detached: true makes the child its own process group leader, so any
     // grandchildren it forks share its process group unless they detach
@@ -134,7 +164,7 @@ export function runAgent(
     // That lets us tear down the whole tree with one signal to -pid instead
     // of leaving orphans that hold the stdout pipe open or keep running
     // past the timeout.
-    const child = spawn(spec.cmd, spec.args, { cwd: spec.cwd, stdio: ["ignore", "pipe", "pipe"], detached: true });
+    const child = spawn(spec.cmd, spec.args, { cwd: spec.cwd, env: spec.env, stdio: ["ignore", "pipe", "pipe"], detached: true });
     // Buffers are accumulated and decoded to a string exactly once, at exit
     // (below) — decoding each chunk independently (`stdout += d`) can split
     // a multi-byte UTF-8 character across a pipe chunk boundary, corrupting
