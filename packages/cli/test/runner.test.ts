@@ -4,7 +4,7 @@ import { isAbsolute, join } from "node:path";
 import { describe, expect, it } from "vitest";
 import { buildPrompt } from "../src/prompt.js";
 import {
-  buildSpawnSpec, claudeAllowedTools, guardSettingsJson, GUARD_TIMEOUT_S,
+  buildSpawnSpec, claudeAllowedTools, guardCodexConfigArg, guardSettingsJson, GUARD_TIMEOUT_S,
   parseClaudeJson, parseCodexJsonl, runAgent, truncateUtf8,
 } from "../src/runner.js";
 import { getPaths } from "../src/paths.js";
@@ -100,8 +100,11 @@ describe("buildSpawnSpec", () => {
   it("spawns codex directly, keeping its native sandbox level as the write cap", () => {
     const s = buildSpawnSpec("codex", "PROMPT", WORKDIR, () => "/abs/path/to/codex");
     expect(s.cmd).toBe("/abs/path/to/codex");
-    expect(s.args).toEqual([
-      "exec", "--sandbox", "workspace-write", "--cd", WORKDIR, "--skip-git-repo-check", "--json", "PROMPT",
+    // The `-c` payload is asserted in "guard hook wiring" rather than pinned
+    // here, so this stays a test of the spawn shape.
+    expect(s.args.filter((a) => a !== guardCodexConfigArg())).toEqual([
+      "exec", "--ignore-user-config", "--sandbox", "workspace-write", "--cd", WORKDIR,
+      "--skip-git-repo-check", "--json", "-c", "PROMPT",
     ]);
     expect(s.cwd).toBe(WORKDIR);
   });
@@ -316,8 +319,55 @@ describe("guard hook wiring", () => {
     expect(spec.env?.AGENTCALL_CALL_ID).toBe("call-9");
   });
 
-  it("leaves the codex spawn untouched", () => {
+  it("does not pass claude's --settings to codex, which would not parse it", () => {
     const spec = buildSpawnSpec("codex", "hi", WORKDIR, () => "/bin/codex", FULL_ACCESS_ENVELOPE, "call-9");
     expect(spec.args).not.toContain("--settings");
+  });
+
+  // Codex takes hooks as config, not as a settings blob, and `-c` is the only
+  // form that stays scoped to this spawn — writing ~/.codex/hooks.json would
+  // edit the owner's real configuration, which claude's inline --settings
+  // deliberately avoids.
+  it("registers the guard on the codex spawn via an inline -c override", () => {
+    const spec = buildSpawnSpec("codex", "hi", WORKDIR, () => "/bin/codex", FULL_ACCESS_ENVELOPE, "call-9");
+    const i = spec.args.indexOf("-c");
+    expect(i).toBeGreaterThan(-1);
+    const override = spec.args[i + 1]!;
+    expect(override).toContain("hooks.PreToolUse");
+    expect(override).toContain("guard-entry.js");
+    expect(override).toContain(`timeout=${GUARD_TIMEOUT_S}`);
+    expect(spec.env?.AGENTCALL_CALL_ID).toBe("call-9");
+  });
+
+  // The guard is not codex's read boundary — codex's own deny_read is — so it
+  // must not deny tools it cannot classify and take the runtime down with it.
+  it("runs the codex guard in observe mode", () => {
+    const spec = buildSpawnSpec("codex", "hi", WORKDIR, () => "/bin/codex", FULL_ACCESS_ENVELOPE, "call-9");
+    expect(spec.env?.AGENTCALL_GUARD_MODE).toBe("observe");
+  });
+
+  it("leaves the claude spawn in enforcing mode", () => {
+    const spec = buildSpawnSpec("claude", "hi", WORKDIR, () => "/bin/claude", FULL_ACCESS_ENVELOPE, "call-9");
+    expect(spec.env?.AGENTCALL_GUARD_MODE).toBeUndefined();
+  });
+
+  // The prompt is positional and codex reads the last one, so an override
+  // appended after it would be taken as the prompt instead.
+  it("keeps the prompt last, after the -c override", () => {
+    const spec = buildSpawnSpec("codex", "PROMPT", WORKDIR, () => "/bin/codex");
+    expect(spec.args.at(-1)).toBe("PROMPT");
+  });
+});
+
+// A codex spawn inherits every MCP server, plugin and app in the owner's
+// ~/.codex — separate processes that read the filesystem outside codex's
+// sandbox entirely. On a developer machine that routinely includes a
+// filesystem server (serena) and `claude mcp serve`, which re-exposes Read
+// and Bash. Unlike claude, codex has no --allowedTools to fence them off, so
+// the only lever is to not load them.
+describe("codex user-config isolation", () => {
+  it("ignores the owner's codex config when answering a remote call", () => {
+    const spec = buildSpawnSpec("codex", "hi", WORKDIR, () => "/bin/codex");
+    expect(spec.args).toContain("--ignore-user-config");
   });
 });

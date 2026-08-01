@@ -9,33 +9,27 @@ import { GUARD_TIMEOUT_S } from "../src/runner.js";
 // only way to measure what the timeout has to cover.
 const ENTRY = join(process.cwd(), "dist", "guard-entry.js");
 
-function run(payload: object, home: string): { status: number; stdout: string } {
+type Run = { status: number; stdout: string; stderr: string };
+
+function runEntry(input: string, home: string, extraEnv: NodeJS.ProcessEnv = {}): Run {
+  const env = { ...process.env, AGENTCALL_HOME: home, AGENTCALL_CALL_ID: "call-abc", ...extraEnv };
   try {
+    // Pipe stderr rather than inheriting it, so the reason text can be
+    // asserted — it is what makes exit 2 blocking rather than "hook failed".
     const stdout = execFileSync(process.execPath, [ENTRY], {
-      input: JSON.stringify(payload),
-      env: { ...process.env, AGENTCALL_HOME: home, AGENTCALL_CALL_ID: "call-abc" },
-      encoding: "utf8",
+      input, env, encoding: "utf8", stdio: ["pipe", "pipe", "pipe"],
     });
-    return { status: 0, stdout };
+    return { status: 0, stdout, stderr: "" };
   } catch (e) {
-    const err = e as { status: number; stdout: string };
-    return { status: err.status, stdout: err.stdout ?? "" };
+    const err = e as { status: number; stdout: string; stderr: string };
+    return { status: err.status, stdout: err.stdout ?? "", stderr: err.stderr ?? "" };
   }
 }
 
-function runRaw(raw: string, home: string): { status: number; stdout: string } {
-  try {
-    const stdout = execFileSync(process.execPath, [ENTRY], {
-      input: raw,
-      env: { ...process.env, AGENTCALL_HOME: home, AGENTCALL_CALL_ID: "call-abc" },
-      encoding: "utf8",
-    });
-    return { status: 0, stdout };
-  } catch (e) {
-    const err = e as { status: number; stdout: string };
-    return { status: err.status, stdout: err.stdout ?? "" };
-  }
-}
+const run = (payload: object, home: string, extraEnv?: NodeJS.ProcessEnv): Run =>
+  runEntry(JSON.stringify(payload), home, extraEnv);
+
+const runRaw = (raw: string, home: string): Run => runEntry(raw, home);
 
 function one(home: string, body: string): Promise<void> {
   return new Promise<void>((ok, fail) => {
@@ -71,6 +65,40 @@ describe("guard-entry as a real process", () => {
     const home = mkdtempSync(join(tmpdir(), "guard-"));
     const r = runRaw("{not json", home);
     expect(r.status).toBe(2);
+  });
+
+  // Codex only treats exit 2 as blocking when stderr carries a reason; with
+  // an empty stderr it records a failed hook and runs the tool. The bare
+  // `process.exit(2)` this file used to end on therefore failed OPEN there.
+  it("exits 2 with a reason on stderr, which is what makes it blocking", () => {
+    const home = mkdtempSync(join(tmpdir(), "guard-"));
+    const r = runRaw("{not json", home);
+    expect(r.status).toBe(2);
+    expect(r.stderr.trim()).not.toBe("");
+  });
+
+  it("observes without denying when AGENTCALL_GUARD_MODE is observe", () => {
+    const home = mkdtempSync(join(tmpdir(), "guard-"));
+    const r = run(
+      { tool_name: "Read", tool_input: { file_path: join(home, ".ssh/id_rsa") }, cwd: home },
+      home,
+      { AGENTCALL_GUARD_MODE: "observe" },
+    );
+    expect(r.status).toBe(0);
+    expect(r.stdout).toBe("");
+    const calls = readFileSync(join(home, ".agentcall", "calls.log"), "utf8").trim();
+    expect(JSON.parse(calls)).toMatchObject({ type: "tool_attempt_flagged" });
+  });
+
+  // An unrecognised value must not silently downgrade enforcement.
+  it("enforces when the mode env var is set to anything unrecognised", () => {
+    const home = mkdtempSync(join(tmpdir(), "guard-"));
+    const r = run(
+      { tool_name: "Read", tool_input: { file_path: join(home, ".ssh/id_rsa") }, cwd: home },
+      home,
+      { AGENTCALL_GUARD_MODE: "off" },
+    );
+    expect(JSON.parse(r.stdout).hookSpecificOutput.permissionDecision).toBe("deny");
   });
 
   // Guards the fail-open-on-timeout path, and does it under concurrency:

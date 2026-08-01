@@ -217,11 +217,13 @@ instruction, never a boundary; see below.
   - A caller's prompt could induce the agent to read and echo back the
     callee's Claude Code session history (`~/.claude/projects/*`, which can
     contain pasted secrets and private code), API keys in `~/.claude.json`'s
-    `mcpServers` entries, `~/.ssh`, `~/.aws`, or the relay token in
-    `~/.agentcall/config.json`. The tool guard below refuses these paths for a
-    Claude answering agent's file-reading tools, but not for `exec`, and not
-    at all for a Codex answering agent. **Only share your address with people
-    you would trust to run a read-only command in your home directory.**
+    `mcpServers` entries, `~/.ssh`, `~/.aws`, `~/.codex` (which holds
+    `auth.json` and a `config.toml` that routinely carries API keys in
+    plaintext), or the relay token in `~/.agentcall/config.json`. The tool
+    guard below refuses these paths for a Claude answering agent's
+    file-reading tools, but not for `exec`, and not at all for a Codex
+    answering agent. **Only share your address with people you would trust to
+    run a read-only command in your home directory.**
   - Executable configuration surfaces (`~/.claude/CLAUDE.md`, `hooks`,
     `plugins`, `commands`, `agents`) are writable by an agent granted `write`,
     so a hostile prompt can persist beyond the call. On Claude, the tool guard
@@ -233,10 +235,13 @@ instruction, never a boundary; see below.
     frontmatter), to `~/Library/LaunchAgents`, and to shell startup files
     (`.zshrc` and friends). This risk remains live via `exec` and on a Codex
     answering agent, which has no read guard.
+  - `~/.codex` is refused for a Claude answering agent, but a **Codex**
+    answering agent can still read its own configuration and credentials —
+    `--ignore-user-config` stops that config being *loaded*, not being *read*.
 
 **Tool guard.** Tool calls a caller's agent makes on your machine are checked before
 they run. File reads, writes, searches, and listings that reach credential paths
-(`~/.ssh`, `~/.aws`, `.env`, Keychains, `~/.agentcall`, `~/.claude`), the guard's own
+(`~/.ssh`, `~/.aws`, `.env`, Keychains, `~/.agentcall`, `~/.claude`, `~/.codex`), the guard's own
 installed code, `~/AgentCall/tasks`, `~/Library/LaunchAgents`, and shell startup files
 are refused, and every tool call reaching the guard is recorded to
 `~/.agentcall/tools.log`. `agentcall doctor` verifies the guard is in force.
@@ -246,9 +251,21 @@ Two limits, stated plainly:
 - **A task that grants `exec` has no read floor.** Shell commands are recorded, not
   blocked — pattern-matching a command string is too weak to be a boundary and too
   eager to be harmless. The control on `exec` is which tasks you choose to write.
-- **Claude answering agents only.** Codex has no equivalent hook wired yet, so a Codex
-  answering agent has no read guard at all; its `--sandbox` level confines writes but
-  not reads.
+- **A Codex answering agent is observed, not guarded.** The same hook is registered on
+  the Codex spawn, but in *observe* mode: it records every tool attempt to
+  `tools.log` and never blocks. That is deliberate rather than provisional — Codex has
+  no `Read`/`Grep`/`Glob` tools and reaches the filesystem entirely through `Bash`
+  (`sed -n '1,200p' file`), which is exactly the surface the point above says cannot be
+  bounded by matching command strings. Its `--sandbox` level confines writes but not
+  reads: `codex exec --sandbox read-only` still reads `~/.ssh`. **A Codex answering
+  agent therefore has no read floor, and `tools.log` for one is a record of attempts,
+  not of what was permitted.**
+- **The Codex spawn does not load your `~/.codex`.** It runs with
+  `--ignore-user-config`, so a caller cannot reach your MCP servers, plugins, or apps.
+  Those run as separate processes outside Codex's sandbox, and a filesystem MCP server
+  — or `claude mcp serve`, which re-exposes `Read` and `Bash` — would otherwise route
+  around every control here. Codex's own bundled `codex_apps` tools are not removed by
+  that flag and remain reachable.
 
 ## Development
 

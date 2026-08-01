@@ -20,11 +20,30 @@ export type GuardVerdict =
 export const DENY_REASON =
   "This action is not permitted by the answering agent's policy.";
 
+// Written to stderr on every exit-2 path. Claude blocks on exit 2 regardless
+// of stderr; codex blocks on exit 2 ONLY when stderr carries a reason, and
+// treats an empty one as a failed hook — which runs the tool. So the text
+// below is what keeps the fail-closed paths closed on both runtimes. Same
+// contract as DENY_REASON: no path, no rule name.
+export const FAIL_CLOSED_REASON =
+  "The answering agent's policy guard could not evaluate this action.";
+
+// `enforce` blocks; `observe` records and always allows.
+//
+// The codex spawn runs in `observe`. The guard is not codex's read boundary —
+// codex reaches the filesystem through `Bash` (`sed -n '1,200p' file`), which
+// this module deliberately records rather than blocks, so enforcing here would
+// buy no protection. It would, however, deny every codex tool `decide()` cannot
+// classify (`apply_patch` and friends) and break the runtime. Codex's own
+// kernel-enforced `deny_read` is the boundary there.
+export type GuardMode = "enforce" | "observe";
+
 // Home-relative directories. Everything beneath them is denied.
 const DENIED_DIRS = [
   ".ssh", ".gnupg", ".aws", ".config/gcloud", "Library/Keychains",
   ".agentcall",   // holds config.json and the relay token
   ".claude",      // executable configuration; cf. CVE-2025-59536
+  ".codex",       // auth.json, plus a config.toml that routinely holds API keys
   "AgentCall/tasks",       // task frontmatter sets the envelope's caps verbatim
   "Library/LaunchAgents",  // how the listener itself gets launched
 ];
@@ -249,9 +268,18 @@ export interface GuardDeps {
   appendLine: (file: string, line: string) => void;
 }
 
+export type GuardOutput = { exitCode: number; stdout: string; stderr: string };
+
+const ALLOW: GuardOutput = { exitCode: 0, stdout: "", stderr: "" };
+const FAIL_CLOSED: GuardOutput = { exitCode: 2, stdout: "", stderr: FAIL_CLOSED_REASON };
+
 // calls.log stays sparse and owner-facing; tools.log carries every call so the
 // audit-trail claim is true. A denial appears in both.
-export function runGuard(raw: string, deps: GuardDeps): { exitCode: number; stdout: string } {
+export function runGuard(raw: string, deps: GuardDeps, mode: GuardMode = "enforce"): GuardOutput {
+  // In observe mode the guard is telemetry, not a boundary, so a failure to
+  // decide must not cost availability — there is nothing to fail closed *to*.
+  const onFailure = mode === "observe" ? ALLOW : FAIL_CLOSED;
+
   let input: GuardInput;
   try {
     const parsed = JSON.parse(raw) as Partial<GuardInput>;
@@ -263,7 +291,7 @@ export function runGuard(raw: string, deps: GuardDeps): { exitCode: number; stdo
     };
   } catch {
     // Exit 2 blocks bluntly. The guard never allows because it failed to decide.
-    return { exitCode: 2, stdout: "" };
+    return onFailure;
   }
 
   // EVERYTHING below is inside the failure boundary, including the log writes.
@@ -276,35 +304,40 @@ export function runGuard(raw: string, deps: GuardDeps): { exitCode: number; stdo
     const write = (file: string, obj: Record<string, unknown>) =>
       deps.appendLine(file, JSON.stringify({ ts, ...obj }));
 
-    write(deps.paths.toolsLog, {
-      type: "tool_call", call_id: deps.callId, tool: input.tool_name, allowed: verdict.allow,
-    });
+    // PreToolUse fires on what the model ATTEMPTED. In enforce mode this
+    // function's own verdict is the outcome, so `allowed` is a fact. In
+    // observe mode it is not: the tool proceeds regardless of the verdict, and
+    // may still be stopped downstream by codex's sandbox. Recording `allowed`
+    // there would assert an outcome this hook never sees.
+    write(deps.paths.toolsLog, mode === "observe"
+      ? { type: "tool_call", call_id: deps.callId, tool: input.tool_name, mode }
+      : { type: "tool_call", call_id: deps.callId, tool: input.tool_name, allowed: verdict.allow });
 
-    if (!verdict.allow) {
+    const noteworthy = verdict.allow ? verdict.flag : verdict;
+    if (noteworthy) {
       write(deps.paths.callsLog, {
-        type: "tool_denied", call_id: deps.callId, tool: input.tool_name,
-        rule: verdict.rule, detail: verdict.detail,
-      });
-      return {
-        exitCode: 0,
-        stdout: JSON.stringify({
-          hookSpecificOutput: {
-            hookEventName: "PreToolUse",
-            permissionDecision: "deny",
-            permissionDecisionReason: DENY_REASON,
-          },
-        }),
-      };
-    }
-
-    if (verdict.flag) {
-      write(deps.paths.callsLog, {
-        type: "tool_flagged", call_id: deps.callId, tool: input.tool_name,
-        rule: verdict.flag.rule, detail: verdict.flag.detail,
+        // Three distinct names, because they are three distinct claims:
+        // denied = we stopped it; flagged = we let it through and noticed;
+        // attempt_flagged = we only ever watched.
+        type: mode === "observe" ? "tool_attempt_flagged" : verdict.allow ? "tool_flagged" : "tool_denied",
+        call_id: deps.callId, tool: input.tool_name,
+        rule: noteworthy.rule, detail: noteworthy.detail,
       });
     }
-    return { exitCode: 0, stdout: "" };
+
+    if (mode === "observe" || verdict.allow) return ALLOW;
+    return {
+      exitCode: 0,
+      stdout: JSON.stringify({
+        hookSpecificOutput: {
+          hookEventName: "PreToolUse",
+          permissionDecision: "deny",
+          permissionDecisionReason: DENY_REASON,
+        },
+      }),
+      stderr: "",
+    };
   } catch {
-    return { exitCode: 2, stdout: "" };
+    return onFailure;
   }
 }

@@ -16,6 +16,13 @@ describe("decide — exact-target tools", () => {
     expect(v.allow).toBe(false);
   });
 
+  // ~/.codex holds auth.json and a config.toml that routinely carries API
+  // keys in plaintext — the same argument that put ~/.claude on the list.
+  it("denies reading inside ~/.codex", () => {
+    const v = decide(call("Read", { file_path: "/Users/owner/.codex/auth.json" }), HOME, id);
+    expect(v.allow).toBe(false);
+  });
+
   it("denies a denied basename anywhere on disk", () => {
     const v = decide(call("Read", { file_path: "/Users/owner/proj/.env" }), HOME, id);
     expect(v.allow).toBe(false);
@@ -434,5 +441,83 @@ describe("runGuard", () => {
       appendLine: () => { throw new Error("ENOSPC: no space left on device"); },
     });
     expect(out.exitCode).toBe(2);
+  });
+
+  // Codex treats exit 2 with an EMPTY stderr as a failed hook and runs the
+  // tool anyway; only exit 2 WITH a reason on stderr blocks. Every fail-closed
+  // path must therefore carry text, or the guard's fail-closed paths fail OPEN
+  // the moment the same entry point is wired to a codex spawn.
+  it.each([
+    ["unparseable input", "not json"],
+    ["a payload with no tool name", JSON.stringify({ cwd: CWD })],
+  ])("emits a non-empty stderr reason when failing closed on %s", (_label, raw) => {
+    const h = harness();
+    const out = runGuard(raw, h.deps);
+    expect(out.exitCode).toBe(2);
+    expect(out.stderr.trim()).not.toBe("");
+  });
+
+  it("emits a non-empty stderr reason when the audit write throws", () => {
+    const h = harness();
+    const out = runGuard(payload("Read", { file_path: "/Users/owner/proj/a.ts" }), {
+      ...h.deps,
+      appendLine: () => { throw new Error("ENOSPC: no space left on device"); },
+    });
+    expect(out.exitCode).toBe(2);
+    expect(out.stderr.trim()).not.toBe("");
+  });
+
+  it("keeps the stderr reason free of the resolved path, as with stdout", () => {
+    const h = harness();
+    const out = runGuard(payload("Read", { file_path: "/Users/owner/.ssh/id_rsa" }), h.deps);
+    expect(out.stderr).not.toContain("id_rsa");
+  });
+});
+
+// The codex spawn gets the same hook, but codex's own kernel-enforced
+// `deny_read` is the boundary there — not this. Observing rather than
+// enforcing keeps the guard from denying codex tools it cannot classify
+// (`apply_patch` and friends), which would break the runtime while adding
+// no security. See the design spec.
+describe("runGuard — observe mode", () => {
+  it("records a credential read without denying it", () => {
+    const h = harness();
+    const out = runGuard(payload("Read", { file_path: "/Users/owner/.ssh/id_rsa" }), h.deps, "observe");
+    expect(out.exitCode).toBe(0);
+    expect(out.stdout).toBe("");
+    expect(h.calls()[0]).toMatchObject({ type: "tool_attempt_flagged", tool: "Read" });
+  });
+
+  it("records an unclassified tool without denying it", () => {
+    const h = harness();
+    const out = runGuard(payload("apply_patch", { patch: "x" }), h.deps, "observe");
+    expect(out.exitCode).toBe(0);
+    expect(out.stdout).toBe("");
+  });
+
+  it("still writes every call to tools.log", () => {
+    const h = harness();
+    runGuard(payload("Bash", { command: "sed -n '1,200p' a.ts" }), h.deps, "observe");
+    expect(h.tools()[0]).toMatchObject({ type: "tool_call", tool: "Bash" });
+  });
+
+  // PreToolUse reports what the model ATTEMPTED, and in observe mode nothing
+  // downstream is blocked by us — so an `allowed` field would assert an
+  // outcome this hook never observes.
+  it("does not claim an allow/deny outcome it cannot observe", () => {
+    const h = harness();
+    runGuard(payload("Bash", { command: "echo hi" }), h.deps, "observe");
+    expect(h.tools()[0]).not.toHaveProperty("allowed");
+    expect(h.tools()[0]).toMatchObject({ mode: "observe" });
+  });
+
+  // Not a boundary here, so a guard failure must not cost availability.
+  it("fails open when the audit write throws", () => {
+    const h = harness();
+    const out = runGuard(payload("Read", { file_path: "/Users/owner/proj/a.ts" }), {
+      ...h.deps,
+      appendLine: () => { throw new Error("ENOSPC: no space left on device"); },
+    }, "observe");
+    expect(out.exitCode).toBe(0);
   });
 });

@@ -42,19 +42,32 @@ export const GUARD_TIMEOUT_S = 30;
 // Single quotes with the standard '\'' escape are the safe POSIX form.
 const shellQuote = (s: string) => `'${s.replaceAll("'", `'\\''`)}'`;
 
+const guardCommand = () =>
+  `${shellQuote(process.execPath)} ${shellQuote(fileURLToPath(new URL("./guard-entry.js", import.meta.url)))}`;
+
 export function guardSettingsJson(): string {
-  const entry = fileURLToPath(new URL("./guard-entry.js", import.meta.url));
   return JSON.stringify({
     hooks: {
       PreToolUse: [{
-        hooks: [{
-          type: "command",
-          command: `${shellQuote(process.execPath)} ${shellQuote(entry)}`,
-          timeout: GUARD_TIMEOUT_S,
-        }],
+        hooks: [{ type: "command", command: guardCommand(), timeout: GUARD_TIMEOUT_S }],
       }],
     },
   });
+}
+
+// TOML basic string. Only `"` and `\` need escaping for a path; the control
+// characters that would also require it cannot appear in one.
+const tomlQuote = (s: string) => `"${s.replaceAll("\\", "\\\\").replaceAll(`"`, `\\"`)}"`;
+
+// Codex takes hooks as configuration rather than as a settings blob, and `-c`
+// is the only form scoped to a single spawn — the alternatives
+// ($CODEX_HOME/hooks.json, the project .codex/) would edit configuration the
+// owner keeps, which claude's inline --settings deliberately avoids.
+//
+// This registers the SAME entry point as claude, but the spawn runs it in
+// observe mode: it records attempts, it does not block. See GuardMode.
+export function guardCodexConfigArg(): string {
+  return `hooks.PreToolUse=[{hooks=[{type="command",command=${tomlQuote(guardCommand())},timeout=${GUARD_TIMEOUT_S}}]}]`;
 }
 
 // Cap -> Claude Code tool names, used with --allowedTools + --permission-mode
@@ -103,12 +116,24 @@ export function buildSpawnSpec(
   }
   // Codex has no per-tool granularity, so the envelope's write cap maps onto
   // its native sandbox level instead — the codex-side analogue of claude's
-  // --allowedTools, and now the only thing confining its writes.
+  // --allowedTools, and now the only thing confining its writes. Note it does
+  // NOT confine reads: `codex exec --sandbox read-only` still reads ~/.ssh.
   const sandbox = envelope.caps.includes("write") ? "workspace-write" : "read-only";
   return {
     cmd: resolveBin(kind),
-    args: ["exec", "--sandbox", sandbox, "--cd", workdir, "--skip-git-repo-check", "--json", prompt],
+    // --ignore-user-config drops the owner's ~/.codex: their MCP servers,
+    // plugins and apps. Those are separate processes that reach the
+    // filesystem outside codex's sandbox entirely, so a remote caller could
+    // otherwise route around every control here — on a typical dev machine
+    // that means a filesystem MCP server, and often `claude mcp serve`, which
+    // re-exposes Read and Bash. Claude fences these off with --allowedTools,
+    // an allowlist that `mcp__*` names never match; codex has no equivalent,
+    // so not loading them is the only lever. The prompt stays last: codex
+    // takes the final positional as the prompt.
+    args: ["exec", "--ignore-user-config", "--sandbox", sandbox, "--cd", workdir,
+      "--skip-git-repo-check", "--json", "-c", guardCodexConfigArg(), prompt],
     cwd: workdir,
+    env: { ...process.env, AGENTCALL_CALL_ID: callId, AGENTCALL_GUARD_MODE: "observe" },
   };
 }
 

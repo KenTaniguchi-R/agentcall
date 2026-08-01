@@ -6,6 +6,39 @@ which are released together.
 
 ## Unreleased
 
+### Fixed — the guard's fail-closed paths could fail open (security-relevant)
+
+- **Exit 2 now carries a reason on stderr.** Claude blocks on exit 2 regardless
+  of stderr, so this was invisible while the guard was Claude-only. Codex blocks
+  on exit 2 *only* when stderr carries a reason and treats an empty one as a
+  merely-failed hook — which runs the tool. Every fail-closed path was therefore
+  a fail-*open* path the moment the same entry point reached a Codex spawn.
+
+### Added — the Codex spawn is now observed, and no longer loads your `~/.codex`
+
+- **`--ignore-user-config` on the Codex spawn.** A Codex answering agent used to
+  inherit the owner's whole `~/.codex`: MCP servers, plugins and apps. Those are
+  separate processes that reach the filesystem outside Codex's sandbox, so a
+  caller could route around every control in the CLI — on a typical dev machine
+  that means a filesystem MCP server, and often `claude mcp serve`, which
+  re-exposes `Read` and `Bash`. Claude fences these off with `--allowedTools`, an
+  allowlist `mcp__*` names never match; Codex has no equivalent, so not loading
+  them is the only lever. Codex's own bundled `codex_apps` tools are **not**
+  removed by this flag.
+- **The PreToolUse guard is registered on the Codex spawn**, inline via `-c` so
+  the owner's `~/.codex/hooks.json` is untouched — the Codex analogue of the
+  inline `--settings` used for Claude. It runs in **observe** mode: it records
+  attempts and never blocks. Codex has no `Read`/`Grep`/`Glob` and reaches the
+  filesystem through `Bash`, which the guard records rather than blocks, so
+  enforcing would add no protection while denying Codex tools it cannot classify
+  (`apply_patch`) and breaking the runtime. **This is not read-guard parity, and
+  the README no longer implies it is.** `tools.log` lines from a Codex spawn
+  carry `"mode":"observe"` and omit `allowed`, because PreToolUse reports what
+  was attempted, not what was permitted.
+- **`~/.codex` joins the denied paths** for a Claude answering agent, on the same
+  argument that put `~/.claude` there: it holds `auth.json` and a `config.toml`
+  that routinely carries API keys in plaintext.
+
 ### Removed — the OS-level sandbox (breaking, security-relevant)
 
 - **Spawned agents are no longer wrapped in Seatbelt.** Every call used to run
