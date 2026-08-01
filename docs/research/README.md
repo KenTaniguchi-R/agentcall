@@ -6,7 +6,7 @@ decisions.** No implementation follows from them without a separate call.
 All four docs date from 2026-07-31 and were produced together; read them as one body
 of work rather than four independent studies.
 
-## Read in this order
+## Market research — read in this order
 
 | Doc | Answers |
 |---|---|
@@ -14,6 +14,12 @@ of work rather than four independent studies.
 | [enterprise-pivot-research](./2026-07-31-enterprise-pivot-research.md) | Who is the direct competitor, and how should the enterprise version work? |
 | [demand-validation](./2026-07-31-demand-validation.md) | Does anyone pay for this? What blocks deals? |
 | [market-outlook](./2026-07-31-market-outlook.md) | Is this market dying or growing? What kills us? |
+
+## Technical reference
+
+| Doc | Answers |
+|---|---|
+| [claude-code-enforcement-surfaces](./2026-07-31-claude-code-enforcement-surfaces.md) | With the OS sandbox gone, what can actually enforce policy — and what can't? |
 
 ## The five findings that matter
 
