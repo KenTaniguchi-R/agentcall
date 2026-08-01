@@ -29,9 +29,23 @@ which are released together.
   present in an existing `SKILL.md`, which keeps old task files loading. Task
   capabilities are now expressed by `tools:` alone.
 
+### Added — optional `workdir`
+
+- **`workdir` in `~/.agentcall/config.json`** sets the absolute directory the
+  answering agent runs in, so calls can be answered with real project context
+  instead of from an empty share folder. Defaults to `~/AgentCall/public`, and
+  is deliberately *not* prompted for during setup — it's a two-second question
+  for a developer and an unanswerable one for everyone else.
+- Resolved once at listener start, so a relative, missing, or non-directory
+  path stops `agentcall listen` with a clear message rather than failing every
+  inbound call. `agentcall doctor` reports it as its own check.
+- When `workdir` is set, the prompt no longer instructs the agent to stay
+  inside its working directory.
+
 ### Fixed
 
 - `agentcall --version` reported `0.2.0` on a `0.3.0` package.
+- `agentcall doctor` gained a `workdir` check.
 
 ## 0.2.0 — 2026-07-16
 

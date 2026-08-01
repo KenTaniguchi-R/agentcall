@@ -1,9 +1,9 @@
-import { mkdtempSync, statSync } from "node:fs";
+import { mkdirSync, mkdtempSync, statSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 import { getPaths } from "../src/paths.js";
-import { loadConfig, saveConfig, relayUrl, assertCallableConfig } from "../src/config.js";
+import { loadConfig, saveConfig, relayUrl, assertCallableConfig, resolveWorkdir } from "../src/config.js";
 
 function tempHome() { return mkdtempSync(join(tmpdir(), "agentcall-test-")); }
 
@@ -62,5 +62,44 @@ describe("config", () => {
     expect(() => assertCallableConfig(full)).not.toThrow();
     expect(() => assertCallableConfig({ handle: "k", token: "t", relay: "https://x.y" }))
       .toThrow(/caller-only.*agentcall setup/);
+  });
+});
+
+// `workdir` is an opt-in override, never prompted for during setup: a
+// developer points it at a real project so calls answer with real context,
+// and everyone else silently keeps ~/AgentCall/public.
+describe("resolveWorkdir", () => {
+  const base = { handle: "k", token: "t", agent_kind: "claude" as const, relay: "https://x.y" };
+
+  it("defaults to publicDir and reports it as confined", () => {
+    const p = getPaths("/tmp/fakehome");
+    expect(resolveWorkdir(base, p)).toEqual({ dir: p.publicDir, confined: true });
+  });
+
+  it("uses an explicit workdir and drops the confinement claim", () => {
+    const home = tempHome();
+    const p = getPaths(home);
+    const project = join(home, "code", "payments-api");
+    mkdirSync(project, { recursive: true });
+    expect(resolveWorkdir({ ...base, workdir: project }, p)).toEqual({ dir: project, confined: false });
+  });
+
+  // Both of these would otherwise surface as a cryptic spawn ENOENT on every
+  // inbound call, so they fail loudly at listener start instead.
+  it("rejects a relative workdir", () => {
+    const p = getPaths("/tmp/fakehome");
+    expect(() => resolveWorkdir({ ...base, workdir: "code/api" }, p)).toThrow(/absolute/i);
+  });
+
+  it("rejects a workdir that does not exist", () => {
+    const p = getPaths("/tmp/fakehome");
+    expect(() => resolveWorkdir({ ...base, workdir: "/no/such/dir" }, p)).toThrow(/does not exist/i);
+  });
+
+  it("rejects a workdir that is a file rather than a directory", () => {
+    const home = tempHome();
+    const p = getPaths(home);
+    saveConfig(p, base); // any real file will do
+    expect(() => resolveWorkdir({ ...base, workdir: p.configFile }, p)).toThrow(/not a directory/i);
   });
 });

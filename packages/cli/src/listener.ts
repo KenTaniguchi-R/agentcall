@@ -4,7 +4,7 @@ import WebSocket from "ws";
 import {
   AGENT_TIMEOUT_MS, RelayToListenerFrame, safeParseFrame,
 } from "@benree/agentcall-shared";
-import type { CallableConfig } from "./config.js";
+import { resolveWorkdir, type CallableConfig } from "./config.js";
 import type { Paths } from "./paths.js";
 import { buildPrompt } from "./prompt.js";
 import { AgentRunError, runAgent } from "./runner.js";
@@ -23,6 +23,10 @@ export interface ListenerDeps {
 
 export function startListener(deps: ListenerDeps): { stop(): void } {
   const run = deps.run ?? runAgent;
+  // Resolved once, up front: a bad `workdir` in config.json should stop
+  // `agentcall listen` with a clear message, not fail every inbound call
+  // individually. Changing it therefore needs a listener restart.
+  const workdir = resolveWorkdir(deps.config, deps.paths);
   const queue = new SerialQueue(deps.maxPending ?? 5);
   const backoff = deps.backoffMs ?? ((n) => Math.min(1000 * 2 ** n, 60_000) + Math.random() * 500);
   let stopped = false;
@@ -78,8 +82,8 @@ export function startListener(deps: ListenerDeps): { stop(): void } {
         try {
           const out = await run(
             deps.config.agent_kind,
-            buildPrompt(deps.config.handle, from, message, task),
-            deps.paths,
+            buildPrompt(deps.config.handle, from, message, task, workdir),
+            workdir.dir,
             timeoutMs,
             undefined,
             task.envelope,

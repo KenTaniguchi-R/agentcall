@@ -2,7 +2,7 @@ import { execFileSync } from "node:child_process";
 import { existsSync } from "node:fs";
 import { getStatus } from "./api.js";
 import { callAgent } from "./callClient.js";
-import { loadConfig, relayUrl, type Config } from "./config.js";
+import { loadConfig, relayUrl, resolveWorkdir, type Config, type Workdir } from "./config.js";
 import { LAUNCH_LABEL } from "./launchd.js";
 import type { Paths } from "./paths.js";
 import { checkRelaySelfCall, formatCheck, short, verifyAgent, type VerifyCheck, type VerifyFns } from "./verify.js";
@@ -50,6 +50,17 @@ export async function runDoctor(deps: DoctorDeps): Promise<number> {
     return 0;
   }
 
+  // A workdir that's relative, missing, or a file stops startListener dead,
+  // so diagnose it here rather than letting the owner discover it as a
+  // listener that won't stay up.
+  let workdir: Workdir | undefined;
+  try {
+    workdir = resolveWorkdir(cfg, deps.paths);
+    report({ name: "workdir", ok: true, detail: workdir.dir });
+  } catch (e) {
+    report({ name: "workdir", ok: false, detail: short(e), hint: "fix or remove `workdir` in ~/.agentcall/config.json" });
+  }
+
   if (deps.isDarwin ?? process.platform === "darwin") {
     let loaded = false;
     try {
@@ -79,7 +90,10 @@ export async function runDoctor(deps: DoctorDeps): Promise<number> {
     report({ name: "relay status", ok: false, detail: short(e) });
   }
 
-  const agentChecks = await verifyAgent(cfg.agent_kind, deps.paths, deps.verifyFns);
+  // Falls back to publicDir when workdir didn't resolve: per the ladder
+  // semantics above, a static-check failure reports itself but must not stop
+  // the agent checks from running.
+  const agentChecks = await verifyAgent(cfg.agent_kind, workdir?.dir ?? deps.paths.publicDir, deps.verifyFns);
   for (const c of agentChecks) report(c);
   const agentOk = agentChecks.every((c) => c.ok);
 

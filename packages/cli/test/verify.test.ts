@@ -124,17 +124,17 @@ describe("checkCodexAuth", () => {
   });
 });
 
-const fakePaths = getPaths("/tmp/agentcall-verify-test-home");
+const fakeWorkdir = getPaths("/tmp/agentcall-verify-test-home").publicDir;
 
 describe("checkAgentSpawn", () => {
   it("passes when runFn resolves, without asserting reply text", async () => {
-    const c = await checkAgentSpawn("claude", fakePaths, async () => ({ text: "OK, got it!" }));
+    const c = await checkAgentSpawn("claude", fakeWorkdir, async () => ({ text: "OK, got it!" }));
     expect(c).toMatchObject({ name: "agent run", ok: true });
   });
 
   it("invokes runFn with the verify prompt, timeout, and the read-only ask envelope", async () => {
     const seen: unknown[] = [];
-    await checkAgentSpawn("claude", fakePaths, async (kind, prompt, _p, timeoutMs, _specOverride, envelope) => {
+    await checkAgentSpawn("claude", fakeWorkdir, async (kind, prompt, _p, timeoutMs, _specOverride, envelope) => {
       seen.push(kind, prompt, timeoutMs, envelope);
       return { text: "OK" };
     });
@@ -142,7 +142,7 @@ describe("checkAgentSpawn", () => {
   });
 
   it("classifies an auth failure into a hint", async () => {
-    const c = await checkAgentSpawn("claude", fakePaths, async () => {
+    const c = await checkAgentSpawn("claude", fakeWorkdir, async () => {
       throw new AgentRunError("could not parse agent output: Error: claude reported an error: Invalid API key · Please run /login", "agent_error");
     });
     expect(c.ok).toBe(false);
@@ -153,7 +153,7 @@ describe("checkAgentSpawn", () => {
 
 describe("verifyAgent", () => {
   it("runs binary -> spawn for claude and returns both checks", async () => {
-    const checks = await verifyAgent("claude", fakePaths, {
+    const checks = await verifyAgent("claude", fakeWorkdir, {
       resolveBin: () => "/fake/bin/claude",
       runFn: async () => ({ text: "OK" }),
     });
@@ -162,7 +162,7 @@ describe("verifyAgent", () => {
   });
 
   it("runs binary -> codex auth -> spawn for codex", async () => {
-    const checks = await verifyAgent("codex", fakePaths, {
+    const checks = await verifyAgent("codex", fakeWorkdir, {
       resolveBin: () => "/fake/bin/codex",
       execFn: () => {},
       runFn: async () => ({ text: "OK" }),
@@ -172,7 +172,7 @@ describe("verifyAgent", () => {
 
   it("stops the ladder at the first failure (no spawn after failed codex auth)", async () => {
     let spawned = false;
-    const checks = await verifyAgent("codex", fakePaths, {
+    const checks = await verifyAgent("codex", fakeWorkdir, {
       resolveBin: () => "/fake/bin/codex",
       execFn: () => {
         throw new Error("Not logged in");
@@ -188,7 +188,7 @@ describe("verifyAgent", () => {
   });
 
   it("stops after a failed binary check", async () => {
-    const checks = await verifyAgent("claude", fakePaths, {
+    const checks = await verifyAgent("claude", fakeWorkdir, {
       resolveBin: () => {
         throw new Error("Could not find `claude` on PATH.");
       },

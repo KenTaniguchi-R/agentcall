@@ -2,7 +2,6 @@ import { spawn } from "node:child_process";
 import { AGENT_TIMEOUT_MS, MAX_REPLY_BYTES } from "@benree/agentcall-shared";
 import { resolveAgentBin } from "./bin.js";
 import { CAPS, FULL_ACCESS_ENVELOPE, type Cap, type Envelope } from "./tasks.js";
-import type { Paths } from "./paths.js";
 
 export type AgentKind = "claude" | "codex";
 export interface SpawnSpec { cmd: string; args: string[]; cwd: string }
@@ -55,7 +54,7 @@ export function claudeAllowedTools(envelope: Envelope): string {
 // plus pre-prompt task resolution (policy.ts/listener.ts) is what stands
 // between a caller and the machine.
 export function buildSpawnSpec(
-  kind: AgentKind, prompt: string, p: Paths, resolveBin: (kind: AgentKind) => string = resolveAgentBin,
+  kind: AgentKind, prompt: string, workdir: string, resolveBin: (kind: AgentKind) => string = resolveAgentBin,
   envelope: Envelope = FULL_ACCESS_ENVELOPE,
 ): SpawnSpec {
   if (kind === "claude") {
@@ -63,7 +62,7 @@ export function buildSpawnSpec(
       cmd: resolveBin(kind),
       args: ["-p", prompt, "--output-format", "json",
         "--permission-mode", "dontAsk", "--allowedTools", claudeAllowedTools(envelope)],
-      cwd: p.publicDir,
+      cwd: workdir,
     };
   }
   // Codex has no per-tool granularity, so the envelope's write cap maps onto
@@ -72,8 +71,8 @@ export function buildSpawnSpec(
   const sandbox = envelope.caps.includes("write") ? "workspace-write" : "read-only";
   return {
     cmd: resolveBin(kind),
-    args: ["exec", "--sandbox", sandbox, "--cd", p.publicDir, "--skip-git-repo-check", "--json", prompt],
-    cwd: p.publicDir,
+    args: ["exec", "--sandbox", sandbox, "--cd", workdir, "--skip-git-repo-check", "--json", prompt],
+    cwd: workdir,
   };
 }
 
@@ -118,10 +117,10 @@ export function truncateUtf8(text: string, maxBytes: number): string {
 }
 
 export function runAgent(
-  kind: AgentKind, prompt: string, p: Paths, timeoutMs: number = AGENT_TIMEOUT_MS, specOverride?: SpawnSpec,
+  kind: AgentKind, prompt: string, workdir: string, timeoutMs: number = AGENT_TIMEOUT_MS, specOverride?: SpawnSpec,
   envelope: Envelope = FULL_ACCESS_ENVELOPE,
 ): Promise<AgentOutput> {
-  const spec = specOverride ?? buildSpawnSpec(kind, prompt, p, resolveAgentBin, envelope);
+  const spec = specOverride ?? buildSpawnSpec(kind, prompt, workdir, resolveAgentBin, envelope);
   return new Promise<AgentOutput>((resolve, reject) => {
     // detached: true makes the child its own process group leader, so any
     // grandchildren it forks share its process group unless they detach

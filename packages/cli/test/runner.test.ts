@@ -8,6 +8,8 @@ import { getPaths } from "../src/paths.js";
 import { ASK_TASK, FULL_ACCESS_ENVELOPE, type Envelope, type Task } from "../src/tasks.js";
 
 const p = getPaths("/tmp/fakehome");
+// runAgent/buildSpawnSpec take the resolved working directory, not Paths.
+const WORKDIR = p.publicDir;
 
 describe("buildPrompt", () => {
   it("includes handle, caller, divider, and message", () => {
@@ -34,6 +36,23 @@ describe("buildPrompt", () => {
     expect(buildPrompt("ken", "shusaku", "q?", ASK_TASK)).not.toContain("TASK-INSTRUCTIONS");
     expect(buildPrompt("ken", "shusaku", "q?")).not.toContain("TASK-INSTRUCTIONS");
   });
+
+  // The confinement sentence is only honest for the default ~/AgentCall/public
+  // share folder. When an owner deliberately points workdir at a real project,
+  // telling the agent not to leave it contradicts the reason they set it.
+  it("claims confinement only for the default workdir", () => {
+    const confined = buildPrompt("ken", "shusaku", "q?", undefined, { dir: "/h/AgentCall/public", confined: true });
+    expect(confined).toContain("/h/AgentCall/public");
+    expect(confined).toMatch(/do not access anything outside it/i);
+
+    const open = buildPrompt("ken", "shusaku", "q?", undefined, { dir: "/h/code/api", confined: false });
+    expect(open).toContain("/h/code/api");
+    expect(open).not.toMatch(/do not access anything outside it/i);
+  });
+
+  it("omits the directory sentence entirely when no workdir is given", () => {
+    expect(buildPrompt("ken", "shusaku", "q?")).not.toMatch(/working directory/i);
+  });
 });
 
 describe("buildSpawnSpec", () => {
@@ -44,14 +63,14 @@ describe("buildSpawnSpec", () => {
   // listener runs under launchd's fixed PATH, where a bare name can fail to
   // resolve even though an interactive shell finds it.
   it("spawns claude directly with the resolved absolute agent path", () => {
-    const s = buildSpawnSpec("claude", "PROMPT", p, () => "/abs/path/to/claude");
+    const s = buildSpawnSpec("claude", "PROMPT", WORKDIR, () => "/abs/path/to/claude");
     expect(s.cmd).toBe("/abs/path/to/claude");
     expect(s.args).toEqual([
       "-p", "PROMPT", "--output-format", "json",
       "--permission-mode", "dontAsk",
       "--allowedTools", "Read,Grep,Glob,LS,Write,Edit,WebFetch,WebSearch,Bash",
     ]);
-    expect(s.cwd).toBe(p.publicDir);
+    expect(s.cwd).toBe(WORKDIR);
   });
 
   // Regression: every spawn used to be wrapped in `npx
@@ -60,7 +79,7 @@ describe("buildSpawnSpec", () => {
   // real context — so no spawn should reach for npx or a settings file.
   it("does not wrap the spawn in the sandbox runtime", () => {
     for (const kind of ["claude", "codex"] as const) {
-      const s = buildSpawnSpec(kind, "PROMPT", p, () => `/abs/${kind}`);
+      const s = buildSpawnSpec(kind, "PROMPT", WORKDIR, () => `/abs/${kind}`);
       expect(s.cmd).not.toBe("npx");
       expect(s.args).not.toContain("--settings");
       expect(s.args.join(" ")).not.toContain("sandbox-runtime");
@@ -68,19 +87,19 @@ describe("buildSpawnSpec", () => {
   });
 
   it("spawns codex directly, keeping its native sandbox level as the write cap", () => {
-    const s = buildSpawnSpec("codex", "PROMPT", p, () => "/abs/path/to/codex");
+    const s = buildSpawnSpec("codex", "PROMPT", WORKDIR, () => "/abs/path/to/codex");
     expect(s.cmd).toBe("/abs/path/to/codex");
     expect(s.args).toEqual([
-      "exec", "--sandbox", "workspace-write", "--cd", p.publicDir, "--skip-git-repo-check", "--json", "PROMPT",
+      "exec", "--sandbox", "workspace-write", "--cd", WORKDIR, "--skip-git-repo-check", "--json", "PROMPT",
     ]);
-    expect(s.cwd).toBe(p.publicDir);
+    expect(s.cwd).toBe(WORKDIR);
   });
 
   it("resolves an absolute path by default, not a bare binary name", () => {
     // "node" stands in for a real agent kind: guaranteed to be on PATH
     // wherever this suite runs, so the production default resolver
     // (resolveAgentBin) can be exercised without claude/codex installed.
-    const s = buildSpawnSpec("node" as unknown as "claude" | "codex", "PROMPT", p);
+    const s = buildSpawnSpec("node" as unknown as "claude" | "codex", "PROMPT", WORKDIR);
     expect(isAbsolute(s.cmd)).toBe(true);
   });
 });
@@ -130,12 +149,12 @@ describe("runAgent (with a fake agent binary)", () => {
     // fake spec via kind override: use claude spec but point PATH at a script? Simpler:
     // runAgent accepts an optional spawnSpec override for tests.
     await expect(
-      runAgent("claude", "x", p, 300, { cmd: "sleep", args: ["5"], cwd: "/tmp" }),
+      runAgent("claude", "x", WORKDIR, 300, { cmd: "sleep", args: ["5"], cwd: "/tmp" }),
     ).rejects.toMatchObject({ code: "timeout" });
   }, 15_000);
   it("captures stdout of a real process", async () => {
     const fakeOut = JSON.stringify({ type: "result", result: "hi", session_id: "s" });
-    const res = await runAgent("claude", "x", p, 5000, {
+    const res = await runAgent("claude", "x", WORKDIR, 5000, {
       cmd: "node", args: ["-e", `console.log(${JSON.stringify(fakeOut)})`], cwd: "/tmp",
     });
     expect(res.text).toBe("hi");
@@ -152,12 +171,12 @@ describe("runAgent (with a fake agent binary)", () => {
       process.stdout.write(full.subarray(0, splitAt));
       setTimeout(() => process.stdout.write(full.subarray(splitAt)), 20);
     `;
-    const res = await runAgent("claude", "x", p, 5000, { cmd: "node", args: ["-e", script], cwd: "/tmp" });
+    const res = await runAgent("claude", "x", WORKDIR, 5000, { cmd: "node", args: ["-e", script], cwd: "/tmp" });
     expect(res.text).toBe("日本語");
   });
   it("rejects agent_error on nonzero exit", async () => {
     await expect(
-      runAgent("claude", "x", p, 5000, { cmd: "node", args: ["-e", "process.exit(3)"], cwd: "/tmp" }),
+      runAgent("claude", "x", WORKDIR, 5000, { cmd: "node", args: ["-e", "process.exit(3)"], cwd: "/tmp" }),
     ).rejects.toMatchObject({ code: "agent_error" });
   });
   it("falls back to stdout for the error message when stderr is empty", async () => {
@@ -168,7 +187,7 @@ describe("runAgent (with a fake agent binary)", () => {
     const stdout = JSON.stringify({ type: "result", is_error: true, result: "Not logged in · Please run /login" });
     const script = `process.stdout.write(${JSON.stringify(stdout)}); process.exit(1);`;
     await expect(
-      runAgent("claude", "x", p, 5000, { cmd: "node", args: ["-e", script], cwd: "/tmp" }),
+      runAgent("claude", "x", WORKDIR, 5000, { cmd: "node", args: ["-e", script], cwd: "/tmp" }),
     ).rejects.toMatchObject({ code: "agent_error", message: expect.stringContaining("Not logged in") });
   });
   it("kills the whole process group on timeout, so a grandchild holding stdout doesn't hang the promise", async () => {
@@ -189,7 +208,7 @@ describe("runAgent (with a fake agent binary)", () => {
     `;
     const start = Date.now();
     await expect(
-      runAgent("claude", "x", p, 500, { cmd: "node", args: ["-e", script], cwd: "/tmp" }),
+      runAgent("claude", "x", WORKDIR, 500, { cmd: "node", args: ["-e", script], cwd: "/tmp" }),
     ).rejects.toMatchObject({ code: "timeout" });
     expect(Date.now() - start).toBeLessThan(5000);
     const grandchildPid = Number(readFileSync(marker, "utf8"));
@@ -206,7 +225,7 @@ describe("runAgent (with a fake agent binary)", () => {
     `;
     const start = Date.now();
     await expect(
-      runAgent("claude", "x", p, 20_000, { cmd: "node", args: ["-e", script], cwd: "/tmp" }),
+      runAgent("claude", "x", WORKDIR, 20_000, { cmd: "node", args: ["-e", script], cwd: "/tmp" }),
     ).rejects.toMatchObject({ code: "agent_error" });
     // Should be caught by the 10MB cap almost immediately, well before the
     // 20s timeout — proves the cap tripped, not the timeout.
@@ -224,20 +243,20 @@ describe("envelope-scoped spawn spec", () => {
   });
 
   it("read-only envelope restricts claude's allowedTools", () => {
-    const s = buildSpawnSpec("claude", "PROMPT", p, () => "/abs/claude", READ_ONLY);
+    const s = buildSpawnSpec("claude", "PROMPT", WORKDIR, () => "/abs/claude", READ_ONLY);
     const idx = s.args.indexOf("--allowedTools");
     expect(s.args[idx + 1]).toBe("Read,Grep,Glob,LS");
     expect(s.args).toContain("dontAsk");
   });
 
   it("codex gets --sandbox read-only when the envelope has no write cap", () => {
-    const s = buildSpawnSpec("codex", "PROMPT", p, () => "/abs/codex", READ_ONLY);
+    const s = buildSpawnSpec("codex", "PROMPT", WORKDIR, () => "/abs/codex", READ_ONLY);
     const idx = s.args.indexOf("--sandbox");
     expect(s.args[idx + 1]).toBe("read-only");
   });
 
   it("codex keeps workspace-write when the envelope has the write cap", () => {
-    const s = buildSpawnSpec("codex", "PROMPT", p, () => "/abs/codex", FULL_ACCESS_ENVELOPE);
+    const s = buildSpawnSpec("codex", "PROMPT", WORKDIR, () => "/abs/codex", FULL_ACCESS_ENVELOPE);
     const idx = s.args.indexOf("--sandbox");
     expect(s.args[idx + 1]).toBe("workspace-write");
   });

@@ -34,9 +34,38 @@ describe("runDoctor", () => {
     const code = await runDoctor({ ...baseDeps, paths: p, log: (l) => lines.push(l) });
     expect(code).toBe(0);
     const out = lines.join("\n");
-    for (const name of ["config", "background listener", "relay status", "agent binary", "agent run", "relay self-call"]) {
+    for (const name of ["config", "workdir", "background listener", "relay status", "agent binary", "agent run", "relay self-call"]) {
       expect(out).toContain(`✓ ${name}`);
     }
+  });
+
+  // A bad workdir stops startListener dead, so doctor has to name it rather
+  // than leave the owner with a listener that won't stay up. It must still be
+  // informational: the agent checks below it run either way.
+  it("reports a broken workdir but still runs the agent checks", async () => {
+    const p = freshPaths();
+    saveConfig(p, {
+      handle: "ken", token: "t", agent_kind: "claude", relay: "https://relay.example",
+      workdir: "/no/such/project",
+    });
+    const lines: string[] = [];
+    const code = await runDoctor({ ...baseDeps, paths: p, log: (l) => lines.push(l) });
+    expect(code).toBe(1);
+    const out = lines.join("\n");
+    expect(out).toContain("✗ workdir");
+    expect(out).toContain("config.json");
+    expect(out).toContain("✓ agent run");
+  });
+
+  it("reports a configured workdir by path when it is valid", async () => {
+    const p = freshPaths();
+    saveConfig(p, {
+      handle: "ken", token: "t", agent_kind: "claude", relay: "https://relay.example",
+      workdir: p.home,
+    });
+    const lines: string[] = [];
+    await runDoctor({ ...baseDeps, paths: p, log: (l) => lines.push(l) });
+    expect(lines.join("\n")).toContain(`✓ workdir — ${p.home}`);
   });
 
   it("exits 1 with a setup hint when there is no config", async () => {

@@ -4,7 +4,7 @@ import { homedir } from "node:os";
 import { dirname, join } from "node:path";
 import { getPaths, type Paths } from "./paths.js";
 import { ask as ttyAsk } from "./tty.js";
-import { loadConfig, saveConfig, relayUrl, type Config } from "./config.js";
+import { loadConfig, saveConfig, relayUrl, resolveWorkdir, type Config } from "./config.js";
 import { registerHandle } from "./api.js";
 import { publishCard } from "./card.js";
 import { DEFAULT_POLICY } from "./policy.js";
@@ -232,7 +232,7 @@ export async function runSetup(opts: SetupOpts): Promise<{ ready: boolean }> {
 
     if (opts.verify !== false) {
       console.log(`\nVerifying ${cfg.agent_kind} can answer a test call (takes ~10-30s)...`);
-      const checks = await verifyAgent(cfg.agent_kind, paths, opts.verifyFns);
+      const checks = await verifyAgent(cfg.agent_kind, resolveWorkdir(cfg, paths).dir, opts.verifyFns);
       for (const c of checks) console.log(formatCheck(c));
       verifyFailure = checks.find((c) => !c.ok);
     }

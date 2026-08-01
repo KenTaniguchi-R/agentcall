@@ -21,7 +21,7 @@ sequenceDiagram
     Relay-->>CLI: call_status ringing
     L->>Relay: call_answer {call_id}
     Relay-->>CLI: call_status answered
-    L->>Agent: spawn (cwd ~/AgentCall/public, capability-scoped)
+    L->>Agent: spawn (cwd = workdir, capability-scoped)
     Agent-->>L: reply text
     L->>Relay: call_result {call_id, text}
     Relay-->>CLI: call_reply {text}
@@ -99,7 +99,7 @@ listener, relay self-call) — run it whenever calls to you start failing.
 Plain calls (no `--task`) run the built-in read-only `ask` task. To offer more:
 
     agentcall task new schedule-meeting   # scaffold ~/AgentCall/tasks/<id>/SKILL.md
-    # edit the SKILL.md (YAML frontmatter: description, tools, network, ...)
+    # edit the SKILL.md (YAML frontmatter: description, tools, timeout_s, ...)
     agentcall card                        # review your card + catch problems
     agentcall offer schedule-meeting      # offer to everyone, or:
     agentcall allow ken schedule-meeting  # grant to one caller
@@ -147,19 +147,43 @@ and never leave your machine.
   to the relay so calls are delivered instantly instead of polled.
 - It queues at most 1 running call + 5 pending; anything beyond that gets an
   immediate `busy` reply.
-- Each call spawns a fresh one-shot agent process with cwd set to
-  `~/AgentCall/public/`, scoped to the capabilities the resolved task grants:
+- Each call spawns a fresh one-shot agent process in the working directory
+  (`~/AgentCall/public/` by default — see below), scoped to the capabilities
+  the resolved task grants:
   - Claude: `claude -p --permission-mode dontAsk --allowedTools <tools>`, where
     the tool list is derived from the task's `tools:` frontmatter. Anything not
     listed is denied rather than prompted for (headless `-p` can't prompt).
-  - Codex: `codex exec --sandbox read-only|workspace-write --cd
-    ~/AgentCall/public`. Codex has no per-tool granularity, so the task's
-    `write` capability maps onto its native sandbox level instead.
+  - Codex: `codex exec --sandbox read-only|workspace-write --cd <workdir>`.
+    Codex has no per-tool granularity, so the task's `write` capability maps
+    onto its native sandbox level instead.
 - Every call — accepted or not — appends a JSONL line to
   `~/.agentcall/calls.log`: `{ts, call_id, from, message, status, duration_ms}`.
   That's your audit trail of who called and what happened.
 - A 5-minute kill timer (SIGTERM then SIGKILL) bounds each spawned agent; the
   relay enforces its own 6-minute hard timeout per call on top of that.
+
+### Working directory
+
+By default the answering agent runs in `~/AgentCall/public/` — an empty share
+folder — and is told to stay there. That keeps `setup` free of a question most
+people can't answer, but it also means the agent has little to answer *from*.
+
+To have your agent answer with real context, set an absolute `workdir` in
+`~/.agentcall/config.json`:
+
+```json
+{ "handle": "ken", "token": "...", "agent_kind": "claude",
+  "relay": "https://agentcall.benree.tech",
+  "workdir": "/Users/ken/code/payments-api" }
+```
+
+Restart the listener afterwards — it resolves `workdir` once at startup, and
+refuses to start if the path is relative, missing, or not a directory.
+`agentcall doctor` reports the resolved path (or the reason it failed).
+
+When `workdir` is set, the prompt stops telling the agent to stay inside it —
+you pointed it at that directory on purpose. Note this was only ever an
+instruction, never a boundary; see below.
 
 ## Security model (v1, explicit)
 
@@ -182,8 +206,8 @@ and never leave your machine.
     within the granted capabilities — read or write anywhere the owner's own
     agent could. Capability scoping bounds *what kind* of action is possible,
     not *where*.
-  - `~/AgentCall/public` as the working directory is a prompt instruction, not
-    an enforced boundary. An agent granted `read` can read outside it.
+  - The working directory is a prompt instruction, not an enforced boundary.
+    An agent granted `read` can read outside it regardless of `workdir`.
   - The relay operator can read message plaintext — there's no end-to-end
     encryption in v1.
   - A caller's prompt could induce the agent to read and echo back the

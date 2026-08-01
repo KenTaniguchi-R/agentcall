@@ -1,7 +1,6 @@
 import { execFileSync } from "node:child_process";
 import { callAgent } from "./callClient.js";
 import { relayUrl, type Config } from "./config.js";
-import type { Paths } from "./paths.js";
 import { AgentRunError, runAgent, type AgentKind } from "./runner.js";
 import { resolveAgentBin } from "./bin.js";
 import { ASK_TASK } from "./tasks.js";
@@ -92,10 +91,10 @@ export const VERIFY_TIMEOUT_MS = 120_000;
 // not the FULL_ACCESS_ENVELOPE default — since verification must not exercise
 // more capability than an untrusted caller would actually be granted.
 export async function checkAgentSpawn(
-  kind: AgentKind, paths: Paths, runFn: typeof runAgent = runAgent,
+  kind: AgentKind, workdir: string, runFn: typeof runAgent = runAgent,
 ): Promise<VerifyCheck> {
   try {
-    await runFn(kind, VERIFY_PROMPT, paths, VERIFY_TIMEOUT_MS, undefined, ASK_TASK.envelope);
+    await runFn(kind, VERIFY_PROMPT, workdir, VERIFY_TIMEOUT_MS, undefined, ASK_TASK.envelope);
     return { name: "agent run", ok: true };
   } catch (e) {
     return { name: "agent run", ok: false, detail: short(e), hint: classifyAgentFailure(kind, e) };
@@ -113,7 +112,7 @@ export interface VerifyFns {
 // The binary -> codex-auth -> agent-spawn ladder shared by setup and
 // doctor. Stops at the first failure: a failed pre-check must not burn a
 // model call, and the user should see the first broken layer, not a cascade.
-export async function verifyAgent(kind: AgentKind, paths: Paths, fns: VerifyFns = {}): Promise<VerifyCheck[]> {
+export async function verifyAgent(kind: AgentKind, workdir: string, fns: VerifyFns = {}): Promise<VerifyCheck[]> {
   const checks: VerifyCheck[] = [checkAgentBinary(kind, fns.resolveBin)];
   if (!checks[0].ok) return checks;
   if (kind === "codex") {
@@ -121,7 +120,7 @@ export async function verifyAgent(kind: AgentKind, paths: Paths, fns: VerifyFns 
     checks.push(auth);
     if (!auth.ok) return checks;
   }
-  checks.push(await checkAgentSpawn(kind, paths, fns.runFn));
+  checks.push(await checkAgentSpawn(kind, workdir, fns.runFn));
   return checks;
 }
 

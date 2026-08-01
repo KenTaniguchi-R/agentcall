@@ -10,7 +10,13 @@ import type { Config } from "../src/config.js";
 
 let httpServer: Server;
 let stopper: { stop(): void } | undefined;
-afterEach(() => { stopper?.stop(); return new Promise<void>((r) => httpServer?.close(() => r())); });
+// Resolves immediately when a test never started a relay — `httpServer?.close()`
+// on an undefined server is a silent no-op whose callback never fires, which
+// would hang teardown until vitest's timeout.
+afterEach(() => {
+  stopper?.stop();
+  return new Promise<void>((r) => { if (httpServer) httpServer.close(() => r()); else r(); });
+});
 
 function fakeRelay(onConn: (ws: WsSocket) => void): Promise<string> {
   return new Promise((resolve) => {
@@ -36,6 +42,48 @@ function frames(ws: WsSocket, n: number): Promise<any[]> {
     });
   });
 }
+
+describe("startListener workdir", () => {
+  // Resolved once at startup so a typo'd workdir stops `agentcall listen`
+  // with a clear message instead of failing every inbound call individually.
+  it("throws at start rather than per call when workdir is unusable", () => {
+    const paths = getPaths(mkdtempSync(join(tmpdir(), "agentcall-l-")));
+    expect(() =>
+      startListener({
+        relay: "http://127.0.0.1:1", paths,
+        config: { ...cfg, workdir: "/no/such/project" },
+        run: async () => ({ text: "unused" }),
+      }),
+    ).toThrow(/does not exist/i);
+  });
+
+  it("spawns in the configured workdir and drops the confinement line from the prompt", async () => {
+    const home = mkdtempSync(join(tmpdir(), "agentcall-l-"));
+    const paths = getPaths(home);
+    const project = join(home, "code", "api");
+    mkdirSync(project, { recursive: true });
+    const seen: { workdir?: string; prompt?: string } = {};
+    const relayReady = new Promise<WsSocket>((resolveWs) => {
+      void fakeRelay((ws) => resolveWs(ws)).then((url) => {
+        stopper = startListener({
+          relay: url, paths,
+          config: { ...cfg, workdir: project },
+          run: async (_k, prompt, workdir) => {
+            seen.prompt = prompt; seen.workdir = workdir;
+            return { text: "ok" };
+          },
+        });
+      });
+    });
+    const ws = await relayReady;
+    const done = frames(ws, 2);
+    ws.send(JSON.stringify({ type: "incoming_call", call_id: "c1", from: "shusaku", message: "hi" }));
+    await done;
+    expect(seen.workdir).toBe(project);
+    expect(seen.prompt).toContain(project);
+    expect(seen.prompt).not.toMatch(/do not access anything outside it/i);
+  });
+});
 
 describe("startListener", () => {
   it("answers an incoming call: answer -> run -> result, and audits", async () => {

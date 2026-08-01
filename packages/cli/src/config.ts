@@ -1,4 +1,5 @@
-import { existsSync, mkdirSync, readFileSync, writeFileSync, chmodSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, statSync, writeFileSync, chmodSync } from "node:fs";
+import { isAbsolute } from "node:path";
 import type { Paths } from "./paths.js";
 
 export interface Config {
@@ -7,6 +8,13 @@ export interface Config {
   // Absent = caller-only: this install can call others but is not callable.
   agent_kind?: "claude" | "codex";
   relay: string;
+  // Absolute path the answering agent runs in. Absent = ~/AgentCall/public.
+  // Deliberately not prompted for during setup: "which directory should your
+  // agent answer from?" is a two-second question for a developer and an
+  // unanswerable one for everyone else, and a wrong answer quietly makes the
+  // agent useless. Owners who want their agent answering with real project
+  // context set it by hand; everyone else never sees it.
+  workdir?: string;
 }
 
 export type CallableConfig = Config & { agent_kind: "claude" | "codex" };
@@ -20,6 +28,37 @@ export function assertCallableConfig(cfg: Config): asserts cfg is CallableConfig
 }
 
 export const DEFAULT_RELAY = "https://agentcall.benree.tech";
+
+export interface Workdir {
+  /** Absolute directory the agent is spawned in. */
+  dir: string;
+  /**
+   * Whether the prompt should tell the agent to stay inside `dir`. True only
+   * for the default ~/AgentCall/public share folder — an owner who points
+   * workdir at a real project did so precisely so the agent would use it.
+   *
+   * Note this has never been an enforced boundary since the OS sandbox was
+   * removed; it is an instruction the model can decline either way.
+   */
+  confined: boolean;
+}
+
+// Resolved once at listener start rather than per call, so a misconfigured
+// workdir fails loudly at `agentcall listen` instead of turning every inbound
+// call into a cryptic spawn ENOENT.
+export function resolveWorkdir(cfg: Config, p: Paths): Workdir {
+  if (cfg.workdir === undefined) return { dir: p.publicDir, confined: true };
+  if (!isAbsolute(cfg.workdir)) {
+    throw new Error(`config.json workdir must be an absolute path, got "${cfg.workdir}".`);
+  }
+  if (!existsSync(cfg.workdir)) {
+    throw new Error(`config.json workdir "${cfg.workdir}" does not exist.`);
+  }
+  if (!statSync(cfg.workdir).isDirectory()) {
+    throw new Error(`config.json workdir "${cfg.workdir}" is not a directory.`);
+  }
+  return { dir: cfg.workdir, confined: false };
+}
 
 export function loadConfig(p: Paths): Config {
   if (!existsSync(p.configFile)) {
