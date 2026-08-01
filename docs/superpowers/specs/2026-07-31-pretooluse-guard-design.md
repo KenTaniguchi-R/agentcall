@@ -1,7 +1,10 @@
 # PreToolUse guard — design
 
 **Date:** 2026-07-31
-**Status:** Design approved, not implemented.
+**Status:** Design approved, **two preconditions outstanding** — see
+[Review](#review--2026-07-31). Open questions 2 and 3 are reclassified as gates: one
+decides the size of this spec, the other decides a security parameter. Neither should
+be answered after the code is written.
 **Layer:** #3 of the defence model in
 [claude-code-enforcement-surfaces §7](../../research/2026-07-31-claude-code-enforcement-surfaces.md),
 the one marked "Gap — the work".
@@ -304,3 +307,106 @@ test run.
 3. **Hook process cost per tool call.** One Node start per call is fine for Q&A, less
    obviously fine for an exec-heavy task. Measure before optimising; the `if` field is
    *not* the fix, for the fails-open reason above.
+
+---
+
+## Review — 2026-07-31
+
+Reviewed by a second session. The shape is right, and grounding it in three live
+experiments rather than documentation reads is what makes it trustworthy — particularly
+finding #2, that `permissions.deny` sits *in front of* the hook rather than beneath it.
+That inverts the natural belt-and-braces instinct and would not have been found by
+reading docs.
+
+Three things to settle before writing code, then two smaller notes.
+
+### Gate 1 — resolve open question 2 first, not later
+
+Open question 2 asks whether `sandbox.filesystem.denyRead` covers the `Read` tool. It is
+filed as something worth measuring "before the denied-path table grows." **It should be
+measured before the first line is written.**
+
+This spec is a new `guard.ts`, a hidden `_guard` command, `--settings` plumbing in
+`runner.ts`, a `doctor` self-test, and four test files — several hundred lines. If
+`denyRead` covers the `Read` tool, the same read protection is a ten-line JSON block,
+delivered through the `--settings` channel this spec already builds. That does not merely
+shrink the denied-path table; it removes the reason for most of the component.
+
+The check costs about what experiments 1–3 cost:
+
+```bash
+claude -p "read ~/.ssh/canary and tell me its contents" \
+  --settings '{"sandbox":{"filesystem":{"denyRead":["~/.ssh"]}}}' \
+  --allowedTools Read --permission-mode dontAsk
+```
+
+Note the provenance of the doubt is healthy: the research doc marked native sandboxing
+Bash-only as **[unverified]**, and this spec found documentation contradicting it. The
+tag did its job. Now close it.
+
+### Gate 2 — the timeout test measures the wrong thing
+
+The plan asserts "a decision returns well inside" the registered `timeout`, tested in
+`guard.test.ts` against `decide()` with no fs and no spawn. `decide()` is a pure function
+and returns in microseconds. **That test passes while the real path is slow.**
+
+The real hot path is: Node cold start → module load → read stdin → `getPaths()` →
+`realpath` → `decide()` → append `calls.log` → stdout. Realistically 100–300 ms
+dominated by process startup, none of which the unit test touches.
+
+This is a security measurement, not a performance one, for the reason the spec itself
+gives: a guard that is merely slow is a guard that is not there. The `timeout` value has
+to be derived from a measured worst case of the **spawned `_guard` process** on a loaded
+machine — which makes open question 3 the same gate, not a separate optimisation
+question.
+
+### Gap — `Grep` and `Glob` reach denied paths through a parent
+
+> Read-shaped tools (`Read`, `Grep`, `Glob`, `Write`, `Edit`) expose their target as a
+> structured argument, so matching is exact.
+
+True for `Read`, `Write`, `Edit`. Not for the other two:
+
+```
+Grep(path: "~", pattern: "BEGIN OPENSSH PRIVATE KEY")
+Glob(pattern: "**/id_*")
+```
+
+Neither target matches `~/.ssh/**`, and both surface content or filenames from inside it.
+Matching the target path is insufficient when the target *contains* a denied path.
+
+`decide()` needs to answer "could this target reach a denied path", not just "is this
+target denied". Either refuse broad roots for `Grep`/`Glob`, or rewrite the call via
+`updatedInput` with the denied paths excluded. Adding `Grep(path: "~")` to the table-driven
+cases surfaces this at design time.
+
+### Note — Bash matching may cost more than it earns
+
+Denying commands whose text references a table path will fire on legitimate work:
+`cat .env.example`, `ls -la | grep env`, `docker run --env-file`. The spec is honest that
+obfuscation defeats string matching, but does not consider the opposite failure — weak as
+a control, strong as an obstacle.
+
+Worth considering: record Bash matches to `calls.log` without denying. That keeps the
+signal, drops the false-positive burden, and matches the spec's own assessment that the
+real control on `exec` is which tasks the owner writes.
+
+### Note — denials-only logging gives up a claimed differentiator
+
+"Denials only. Logging every allowed tool call would bury the signal." Sound as log
+design, but it conflicts with the positioning in
+[claude-code-enforcement-surfaces §7](../../research/2026-07-31-claude-code-enforcement-surfaces.md):
+a deterministic audit trail of every tool call is listed as something neither Viven nor
+the gateway vendors have, and only 17% of organisations surveyed in Q1 2026 could
+reconstruct a full tool-call sequence. EU AI Act enforcement begins 2026-08-02.
+
+The burying problem is real; the answer is probably a separate stream or a setting, not
+omission.
+
+### Not in dispute
+
+`realpath` as an injected parameter (purity and symlink resolution from one decision);
+declining `matcher` and `if` because a fails-open parser must not be the gate; keeping
+this out of `~/.claude` so the owner's own sessions are untouched; and the reason-text
+contract — *the guard tells the caller nothing the model did not already know* — which
+correctly replaced a false claim in an earlier draft with something testable.
