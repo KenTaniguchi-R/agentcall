@@ -1,11 +1,23 @@
 import { execFileSync } from "node:child_process";
 import { existsSync, mkdirSync, rmSync, writeFileSync } from "node:fs";
-import { dirname } from "node:path";
+import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import type { Paths } from "./paths.js";
 
 export const LAUNCH_LABEL = "tech.benree.agentcall.listener";
 type ExecCmd = (cmd: string[]) => void;
+
+// This module is the only place that knows the background listener is a
+// macOS LaunchAgent. Everything outside it asks "is the listener installed?"
+// rather than reaching for a plist path, so adding a systemd (or other)
+// supervisor later is a sibling module rather than surgery across the CLI.
+export function launchAgentFile(p: Paths): string {
+  return join(p.home, "Library", "LaunchAgents", `${LAUNCH_LABEL}.plist`);
+}
+
+export function isLaunchAgentInstalled(p: Paths): boolean {
+  return existsSync(launchAgentFile(p));
+}
 
 const defaultExec: ExecCmd = (cmd) => {
   execFileSync(cmd[0]!, cmd.slice(1), { stdio: "ignore" });
@@ -57,8 +69,9 @@ export function installLaunchAgent(
   p: Paths, execCmd: ExecCmd = defaultExec, extraPathDirs: string[] = [], sleep: SleepFn = defaultSleep,
 ): void {
   const cliScript = fileURLToPath(new URL("../dist/index.js", import.meta.url));
-  mkdirSync(dirname(p.plistFile), { recursive: true });
-  writeFileSync(p.plistFile, plistContent(process.execPath, cliScript, p, extraPathDirs));
+  const plistFile = launchAgentFile(p);
+  mkdirSync(dirname(plistFile), { recursive: true });
+  writeFileSync(plistFile, plistContent(process.execPath, cliScript, p, extraPathDirs));
   try {
     execCmd(["launchctl", "bootout", `gui/${uid()}/${LAUNCH_LABEL}`]);
   } catch {
@@ -70,7 +83,7 @@ export function installLaunchAgent(
   const BOOTSTRAP_ATTEMPTS = 5;
   for (let attempt = 1; ; attempt++) {
     try {
-      execCmd(["launchctl", "bootstrap", `gui/${uid()}`, p.plistFile]);
+      execCmd(["launchctl", "bootstrap", `gui/${uid()}`, plistFile]);
       return;
     } catch (e) {
       if (attempt >= BOOTSTRAP_ATTEMPTS) throw e;
@@ -85,5 +98,6 @@ export function uninstallLaunchAgent(p: Paths, execCmd: ExecCmd = defaultExec): 
   } catch {
     /* not loaded */
   }
-  if (existsSync(p.plistFile)) rmSync(p.plistFile);
+  const plistFile = launchAgentFile(p);
+  if (existsSync(plistFile)) rmSync(plistFile);
 }

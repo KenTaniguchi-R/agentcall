@@ -3,7 +3,7 @@ import { join } from "node:path";
 
 export interface Paths {
   home: string; dir: string; configFile: string;
-  callsLog: string; listenerLog: string; publicDir: string; plistFile: string;
+  callsLog: string; listenerLog: string; publicDir: string;
   tasksDir: string; policyFile: string; cardSnapshotFile: string;
   contactsFile: string;
 }
@@ -16,7 +16,6 @@ export function getPaths(home: string = process.env.AGENTCALL_HOME ?? os.homedir
     callsLog: join(dir, "calls.log"),
     listenerLog: join(dir, "listener.log"),
     publicDir: join(home, "AgentCall", "public"),
-    plistFile: join(home, "Library", "LaunchAgents", "tech.benree.agentcall.listener.plist"),
     policyFile: join(dir, "policy.json"),
     tasksDir: join(home, "AgentCall", "tasks"),
     cardSnapshotFile: join(dir, "card.pushed.json"),

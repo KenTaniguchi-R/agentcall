@@ -12,7 +12,6 @@ describe("paths", () => {
     const p = getPaths("/tmp/fakehome");
     expect(p.configFile).toBe("/tmp/fakehome/.agentcall/config.json");
     expect(p.publicDir).toBe("/tmp/fakehome/AgentCall/public");
-    expect(p.plistFile).toBe("/tmp/fakehome/Library/LaunchAgents/tech.benree.agentcall.listener.plist");
   });
 });
 

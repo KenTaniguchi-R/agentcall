@@ -2,7 +2,7 @@ import { mkdtempSync, existsSync, readFileSync, writeFileSync, mkdirSync } from 
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
-import { plistContent, installLaunchAgent, uninstallLaunchAgent } from "../src/launchd.js";
+import { plistContent, installLaunchAgent, isLaunchAgentInstalled, launchAgentFile, LAUNCH_LABEL, uninstallLaunchAgent } from "../src/launchd.js";
 import { getPaths } from "../src/paths.js";
 
 describe("plistContent", () => {
@@ -48,15 +48,15 @@ describe("install/uninstall", () => {
     const p = getPaths(mkdtempSync(join(tmpdir(), "agentcall-ld-")));
     const calls: string[][] = [];
     installLaunchAgent(p, (cmd) => { calls.push(cmd); });
-    expect(existsSync(p.plistFile)).toBe(true);
+    expect(existsSync(launchAgentFile(p))).toBe(true);
     expect(calls.some((c) => c[1] === "bootout")).toBe(true);
     expect(calls.some((c) => c[1] === "bootstrap")).toBe(true);
-    expect(readFileSync(p.plistFile, "utf8")).toContain("agentcall");
+    expect(readFileSync(launchAgentFile(p), "utf8")).toContain("agentcall");
   });
   it("forwards extraPathDirs into the written plist", () => {
     const p = getPaths(mkdtempSync(join(tmpdir(), "agentcall-ld-")));
     installLaunchAgent(p, () => {}, ["/Users/x/.local/bin"]);
-    const xml = readFileSync(p.plistFile, "utf8");
+    const xml = readFileSync(launchAgentFile(p), "utf8");
     expect(xml).toContain("<string>/Users/x/.local/bin:");
   });
   // Regression: bootout of a running (KeepAlive) listener returns before
@@ -93,8 +93,26 @@ describe("install/uninstall", () => {
   it("uninstall removes the plist", () => {
     const p = getPaths(mkdtempSync(join(tmpdir(), "agentcall-ld-")));
     mkdirSync(join(p.home, "Library", "LaunchAgents"), { recursive: true });
-    writeFileSync(p.plistFile, "x");
+    writeFileSync(launchAgentFile(p), "x");
     uninstallLaunchAgent(p, () => {});
-    expect(existsSync(p.plistFile)).toBe(false);
+    expect(existsSync(launchAgentFile(p))).toBe(false);
+  });
+});
+
+// This module is the only thing that should know the listener is a macOS
+// LaunchAgent — callers ask whether it's installed rather than building a
+// plist path themselves, so a non-macOS supervisor can be added alongside.
+describe("isLaunchAgentInstalled", () => {
+  it("reports false before install and true once the plist exists", () => {
+    const p = getPaths(mkdtempSync(join(tmpdir(), "agentcall-ld-")));
+    expect(isLaunchAgentInstalled(p)).toBe(false);
+    mkdirSync(join(p.home, "Library", "LaunchAgents"), { recursive: true });
+    writeFileSync(launchAgentFile(p), "x");
+    expect(isLaunchAgentInstalled(p)).toBe(true);
+  });
+
+  it("derives the plist path from home and the launchd label", () => {
+    expect(launchAgentFile(getPaths("/tmp/fakehome")))
+      .toBe(`/tmp/fakehome/Library/LaunchAgents/${LAUNCH_LABEL}.plist`);
   });
 });
