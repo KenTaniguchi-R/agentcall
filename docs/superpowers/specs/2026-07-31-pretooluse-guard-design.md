@@ -1,10 +1,10 @@
 # PreToolUse guard — design
 
 **Date:** 2026-07-31
-**Status:** Design approved, **two preconditions outstanding** — see
-[Review](#review--2026-07-31). Open questions 2 and 3 are reclassified as gates: one
-decides the size of this spec, the other decides a security parameter. Neither should
-be answered after the code is written.
+**Status:** Design approved. **Both review gates resolved** by measurement on 2026-07-31
+— see findings 5 and 6. Gate 1 came back negative, so the full scope stands; gate 2
+produced the timeout parameter and one architecture change. Ready for an implementation
+plan.
 **Layer:** #3 of the defence model in
 [claude-code-enforcement-surfaces §7](../../research/2026-07-31-claude-code-enforcement-surfaces.md),
 the one marked "Gap — the work".
@@ -43,8 +43,8 @@ later; they are out of scope here.
 
 ## Findings that determined the design
 
-Three live experiments against `claude -p`, not documentation reads. They matter
-because two of them contradict what was assumed going in.
+Live experiments against `claude -p` and against the process itself, not documentation
+reads. Three of the six contradicted what was assumed going in.
 
 **1. `PreToolUse` fires under `--permission-mode dontAsk`, and exit 2 blocks.**
 A hook returning exit 2 refused a `Read`, the canary string did not appear in the
@@ -71,6 +71,29 @@ an internal diagnostic, and has to be written that way.
 Structured deny (`permissionDecision: "deny"` with `permissionDecisionReason`, exit 0)
 produces a better rendering than exit 2 — "the read was blocked" rather than
 "PreToolUse:Read hook error" — so it is the mechanism for ordinary denials.
+
+**5. `sandbox.filesystem.denyRead` does not cover the `Read` tool.** *(Review gate 1.)*
+With `{"sandbox":{"enabled":true,"filesystem":{"denyRead":["<dir>"]}}}` passed through
+`--settings`, a `Read` of a file in that exact directory succeeded and the canary was
+returned. The research doc's `[unverified]` note that native sandboxing is Bash-only was
+**correct**, and the documentation example that appeared to contradict it does not apply
+to the `Read` tool.
+
+There is no cheaper floor. This guard is required at full scope, and the denied-path
+table is the only thing protecting reads.
+
+**6. The hot path is process startup, not `decide()`.** *(Review gate 2.)* Measured over
+20 runs each:
+
+| Path | Per call |
+|---|---|
+| Standalone guard-shaped script (stdin → parse → `realpath` → append → exit) | **~33 ms** |
+| Same work routed through `index.ts` (commander + full import graph) | **~78 ms** |
+
+`decide()` itself is microseconds and irrelevant to the measurement. Two consequences,
+both design-level rather than optimisation: the guard gets **its own minimal entry
+point** rather than going through the CLI's command dispatch, and the timeout is derived
+from the measured process, not the function.
 
 ## Architecture
 
@@ -124,10 +147,14 @@ call reaches `decide()`; `decide()` alone decides.
 
 | File | Responsibility |
 |---|---|
-| `packages/cli/src/guard.ts` **(new)** | `decide()` — pure, agent-agnostic, no I/O. The denied-path table. Plus `runGuard()`, which reads the payload, calls `decide()`, writes the audit line, emits the structured deny on stdout, and returns an exit code. |
-| `packages/cli/src/index.ts` | Hidden `_guard` command — a thin wire to `runGuard()`, matching how the other commands stay thin. |
+| `packages/cli/src/guard.ts` **(new)** | `decide()` — pure, agent-agnostic, no I/O. The denied-path table. Plus `runGuard()`, which reads the payload, calls `decide()`, appends to both log streams, emits the structured deny on stdout, and returns an exit code. |
+| `packages/cli/src/guard-entry.ts` **(new)** | Standalone process entry: stdin → `runGuard()` → exit. **Not** routed through `index.ts` — finding 6 measured that at 2.4× the cost, and this is the hot path. Imports `guard.ts` and nothing else. |
 | `packages/cli/src/runner.ts` | `--settings` JSON, `AGENTCALL_CALL_ID` in spawn env, `SpawnSpec.env`. |
+| `packages/cli/src/paths.ts` | Adds `toolsLog`. |
 | `packages/cli/src/doctor.ts` | Live self-test that the guard actually blocks. |
+
+No `_guard` subcommand on `index.ts`: adding one would invite invoking the guard through
+command dispatch, which is the slow path the entry point exists to avoid.
 
 ### `decide()`
 
@@ -159,8 +186,34 @@ a rewrite.
 
 ### The denied set
 
-Read-shaped tools (`Read`, `Grep`, `Glob`, `Write`, `Edit`) expose their target as a
-structured argument, so matching is exact:
+The question `decide()` answers is **"can this call reach a denied path"**, not "is this
+call's target a denied path". Those differ, and the difference is a hole:
+
+```
+Grep(path: "~", pattern: "BEGIN OPENSSH PRIVATE KEY")
+Glob(pattern: "**/id_*")
+```
+
+Neither target *is* `~/.ssh`, and both return content or filenames from inside it. So the
+three tool shapes are treated differently:
+
+| Shape | Tools | Rule |
+|---|---|---|
+| Exact target | `Read`, `Write`, `Edit` | deny if the resolved target is inside a denied path |
+| Scanning root | `Grep`, `Glob` | deny if the root is inside a denied path **or is an ancestor of one** |
+| Opaque string | `Bash` | see below |
+
+The ancestor clause is what stops `Grep(path: "~")` and `Glob` from a broad root: `~` is
+an ancestor of `~/.ssh`, so it is refused, while `Grep(path: "~/project")` is not an
+ancestor of anything denied and passes. `/` is an ancestor of everything and is refused
+on the same rule rather than as a special case.
+
+Rewriting the call via `updatedInput` to inject exclusions was the alternative. Refusal
+is chosen because a rewrite has to be correct for every tool's argument grammar to be
+safe, and a silently wrong rewrite looks like success — the same property that
+disqualified deny rules in finding 3.
+
+The denied paths themselves:
 
 - `~/.ssh/**`, `~/.gnupg/**`, `~/.aws/**`, `~/.config/gcloud/**`
 - `~/Library/Keychains/**`
@@ -171,14 +224,25 @@ structured argument, so matching is exact:
 - `~/.claude/**`, `~/.claude.json` — executable configuration. This is the surface the
   Seatbelt profile used to carve out, and the class of bug behind CVE-2025-59536.
 
-`Bash` is different in kind. Its argument is an opaque command string, so the guard can
-only pattern-match it. Denied: any command whose text references a path in the table
-above, and four exfiltration shapes — `curl`/`wget` carrying a request body, a pipe into
-`sh`/`bash`, `nc`, and `base64` applied to a denied path.
+### `Bash` — record, do not deny
 
-**This is defence-in-depth, not a boundary**, and the spec says so rather than implying
-otherwise: obfuscation defeats string matching, and any honest description of `exec` is
-that the real control is the owner writing the tasks that grant it.
+`Bash` takes an opaque command string, so the guard can only pattern-match it. An earlier
+draft denied on a match. It should not, and the reason is that string matching fails in
+*both* directions:
+
+- **Too weak to be a boundary.** Obfuscation defeats it trivially, so it cannot be
+  claimed as a control.
+- **Too eager to be harmless.** `cat .env.example`, `ls -la | grep env`, and
+  `docker run --env-file` all match a naive rule and are all legitimate. A control that
+  blocks real work while not stopping a real attacker is the worst of both.
+
+So matches are **recorded to `calls.log` and allowed**. That keeps the signal — an owner
+reviewing the log sees exactly what was attempted — without the false-positive burden,
+and it is consistent with this spec's own position that the real control on `exec` is
+which tasks the owner writes to grant it.
+
+The honest claim is therefore narrow: the guard is a boundary for path-shaped tool
+arguments, and an observer for `Bash`.
 
 ### Failure behaviour
 
@@ -203,11 +267,22 @@ calls the timeout expires, the CLI stops waiting, and the tool executes anyway. 
 that is merely *slow* is a guard that is not there.
 
 So the hot path is a hard constraint, not a performance goal: `decide()` does no network
-I/O, reads no config file, and touches the filesystem only for `realpath`. The hook
-registration carries an explicit `timeout`, and a test asserts a decision returns well
-inside it. If the guard ever needs state, the Composio split applies — warm a cache on
-`SessionStart`, never fetch on the hot path
+I/O, reads no config file, and touches the filesystem only for `realpath`. If the guard
+ever needs state, the Composio split applies — warm a cache on `SessionStart`, never fetch
+on the hot path
 ([lessons-from-composio §3](../../research/2026-07-31-lessons-from-composio.md)).
+
+But per finding 6 the constraint that matters is **process startup**, not the function.
+Hence the separate minimal entry point: ~33 ms standalone against ~78 ms through the CLI's
+command dispatch, for identical work.
+
+**The timeout is biased long, deliberately.** Timeout expiry fails *open* — the tool
+runs. So the entire risk sits on the too-short side, and there is no security argument
+for a tight value. A guard that hangs stalls one call, which is safe and visible; a guard
+that is abandoned lets the call through, which is neither. The registered `timeout` is
+therefore set with wide headroom over the measured worst case rather than tuned close to
+the median. Latency under contention is a cost worth paying for a control that does not
+quietly evaporate under load.
 
 The binary case is covered at setup time by a `doctor` check that spawns a throwaway
 `claude -p` against a canary file and asserts the read is refused. It converts a silent
@@ -230,7 +305,25 @@ The guard appends to `calls.log`, matching the existing JSONL shape written by
 `type` field, so a reader distinguishes them by its absence — nothing parses `calls.log`
 today, so this costs nothing now and is worth fixing whenever one is written.
 
-Denials only. Logging every allowed tool call would bury the signal.
+**Two streams, because one stream cannot serve both readers.**
+
+An earlier draft logged denials only, on the grounds that logging every call would bury
+the signal. The burying problem is real but omission is the wrong fix: a deterministic
+record of *every* tool call is named in
+[claude-code-enforcement-surfaces §7](../../research/2026-07-31-claude-code-enforcement-surfaces.md)
+as something neither Viven nor the gateway vendors offer, and it is the kind of evidence
+EU AI Act deployer obligations ask for. Discarding it to keep a log tidy trades a
+differentiator for neatness.
+
+So:
+
+- **`calls.log`** — call records as today, plus one `tool_denied` line per denial and one
+  `tool_flagged` line per `Bash` pattern match. Sparse, owner-facing, the thing worth
+  reading.
+- **`tools.log`** *(new, added to `paths.ts`)* — every tool call, allowed or not. Dense,
+  machine-facing, the audit trail. Nothing parses it yet; it exists so the claim is true.
+
+A denial appears in both. The signal stays sparse without the record being lossy.
 
 ### What the caller learns — the reason is a contract
 
@@ -274,8 +367,14 @@ Test-first, per CLAUDE.md.
 - **Reason-text contract** — required phrase present, forbidden fragments absent (no
   absolute path, no `~/`, no rule name, no `.ssh`), one sentence. Asserted over every
   denial case in the table, not on a single hand-picked example.
-- **Timeout budget** — a decision returns well inside the registered `timeout`, so the
-  fail-open-on-slow path stays unreachable.
+- **Timeout budget — measured on the spawned process, not on `decide()`.** Timing the
+  pure function would pass while the real path is slow, since the cost is startup. The
+  test spawns `guard-entry` as a real subprocess with a payload on stdin and asserts
+  end-to-end wall time inside budget, in the manner `runner.test.ts` already spawns a
+  fake agent binary.
+- **`Grep`/`Glob` reachability** — `Grep(path: "~")` and a broad `Glob` are denied by the
+  ancestor rule; `Grep(path: "~/project")` is not. These are the cases a target-equality
+  implementation silently passes, so they belong in the table from the first commit.
 - **`test/guard.test.ts`** — also covers `runGuard()` against a temp `AGENTCALL_HOME`:
   exits 0 vs 2, and writes exactly one audit line on deny, none on allow.
 - **`test/doctor.test.ts`** — the self-test reports pass/fail correctly against a mocked
@@ -299,14 +398,14 @@ test run.
 1. **Which deny-rule path form actually matches.** Experiment 2 passed `Read(./rel)` and
    `Read(//abs)` together and did not isolate them. Only matters if the deny-rule
    backstop is revisited.
-2. **Whether `sandbox.filesystem.denyRead` covers the `Read` tool** or only Bash. It is
-   documented with a `denyRead:["~/"] / allowRead:["."]` example, contradicting the
-   research doc's `[unverified]` note that native sandboxing is Bash-only. If it does
-   cover Read, it is a cheaper floor than this guard and worth measuring before the
-   denied-path table grows.
-3. **Hook process cost per tool call.** One Node start per call is fine for Q&A, less
-   obviously fine for an exec-heavy task. Measure before optimising; the `if` field is
-   *not* the fix, for the fails-open reason above.
+2. ~~Whether `sandbox.filesystem.denyRead` covers the `Read` tool.~~ **Resolved — it does
+   not.** See finding 5.
+3. ~~Hook process cost per tool call.~~ **Resolved — ~33 ms standalone, ~78 ms through
+   command dispatch.** See finding 6.
+4. **Behaviour under genuinely parallel tool calls.** Findings 1–4 each exercised one
+   tool call at a time. Copilot's fail-open bug is specifically a *parallel* one, so the
+   contention case is measured but not yet observed. Worth a deliberate multi-call test
+   during implementation rather than another gate now.
 
 ---
 
@@ -410,3 +509,31 @@ declining `matcher` and `if` because a fails-open parser must not be the gate; k
 this out of `~/.claude` so the owner's own sessions are untouched; and the reason-text
 contract — *the guard tells the caller nothing the model did not already know* — which
 correctly replaced a false claim in an earlier draft with something testable.
+
+---
+
+## Response — 2026-07-31
+
+All five points accepted; both gates were resolved by measurement rather than by
+argument, since both were empirical questions.
+
+| Review point | Disposition |
+|---|---|
+| Gate 1 — measure `denyRead` first | **Done, negative.** Finding 5. Full scope stands; there is no ten-line alternative. |
+| Gate 2 — timeout test measures the wrong thing | **Correct.** Finding 6 measured the process. Produced a new component (`guard-entry.ts`) and a changed test. |
+| `Grep`/`Glob` reach denied paths via a parent | **Real bug.** Rule changed from target-equality to reachability, with an ancestor clause. |
+| Bash matching costs more than it earns | **Accepted.** Now records and allows rather than denying. |
+| Denials-only logging drops a differentiator | **Accepted.** Two streams: `calls.log` sparse, `tools.log` complete. |
+
+Two things worth recording about the review itself.
+
+Gate 2 was the most valuable item, because the proposed test would have **passed** while
+leaving the hole open — timing a pure function that returns in microseconds says nothing
+about a path dominated by process startup. A green test asserting the wrong quantity is
+worse than no test, and nothing in the spec would have revealed it.
+
+The `Grep`/`Glob` gap and the earlier caller-visibility error share a cause: both were
+places where the spec asserted a property ("matching is exact", "the caller sees
+nothing") that read as obviously true and was not checked. The pattern to carry into
+implementation is that the confident sentences are the ones that need a test, not the
+hedged ones.
