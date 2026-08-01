@@ -6,8 +6,8 @@ const UPLOAD = {
   description: "Ken's public agent",
   agent_kind: "claude",
   tasks: [
-    { id: "ask", name: "Ask", description: "Answer questions.", examples: [], tier: "T1" },
-    { id: "schedule-meeting", name: "Schedule", description: "Book a time.", examples: [], tier: "T2" },
+    { id: "ask", name: "Ask", description: "Answer questions.", examples: [] },
+    { id: "schedule-meeting", name: "Schedule", description: "Book a time.", examples: [] },
   ],
   default_offer: ["ask"],
   grants: { mia: ["schedule-meeting"] },

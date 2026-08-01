@@ -43,7 +43,6 @@ export const SkillFrontmatter = z.object({
   name: z.string().min(1).max(100).optional(),
   description: z.string().min(1).max(1000),
   examples: z.array(z.string().max(500)).max(10).default([]),
-  tier: z.enum(["T1", "T2"]).default("T1"),
   tools: z.array(z.enum(CAPS)).default(["read"]),
   timeout_s: z.number().int().positive().max(300).optional(),
 });
@@ -54,7 +53,6 @@ export interface Task {
   name: string;
   description: string;
   examples: string[];
-  tier: "T1" | "T2";
   envelope: Envelope;
   timeout_s?: number;
   skill: string; // SKILL.md body (after the frontmatter), embedded into the spawn prompt
@@ -65,7 +63,6 @@ export const ASK_TASK: Task = {
   name: "Ask a question",
   description: "Answer questions using the files in the public directory.",
   examples: [],
-  tier: "T1",
   envelope: { caps: ["read"] },
   skill: "",
 };
@@ -112,7 +109,6 @@ export function loadTasks(p: Paths, warn: (msg: string) => void = console.error)
       name: fm.name ?? id,
       description: fm.description,
       examples: fm.examples,
-      tier: fm.tier,
       envelope: { caps: fm.tools },
       timeout_s: fm.timeout_s,
       skill: body,
@@ -128,7 +124,6 @@ export function loadTasks(p: Paths, warn: (msg: string) => void = console.error)
 export const SKILL_TEMPLATE = `---
 description: TODO — one line callers will see on your card
 # name: defaults to the directory name
-# tier: T1                # T1 runs immediately; T2 reserved for approval gates
 # tools: [read]           # read | write | fetch | exec
 # timeout_s: 300
 # examples:

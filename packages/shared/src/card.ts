@@ -3,12 +3,15 @@ import { HANDLE_RE, TASK_ID_RE } from "./protocol.js";
 
 export const MAX_CARD_TASKS = 50;
 
+// A `tier` field ("T1" | "T2") used to ride along here, reserving T2 for
+// approval-gated tasks. No code ever branched on it and the approval gate is
+// not being built, so it's gone. Zod strips unknown keys, so cards already
+// stored on the relay with a tier still parse.
 export const CardTask = z.object({
   id: z.string().regex(TASK_ID_RE),
   name: z.string().min(1).max(100),
   description: z.string().min(1).max(1000),
   examples: z.array(z.string().max(500)).max(10).default([]),
-  tier: z.enum(["T1", "T2"]).default("T1"),
 });
 
 // What a callee pushes to the relay: full task list + visibility policy.

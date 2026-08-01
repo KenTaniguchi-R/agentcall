@@ -59,9 +59,9 @@ describe("splitFrontmatter", () => {
 });
 
 describe("SkillFrontmatter", () => {
-  it("applies defaults (read-only, T1)", () => {
+  it("applies defaults (read-only)", () => {
     const m = SkillFrontmatter.parse({ description: "Introduce the owner." });
-    expect(m).toMatchObject({ tier: "T1", tools: ["read"], examples: [] });
+    expect(m).toMatchObject({ tools: ["read"], examples: [] });
     expect(m.name).toBeUndefined();
   });
   it("requires description", () => {
@@ -157,7 +157,7 @@ describe("scaffoldTask", () => {
 });
 
 describe("FULL_ACCESS_ENVELOPE", () => {
-  it("matches today's single-tier behavior", () => {
+  it("is every capability", () => {
     expect(FULL_ACCESS_ENVELOPE).toEqual({ caps: ["read", "write", "fetch", "exec"] });
   });
 });

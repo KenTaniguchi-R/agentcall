@@ -1,4 +1,4 @@
-import { existsSync, rmSync } from "node:fs";
+import { rmSync } from "node:fs";
 import { Command } from "commander";
 import { getPaths } from "./paths.js";
 import { loadConfig, saveConfig, relayUrl, assertCallableConfig } from "./config.js";
@@ -6,7 +6,7 @@ import { callAgent, CallError } from "./callClient.js";
 import { getStatus, fetchCard, rotateToken, ApiError } from "./api.js";
 import { startListener } from "./listener.js";
 import { runSetup } from "./setup.js";
-import { installLaunchAgent, uninstallLaunchAgent } from "./launchd.js";
+import { installLaunchAgent, isLaunchAgentInstalled, uninstallLaunchAgent } from "./launchd.js";
 import { publishCard } from "./card.js";
 import { loadPolicy, savePolicy } from "./policy.js";
 import { loadTasks, scaffoldTask } from "./tasks.js";
@@ -177,7 +177,7 @@ program
       );
       console.log(`${card.handle} (${card.agent_kind})${card.description ? ` — ${card.description}` : ""}`);
       for (const t of card.tasks) {
-        console.log(`  ${t.id} [${t.tier}] — ${t.description}`);
+        console.log(`  ${t.id} — ${t.description}`);
         for (const ex of t.examples) console.log(`      e.g. ${ex}`);
       }
       console.log(`\nCall with: agentcall call ${target} --task <id> "<message>"`);
@@ -331,7 +331,7 @@ program
       // memory, so without a restart it reconnects with a dead credential and
       // 401s forever. Only restart a listener that's actually installed —
       // installLaunchAgent would otherwise create one the owner opted out of.
-      if (existsSync(paths.plistFile)) {
+      if (isLaunchAgentInstalled(paths)) {
         installLaunchAgent(paths);
         console.log("Background listener restarted with the new token.");
       } else if (cfg.agent_kind) {

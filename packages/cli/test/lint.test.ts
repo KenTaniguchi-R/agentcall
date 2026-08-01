@@ -24,7 +24,7 @@ describe("buildCardReport", () => {
   it("renders the default menu and a never-pushed notice on a fresh install", () => {
     const p = getPaths(home());
     const r = buildCardReport(cfg, p);
-    expect(r.menu.join("\n")).toContain("ask [T1]");
+    expect(r.menu.join("\n")).toContain("ask");
     expect(r.problems).toEqual([]);
     expect(r.notices.join("\n")).toContain("never been pushed");
   });
@@ -112,7 +112,7 @@ describe("buildCardReport", () => {
       callers: { mia: { offer: ["intro"], block: false }, spammer: { offer: [], block: true } },
     }));
     const text = buildCardReport(cfg, p).menu.join("\n");
-    expect(text).toContain("mia: intro [T1]");
+    expect(text).toContain("mia: intro");
     expect(text).toContain("Blocked: spammer");
   });
 });

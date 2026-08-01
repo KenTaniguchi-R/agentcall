@@ -45,13 +45,13 @@ export function buildCardReport(cfg: Config, p: Paths): CardReport {
   menu.push("  Offered to anyone:");
   for (const id of upload.default_offer) {
     const t = byId.get(id)!;
-    menu.push(`    ${id} [${t.tier}] — ${t.description}`);
+    menu.push(`    ${id} — ${t.description}`);
   }
   const grantEntries = Object.entries(upload.grants);
   if (grantEntries.length > 0) {
     menu.push("  Granted per caller:");
     for (const [caller, ids] of grantEntries) {
-      menu.push(`    ${caller}: ${ids.map((id) => `${id} [${byId.get(id)!.tier}]`).join(", ")}`);
+      menu.push(`    ${caller}: ${ids.join(", ")}`);
     }
   }
   const blocked = Object.entries(policy.callers).filter(([, e]) => e.block).map(([h]) => h);

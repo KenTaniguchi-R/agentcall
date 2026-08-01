@@ -192,7 +192,7 @@ describe("pushCard / fetchCard", () => {
     });
     await pushCard(relay, { handle: "ken", token: "tok" }, {
       description: "", agent_kind: "claude",
-      tasks: [{ id: "ask", name: "Ask", description: "d", examples: [], tier: "T1" }],
+      tasks: [{ id: "ask", name: "Ask", description: "d", examples: [] }],
       default_offer: ["ask"], grants: {},
     });
     expect(seen.method).toBe("PUT");
@@ -204,7 +204,7 @@ describe("pushCard / fetchCard", () => {
   it("fetchCard parses and returns the card; 404 -> ApiError unknown_handle", async () => {
     const card = {
       handle: "ken", description: "", agent_kind: "claude",
-      tasks: [{ id: "ask", name: "Ask", description: "d", examples: [], tier: "T1" }], updated_at: 1,
+      tasks: [{ id: "ask", name: "Ask", description: "d", examples: [] }], updated_at: 1,
     };
     const relay = await startServer((req, res) => {
       if (req.url === "/v1/card/ken") {

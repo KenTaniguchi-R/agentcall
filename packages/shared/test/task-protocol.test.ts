@@ -68,7 +68,7 @@ describe("card schemas", () => {
     const parsed = CardUpload.parse({ agent_kind: "claude", tasks: [task], default_offer: ["ask"] });
     expect(parsed.description).toBe("");
     expect(parsed.grants).toEqual({});
-    expect(parsed.tasks[0]).toMatchObject({ id: "ask", tier: "T1", examples: [] });
+    expect(parsed.tasks[0]).toMatchObject({ id: "ask", examples: [] });
   });
   it("rejects a grant keyed by an invalid handle", () => {
     const bad = CardUpload.safeParse({
@@ -76,16 +76,19 @@ describe("card schemas", () => {
     });
     expect(bad.success).toBe(false);
   });
-  it("rejects a task with a bad tier", () => {
-    const bad = CardUpload.safeParse({
-      agent_kind: "claude", tasks: [{ ...task, tier: "T9" }], default_offer: [],
+  // `tier` was removed; cards already stored on the relay still carry it, so
+  // parsing must strip it rather than reject the whole card.
+  it("strips a legacy tier field instead of rejecting the card", () => {
+    const parsed = CardUpload.parse({
+      agent_kind: "claude", tasks: [{ ...task, tier: "T2" }], default_offer: ["ask"],
     });
-    expect(bad.success).toBe(false);
+    expect(parsed.tasks[0]).not.toHaveProperty("tier");
+    expect(parsed.tasks[0].id).toBe("ask");
   });
   it("round-trips an AgentCard (the relay's GET response shape)", () => {
     const card = AgentCard.parse({
       handle: "ken", description: "", agent_kind: "claude",
-      tasks: [{ ...task, examples: [], tier: "T1" }], updated_at: 1752600000000,
+      tasks: [{ ...task, examples: [] }], updated_at: 1752600000000,
     });
     expect(card.tasks).toHaveLength(1);
   });
