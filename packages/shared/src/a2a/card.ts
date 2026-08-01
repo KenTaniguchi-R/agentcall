@@ -28,17 +28,27 @@ export type A2AAgentInterface = {
   tenant?: string;
 };
 
+export type A2AAgentExtension = {
+  uri: string;
+  description: string;
+  required: boolean;
+  params?: Record<string, string>;
+};
+
 export type A2AAgentCard = {
   name: string;
   description: string;
   version: string;
-  protocolVersion: string;
-  capabilities: { streaming: boolean; pushNotifications: boolean; extendedAgentCard: boolean };
+  capabilities: {
+    streaming: boolean;
+    pushNotifications: boolean;
+    extendedAgentCard: boolean;
+    extensions?: A2AAgentExtension[];
+  };
   defaultInputModes: string[];
   defaultOutputModes: string[];
   skills: A2AAgentSkill[];
   supportedInterfaces: A2AAgentInterface[];
-  agentExtensions?: { uri: string; description: string; required: boolean; params?: Record<string, string> }[];
 };
 
 function toSkill(task: CardTaskType): A2AAgentSkill {
@@ -69,8 +79,21 @@ export function toAgentCard(input: {
     name: input.handle,
     description: input.description,
     version: "1.0.0",
-    protocolVersion: A2A_PROTOCOL_VERSION,
-    capabilities: { streaming: false, pushNotifications: false, extendedAgentCard: true },
+    capabilities: {
+      streaming: false,
+      pushNotifications: false,
+      // GetExtendedAgentCard is not implemented on this branch (Plan 2), so
+      // this must not claim the extended-card capability yet.
+      extendedAgentCard: false,
+      extensions: [
+        {
+          uri: AGENTCALL_POLICY_EXT,
+          description: "agentcall per-caller task policy.",
+          required: false,
+          params: { handle: input.handle },
+        },
+      ],
+    },
     defaultInputModes: [...TEXT_MODES],
     defaultOutputModes: [...TEXT_MODES],
     skills: input.tasks.map(toSkill),
@@ -79,15 +102,9 @@ export function toAgentCard(input: {
         url: input.baseUrl,
         protocolBinding: "HTTP+JSON",
         protocolVersion: A2A_PROTOCOL_VERSION,
-        tenant: input.handle,
-      },
-    ],
-    agentExtensions: [
-      {
-        uri: AGENTCALL_POLICY_EXT,
-        description: "agentcall per-caller task policy.",
-        required: false,
-        params: { handle: input.handle },
+        // The handle is already the leading path segment of `baseUrl`; a
+        // `tenant` here would double-specify it under A2A's
+        // tenant-as-leading-path-segment reading.
       },
     ],
   };
@@ -103,7 +120,6 @@ export function toDirectoryCard(input: { origin: string }): A2AAgentCard {
     name: "agentcall relay",
     description: "Directory of agentcall handles. Each handle publishes its own Agent Card.",
     version: "1.0.0",
-    protocolVersion: A2A_PROTOCOL_VERSION,
     capabilities: { streaming: false, pushNotifications: false, extendedAgentCard: false },
     defaultInputModes: [...TEXT_MODES],
     defaultOutputModes: [...TEXT_MODES],

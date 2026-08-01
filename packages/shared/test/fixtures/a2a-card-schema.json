@@ -1,0 +1,37 @@
+{
+  "_source": "https://github.com/a2aproject/a2a-tck specification/a2a.json @ 5996b79f9cefa6fc390980e383e358a66fb9e49e",
+  "_note": "Minimal vendored copy of two definitions from the A2A v1.0 JSON Schema. Trimmed to the fields this repo's structural test needs (additionalProperties + the camelCase property key set); the full upstream definitions also list snake_case patternProperties aliases and $refs to nested types, which are irrelevant to an unknown-key check. Do not hand-edit the key lists — re-derive them from the vendored a2a.json if the TCK ref (scripts/tck.sh TCK_REF) ever moves.",
+  "definitions": {
+    "Agent Card": {
+      "additionalProperties": false,
+      "properties": [
+        "capabilities",
+        "defaultInputModes",
+        "defaultOutputModes",
+        "description",
+        "documentationUrl",
+        "iconUrl",
+        "name",
+        "provider",
+        "securityRequirements",
+        "securitySchemes",
+        "signatures",
+        "skills",
+        "supportedInterfaces",
+        "version"
+      ]
+    },
+    "Agent Interface": {
+      "additionalProperties": false,
+      "properties": ["protocolBinding", "protocolVersion", "tenant", "url"]
+    },
+    "Agent Capabilities": {
+      "additionalProperties": false,
+      "properties": ["extendedAgentCard", "extensions", "pushNotifications", "streaming"]
+    },
+    "Agent Extension": {
+      "additionalProperties": false,
+      "properties": ["description", "params", "required", "uri"]
+    }
+  }
+}
