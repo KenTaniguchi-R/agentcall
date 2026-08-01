@@ -473,15 +473,57 @@ independent of where the card was fetched. Setting that URL to `https://host/ken
 the client hit `https://host/ken/message:send` — the tenant binding, with the tenant in
 the base.
 
-**Still open, and the reason this is not yet a closed decision:** exactly how origin-level
-card discovery composes with per-tenant interfaces. A single origin card declaring one
-`tenant` per interface does not obviously scale to many handles, and the spec text is
-thin here — `specification.md` mentions tenancy only once, in an authorization aside
-(line 3063), so the concept lives in the proto and bindings rather than in prose. Resolve
-by reading the REST binding section and the `GetExtendedAgentCard` flow before building
-the stub.
+### 5. Discovery is a registry problem, and A2A sanctions registries — question closed
 
-Options 1–3 above are retained only as fallbacks if that resolution fails.
+The remaining worry was how origin-level card discovery composes with per-tenant
+interfaces. It dissolves: **A2A officially recognizes three discovery mechanisms**, not
+one ([agent-discovery.md](https://github.com/a2aproject/A2A/blob/main/docs/topics/agent-discovery.md)):
+
+1. **Well-Known URI** — `https://{domain}/.well-known/agent-card.json`, RFC 8615.
+2. **Curated Registries** — "an intermediary service (the registry) maintains a collection
+   of Agent Cards. Clients query this registry to find agents based on various criteria,"
+   for "both private and public marketplaces."
+3. **Direct configuration / private discovery** — for tightly coupled or private systems.
+
+**The relay is a curated registry.** `GET /v1/card/:handle` is already a registry query.
+That is mechanism 2, officially sanctioned — not a deviation needing a workaround. And
+because the spec "does not prescribe a standard API for curated registries," a registry
+API cannot be non-conformant.
+
+Options 1–3 of the discovery section, and finding 3's nested-well-known concern, are all
+withdrawn. Nothing needs wildcard DNS.
+
+**Resolved topology:**
+
+| Concern | Resolution |
+|---|---|
+| Operations | tenant binding — `/{handle}/message:send`, etc. (finding 4) |
+| Per-handle card | curated registry — the relay's card endpoint, returning a real `AgentCard` |
+| Origin well-known | **one** card describing the *relay itself* — the directory/gateway agent. Honest and conformant: it is the relay's own card, not a per-handle fudge |
+| `handle@host` | the naming/resolution layer over the registry |
+| TCK run | prove conformance once for the tenant endpoint shape; it is the same code path for every handle, so per-handle conformance follows |
+
+That last row matters for the procurement claim: we demonstrate a conformant
+card-plus-endpoint pair, not conformance of every handle individually.
+
+### 6. Corroboration — Cotal reached the same judgment independently
+
+Cotal faces the identical problem (many agents, one deployment) and **declined A2A's
+well-known discovery**: it resolves a bare name to `.cotal/agents/<name>.md` by directory
+convention, "not an HTTP /.well-known card," with presence in a per-space NATS KV bucket
+(TTL + heartbeat). It reuses A2A's `AgentCard` and `Message`/`Part` *shapes* while
+replacing the discovery *mechanism*.
+
+Two independent projects reading the same spec concluded that origin-scoped well-known
+discovery does not fit person- or agent-scoped multiplicity. That is corroboration the
+reading is right, not a shortcut.
+
+The gap is acknowledged ecosystem-wide — Solo.io's
+[agent discovery, naming and resolution](https://blog.christianposta.com/dynamic-agent-discovery-with-a2a-and-ans/)
+argues A2A lacks registration, a naming service, and a gateway. **agentcall already has
+all three**: the relay is registration and gateway, `handle@host` is the naming service.
+Worth treating as positioning, not just as a technical resolution — it is the thing the
+ecosystem says is missing.
 
 ### 3. New concrete requirement the design missed
 
@@ -511,11 +553,11 @@ POST|GET /{tenant}/tasks/{id}/pushNotificationConfigs[/{configId}]
 
 ### Remaining work in Spike 1
 
-Not done: the stub and the run. Finding 4 changed its shape mid-spike — a stub built for
-the per-handle-origin topology would have tested the wrong thing — so the tenant/discovery
-composition question above must be settled first.
+Not done: the stub and the run. Findings 4 and 5 changed its shape mid-spike — a stub
+built for the per-handle-origin topology would have tested the wrong thing. The topology
+is now settled, so the stub is unblocked.
 
-Then: minimal REST stub over the surface above, and
+Next: minimal REST stub over the surface above, and
 `./run_tck.py --sut-host <stub> --transport http_json --level must`. That converts these
 inferences into a report and produces the pinned baseline the CI gate compares against.
 Approximately 61 MUST requirements are in scope (`core_operations` 31, `data_model` 11,
