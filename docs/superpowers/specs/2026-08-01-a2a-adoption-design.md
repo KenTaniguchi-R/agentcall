@@ -201,22 +201,80 @@ and unsupported-but-requested behavior. Small, but real.
 | execution begins | `WORKING` | |
 | reply delivered | `COMPLETED` | text as `Artifact` |
 | `busy`, within capacity | `SUBMITTED` | relay capacity, **not** the listener's in-memory 1+5 |
-| `busy`, capacity exceeded | 429/503, no task | see below |
+| `busy`, capacity exceeded | no task — §3.3.2 System category, `503` (or `429`) + `Retry-After` | |
 | `offline` | `SUBMITTED` | legitimate, but see the narrowed claim below |
 | `agent_error` | `FAILED` | execution accepted, then failed |
 | execution timeout | `FAILED` | |
 | queued task expires pre-execution | `FAILED` | server-enforced expiry ≠ caller cancellation |
 | caller cancels | `CANCELED` | via `CancelTask`; needs race semantics vs dispatch |
-| `unknown_handle` | — | pre-task: HTTP 404 |
-| `rate_limited` | — | pre-task: HTTP 429 + `Retry-After` |
-| `unauthorized` | — | pre-task: HTTP 401 |
-| `blocked`, `task_not_offered`, `task_unknown` | — | **reject before task creation** — a durable `REJECTED` task leaks policy facts and task existence |
-| `message_too_large` | — | pre-task: HTTP 413 |
-| malformed request | — | HTTP 400 |
+| pre-task refusals | — | **reject before task creation**; see the error mapping below |
 | — | `INPUT_REQUIRED`, `AUTH_REQUIRED` | reserved, unused in v1 |
 
 `REJECTED` is reserved for a task the server admitted and then declined. Because
 authorization and capacity refusals now happen *before* admission, v1 does not produce it.
+
+## Error mapping
+
+Transcribed from spec **§5.4**, which is normative — not re-derived. An earlier draft of
+this table invented HTTP statuses by intuition and got at least one wrong
+(push-not-supported as 501; it is 400).
+
+### A2A-specific errors — §5.4, `MUST`
+
+| A2A error type | JSON-RPC | HTTP |
+|---|---|---|
+| `TaskNotFoundError` | `-32001` | `404 Not Found` |
+| `TaskNotCancelableError` | `-32002` | `409 Conflict` |
+| `PushNotificationNotSupportedError` | `-32003` | `400 Bad Request` |
+| `UnsupportedOperationError` | `-32004` | `400 Bad Request` |
+| `ContentTypeNotSupportedError` | `-32005` | `415 Unsupported Media Type` |
+| `InvalidAgentResponseError` | `-32006` | `502 Bad Gateway` |
+| `ExtendedAgentCardNotConfiguredError` | `-32007` | `400 Bad Request` |
+| `ExtensionSupportRequiredError` | `-32008` | `400 Bad Request` |
+| `VersionNotSupportedError` | `-32009` | `400 Bad Request` |
+
+### Standard error categories — §3.3.2
+
+| Category | HTTP | Notes |
+|---|---|---|
+| Authentication | `401` | SHOULD carry an auth challenge and name the required scheme |
+| Authorization | `403` | but see the non-disclosure rule below |
+| Validation | `400` | SHOULD name the failing parameter |
+| Resource | `404` | |
+| System / temporary | `500` / `503` | MAY include `Retry-After`. Rate limiting sits in this category — `429` is compatible but not spec-named |
+
+### AIP-193 envelope — §11.6, `MUST`
+
+REST errors use [AIP-193](https://google.aip.dev/193). `error.code` is the **HTTP status
+number**, not a string — the Spike 1 stub returned `"NOT_FOUND"` and failed on `int()`
+conversion. A2A-specific errors MUST additionally carry a `google.rpc.ErrorInfo` in
+`error.details`:
+
+```json
+{ "error": { "code": 404, "message": "…", "details": [
+  { "@type": "type.googleapis.com/google.rpc.ErrorInfo",
+    "reason": "TASK_NOT_FOUND",
+    "domain": "a2a-protocol.org" } ] } }
+```
+
+`reason` is the error type in UPPER_SNAKE_CASE with the `Error` suffix dropped.
+
+### Two normative rules that change this design
+
+§3.3.2 states servers **MUST NOT** reveal the existence of resources the client is not
+authorized to access, and **SHOULD NOT** distinguish "does not exist" from "not
+authorized."
+
+1. **`blocked` and `unknown_handle` collapse to an identical `404`.** The earlier table
+   returned `403` for blocked, which tells a blocked caller that the handle exists and
+   that they specifically were refused. Both must now be indistinguishable. This is a
+   behavior change from today's protocol, which returns a distinct `blocked` code.
+2. **`task_not_offered` must not confirm the task exists.** It maps to
+   `UnsupportedOperationError` (`400`) and returns only the caller's own `offered[]` —
+   what they *are* entitled to — never an acknowledgement of what they asked for.
+
+Both tighten the same leak Codex flagged in F10: the caller learns their own capability,
+never the callee's policy.
 
 **`CancelTask` and `ListTasks` are standard operations, not optional.** `ListTasks`
 materially expands the storage model: caller/tenant scoping, pagination, filtering,
@@ -583,7 +641,7 @@ Every one of these came from a failure, and none was in the design:
 | Requirement | Detail |
 |---|---|
 | **AIP-193 error format** | REST error bodies must follow Google's AIP-193 — `error.code` is a **number**, not a string. The stub's `"NOT_FOUND"` failed with `invalid literal for int()`. Spec §11.6 |
-| **Normative error→status mapping** | Spec §5.4 defines the mapping. The lifecycle table in this doc invented 404/429/401/403/413 — it must defer to §5.4 instead. Concretely: push-not-supported is **400**, not the 501 the stub returned |
+| **Normative error→status mapping** | Spec §5.4 defines the mapping. **Now transcribed — see [Error mapping](#error-mapping).** It also surfaced two non-disclosure rules that changed the design: `blocked` and `unknown_handle` must be indistinguishable |
 | **`A2A-Version` header** | The server MUST validate it and return `VersionNotSupportedError` (400) when unsupported. Not mentioned anywhere in the design |
 | **Terminal-state guards** | `CancelTask` and `SubscribeToTask` must error on an already-terminal task |
 | **`SendMessage` may return a bare `Message`** | Not always a `Task`. `SendMessageResponse` is a `{message?, task?}` wrapper |
