@@ -1,7 +1,10 @@
 # CLAUDE.md
 
 Dev guide for working in this repo. **[README.md](./README.md) is the authority on
-current behavior**, with [CHANGELOG.md](./CHANGELOG.md) for what changed when.
+current behavior**, with [CHANGELOG.md](./CHANGELOG.md) for what changed when and
+**[TODO.md](./TODO.md) for what is still open** — TODO.md is the single place task
+status is tracked, so update it there rather than editing checkboxes in the docs it
+links to.
 
 Everything under `docs/superpowers/` is a **historical** design/implementation
 record, dated and never revised — useful for *why* a decision was made, wrong about

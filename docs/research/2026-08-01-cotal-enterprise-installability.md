@@ -66,6 +66,11 @@ Ordered by how hard each one blocks a deal, not by effort. Items in **A** kill
 deployments outright; **B** stalls procurement; **C** is the argument to win in security
 review; **D** is competitive parity; **E** is positioning.
 
+> **Status now lives in [`TODO.md`](../../TODO.md).** The checkboxes below are a snapshot
+> as of this doc's date and are not maintained — this doc keeps the *reasoning* for each
+> item, `TODO.md` keeps how far along it is. The item lettering is shared, so `C.2` here
+> is `C.2` there.
+
 ### A. Deployment surface — deal blockers
 
 - [ ] **Self-hostable relay.** Internal engineering Q&A through a Cloudflare Worker
