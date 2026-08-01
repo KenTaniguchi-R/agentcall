@@ -23,7 +23,13 @@
 > Omnigent), the `agentcall.co` name collision, and the findings on standards,
 > prompt injection, and unit economics. Confidence tags apply as written.
 >
-> Read in sequence — see [README](./README.md); this is #3 of 5.
+> **Amended 2026-08-01 on Cotal specifically.** The §Cotal verdict — fleet mesh,
+> inside your perimeter, therefore disjoint from us — was scored against the *consumer*
+> product. Under the enterprise pivot our deployment shape becomes theirs, and they have
+> since been confirmed to ship durable delivery, the availability axis we were losing on.
+> See [cotal-enterprise-installability](./2026-08-01-cotal-enterprise-installability.md).
+>
+> Read in sequence — see [README](./README.md); this is #3 of 7.
 
 **Date:** 2026-07-31
 **Question:** Who else is doing agent-to-agent coordination, and is anyone doing
