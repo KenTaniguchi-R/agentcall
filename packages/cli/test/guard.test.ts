@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
-import { decide, DENY_REASON, type GuardInput } from "../src/guard.js";
+import { decide, DENY_REASON, runGuard, type GuardDeps, type GuardInput } from "../src/guard.js";
+import { getPaths } from "../src/paths.js";
 
 const HOME = "/Users/owner";
 const CWD = "/Users/owner/AgentCall/public";
@@ -186,5 +187,90 @@ describe("DENY_REASON is a contract", () => {
     expect(DENY_REASON).not.toMatch(/[/~]/);
     expect(DENY_REASON).not.toMatch(/ssh|aws|env|keychain/i);
     expect(DENY_REASON.split(/[.!?]/).filter((s) => s.trim()).length).toBe(1);
+  });
+});
+
+function harness() {
+  const lines: Array<{ file: string; line: string }> = [];
+  const deps: GuardDeps = {
+    paths: getPaths(HOME),
+    callId: "call-123",
+    now: () => "2026-07-31T00:00:00.000Z",
+    realpath: id,
+    appendLine: (file, line) => lines.push({ file, line }),
+  };
+  const p = getPaths(HOME);
+  return {
+    deps, lines,
+    calls: () => lines.filter((l) => l.file === p.callsLog).map((l) => JSON.parse(l.line)),
+    tools: () => lines.filter((l) => l.file === p.toolsLog).map((l) => JSON.parse(l.line)),
+  };
+}
+
+const payload = (tool: string, input: Record<string, unknown>) =>
+  JSON.stringify({ hook_event_name: "PreToolUse", tool_name: tool, tool_input: input, cwd: CWD });
+
+describe("runGuard", () => {
+  it("allows an ordinary read, logging only to tools.log", () => {
+    const h = harness();
+    const out = runGuard(payload("Read", { file_path: "/Users/owner/proj/a.ts" }), h.deps);
+    expect(out.exitCode).toBe(0);
+    expect(out.stdout).toBe("");
+    expect(h.calls()).toHaveLength(0);
+    expect(h.tools()).toEqual([
+      { ts: "2026-07-31T00:00:00.000Z", type: "tool_call", call_id: "call-123", tool: "Read", allowed: true },
+    ]);
+  });
+
+  it("denies a credential read, logging to both streams", () => {
+    const h = harness();
+    const out = runGuard(payload("Read", { file_path: "/Users/owner/.ssh/id_rsa" }), h.deps);
+    expect(out.exitCode).toBe(0);
+    const decision = JSON.parse(out.stdout);
+    expect(decision.hookSpecificOutput.permissionDecision).toBe("deny");
+    expect(decision.hookSpecificOutput.permissionDecisionReason).toBe(DENY_REASON);
+    expect(h.calls()[0]).toMatchObject({ type: "tool_denied", call_id: "call-123", tool: "Read" });
+    expect(h.tools()[0]).toMatchObject({ type: "tool_call", allowed: false });
+  });
+
+  it("never leaks the resolved path to the caller", () => {
+    const h = harness();
+    const out = runGuard(payload("Read", { file_path: "/Users/owner/.ssh/id_rsa" }), h.deps);
+    expect(out.stdout).not.toContain("id_rsa");
+    expect(out.stdout).not.toContain(".ssh");
+    // …while the owner's log keeps the specifics.
+    expect(JSON.stringify(h.calls()[0])).toContain("id_rsa");
+  });
+
+  it("records a flagged Bash command without denying it", () => {
+    const h = harness();
+    const out = runGuard(payload("Bash", { command: "cat /Users/owner/.ssh/id_rsa" }), h.deps);
+    expect(out.exitCode).toBe(0);
+    expect(out.stdout).toBe("");
+    expect(h.calls()[0]).toMatchObject({ type: "tool_flagged", tool: "Bash" });
+    expect(h.tools()[0]).toMatchObject({ allowed: true });
+  });
+
+  it("fails closed on unparseable input", () => {
+    const h = harness();
+    const out = runGuard("not json", h.deps);
+    expect(out.exitCode).toBe(2);
+  });
+
+  it("fails closed on a payload with no tool name", () => {
+    const h = harness();
+    const out = runGuard(JSON.stringify({ cwd: CWD }), h.deps);
+    expect(out.exitCode).toBe(2);
+  });
+
+  it("fails closed when the audit write throws", () => {
+    // A full disk or read-only home must not become a silent allow. Without
+    // the log writes inside the try, this exits 1 and Claude runs the tool.
+    const h = harness();
+    const out = runGuard(payload("Read", { file_path: "/Users/owner/proj/a.ts" }), {
+      ...h.deps,
+      appendLine: () => { throw new Error("ENOSPC: no space left on device"); },
+    });
+    expect(out.exitCode).toBe(2);
   });
 });

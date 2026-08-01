@@ -1,4 +1,5 @@
 import { basename, dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
+import type { Paths } from "./paths.js";
 
 export type GuardInput = {
   tool_name: string;
@@ -179,4 +180,72 @@ export function decide(
   // Unclassified tool. Deny — an argument shape this function has never seen
   // cannot be inspected, and allowing it is how LS became a hole.
   return { allow: false, rule: "unclassified-tool", detail: tool };
+}
+
+export interface GuardDeps {
+  paths: Paths;
+  callId: string;
+  now: () => string;
+  realpath: (p: string) => string;
+  appendLine: (file: string, line: string) => void;
+}
+
+// calls.log stays sparse and owner-facing; tools.log carries every call so the
+// audit-trail claim is true. A denial appears in both.
+export function runGuard(raw: string, deps: GuardDeps): { exitCode: number; stdout: string } {
+  let input: GuardInput;
+  try {
+    const parsed = JSON.parse(raw) as Partial<GuardInput>;
+    if (typeof parsed.tool_name !== "string" || parsed.tool_name === "") throw new Error("no tool_name");
+    input = {
+      tool_name: parsed.tool_name,
+      tool_input: (parsed.tool_input ?? {}) as Record<string, unknown>,
+      cwd: typeof parsed.cwd === "string" ? parsed.cwd : deps.paths.home,
+    };
+  } catch {
+    // Exit 2 blocks bluntly. The guard never allows because it failed to decide.
+    return { exitCode: 2, stdout: "" };
+  }
+
+  // EVERYTHING below is inside the failure boundary, including the log writes.
+  // An exception escaping this function exits the process 1, and Claude treats
+  // any exit other than 0 or 2 as a non-blocking error — so a full disk or a
+  // read-only home would silently turn the guard off. Fail closed instead.
+  try {
+    const verdict = decide(input, deps.paths.home, deps.realpath);
+    const ts = deps.now();
+    const write = (file: string, obj: Record<string, unknown>) =>
+      deps.appendLine(file, JSON.stringify({ ts, ...obj }));
+
+    write(deps.paths.toolsLog, {
+      type: "tool_call", call_id: deps.callId, tool: input.tool_name, allowed: verdict.allow,
+    });
+
+    if (!verdict.allow) {
+      write(deps.paths.callsLog, {
+        type: "tool_denied", call_id: deps.callId, tool: input.tool_name,
+        rule: verdict.rule, detail: verdict.detail,
+      });
+      return {
+        exitCode: 0,
+        stdout: JSON.stringify({
+          hookSpecificOutput: {
+            hookEventName: "PreToolUse",
+            permissionDecision: "deny",
+            permissionDecisionReason: DENY_REASON,
+          },
+        }),
+      };
+    }
+
+    if (verdict.flag) {
+      write(deps.paths.callsLog, {
+        type: "tool_flagged", call_id: deps.callId, tool: input.tool_name,
+        rule: verdict.flag.rule, detail: verdict.flag.detail,
+      });
+    }
+    return { exitCode: 0, stdout: "" };
+  } catch {
+    return { exitCode: 2, stdout: "" };
+  }
 }
