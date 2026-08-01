@@ -6,6 +6,26 @@ which are released together.
 
 ## Unreleased
 
+### Known issue — Codex reaches the filesystem without the shell, and unrecorded (unfixed)
+
+- **`view_image` is a general file-read primitive, not an image viewer.** It does
+  not validate that its argument is an image: pointed at a text file outside the
+  workspace it returns the raw bytes as
+  `{"image_url":"data:application/octet-stream;base64,…"}`. `apply_patch` also
+  reads a file, to verify patch context. Both are reachable in the exact
+  `buildSpawnSpec` shape under `--ignore-user-config --sandbox read-only`.
+- **Neither leaves any record.** They emit no event that `parseCodexJsonl` reads
+  (it extracts `agent_message` only), so a read through them appears in no log —
+  not `tools.log`, not `calls.log`. This corrects a README claim that Codex
+  "reaches the filesystem entirely through `Bash`", which was the stated
+  justification for the guard being observe-only.
+- **A machine-wide `deny_read` does stop them.** Verified against codex-cli
+  0.146.0: with `/etc/codex/requirements.toml` installed, all three routes
+  (`exec_command`, `view_image`, `apply_patch`) fail with
+  `Operation not permitted (os error 1)`. That is the C.2 read floor, which is
+  *not* shipped — `agentcall` neither installs nor currently requires it.
+  `scripts/verify-codex-deny-read-p2.sh` is the repeatable check.
+
 ### Known issue — the Codex guard is registered but never runs (unfixed)
 
 - **Codex spawns produce no `tools.log` telemetry at all.** Codex gates hook
