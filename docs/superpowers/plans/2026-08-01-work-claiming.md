@@ -388,16 +388,32 @@ real selection logic rather than a mock.
 
 - [ ] **Step 7: Confirm the renewal assumption the whole design rests on**
 
-The staleness rule assumes activity bumps `updated_at`. Verify rather than assume:
+The staleness rule assumes activity bumps `updated_at`. Verify rather than assume.
+
+Post via `gh api` rather than `gh issue comment` so the comment id comes back
+directly — the comment is test residue on a real issue that another collaborator
+can see, and it gets deleted in the same step:
 
 ```bash
 gh issue view 25 --json updatedAt --jq .updatedAt
-gh issue comment 25 --body "Testing claim-renewal timestamp behaviour; ignore."
+
+comment_id="$(gh api repos/:owner/:repo/issues/25/comments \
+  -f body='Automated check of claim-renewal timestamps. Deleting momentarily.' \
+  --jq .id)"
+echo "posted comment ${comment_id}"
+
 gh issue view 25 --json updatedAt --jq .updatedAt
+
+gh api --method DELETE "repos/:owner/:repo/issues/comments/${comment_id}"
+gh issue view 25 --json comments --jq '.comments | length'
 ```
 
-Expected: the second timestamp is later than the first. If it is not, stop — the
-3-day rule is unsound and the design needs revisiting before this ships.
+Expected: the second timestamp is later than the first, and the final count is
+back to whatever #25 had before this step (`0` unless someone has commented on it
+since). If the timestamp does **not** move, stop — the 3-day rule is unsound and
+the design needs revisiting before this ships.
+
+Delete the comment even if the timestamp assertion fails.
 
 - [ ] **Step 8: Release the fixture**
 
