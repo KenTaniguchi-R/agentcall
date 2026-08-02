@@ -327,6 +327,15 @@ and leave the real one open. `runGuard` takes `userHome` explicitly for denial, 
 separately takes `machine.dir` — so a compromised agent on one line cannot read
 *another* line's token, which is a new attack surface this design creates.
 
+**The per-line layout silently breaks an existing deny rule.** `DENIED_DIRS`
+(`guard.ts:42-52`) is home-relative and contains `AgentCall/tasks`. Once tasks live
+at `AgentCall/<line>/tasks`, that entry matches nothing — and task frontmatter sets
+the envelope's caps verbatim, so losing the rule lets an answering agent widen its
+own permissions. The fix uses machinery `deniedPaths` already has: it accepts
+`extraRoots` (today just the package root), so `runGuard` enumerates every line's
+`tasksDir` and passes them. Enumerating *every* line, not just the current one, is
+deliberate — one line's agent must not rewrite another line's tasks either.
+
 (For the record: the guard does **not** write `~/.claude/settings.json`. `runner.ts:33`
 passes `--settings guardSettingsJson()` inline per spawn, and Codex gets `-c`. The
 owner's `~/.claude` and `~/.codex` are untouched.)
@@ -443,8 +452,10 @@ process; each line audits to its own `calls.log`; a reconnect re-reads `config.j
 so a rotated token takes effect without a process restart.
 
 **`test/guard.test.ts`** — denial is evaluated against `userHome`, not `stateRoot`;
-an agent on line A cannot read line B's `config.json`; a guard subprocess with no
-`AGENTCALL_LINE` fails closed.
+an agent on line A cannot read line B's `config.json` (free, since `.agentcall` is
+already a denied root — but only if the *real* home is what gets passed); every
+line's `tasksDir` is denied while its `shareDir` stays writable; a guard subprocess
+with no `AGENTCALL_LINE` fails closed.
 
 No live agent spawn; `runner.test.ts`'s fake binary remains the seam.
 
