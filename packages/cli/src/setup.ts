@@ -152,6 +152,18 @@ export async function runSetup(opts: SetupOpts): Promise<{ ready: boolean }> {
   } catch {
     existingCfg = undefined;
   }
+  const requestedRelay = opts.relay?.replace(/\/+$/, "");
+  if (
+    existingCfg !== undefined &&
+    (!opts.handle || opts.handle === existingCfg.handle) &&
+    requestedRelay !== undefined &&
+    requestedRelay !== relayUrl(existingCfg)
+  ) {
+    throw new Error(
+      `This machine is already registered with ${relayUrl(existingCfg)}. ` +
+        "Run `agentcall uninstall` before setting up with a different relay.",
+    );
+  }
   const reusedCfg =
     existingCfg !== undefined &&
     (!opts.handle || opts.handle === existingCfg.handle)
@@ -202,7 +214,7 @@ export async function runSetup(opts: SetupOpts): Promise<{ ready: boolean }> {
     const handle = opts.handle ?? (await ask("Choose a handle (e.g. ken): ")).trim();
     if (!handle) throw new Error("A handle is required.");
 
-    const relay = (opts.relay ?? relayUrl()).replace(/\/+$/, "");
+    const relay = requestedRelay ?? relayUrl();
 
     console.log(`Registering ${handle} with ${relay} ...`);
     const { org, token, address: registeredAddress } = await registerHandle(relay, invite, handle, agentKind);

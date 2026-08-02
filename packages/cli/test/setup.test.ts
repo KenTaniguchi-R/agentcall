@@ -76,7 +76,7 @@ describe("runSetup", () => {
     }
   });
 
-  it("re-running setup with the same handle reuses the saved config instead of re-registering", async () => {
+  it("re-running setup with the same handle and relay reuses the saved config instead of re-registering", async () => {
     const home = mkdtempSync(join(tmpdir(), "agentcall-setup-"));
     process.env.AGENTCALL_HOME = home;
     try {
@@ -85,16 +85,32 @@ describe("runSetup", () => {
       const p = getPaths(home);
       const firstCfg = JSON.parse(readFileSync(p.configFile, "utf8"));
 
-      // Second run points at a relay that 409s every register call — if
-      // runSetup still tried to register, this run would throw. It must
-      // instead detect the existing config.json (same handle) and reuse it.
-      const badRelay = await fakeRelay409();
-      await runSetup({ verify: false, handle: "ken", agent: "claude", relay: badRelay, snippet: false, skipLaunchd: true });
+      await runSetup({ verify: false, handle: "ken", agent: "claude", relay: `${relay}/`, snippet: false, skipLaunchd: true });
 
       const secondCfg = JSON.parse(readFileSync(p.configFile, "utf8"));
       expect(secondCfg).toEqual(firstCfg);
       expect(secondCfg.token).toBe("tok-123");
       expect(existsSync(p.publicDir)).toBe(true);
+    } finally {
+      delete process.env.AGENTCALL_HOME;
+    }
+  });
+
+  it("refuses an explicitly different relay instead of silently reusing the saved registration", async () => {
+    const home = mkdtempSync(join(tmpdir(), "agentcall-setup-"));
+    process.env.AGENTCALL_HOME = home;
+    try {
+      const relay = await fakeRelay();
+      await runSetup({ invite: "test-invite", verify: false, handle: "ken", agent: "claude", relay, snippet: false, skipLaunchd: true });
+      const p = getPaths(home);
+      const firstCfg = readFileSync(p.configFile, "utf8");
+      const otherRelay = await fakeRelay409();
+
+      await expect(runSetup({
+        verify: false, handle: "ken", agent: "claude", relay: otherRelay, snippet: false, skipLaunchd: true,
+      })).rejects.toThrow(/already registered.*uninstall.*different relay/i);
+
+      expect(readFileSync(p.configFile, "utf8")).toBe(firstCfg);
     } finally {
       delete process.env.AGENTCALL_HOME;
     }
@@ -398,12 +414,11 @@ describe("caller-only setup", () => {
       const p = getPaths(home);
       const firstCfg = JSON.parse(readFileSync(p.configFile, "utf8"));
 
-      const badRelay = await fakeRelay409();
       const asked: string[] = [];
       await runSetup({ invite: "test-invite",
         verify: false,
         callerOnly: true,
-        relay: badRelay,
+        relay,
         snippet: false,
         hasBin: () => false,
         io: { ask: async (q) => { asked.push(q); return ""; } },
@@ -473,13 +488,11 @@ describe("caller-only setup", () => {
       const p = getPaths(home);
       expect(JSON.parse(readFileSync(p.configFile, "utf8")).agent_kind).toBeUndefined();
 
-      // The upgrade run points at a relay that 409s every register call —
-      // it must reuse the existing handle/token, not re-register.
-      const badRelay = await fakeRelay409();
+      // The upgrade must reuse the existing handle/token, not re-register.
       let launchdCalled = false;
       await runSetup({ invite: "test-invite",
         verify: false,
-        relay: badRelay,
+        relay,
         snippet: false,
         hasBin: (name) => name === "claude",
         io: { ask: async () => "y" },
