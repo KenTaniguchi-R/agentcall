@@ -6,7 +6,8 @@
 CREATE TABLE rosters (
   id TEXT PRIMARY KEY,
   org TEXT NOT NULL,
-  secret_hash TEXT NOT NULL,
+  join_secret_hash TEXT NOT NULL,
+  admin_secret_hash TEXT NOT NULL,
   created_at INTEGER NOT NULL
 );
 
@@ -21,3 +22,18 @@ CREATE TABLE roster_members (
 -- Supports "which rosters does this identity belong to", which membership
 -- checks and any future cleanup need; the PK only indexes the other direction.
 CREATE INDEX roster_members_by_identity ON roster_members(org, handle);
+
+-- Append-only evidence. Deliberately has no foreign key: lifecycle events
+-- survive roster teardown even though the live roster and membership rows do
+-- not. There is no public read surface; this is relay-side audit material.
+CREATE TABLE roster_events (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  roster_id TEXT NOT NULL,
+  org TEXT NOT NULL,
+  kind TEXT NOT NULL CHECK (kind IN ('create', 'join', 'leave', 'expel', 'rotate', 'evict_all', 'delete')),
+  actor TEXT NOT NULL,
+  subject TEXT,
+  at INTEGER NOT NULL
+);
+
+CREATE INDEX roster_events_by_roster ON roster_events(roster_id, at);

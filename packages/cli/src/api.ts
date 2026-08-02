@@ -1,5 +1,5 @@
 import {
-  HANDLE_RE, AgentCard, CreateInviteResponse, CreateRosterResponse, RegisterResponse, RosterBundle,
+  HANDLE_RE, AgentCard, CreateInviteResponse, CreateRosterResponse, RegisterResponse, RosterBundle, RotateRosterResponse,
   type AgentCardType, type CardUploadType, type RosterBundleType,
 } from "@benree/agentcall-shared";
 
@@ -142,7 +142,7 @@ export async function pushCard(
 
 export async function createRoster(
   relay: string, auth: Auth, opts: { timeoutMs?: number } = {},
-): Promise<{ roster_id: string; secret: string }> {
+): Promise<{ roster_id: string; join_secret: string; admin_secret: string }> {
   const res = await relayFetch(
     relay, "/v1/roster",
     { method: "POST", headers: authHeaders(auth) },
@@ -155,7 +155,7 @@ export async function createRoster(
 }
 
 export async function joinRoster(
-  relay: string, auth: Auth, rosterId: string, secret: string,
+  relay: string, auth: Auth, rosterId: string, joinSecret: string,
   opts: { timeoutMs?: number } = {},
 ): Promise<void> {
   const res = await relayFetch(
@@ -163,7 +163,7 @@ export async function joinRoster(
     {
       method: "POST",
       headers: { "content-type": "application/json", ...authHeaders(auth) },
-      body: JSON.stringify({ secret }),
+      body: JSON.stringify({ join_secret: joinSecret }),
     },
     opts.timeoutMs ?? RELAY_TIMEOUT_MS,
   );
@@ -176,6 +176,45 @@ export async function joinRoster(
   }
   if (res.status === 409) throw new ApiError("That roster is full.", "invalid");
   if (!res.ok) throw new ApiError(`Joining the roster failed (${res.status}).`, "network");
+}
+
+async function rosterMutation(
+  relay: string, auth: Auth, rosterId: string, operation: string, body: unknown,
+  opts: { timeoutMs?: number } = {},
+): Promise<Response> {
+  const res = await relayFetch(relay, `/v1/roster/${rosterId}/${operation}`, {
+    method: "POST",
+    headers: { "content-type": "application/json", ...authHeaders(auth) },
+    body: JSON.stringify(body),
+  }, opts.timeoutMs ?? RELAY_TIMEOUT_MS);
+  if (res.status === 401) throw new ApiError("Your credentials were rejected. Re-run `agentcall setup`.", "invalid");
+  if (res.status === 429) throw new ApiError(`Too many roster ${operation} attempts — try again in a minute.`, "network");
+  if (res.status === 404) throw new ApiError("That roster, member, or administrative secret was not found.", "unknown_handle");
+  if (!res.ok) throw new ApiError(`Roster ${operation} failed (${res.status}).`, "network");
+  return res;
+}
+
+export async function leaveRoster(relay: string, auth: Auth, rosterId: string): Promise<void> {
+  await rosterMutation(relay, auth, rosterId, "leave", {});
+}
+
+export async function expelRosterMember(
+  relay: string, auth: Auth, rosterId: string, handle: string, adminSecret: string,
+): Promise<void> {
+  await rosterMutation(relay, auth, rosterId, "expel", { handle, admin_secret: adminSecret });
+}
+
+export async function rotateRoster(
+  relay: string, auth: Auth, rosterId: string, adminSecret: string, evict: boolean,
+): Promise<{ join_secret: string }> {
+  const res = await rosterMutation(relay, auth, rosterId, "rotate", { admin_secret: adminSecret, evict });
+  return RotateRosterResponse.parse(await res.json());
+}
+
+export async function deleteRoster(
+  relay: string, auth: Auth, rosterId: string, adminSecret: string,
+): Promise<void> {
+  await rosterMutation(relay, auth, rosterId, "delete", { admin_secret: adminSecret });
 }
 
 // Returns "not-modified" rather than a bundle when the relay 304s, so the
