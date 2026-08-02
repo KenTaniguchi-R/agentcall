@@ -20,7 +20,9 @@
 - **No live network and no live `claude`/`codex` spawn in tests.** CLI tests mock `ws`/`fs`; relay tests drive routes through `SELF.fetch`.
 - **A relay rate-limit binding must exist in THREE places**, not two: `apps/relay/wrangler.jsonc` (`ratelimits`), the `Env` type in `apps/relay/src/index.ts`, and **`apps/relay/vitest.config.ts`**, which mirrors the bindings by hand for miniflare because the test tooling drops `wrangler.jsonc`'s `ratelimits` field entirely. Miss the third and `c.env.<BINDING>` is `undefined` at test time — every request through it 500s, and nothing fails at compile time. This bit Task 3, which added a binding two places and stayed green because its own route used a different one; the gap only surfaced in Task 4 when that binding got its first consumer.
 - **`RELAY_HOST` in `apps/relay/src/index.ts` is deliberately not exported** — workerd rejects non-handler named exports from the entry module. Do not export it.
-- Exact constant values, copied from the spec: `MAX_ROSTER_MEMBERS = 200`, `MAX_BUNDLE_TASKS_PER_CARD = 10`, `MAX_BUNDLE_BYTES = 4_500_000`, `MAX_KEYWORD_LENGTH = 40`, `MAX_TASK_KEYWORDS = 20`, `MAX_TASK_ID_LENGTH = 64`, cache TTL 15 minutes, default search limit 5, field weights `keywords: 3, name: 2, description: 1`.
+- Exact constant values, copied from the spec: `MAX_ROSTER_MEMBERS = 200`, `MAX_BUNDLE_TASKS_PER_CARD = 10`, `MAX_BUNDLE_BYTES = 4_500_000`, `MAX_KEYWORD_LENGTH = 40`, `MAX_TASK_KEYWORDS = 20`, `MAX_TASK_ID_LENGTH = 64`, cache TTL 15 minutes, default search limit 5, field weights `keywords: 3, name: 2, description: 1`, `MIN_SCORE = 2`.
+- **A result must clear `MIN_SCORE = 2` to be shown.** A curated hit clears it alone (keyword 3, task name 2); two corroborating description terms clear it; a lone incidental word in prose does not. Pin it with a test asserting **both** directions — a description-only match returns nothing, a single keyword match still routes — otherwise a later edit can raise the threshold arbitrarily without failing anything.
+- **Test fixtures for the over-firing tests must be able to match.** A roster fixture sharing no tokens with the queries proves nothing; it re-tests the zero-overlap case and would pass under a much looser matcher. At least one fixture card must contain ordinary coding vocabulary incidentally, so a false match is genuinely possible.
 - **Bounds are named constants that the schemas themselves consume, never bare literals.** `MAX_KEYWORD_LENGTH` / `MAX_TASK_KEYWORDS` live in `packages/shared/src/card.ts`; `MAX_TASK_ID_LENGTH` lives in `packages/shared/src/protocol.ts` beside `TASK_ID_RE`, pinned to it by test. This exists so the bundle-size guard and the schema read one source — a literal in either place recreates the drift the guard is there to catch.
 
 ## File Structure
@@ -1440,6 +1442,18 @@ export interface SearchResult extends SearchEntry {
 
 export const DEFAULT_SEARCH_LIMIT = 5;
 
+// A result must clear this to be shown. With weights keywords:3, name:2,
+// description:1, a curated hit qualifies on its own (a keyword, or the task
+// name), and two corroborating description terms qualify — but a SINGLE
+// incidental word in prose does not.
+//
+// This is not arbitrary. Without it, a colleague whose CI task description
+// merely mentioned "deploy" and "test" was routed for the queries "deploy the
+// worker to production" and "fix the failing test", neither of which they can
+// help with. One low-weight term in prose is not evidence, and a tool that
+// answers those questions gets muted — at which point it finds nobody.
+export const MIN_SCORE = 2;
+
 // Plain codepoint comparison rather than localeCompare: tie-break order must
 // be identical on every machine, and localeCompare is locale-dependent.
 const cmp = (a: string, b: string) => (a < b ? -1 : a > b ? 1 : 0);
@@ -1467,7 +1481,7 @@ export function rank(query: string, entries: SearchEntry[], limit = DEFAULT_SEAR
       for (const f of fields) score += WEIGHTS[f];
       matched.push({ term, fields });
     }
-    if (score > 0) scored.push({ ...e, score, matched });
+    if (score >= MIN_SCORE) scored.push({ ...e, score, matched });
   }
 
   scored.sort(
