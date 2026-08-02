@@ -6,6 +6,15 @@ which are released together.
 
 ## Unreleased
 
+### Release OIDC enforcement
+
+- The npm publish process now pins `NODE_AUTH_TOKEN` empty and verifies both
+  GitHub OIDC request variables before touching the registry. The guard runs in
+  the same step as `npm publish`, so token auth cannot bypass a check performed
+  in a different process.
+- A workflow-structure regression test proves a deliberate token reintroduction
+  fails the invariant and keeps the OIDC checks before the first publish call.
+
 ### Organization invite lifecycle
 
 - Replaced the create-only organization invite command with `invite create`,

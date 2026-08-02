@@ -8,6 +8,33 @@ const workflow = readFileSync(join(root, ".github/workflows/release.yml"), "utf8
 const ciWorkflow = readFileSync(join(root, ".github/workflows/ci.yml"), "utf8");
 const workflowFiles = ["ci.yml", "invariants.yml", "release.yml", "stale-claims.yml"];
 
+type WorkflowStep = { name?: string; env?: Record<string, unknown>; run?: string };
+
+function publishStep(source: string): WorkflowStep {
+  const parsed = parse(source) as { jobs?: { publish?: { steps?: WorkflowStep[] } } };
+  const step = parsed.jobs?.publish?.steps?.find((candidate) => candidate.name === "Publish with keyless provenance");
+  if (!step) throw new Error("publish step not found");
+  return step;
+}
+
+function keylessPublishGuardErrors(source: string): string[] {
+  const publish = publishStep(source);
+  const errors: string[] = [];
+  if (publish.env?.NODE_AUTH_TOKEN !== "") errors.push("NODE_AUTH_TOKEN must be pinned empty");
+  const firstRegistryCall = publish.run?.indexOf('npm view "$package_name@$version"') ?? -1;
+  for (const guard of [
+    'test -z "${NODE_AUTH_TOKEN:-}"',
+    'test -n "${ACTIONS_ID_TOKEN_REQUEST_URL:-}"',
+    'test -n "${ACTIONS_ID_TOKEN_REQUEST_TOKEN:-}"',
+  ]) {
+    const position = publish.run?.indexOf(guard) ?? -1;
+    if (position < 0 || firstRegistryCall < 0 || position >= firstRegistryCall) {
+      errors.push(`${guard} must run before the first registry call`);
+    }
+  }
+  return errors;
+}
+
 function actionReferences(value: unknown): string[] {
   if (Array.isArray(value)) return value.flatMap(actionReferences);
   if (value && typeof value === "object") {
@@ -55,6 +82,18 @@ describe("npm release workflow", () => {
       "npm publish \"$tarball\" --provenance --access public --tag \"$NPM_DIST_TAG\"",
     );
     expect(workflow).not.toMatch(/secrets\..*npm|NODE_AUTH_TOKEN:\s*\$\{\{/i);
+  });
+
+  it("asserts keyless authentication inside the exact process that publishes", () => {
+    const publish = publishStep(workflow);
+    expect(publish.env?.NODE_AUTH_TOKEN).toBe("");
+    expect(publish.run).toContain('test -z "${NODE_AUTH_TOKEN:-}"');
+    expect(publish.run).toContain('test -n "${ACTIONS_ID_TOKEN_REQUEST_URL:-}"');
+    expect(publish.run).toContain('test -n "${ACTIONS_ID_TOKEN_REQUEST_TOKEN:-}"');
+    expect(keylessPublishGuardErrors(workflow)).toEqual([]);
+
+    const deliberateRegression = workflow.replace('NODE_AUTH_TOKEN: ""', 'NODE_AUTH_TOKEN: synthetic-token');
+    expect(keylessPublishGuardErrors(deliberateRegression)).toContain("NODE_AUTH_TOKEN must be pinned empty");
   });
 
   it("keeps repository writes separate from npm publishing authority", () => {
