@@ -2,23 +2,19 @@ import { rmSync } from "node:fs";
 import { Command, CommanderError } from "commander";
 import { getPaths } from "./paths.js";
 import { loadConfig, saveConfig, relayUrl, assertCallableConfig } from "./config.js";
-import { fetchCard, rotateToken, ApiError } from "./api.js";
+import { rotateToken, ApiError } from "./api.js";
 import { startListener } from "./listener.js";
 import { runSetup } from "./setup.js";
 import { installLaunchAgent, isLaunchAgentInstalled, uninstallLaunchAgent } from "./launchd.js";
-import { publishCard } from "./card.js";
-import { loadPolicy, savePolicy } from "./policy.js";
-import { loadTasks, scaffoldTask } from "./tasks.js";
-import { execVerb, type Verb } from "./verbs.js";
-import { buildCardReport } from "./lint.js";
 import { runDoctor } from "./doctor.js";
-import { resolveAddress } from "./contacts.js";
 import { DEFAULT_SEARCH_LIMIT } from "./search.js";
 import { ExitOnly, realDeps } from "./commands/deps.js";
 import { rosterCreate, rosterForget, rosterJoin, rosterList } from "./commands/roster.js";
 import { search } from "./commands/search.js";
 import { contactsAdd, contactsList, contactsRemove } from "./commands/contacts.js";
 import { call, status } from "./commands/call.js";
+import { card, taskNew } from "./commands/card.js";
+import { policyVerb } from "./commands/policy.js";
 
 export function createProgram(): Command {
 const program = new Command();
@@ -101,65 +97,7 @@ program
   .command("card")
   .description("show your own card with problems, another agent's menu, or publish yours (push)")
   .argument("[target]", "contact name or handle@host to fetch, 'push' to publish, or omit to review your own card")
-  .action(async (target?: string) => {
-    const paths = getPaths();
-    if (target === undefined) {
-      const cfg = loadConfig(paths);
-      if (!cfg.agent_kind) {
-        console.error("This handle is caller-only (no agent configured) — no card to review.");
-        process.exitCode = 1;
-        return;
-      }
-      const report = buildCardReport(cfg, paths);
-      for (const line of report.menu) console.log(line);
-      if (report.problems.length > 0) {
-        console.log("\nProblems:");
-        for (const p of report.problems) console.log(`  ✗ ${p}`);
-      }
-      if (report.notices.length > 0) {
-        console.log("\nNotes:");
-        for (const n of report.notices) console.log(`  ! ${n}`);
-      }
-      if (report.problems.length > 0) process.exitCode = 1;
-      return;
-    }
-    if (target === "push") {
-      const cfg = loadConfig(paths);
-      if (!cfg.agent_kind) {
-        console.error("This handle is caller-only (no agent configured) and has nothing to publish a card for.");
-        process.exitCode = 1;
-        return;
-      }
-      await publishCard(cfg, paths);
-      console.log("Card published.");
-      return;
-    }
-    let cfg;
-    try { cfg = loadConfig(paths); } catch { cfg = undefined; }
-    const parsed = resolveAddress(paths, target, relayUrl(cfg));
-    if (!parsed.ok) {
-      console.error(`${parsed.error} (or 'push')`);
-      process.exitCode = 1;
-      return;
-    }
-    if (parsed.warning) console.error(parsed.warning);
-    try {
-      const card = await fetchCard(
-        cfg ? relayUrl(cfg) : relayUrl(undefined),
-        parsed.handle,
-        cfg ? { handle: cfg.handle, token: cfg.token } : undefined,
-      );
-      console.log(`${card.handle} (${card.agent_kind})${card.description ? ` — ${card.description}` : ""}`);
-      for (const t of card.tasks) {
-        console.log(`  ${t.id} — ${t.description}`);
-        for (const ex of t.examples) console.log(`      e.g. ${ex}`);
-      }
-      console.log(`\nCall with: agentcall call ${target} --task <id> "<message>"`);
-    } catch (e) {
-      console.error(e instanceof ApiError ? e.message : String(e));
-      process.exitCode = 1;
-    }
-  });
+  .action(run((target?: string) => card(realDeps(), target)));
 
 const contacts = program.command("contacts").description("manage your local address book of callable agents");
 contacts
@@ -218,63 +156,27 @@ program
   .action(run((questionParts: string[], o: { roster?: string; limit: number; json?: boolean; offline?: boolean }) =>
     search(realDeps(), questionParts, o)));
 
-function policyVerbAction(verb: Verb) {
-  return async (a: string, b?: string) => {
-    const paths = getPaths();
-    const cfg = loadConfig(paths);
-    if (!cfg.agent_kind) {
-      console.error("This handle is caller-only (no agent configured) — there is no card or policy to manage.");
-      process.exitCode = 1;
-      return;
-    }
-    try {
-      const { policy, lines } = execVerb(loadPolicy(paths), loadTasks(paths), verb, a, b);
-      savePolicy(paths, policy);
-      for (const line of lines) console.log(line);
-      try {
-        await publishCard(cfg, paths);
-        console.log("Card updated.");
-      } catch (e) {
-        console.error(`Warning: policy saved locally, but the card push failed (${String(e)}). Run \`agentcall card push\` later.`);
-      }
-    } catch (e) {
-      console.error(String(e instanceof Error ? e.message : e));
-      process.exitCode = 1;
-    }
-  };
-}
-
 const task = program.command("task").description("manage the tasks your agent offers");
 task
   .command("new")
   .description("scaffold a new task (does not publish it)")
   .argument("<id>", "task id: lowercase kebab-case, becomes the directory name")
-  .action((id: string) => {
-    const paths = getPaths();
-    try {
-      const file = scaffoldTask(paths, id);
-      console.log(`Created ${file}\nEdit it, then:`);
-      console.log(`  agentcall card                      # check it validates`);
-      console.log(`  agentcall offer ${id}    # offer to everyone, or:`);
-      console.log(`  agentcall allow <handle> ${id}`);
-    } catch (e) {
-      console.error(String(e instanceof Error ? e.message : e));
-      process.exitCode = 1;
-    }
-  });
+  .action(run((id: string) => taskNew(realDeps(), id)));
 
 program.command("allow").description("grant a caller an extra task (and republish your card)")
-  .argument("<handle>").argument("<task-id>").action(policyVerbAction("allow"));
+  .argument("<handle>").argument("<task-id>")
+  .action(run((handle: string, taskId: string) => policyVerb(realDeps(), "allow", [handle, taskId])));
 program.command("revoke").description("remove a caller's task grant")
-  .argument("<handle>").argument("<task-id>").action(policyVerbAction("revoke"));
+  .argument("<handle>").argument("<task-id>")
+  .action(run((handle: string, taskId: string) => policyVerb(realDeps(), "revoke", [handle, taskId])));
 program.command("block").description("refuse all calls from a handle")
-  .argument("<handle>").action(policyVerbAction("block"));
+  .argument("<handle>").action(run((handle: string) => policyVerb(realDeps(), "block", [handle])));
 program.command("unblock").description("lift a block")
-  .argument("<handle>").action(policyVerbAction("unblock"));
+  .argument("<handle>").action(run((handle: string) => policyVerb(realDeps(), "unblock", [handle])));
 program.command("offer").description("offer a task to any registered caller")
-  .argument("<task-id>").action(policyVerbAction("offer"));
+  .argument("<task-id>").action(run((taskId: string) => policyVerb(realDeps(), "offer", [taskId])));
 program.command("unoffer").description("stop offering a task publicly")
-  .argument("<task-id>").action(policyVerbAction("unoffer"));
+  .argument("<task-id>").action(run((taskId: string) => policyVerb(realDeps(), "unoffer", [taskId])));
 
 program
   .command("listen")
