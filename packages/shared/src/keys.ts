@@ -11,6 +11,10 @@ export const MAX_ENCRYPTION_KEY_VALIDITY_MS = 2_592_000_000;
 // published on one relay cannot be presented as valid on another.
 const ADDRESS_RE = /^[a-z0-9][a-z0-9-]{1,30}@[a-z0-9.-]{1,253}$/;
 const KEY_ID_RE = /^[0-9a-f]{32}$/;
+// Same width as a key id but a different quantity: the digest of the previous
+// epoch's transcript. It gets its own pattern so that widening one can never
+// silently widen the other.
+const PREV_RE = /^[0-9a-f]{32}$/;
 const BASE64URL_RE = /^[A-Za-z0-9_-]+$/;
 
 export const IdentityRecord = z.object({
@@ -26,12 +30,20 @@ export const EncryptionKeyRecord = z.object({
   key_id: z.string().regex(KEY_ID_RE),
   suite: z.literal(HPKE_SUITE),
   pub: z.string().regex(BASE64URL_RE).max(256),
-  epoch: z.number().int().nonnegative(),
+  // Epochs start at 1 and advance by one per rotation, so 0 is a value no
+  // publisher ever produces. Matches the CLI's stored key file, which is also
+  // `positive()`: the two must agree or a record the CLI can hold is a record
+  // the protocol rejects.
+  epoch: z.number().int().positive(),
   not_before: z.number().int().nonnegative(),
   not_after: z.number().int().nonnegative(),
-  // SHA-256 of the previous epoch's transcript, so a client that sees epochs 5
-  // and 7 knows it missed 6 rather than silently accepting a fork.
-  prev: z.string().regex(KEY_ID_RE).nullable(),
+  // SHA-256 of the previous epoch's TRANSCRIPT — the exact bytes
+  // `encryptionKeyTranscript` produces for epoch n-1, not the JSON record —
+  // truncated to its first 16 bytes and hex-encoded (32 characters). 128 bits
+  // is second-preimage resistance enough for a chain link. Chaining lets a
+  // client that sees epochs 5 and 7 know it missed 6 rather than silently
+  // accepting a fork. `null` only on the first epoch.
+  prev: z.string().regex(PREV_RE).nullable(),
 }).refine((r) => r.not_after > r.not_before, {
   message: "not_after must be after not_before",
 }).refine((r) => r.not_after - r.not_before <= MAX_ENCRYPTION_KEY_VALIDITY_MS, {

@@ -62,6 +62,24 @@ describe("EncryptionKeyRecord", () => {
   it("rejects a negative epoch", () => {
     expect(EncryptionKeyRecord.safeParse({ ...encKey, epoch: -1 }).success).toBe(false);
   });
+
+  it("rejects epoch 0, because epochs start at 1", () => {
+    expect(EncryptionKeyRecord.safeParse({ ...encKey, epoch: 0 }).success).toBe(false);
+  });
+
+  it("accepts a prev that is 32 lowercase hex characters", () => {
+    const chained = { ...encKey, epoch: 2, prev: "abcdef0123456789abcdef0123456789" };
+    expect(EncryptionKeyRecord.safeParse(chained).success).toBe(true);
+  });
+
+  it("rejects a prev that is not 32 lowercase hex characters", () => {
+    // A full untruncated SHA-256 (64 hex) is the most likely wrong value, since
+    // that is what an implementer reading "SHA-256 of the previous record"
+    // would produce. It must fail as loudly as obvious garbage.
+    expect(EncryptionKeyRecord.safeParse({ ...encKey, prev: "ab".repeat(32) }).success).toBe(false);
+    expect(EncryptionKeyRecord.safeParse({ ...encKey, prev: "NOTHEX" }).success).toBe(false);
+    expect(EncryptionKeyRecord.safeParse({ ...encKey, prev: "ABCDEF0123456789ABCDEF0123456789" }).success).toBe(false);
+  });
 });
 
 describe("transcripts", () => {

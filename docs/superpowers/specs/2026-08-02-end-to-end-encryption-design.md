@@ -135,7 +135,7 @@ EncryptionKeyRecord {
   epoch:      <monotonic integer, per address>
   not_before: <epoch ms>
   not_after:  <epoch ms>
-  prev:       <SHA-256 of the previous record, or null>
+  prev:       <first 16 bytes of SHA-256 of the previous epoch's transcript, or null>
 }
 
 signature = ECDSA-P256-SHA256(identity_key, canonical(EncryptionKeyRecord))
@@ -148,7 +148,12 @@ Each field earns its place:
 - **`not_after`** lets a cached record remain usable when the relay is
   unreachable, without remaining usable forever.
 - **`prev`** chains records, so a client seeing epochs 5 and 7 knows it missed 6
-  rather than silently accepting a fork.
+  rather than silently accepting a fork. It hashes the previous epoch's
+  *transcript* — the same canonical bytes that were signed — not the JSON
+  record, which has no single serialization to hash. Truncated to 16 bytes and
+  hex-encoded (32 characters), matching `key_id`'s width: 128 bits of
+  second-preimage resistance is enough for a chain link, and a fixed short
+  width keeps the record small.
 
 ### Canonical encoding
 
