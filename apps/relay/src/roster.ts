@@ -171,7 +171,10 @@ export function mountRoster(app: Hono<{ Bindings: Env }>): void {
     if (state.reusable === 0 && state.used === 1) return c.json(NOT_FOUND, 404);
     if (state.audit_budget_used >= MAX_ROSTER_AUDIT_EVENTS) {
       await recordAuditBudgetExhaustion(c, id, org, handle, "handle");
-      return c.json({ error: "roster event budget exhausted" }, 409);
+      return c.json({
+        error: "roster event budget exhausted",
+        recovery: "ask a roster administrator to reset the audit budget",
+      }, 409);
     }
     return c.json({ error: "roster full" }, 409);
   });
@@ -219,33 +222,49 @@ export function mountRoster(app: Hono<{ Bindings: Env }>): void {
     const now = Date.now();
     const [deleted] = await c.env.DB.batch([
       c.env.DB.prepare(
-        "DELETE FROM roster_members WHERE roster_id = ? AND org = ? AND handle = ? " +
-          "AND EXISTS (SELECT 1 FROM rosters WHERE id = ? AND org = ? AND audit_budget_used < ?)",
-      ).bind(id, identity.org, identity.handle, id, identity.org, MAX_ROSTER_AUDIT_EVENTS),
-      c.env.DB.prepare(
-        "UPDATE rosters SET audit_budget_used = audit_budget_used + 1 " +
-          "WHERE id = ? AND org = ? AND changes() = 1",
-      ).bind(id, identity.org),
+        "DELETE FROM roster_members WHERE roster_id = ? AND org = ? AND handle = ?",
+      ).bind(id, identity.org, identity.handle),
       rosterAuditStatement(c, {
         event: "roster.leave", action: "D", rosterId: id, org: identity.org,
         actor: identity.handle, actorType: "handle", targetType: "handle", targetId: identity.handle,
         description: `${identity.handle} left roster ${id}`, at: now,
       }, "previous-change"),
     ]);
-    if ((deleted.meta.changes ?? 0) !== 1) {
-      const state = await c.env.DB.prepare(
-        "SELECT audit_budget_used, EXISTS(" +
-          "SELECT 1 FROM roster_members WHERE roster_id = ? AND org = ? AND handle = ?" +
-          ") AS member FROM rosters WHERE id = ? AND org = ?",
-      ).bind(id, identity.org, identity.handle, id, identity.org)
-        .first<{ audit_budget_used: number; member: number }>();
-      if (state?.member === 1 && state.audit_budget_used >= MAX_ROSTER_AUDIT_EVENTS) {
-        await recordAuditBudgetExhaustion(c, id, identity.org, identity.handle, "handle");
-        return c.json({ error: "roster event budget exhausted" }, 409);
-      }
-      return c.json(NOT_FOUND, 404);
-    }
+    if ((deleted.meta.changes ?? 0) !== 1) return c.json(NOT_FOUND, 404);
     return c.json({ ok: true });
+  });
+
+  app.post("/v1/roster/:id/audit-budget/reset", async (c) => {
+    const identity = await authenticateRequest(c.env.DB, c.req);
+    if (!identity) return c.json({ error: "unauthorized" }, 401);
+    const id = c.req.param("id");
+    if (!ROSTER_ID_RE.test(id)) return c.json({ error: "invalid roster id" }, 400);
+    if (!(await checkLimit(c.env, `${identity.org}:${id}`, ROSTER_WRITE))) {
+      return c.json({ error: "rate limited" }, 429);
+    }
+    const body = AdminSecretRequest.safeParse(await c.req.json().catch(() => null));
+    if (!body.success) return c.json(NOT_FOUND, 404);
+    const roster = await adminRoster(c, id, body.data.admin_secret);
+    if (!roster || roster.org !== identity.org) return c.json(NOT_FOUND, 404);
+
+    const now = Date.now();
+    const [updated] = await c.env.DB.batch([
+      c.env.DB.prepare(
+        "UPDATE rosters SET audit_budget_used = 0, audit_budget_exhausted_at = NULL " +
+          "WHERE id = ? AND org = ? AND audit_budget_used >= ?",
+      ).bind(id, identity.org, MAX_ROSTER_AUDIT_EVENTS),
+      rosterAuditStatement(c, {
+        event: "roster.audit_budget_reset", action: "U", rosterId: id, org: identity.org,
+        actor: identity.handle, actorType: "admin_secret", targetType: "roster", targetId: null,
+        description: `${identity.handle} reset the membership audit event budget for roster ${id}`,
+        at: now,
+      }, "previous-change"),
+    ]);
+    const reset = (updated.meta.changes ?? 0) === 1;
+    const state = reset ? { audit_budget_used: 0 } : await c.env.DB.prepare(
+      "SELECT audit_budget_used FROM rosters WHERE id = ? AND org = ?",
+    ).bind(id, identity.org).first<{ audit_budget_used: number }>();
+    return c.json({ ok: true, reset, audit_budget_used: state?.audit_budget_used ?? 0 });
   });
 
   app.post("/v1/roster/:id/expel", async (c) => {
