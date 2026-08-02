@@ -5,6 +5,8 @@ import {
   RegisterRequest, CallReply, IncomingCall, CallError, MAX_DETAIL_LENGTH, sanitizeDetail,
   CallAccepted, CallStarted, CancelCall, CallCancelled, CallNotCancelled, RelayToListenerFrame,
   TASK_ID_RE, MAX_TASK_ID_LENGTH,
+  RecoveryIssueResponse, RecoveryRedeemRequest, RecoveryRedeemResponse,
+  RecoveryStateResponse, RegisterResponse, generateRecoveryCode,
 } from "../src/index.js";
 
 describe("handle rules", () => {
@@ -181,5 +183,49 @@ describe("cancellation and acknowledgement frames", () => {
     }
     expect(RelayToListenerFrame.safeParse({ type: "cancel_call", call_id: "c1" }).success).toBe(true);
     expect(ListenerToRelayFrame.safeParse({ type: "cancel_call", call_id: "c1" }).success).toBe(false);
+  });
+});
+
+describe("recovery schemas", () => {
+  it("RecoveryRedeemRequest accepts a valid handle and code", () => {
+    const parsed = RecoveryRedeemRequest.safeParse({
+      handle: "ken",
+      recovery_code: generateRecoveryCode(),
+    });
+    expect(parsed.success).toBe(true);
+  });
+
+  it("RecoveryRedeemRequest rejects a malformed code", () => {
+    expect(RecoveryRedeemRequest.safeParse({ handle: "ken", recovery_code: "nope" }).success).toBe(false);
+    expect(RecoveryRedeemRequest.safeParse({ handle: "ken", recovery_code: "" }).success).toBe(false);
+  });
+
+  it("RecoveryRedeemRequest rejects an invalid handle", () => {
+    expect(RecoveryRedeemRequest.safeParse({
+      handle: "Bad_Handle", recovery_code: generateRecoveryCode(),
+    }).success).toBe(false);
+  });
+
+  it("RecoveryRedeemResponse round-trips", () => {
+    const value = { token: "t", recovery_code: generateRecoveryCode(), address: "ken@relay.test" };
+    expect(RecoveryRedeemResponse.parse(value)).toEqual(value);
+  });
+
+  it("RecoveryIssueResponse round-trips", () => {
+    const value = { recovery_code: generateRecoveryCode() };
+    expect(RecoveryIssueResponse.parse(value)).toEqual(value);
+  });
+
+  it("RecoveryStateResponse allows a null redeemed_at", () => {
+    expect(RecoveryStateResponse.parse({ issued: false, redeemed_at: null })).toEqual({
+      issued: false, redeemed_at: null,
+    });
+    expect(RecoveryStateResponse.parse({ issued: true, redeemed_at: 1 }).redeemed_at).toBe(1);
+  });
+
+  it("RegisterResponse now carries a recovery_code", () => {
+    const value = { token: "t", address: "ken@relay.test", recovery_code: generateRecoveryCode() };
+    expect(RegisterResponse.parse(value)).toEqual(value);
+    expect(RegisterResponse.safeParse({ token: "t", address: "ken@relay.test" }).success).toBe(false);
   });
 });

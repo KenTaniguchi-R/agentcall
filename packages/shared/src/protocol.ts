@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { normalizeRecoveryCode } from "./recovery.js";
 
 export const HANDLE_RE = /^[a-z0-9][a-z0-9-]{1,30}$/;
 export const TASK_ID_RE = /^[a-z0-9][a-z0-9-]{0,63}$/;
@@ -130,7 +131,39 @@ export const RegisterRequest = z.object({
   // Absent = caller-only: the handle can call others but is not callable.
   agent_kind: z.enum(["claude", "codex"]).optional(),
 });
-export const RegisterResponse = z.object({ token: z.string(), address: z.string() });
+
+export const RegisterResponse = z.object({
+  token: z.string(),
+  address: z.string(),
+  // Issued unprompted at registration: most owners will never run
+  // `agentcall recovery issue`, so this is their only copy unless they ask
+  // for another.
+  recovery_code: z.string(),
+});
+
+// Validated through normalizeRecoveryCode rather than a regex so there is
+// exactly one definition of a well-formed code, shared by relay and CLI.
+const RecoveryCode = z.string().refine((s) => normalizeRecoveryCode(s) !== null, {
+  message: "malformed recovery code",
+});
+
+export const RecoveryIssueResponse = z.object({ recovery_code: RecoveryCode });
+
+export const RecoveryRedeemRequest = z.object({
+  handle: z.string().regex(HANDLE_RE),
+  recovery_code: RecoveryCode,
+});
+
+export const RecoveryRedeemResponse = z.object({
+  token: z.string(),
+  recovery_code: RecoveryCode,
+  address: z.string(),
+});
+
+export const RecoveryStateResponse = z.object({
+  issued: z.boolean(),
+  redeemed_at: z.number().nullable(),
+});
 
 export type ErrorCodeType = z.infer<typeof ErrorCode>;
 export type CallRequestType = z.infer<typeof CallRequest>;
@@ -148,6 +181,10 @@ export type CallCancelledType = z.infer<typeof CallCancelled>;
 export type CallNotCancelledType = z.infer<typeof CallNotCancelled>;
 export type RegisterRequestType = z.infer<typeof RegisterRequest>;
 export type RegisterResponseType = z.infer<typeof RegisterResponse>;
+export type RecoveryIssueResponseType = z.infer<typeof RecoveryIssueResponse>;
+export type RecoveryRedeemRequestType = z.infer<typeof RecoveryRedeemRequest>;
+export type RecoveryRedeemResponseType = z.infer<typeof RecoveryRedeemResponse>;
+export type RecoveryStateResponseType = z.infer<typeof RecoveryStateResponse>;
 export type CallerFrameType = z.infer<typeof CallerFrame>;
 export type ListenerToRelayFrameType = z.infer<typeof ListenerToRelayFrame>;
 export type RelayToCallerFrameType = z.infer<typeof RelayToCallerFrame>;
