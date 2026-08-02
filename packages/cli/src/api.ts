@@ -3,7 +3,7 @@ import {
   ListOrgInvitesResponse, ListRosterJoinKeysResponse, RegisterResponse, RevokeOrgInviteResponse,
   RevokeRosterJoinKeyResponse, RosterBundle,
   EncryptionKeyRecord, IdentityRecord, HPKE_SUITE, MAX_ENCRYPTION_KEY_VALIDITY_MS,
-  encryptionKeyTranscript, fromBase64Url, keyIdFor, signTranscript,
+  encryptionKeyTranscript, fromBase64Url, identityTranscript, keyIdFor, signTranscript,
   type AgentCardType, type CardUploadType, type OrgInviteMetadataType, type RosterBundleType,
   type RosterJoinKeyMetadataType,
   type EncryptionKeyRecordType, type IdentityRecordType,
@@ -333,9 +333,20 @@ export async function publishIdentityKey(
   const record: IdentityRecordType = IdentityRecord.parse({
     v: 1, address: `${auth.handle}@${host}`, identity_pub: keys.identity_pub,
   });
+  // Self-signed: the record is signed by the very key it publishes. The relay
+  // has no way to check an identity key against anything else, so possession of
+  // the private half is the only thing that can be proven at publish time.
+  const signature = await signTranscript(
+    await importIdentityPrivateKey(keys.identity_pkcs8),
+    identityTranscript(record),
+  );
   const res = await relayFetch(
     relay, "/v1/keys/identity",
-    { method: "PUT", headers: { "content-type": "application/json", ...authHeaders(auth) }, body: JSON.stringify({ record }) },
+    {
+      method: "PUT",
+      headers: { "content-type": "application/json", ...authHeaders(auth) },
+      body: JSON.stringify({ record, signature }),
+    },
     RELAY_TIMEOUT_MS,
   );
   if (res.status === 409) {
@@ -390,6 +401,23 @@ export async function fetchKeys(
   const record = EncryptionKeyRecord.safeParse(body.encryption?.record);
   if (!identity.success || !record.success || typeof body.encryption?.signature !== "string") {
     throw new ApiError(`The relay returned a malformed key record for ${handle}.`, "invalid");
+  }
+  // Bind the answer to the question. Both records parse fine with any address
+  // in them, so without this a relay asked for `ken` could return Sarah's
+  // records — well-formed, correctly signed by Sarah, and about to be used to
+  // encrypt to the wrong person. The two records must also agree with each
+  // other, or a caller pins one address and encrypts to another.
+  if (identity.data.address !== record.data.address) {
+    throw new ApiError(
+      `The relay returned key records for two different addresses when asked for ${handle}.`,
+      "invalid",
+    );
+  }
+  if (identity.data.address.split("@")[0] !== handle) {
+    throw new ApiError(
+      `The relay returned keys for ${identity.data.address} when asked for ${handle}.`,
+      "invalid",
+    );
   }
   return { identity: identity.data, encryption: { record: record.data, signature: body.encryption.signature } };
 }

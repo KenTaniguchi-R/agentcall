@@ -21,11 +21,22 @@ async function exportPrivate(key: CryptoKey): Promise<string> {
 }
 
 /**
- * Both key pairs live in one file so a partial write cannot leave an identity
- * without its encryption key. `writeJsonAtomic` already creates the directory
- * 0700 and the file 0600.
+ * First-time setup. Both key pairs live in one file so a partial write cannot
+ * leave an identity without its encryption key. `writeJsonAtomic` already
+ * creates the directory 0700 and the file 0600.
+ *
+ * Refuses to overwrite. The identity key is the trust root contacts pin, and
+ * the relay will not replace a published one — regenerating it does not start
+ * over, it bricks the handle. Rotation is `rotateEncryptionKey`.
  */
-export async function generateAndSaveKeys(paths: Paths, epoch = 1): Promise<StoredKeys> {
+export async function generateIdentityKeys(paths: Paths): Promise<StoredKeys> {
+  if (keysExist(paths)) {
+    throw new Error(
+      `${paths.identityKeyFile} already exists. Refusing to overwrite it: replacing the ` +
+        `identity key would orphan every contact who has pinned it, and the relay will not ` +
+        `accept a replacement. To rotate the encryption key instead, use rotateEncryptionKey.`,
+    );
+  }
   const identity = await generateIdentityKeyPair();
   const encryption = await generateEncryptionKeyPair();
   const keys: StoredKeys = {
@@ -33,7 +44,27 @@ export async function generateAndSaveKeys(paths: Paths, epoch = 1): Promise<Stor
     identity_pub: await exportPublicKey(identity.publicKey),
     encryption_pkcs8: await exportPrivate(encryption.privateKey),
     encryption_pub: await exportPublicKey(encryption.publicKey),
-    epoch,
+    epoch: 1,
+  };
+  writeJsonAtomic(paths.identityKeyFile, keys);
+  return keys;
+}
+
+/**
+ * Rotates the encryption key pair only, advancing the epoch by one. The
+ * identity key pair is carried through untouched: it is what signs the new
+ * encryption record, so replacing it here would make the record unverifiable
+ * against the identity key contacts already pinned.
+ */
+export async function rotateEncryptionKey(paths: Paths): Promise<StoredKeys> {
+  const current = loadKeys(paths);
+  const encryption = await generateEncryptionKeyPair();
+  const keys: StoredKeys = {
+    identity_pkcs8: current.identity_pkcs8,
+    identity_pub: current.identity_pub,
+    encryption_pkcs8: await exportPrivate(encryption.privateKey),
+    encryption_pub: await exportPublicKey(encryption.publicKey),
+    epoch: current.epoch + 1,
   };
   writeJsonAtomic(paths.identityKeyFile, keys);
   return keys;
@@ -49,6 +80,11 @@ export function keysExist(paths: Paths): boolean {
  * one written that way.
  */
 export function loadKeys(paths: Paths): StoredKeys {
+  // Checked before statSync so a missing file gets this module's prose rather
+  // than a raw ENOENT stack from node:fs.
+  if (!keysExist(paths)) {
+    throw new Error(`${paths.identityKeyFile} does not exist. Run \`agentcall setup\` first.`);
+  }
   const mode = statSync(paths.identityKeyFile).mode & 0o777;
   if (mode !== 0o600) {
     throw new Error(

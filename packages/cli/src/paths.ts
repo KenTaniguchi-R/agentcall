@@ -9,7 +9,10 @@ export interface Paths {
   rostersFile: string; rosterCacheFile: string;
   contextsFile: string;
   contextsOutFile: string;
-  identityKeyFile: string; encryptionKeyFile: string;
+  // One file holds BOTH key pairs on purpose, so a partial write cannot leave
+  // an identity without its encryption key. There is deliberately no separate
+  // encryption-key path.
+  identityKeyFile: string;
 }
 
 export function managedPolicyPath(platform: NodeJS.Platform = process.platform): string {
@@ -42,6 +45,5 @@ export function getPaths(
     contextsFile: join(dir, "contexts.json"),
     contextsOutFile: join(dir, "contexts-out.json"),
     identityKeyFile: join(dir, "identity.key.json"),
-    encryptionKeyFile: join(dir, "encryption.key.json"),
   };
 }
