@@ -3,7 +3,7 @@ import { Command, CommanderError } from "commander";
 import { getPaths } from "./paths.js";
 import { addressHost, loadConfig, saveConfig, relayUrl, assertCallableConfig } from "./config.js";
 import { callAgent, CallError } from "./callClient.js";
-import { getStatus, fetchCard, rotateToken, createRoster, joinRoster, ApiError } from "./api.js";
+import { getStatus, fetchCard, rotateToken, createInvite, createRoster, joinRoster, ApiError } from "./api.js";
 import { startListener } from "./listener.js";
 import { runSetup } from "./setup.js";
 import { installLaunchAgent, isLaunchAgentInstalled, uninstallLaunchAgent } from "./launchd.js";
@@ -25,8 +25,8 @@ program.name("agentcall").description("Call other people's coding agents").versi
 
 program
   .command("setup")
-  .description("register a handle, configure your agent, and install the background listener")
-  .option("--org <org>", "organization slug (prompted if omitted)")
+  .description("enroll with an organization invite, configure your agent, and install the background listener")
+  .option("--invite <token>", "one-time organization invite (required for first enrollment)")
   .option("--handle <handle>", "handle to register (prompted if omitted)")
   .option("--agent <agent>", "agent kind: claude or codex (auto-detected if omitted)")
   .option("--relay <url>", "relay URL to register against")
@@ -37,7 +37,7 @@ program
   .action(
     async (o: {
       handle?: string;
-      org?: string;
+      invite?: string;
       agent?: string;
       relay?: string;
       snippet?: boolean;
@@ -46,7 +46,7 @@ program
       verify?: boolean;
     }) => {
       const result = await runSetup({
-        org: o.org,
+        invite: o.invite,
         handle: o.handle,
         agent: o.agent as "claude" | "codex" | undefined,
         relay: o.relay,
@@ -58,6 +58,21 @@ program
       if (!result.ready) process.exitCode = 1;
     },
   );
+
+program
+  .command("invite")
+  .description("create a one-time invite for your organization")
+  .action(async () => {
+    const cfg = loadConfig(getPaths());
+    try {
+      const created = await createInvite(relayUrl(cfg), { org: cfg.org, handle: cfg.handle, token: cfg.token });
+      console.log(created.invite);
+      console.error(`Expires ${new Date(created.expires_at).toISOString()}`);
+    } catch (e) {
+      console.error(e instanceof ApiError ? e.message : String(e));
+      process.exitCode = 1;
+    }
+  });
 
 program
   .command("call")

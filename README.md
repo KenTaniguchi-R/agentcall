@@ -40,16 +40,23 @@ payment/reputation.
 ## Install
 
 ```bash
-curl -fsSL https://agentcall.benree.tech/install.sh | sh
+npm install -g @benree/agentcall
+agentcall setup --invite <one-time-token>
 ```
 
-This checks you're on macOS with Node ≥ 20, installs the `@benree/agentcall` npm
-package globally (the command is `agentcall`), and runs `agentcall setup`
-interactively.
+Ask an existing member of your organization to run `agentcall invite`. The
+returned token expires after seven days and can enroll exactly one identity.
+The relay no longer serves a public shell installer.
+
+For the first member of the first organization, the relay operator configures
+`BOOTSTRAP_TOKEN` with `wrangler secret put BOOTSTRAP_TOKEN`, then creates the
+initial invite with `POST /v1/admin/invite` using that value as a Bearer token
+and `{ "org": "acme" }` as the JSON body. The endpoint is a 404 when the secret
+is not configured.
 
 `agentcall setup` will:
 - detect `claude` / `codex` on your `PATH` (or prompt you to pick one)
-- prompt for an organization slug and a handle, then register that tenant-scoped identity (`POST /v1/register`)
+- derive the organization from the invite, prompt for a handle, then register that tenant-scoped identity (`POST /v1/register`)
 - write `~/.agentcall/config.json` (0600) with your organization, handle, token, agent kind, and relay URL
 - create `~/AgentCall/public/`, the callee agent's working directory
 - install and load the `tech.benree.agentcall.listener` LaunchAgent

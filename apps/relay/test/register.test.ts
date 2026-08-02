@@ -1,15 +1,17 @@
 import { env, SELF } from "cloudflare:test";
 import { describe, expect, it } from "vitest";
-import { registerHandle, wsAuth } from "./helpers.js";
+import { issueInvite, registerHandle, wsAuth } from "./helpers.js";
 
 // Each test uses its own synthetic source IP so the per-IP register rate
 // limit (5/60s, see wrangler.jsonc's REGISTER_RL) doesn't make unrelated
 // tests in this file collide with each other's budget.
 async function register(body: unknown, ip = "203.0.113.1") {
+  const input = body as { org?: string; invite?: string; handle?: string; agent_kind?: string };
+  const invite = input.invite ?? await issueInvite(input.org ?? "acme", input.handle ?? "request");
   return SELF.fetch("https://relay.test/v1/register", {
     method: "POST",
     headers: { "content-type": "application/json", "cf-connecting-ip": ip },
-    body: JSON.stringify(body),
+    body: JSON.stringify({ invite, handle: input.handle, agent_kind: input.agent_kind }),
   });
 }
 
@@ -21,15 +23,57 @@ describe("POST /v1/register", () => {
     expect(json.token.length).toBeGreaterThanOrEqual(40);
     expect(json.address).toBe("ken@relay.test");
   });
+  it("requires a valid, unused invite and derives the tenant from it", async () => {
+    const missing = await SELF.fetch("https://relay.test/v1/register", {
+      method: "POST", headers: { "content-type": "application/json", "cf-connecting-ip": "203.0.113.160" },
+      body: JSON.stringify({ handle: "ken" }),
+    });
+    expect(missing.status).toBe(400);
+
+    const invite = await issueInvite("invite-org", "tenant-proof");
+    const first = await register({ invite, org: "attacker-choice", handle: "invited" }, "203.0.113.161");
+    expect(first.status).toBe(200);
+    expect(await first.json()).toMatchObject({ org: "invite-org", address: "invited@relay.test" });
+    const replay = await register({ invite, handle: "replay" }, "203.0.113.162");
+    expect(replay.status).toBe(404);
+  });
+
+  it("does not consume an invite when the requested handle is already taken", async () => {
+    await register({ org: "acme", handle: "occupied" }, "203.0.113.163");
+    const invite = await issueInvite("acme", "retryable");
+    expect((await register({ invite, handle: "occupied" }, "203.0.113.164")).status).toBe(409);
+    expect((await register({ invite, handle: "available" }, "203.0.113.165")).status).toBe(200);
+  });
+
+  it("allows exactly one concurrent registration per invite", async () => {
+    const invite = await issueInvite("race-org", "concurrent");
+    const [a, b] = await Promise.all([
+      register({ invite, handle: "racer-a" }, "203.0.113.171"),
+      register({ invite, handle: "racer-b" }, "203.0.113.172"),
+    ]);
+    expect([a.status, b.status].sort()).toEqual([200, 404]);
+    const rows = await env.DB.prepare("SELECT COUNT(*) AS n FROM handles WHERE org = ?")
+      .bind("race-org").first<{ n: number }>();
+    expect(rows?.n).toBe(1);
+  });
+
+  it("rejects expired invites", async () => {
+    const invite = await issueInvite("expired-org", "expired");
+    await env.DB.prepare("UPDATE invites SET expires_at = ? WHERE org = ?").bind(Date.now() - 1, "expired-org").run();
+    expect((await register({ invite, handle: "late" }, "203.0.113.173")).status).toBe(404);
+  });
   it("409s on duplicate handle", async () => {
     await register({ org: "acme", handle: "dup", agent_kind: "claude" }, "203.0.113.11");
     const res = await register({ org: "acme", handle: "dup", agent_kind: "codex" }, "203.0.113.11");
     expect(res.status).toBe(409);
   });
-  it("400s on invalid handle and reserved handle", async () => {
+  it("400s on invalid handles and agent kinds", async () => {
     expect((await register({ org: "acme", handle: "Bad_Handle", agent_kind: "claude" }, "203.0.113.12")).status).toBe(400);
-    expect((await register({ org: "acme", handle: "admin", agent_kind: "claude" }, "203.0.113.12")).status).toBe(400);
     expect((await register({ org: "acme", handle: "ok-handle", agent_kind: "vim" }, "203.0.113.12")).status).toBe(400);
+  });
+  it("allows formerly global system names inside each tenant", async () => {
+    expect((await register({ org: "acme", handle: "admin" }, "203.0.113.167")).status).toBe(200);
+    expect((await register({ org: "beta", handle: "admin" }, "203.0.113.168")).status).toBe(200);
   });
   it("registers caller-only (no agent_kind) and stores NULL", async () => {
     const res = await register({ org: "acme", handle: "solo" }, "203.0.113.13");
@@ -68,12 +112,59 @@ describe("POST /v1/register", () => {
   });
 
   it("returns the tenant hostname on the hosted relay", async () => {
+    const invite = await issueInvite("hosted", "hosted-address");
     const res = await SELF.fetch("https://agentcall.benree.tech/v1/register", {
       method: "POST",
       headers: { "content-type": "application/json", "cf-connecting-ip": "203.0.113.153" },
-      body: JSON.stringify({ org: "hosted", handle: "person", agent_kind: "claude" }),
+      body: JSON.stringify({ invite, handle: "person", agent_kind: "claude" }),
     });
     expect((await res.json<{ address: string }>()).address).toBe("person@hosted.agentcall.benree.tech");
+  });
+});
+
+describe("POST /v1/invite", () => {
+  it("lets an authenticated tenant member create a single-use tenant invite", async () => {
+    const token = await registerHandle("inviter", "claude", "tenant-a");
+    const res = await SELF.fetch("https://relay.test/v1/invite", {
+      method: "POST", headers: wsAuth("inviter", token, "tenant-a"),
+    });
+    expect(res.status).toBe(200);
+    const created = await res.json<{ invite: string; expires_at: number }>();
+    expect(created.invite.length).toBeGreaterThanOrEqual(40);
+    expect(created.expires_at).toBeGreaterThan(Date.now());
+    const enrolled = await register({ invite: created.invite, handle: "new-member" }, "203.0.113.166");
+    expect(await enrolled.json()).toMatchObject({ org: "tenant-a" });
+  });
+
+  it("rejects anonymous invite creation", async () => {
+    expect((await SELF.fetch("https://relay.test/v1/invite", { method: "POST" })).status).toBe(401);
+  });
+});
+
+describe("POST /v1/admin/invite", () => {
+  it("bootstraps the first tenant invite with the operator secret", async () => {
+    const res = await SELF.fetch("https://relay.test/v1/admin/invite", {
+      method: "POST",
+      headers: {
+        Authorization: "Bearer test-bootstrap-token",
+        "content-type": "application/json",
+        "cf-connecting-ip": "203.0.113.169",
+      },
+      body: JSON.stringify({ org: "first-org" }),
+    });
+    expect(res.status).toBe(200);
+    const { invite } = await res.json<{ invite: string }>();
+    const enrolled = await register({ invite, handle: "founder" }, "203.0.113.170");
+    expect(await enrolled.json()).toMatchObject({ org: "first-org" });
+  });
+
+  it("rejects a wrong operator secret without minting an invite", async () => {
+    const res = await SELF.fetch("https://relay.test/v1/admin/invite", {
+      method: "POST",
+      headers: { Authorization: "Bearer wrong", "content-type": "application/json" },
+      body: JSON.stringify({ org: "forged" }),
+    });
+    expect(res.status).toBe(401);
   });
 });
 

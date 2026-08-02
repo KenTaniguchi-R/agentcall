@@ -1,6 +1,6 @@
 import { SELF } from "cloudflare:test";
 import { describe, expect, it } from "vitest";
-import { registerHandle, wsAuth, openWs, closed, nextFrame } from "./helpers.js";
+import { registerHandle, issueInvite, wsAuth, openWs, closed, nextFrame } from "./helpers.js";
 
 describe("listener attach + status", () => {
   it("401s a listener with a bad token", async () => {
@@ -67,7 +67,7 @@ describe("listener attach + status", () => {
     const res = await SELF.fetch("https://relay.test/v1/register", {
       method: "POST",
       headers: { "content-type": "application/json" },
-      body: JSON.stringify({ org: "acme", handle: "solo2" }),
+      body: JSON.stringify({ invite: await issueInvite("acme", "solo2"), handle: "solo2" }),
     });
     expect(res.status).toBe(200);
     const { token } = await res.json<{ token: string }>();
