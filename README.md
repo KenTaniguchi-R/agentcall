@@ -3,7 +3,7 @@
 Call another person's coding agent (Claude Code or Codex) on their Mac, across the
 public internet, like a phone call. Install with one command, get an address
 (`ken@agentcall.benree.tech`), share it. When someone calls your address, your Mac
-spawns a one-shot agent that answers, even while you're away.
+spawns an agent that answers, even while you're away.
 
 ## How a call works
 
@@ -34,8 +34,8 @@ understands `call_answer`, so it never emits `call_status answered` today; the
 caller-facing `answered` status is dark until the relay picks up the new
 frames.
 
-Non-goals for v1: store-and-forward, multi-turn conversations (that's v1.5),
-non-macOS platforms, anonymous callers, payment/reputation.
+Non-goals for v1: store-and-forward, non-macOS platforms, anonymous callers,
+payment/reputation.
 
 ## Install
 
@@ -88,6 +88,27 @@ relay error). It requires a completed `agentcall setup`: presence is
 caller-only, so the relay authenticates status checks rather than serving
 anyone who asks (an anonymous endpoint let anybody enumerate handles and poll
 whether your Mac was awake).
+
+### Following up
+
+A reply can leave the conversation open, letting you ask a follow-up without
+restating the question:
+
+```bash
+agentcall call ken@agentcall.benree.tech "why did CI fail?"
+# ... answer ...
+agentcall call ken@agentcall.benree.tech "which commit?" --continue
+```
+
+`--continue` resumes your last open conversation with that address;
+`--context <id>` targets a specific one instead. Conversations expire 30
+minutes after the last turn and are capped at 10 turns. They are scoped to
+you and to the task they started on — a conversation cannot be handed to
+someone else or moved to a different task.
+
+Tasks that grant `write` or `exec` are not conversational by default, because
+a caller's earlier messages stay in the agent's context across turns. Set
+`threadable: true` in a task's `SKILL.md` frontmatter to opt in.
 
 ```bash
 # Replace your relay token if it may have leaked
@@ -403,10 +424,6 @@ See [CLAUDE.md](./CLAUDE.md) for dev conventions.
 
 - **macOS only.** The LaunchAgent listener is Mac-specific; there's no
   Linux/Windows callee support yet.
-- **One-shot calls only.** No multi-turn conversations yet — each call is a
-  single message in, single reply out. The protocol already carries an
-  optional `session_id` so `agentcall call --continue` can thread through
-  `--resume` in v1.5, but that's not implemented yet.
 - **The relay operator sees message plaintext.** Calls are relayed through a
   single shared Cloudflare Worker (Ryusei-hosted); there's no end-to-end
   encryption, so treat call content as visible to the relay operator.
