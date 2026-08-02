@@ -2,7 +2,7 @@ import { existsSync, mkdirSync, readdirSync, readFileSync, writeFileSync } from 
 import { join } from "node:path";
 import { z } from "zod";
 import { parse as parseYaml } from "yaml";
-import { TASK_ID_RE } from "@benree/agentcall-shared";
+import { MAX_KEYWORD_LENGTH, MAX_TASK_KEYWORDS, TASK_ID_RE } from "@benree/agentcall-shared";
 import type { Paths } from "./paths.js";
 
 export const CAPS = ["read", "write", "fetch", "exec"] as const;
@@ -46,7 +46,7 @@ export const SkillFrontmatter = z.object({
   // Mirrors CardTask.keywords in packages/shared exactly. The two must not
   // drift: this is the authoring side of the field the search ranker weights
   // highest.
-  keywords: z.array(z.string().min(1).max(40)).max(20).default([]),
+  keywords: z.array(z.string().min(1).max(MAX_KEYWORD_LENGTH)).max(MAX_TASK_KEYWORDS).default([]),
   tools: z.array(z.enum(CAPS)).default(["read"]),
   timeout_s: z.number().int().positive().max(300).optional(),
 });

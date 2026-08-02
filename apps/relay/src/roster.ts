@@ -84,7 +84,11 @@ export function mountRoster(app: Hono<{ Bindings: Env }>): void {
       const count = await c.env.DB.prepare("SELECT COUNT(*) AS n FROM roster_members WHERE roster_id = ?")
         .bind(id).first<{ n: number }>();
       if ((count?.n ?? 0) >= MAX_ROSTER_MEMBERS) return c.json({ error: "roster full" }, 409);
-      await c.env.DB.prepare("INSERT INTO roster_members (roster_id, handle, joined_at) VALUES (?, ?, ?)")
+      // OR IGNORE: two concurrent joins by the same handle can both pass the
+      // membership check above and then race on the (roster_id, handle)
+      // primary key. This endpoint documents itself as idempotent, so the
+      // loser of that race must not 500.
+      await c.env.DB.prepare("INSERT OR IGNORE INTO roster_members (roster_id, handle, joined_at) VALUES (?, ?, ?)")
         .bind(id, handle, Date.now()).run();
     }
     return c.json({ ok: true });

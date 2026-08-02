@@ -45,7 +45,12 @@ const UPLOAD = CardUpload.parse({
     { id: "payroll", name: "Payroll", description: "Secret.", examples: [] },
   ],
   default_offer: ["ask"],
-  grants: { mia: ["adr"] },
+  // mia's grants are deliberately out of card order (payroll before adr):
+  // with a single granted task, grant order and card order always coincide
+  // and the "card order, not grant order" test below can't tell them apart.
+  // With two, a grant-order implementation would produce ask, payroll, adr —
+  // distinct from the card-order ask, adr, payroll both tests assert below.
+  grants: { mia: ["payroll", "adr"] },
 });
 
 describe("visibleTasks", () => {
@@ -53,13 +58,17 @@ describe("visibleTasks", () => {
     expect(visibleTasks(UPLOAD, "").map((t) => t.id)).toEqual(["ask"]);
   });
   it("unions default_offer with the viewer's own grants", () => {
-    expect(visibleTasks(UPLOAD, "mia").map((t) => t.id)).toEqual(["ask", "adr"]);
+    expect(visibleTasks(UPLOAD, "mia").map((t) => t.id)).toEqual(["ask", "adr", "payroll"]);
   });
   it("never leaks a task granted to someone else", () => {
     expect(visibleTasks(UPLOAD, "bob").map((t) => t.id)).toEqual(["ask"]);
   });
   it("returns tasks in card order, not grant order", () => {
-    expect(visibleTasks(UPLOAD, "mia").map((t) => t.id)).toEqual(["ask", "adr"]);
+    // mia's grants are ["payroll", "adr"] — grant order. A buggy
+    // implementation that appended grants in THAT order (rather than
+    // filtering the card's own task list) would produce
+    // ["ask", "payroll", "adr"] here instead.
+    expect(visibleTasks(UPLOAD, "mia").map((t) => t.id)).toEqual(["ask", "adr", "payroll"]);
   });
   // Regression: `grants` is a zod record inheriting Object.prototype, and
   // HANDLE_RE accepts "constructor". A bare grants[viewer] lookup returns the

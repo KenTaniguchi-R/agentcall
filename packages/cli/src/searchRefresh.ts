@@ -1,6 +1,6 @@
 import type { BundleEntryType } from "@benree/agentcall-shared";
 import { ApiError, fetchRosterBundle } from "./api.js";
-import { CACHE_TTL_MS, readCached, writeCached } from "./rosters.js";
+import { CACHE_TTL_MS, deleteCached, readCached, writeCached } from "./rosters.js";
 import type { Paths } from "./paths.js";
 
 export interface RefreshOptions {
@@ -33,7 +33,7 @@ export async function refreshRoster(
 ): Promise<RefreshResult> {
   const now = opts.now ?? Date.now();
   const fetcher = opts.fetcher ?? fetchRosterBundle;
-  const hit = readCached(p, name, identity);
+  const hit = readCached(p, name, { ...identity, roster_id: rosterId });
   const ageMs = hit ? now - hit.fetched_at : Infinity;
 
   if (hit && !opts.offline && ageMs < CACHE_TTL_MS) {
@@ -60,7 +60,14 @@ export async function refreshRoster(
     return { entries: out.bundle.entries, ageSeconds: 0, stale: false };
   } catch (e) {
     // The relay says the roster is gone or membership ended: fail closed.
-    if (e instanceof ApiError && e.code === "unknown_handle") throw e;
+    // Drop the cache entry rather than merely refusing to return it here —
+    // --offline reads the cache directly and returns before any network
+    // call, so a stale entry left in place would keep serving exactly the
+    // results this fail-closed rule exists to suppress, indefinitely.
+    if (e instanceof ApiError && e.code === "unknown_handle") {
+      deleteCached(p, name);
+      throw e;
+    }
     if (!hit) {
       throw new Error(
         `Roster "${name}" has never been fetched and the relay is unreachable (${e instanceof Error ? e.message : String(e)}). ` +

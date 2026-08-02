@@ -3,7 +3,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, it, vi } from "vitest";
 import { getPaths } from "../src/paths.js";
-import { saveMembership, writeCached } from "../src/rosters.js";
+import { readCached, saveMembership, writeCached } from "../src/rosters.js";
 import { ApiError } from "../src/api.js";
 import { refreshRoster } from "../src/searchRefresh.js";
 
@@ -63,12 +63,16 @@ describe("refreshRoster", () => {
   // The ONE place fail-closed is right: the relay is reporting that your
   // ACCESS changed. Serving stale results would advertise people you can no
   // longer reach.
-  it("refuses to serve results on a 404", async () => {
+  it("refuses to serve results on a 404, and drops the stale cache entry", async () => {
     const p = setup();
     writeCached(p, "acme", cached(0));
     const fetcher = vi.fn().mockRejectedValue(new ApiError("gone", "unknown_handle"));
     await expect(refreshRoster(p, "acme", "a".repeat(22), IDENTITY, AUTH, { fetcher, now: Date.now() }))
       .rejects.toThrow(/no longer a member|gone/i);
+    // Otherwise --offline (which reads the cache directly, before any
+    // network call) would keep serving these results indefinitely — exactly
+    // the outcome the fail-closed 404 handling exists to prevent.
+    expect(readCached(p, "acme", { ...IDENTITY, roster_id: "a".repeat(22) })).toBeNull();
   });
 
   it("errors on a cold cache with no network", async () => {

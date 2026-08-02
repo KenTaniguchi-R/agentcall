@@ -9,7 +9,7 @@ import {
 } from "../src/rosters.js";
 
 const paths = () => getPaths(mkdtempSync(join(tmpdir(), "agentcall-roster-")));
-const IDENTITY = { relay: "https://r.test", caller: "ken" };
+const IDENTITY = { relay: "https://r.test", caller: "ken", roster_id: "a".repeat(22) };
 const BUNDLE = {
   relay: "https://r.test", caller: "ken", roster_id: "a".repeat(22),
   fetched_at: 1_000, entries: [], skipped: 0,
@@ -57,6 +57,33 @@ describe("memberships (user data)", () => {
     expect(() => saveMembership(p, { name: "not valid!", relay: "https://r.test", roster_id: "a".repeat(22) }))
       .toThrow(/invalid roster name/i);
   });
+
+  // `--as` defaults to the literal "roster" for both `roster create` and
+  // `roster join`, so re-saving the SAME name with the SAME roster_id (e.g.
+  // re-running `roster join` for a roster you already belong to) must stay
+  // idempotent rather than tripping the conflict guard below.
+  it("re-saving the same name with the same roster_id is idempotent", () => {
+    const p = paths();
+    saveMembership(p, { name: "acme", relay: "https://r.test", roster_id: "a".repeat(22) });
+    expect(() => saveMembership(p, { name: "acme", relay: "https://r.test", roster_id: "a".repeat(22) }))
+      .not.toThrow();
+    expect(loadMemberships(p)).toEqual([{ name: "acme", relay: "https://r.test", roster_id: "a".repeat(22) }]);
+  });
+
+  // The exact loss this file's throw-on-corruption policy exists to
+  // prevent, arriving through the front door: since --as defaults to
+  // "roster" for both create and join, the happy path for joining a SECOND
+  // roster without an explicit --as would otherwise silently destroy the
+  // first roster's id — unrecoverable, since the join secret is discarded at
+  // join time.
+  it("throws rather than silently overwriting a name with a different roster_id", () => {
+    const p = paths();
+    saveMembership(p, { name: "acme", relay: "https://r.test", roster_id: "a".repeat(22) });
+    expect(() => saveMembership(p, { name: "acme", relay: "https://r.test", roster_id: "b".repeat(22) }))
+      .toThrow(/already recorded|different roster/i);
+    // The original membership must survive the rejected write.
+    expect(loadMemberships(p)).toEqual([{ name: "acme", relay: "https://r.test", roster_id: "a".repeat(22) }]);
+  });
 });
 
 describe("bundle cache (derived data)", () => {
@@ -79,13 +106,22 @@ describe("bundle cache (derived data)", () => {
   it("refuses to serve a bundle fetched by a different caller", () => {
     const p = paths();
     writeCached(p, "acme", BUNDLE);
-    expect(readCached(p, "acme", { relay: "https://r.test", caller: "someone-else" })).toBeNull();
+    expect(readCached(p, "acme", { ...IDENTITY, caller: "someone-else" })).toBeNull();
   });
 
   it("refuses to serve a bundle fetched from a different relay", () => {
     const p = paths();
     writeCached(p, "acme", BUNDLE);
-    expect(readCached(p, "acme", { relay: "https://other.test", caller: "ken" })).toBeNull();
+    expect(readCached(p, "acme", { ...IDENTITY, relay: "https://other.test" })).toBeNull();
+  });
+
+  // Without this, `roster forget acme` (which drops rosters.json but leaves
+  // the cache) followed by rejoining a DIFFERENT roster as `--as acme` would
+  // serve the old roster's bundle under the reused local name.
+  it("refuses to serve a bundle fetched under a different roster_id", () => {
+    const p = paths();
+    writeCached(p, "acme", BUNDLE);
+    expect(readCached(p, "acme", { ...IDENTITY, roster_id: "b".repeat(22) })).toBeNull();
   });
 
   it("does not leave the previous cache corrupt if a write is interrupted", () => {

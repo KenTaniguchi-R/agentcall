@@ -65,9 +65,22 @@ describe("rank", () => {
   });
 
   it("scores presence, not count — repetition cannot buy rank", () => {
-    const spammy = entry({ handle: "spam", task: "spam", description: "payroll ".repeat(50), name: "N" });
+    // Two query terms, not one: a lone-term "payroll" query would dedupe
+    // spammy's repeated description to a single hit, which MIN_SCORE (2)
+    // filters out before ranking even begins — so spammy would never enter
+    // the results at all, and "honest first" would pass without spammy's
+    // repetition ever being compared against anything. With both terms in
+    // spammy's description, presence-not-count gives it score 2 (one point
+    // per distinct term, however many times each repeats) against honest's
+    // single-keyword score 3 — a real comparison, not an absence.
+    const spammy = entry({ handle: "spam", task: "spam", description: "payroll salary ".repeat(50), name: "N" });
     const honest = entry({ handle: "honest", task: "honest", keywords: ["payroll"], name: "N", description: "D" });
-    expect(rank("payroll", [spammy, honest])[0]!.handle).toBe("honest");
+    const results = rank("payroll salary", [spammy, honest]);
+    // The length assertion is what keeps this test honest: if spammy failed
+    // to clear MIN_SCORE it would silently vanish from the array rather than
+    // simply losing the comparison, and `results[0]` alone would not catch that.
+    expect(results).toHaveLength(2);
+    expect(results[0]!.handle).toBe("honest");
   });
 
   it("accumulates a term across fields", () => {

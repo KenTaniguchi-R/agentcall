@@ -70,7 +70,20 @@ export function saveMembership(p: Paths, m: Membership): void {
   if (!NAME_RE.test(m.name)) {
     throw new Error(`Invalid roster name "${m.name}" — start with a letter or digit, then letters, digits, ".", "_", "-" (no @).`);
   }
-  const rosters = loadMemberships(p).filter((r) => r.name.toLowerCase() !== m.name.toLowerCase());
+  const existing = loadMemberships(p);
+  const prior = existing.find((r) => r.name.toLowerCase() === m.name.toLowerCase());
+  // `--as` defaults to the literal "roster" for both `roster create` and
+  // `roster join`, so the happy path for joining a SECOND roster without
+  // `--as` would otherwise silently destroy the first one's roster_id here —
+  // unrecoverable, because the join secret is discarded at join time. Same
+  // name + same id stays idempotent (rejoining what you already belong to);
+  // same name + a different id is the collision this throws on.
+  if (prior && prior.roster_id !== m.roster_id) {
+    throw new Error(
+      `"${m.name}" is already recorded for a different roster. Run \`agentcall roster forget ${m.name}\` first, or pick a different --as name.`,
+    );
+  }
+  const rosters = existing.filter((r) => r.name.toLowerCase() !== m.name.toLowerCase());
   rosters.push(m);
   writeAtomic(p.rostersFile, p.dir, { rosters });
 }
@@ -95,17 +108,32 @@ export function loadCache(p: Paths): Record<string, CachedBundle> {
 }
 
 // Identity-validating read. A cached bundle is only ever served back to the
-// exact (relay, caller) that fetched it, because it contains tasks granted
-// privately to that caller. Any mismatch is a miss, never a downgrade.
+// exact (relay, caller, roster_id) that fetched it, because it contains
+// tasks granted privately to that caller under that roster. Any mismatch is
+// a miss, never a downgrade. roster_id matters because rosters.json — not
+// this cache — is keyed by local name only: `roster forget acme` followed by
+// rejoining a *different* roster as `--as acme` must not resurrect the old
+// roster's bundle under the reused name.
 export function readCached(
-  p: Paths, name: string, identity: { relay: string; caller: string },
+  p: Paths, name: string, identity: { relay: string; caller: string; roster_id: string },
 ): CachedBundle | null {
   const hit = loadCache(p)[name];
   if (!hit) return null;
-  if (hit.relay !== identity.relay || hit.caller !== identity.caller) return null;
+  if (hit.relay !== identity.relay || hit.caller !== identity.caller || hit.roster_id !== identity.roster_id) {
+    return null;
+  }
   return hit;
 }
 
 export function writeCached(p: Paths, name: string, bundle: CachedBundle): void {
   writeAtomic(p.rosterCacheFile, p.dir, { version: 1, rosters: { ...loadCache(p), [name]: bundle } });
+}
+
+// Derived data: dropping an entry costs one refetch, never user data. Used
+// on a 404 (see searchRefresh.ts) so a revoked roster's cache cannot outlive
+// the revocation under --offline.
+export function deleteCached(p: Paths, name: string): void {
+  const rosters = { ...loadCache(p) };
+  delete rosters[name];
+  writeAtomic(p.rosterCacheFile, p.dir, { version: 1, rosters });
 }
