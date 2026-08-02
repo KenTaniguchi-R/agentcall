@@ -397,7 +397,11 @@ agentcall/
 └── packages/cli/        # @benree/agentcall — the `agentcall` command (setup/listen/call/status/uninstall)
 ```
 
-See [CLAUDE.md](./CLAUDE.md) for dev conventions.
+See [CLAUDE.md](./CLAUDE.md) for dev conventions. Open work is tracked in GitHub
+Issues, and **the assignee is the claim** — read
+[CONTRIBUTING.md](./CONTRIBUTING.md) before starting anything, so two people
+don't pick up the same issue. It covers claiming, the automatic release of
+stale claims, and the one-worktree-per-session rule.
 
 ## Limitations
 
