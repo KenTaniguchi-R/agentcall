@@ -96,11 +96,14 @@ describe("api client", () => {
       message: expect.stringMatching(/did not respond/),
     });
   });
-  it("gets status and maps 404", async () => {
+  it("gets status and maps a non-enumerating 404 without claiming the target is unknown", async () => {
     const relay = await serve(200, { online: true });
     expect(await getStatus(relay, "ken", { org: "acme", handle: "me", token: "tok" })).toEqual({ online: true });
     const relay2 = await serve(404, { error: "unknown handle" });
-    await expect(getStatus(relay2, "ghost", { org: "acme", handle: "me", token: "tok" })).rejects.toMatchObject({ code: "unknown_handle" });
+    await expect(getStatus(relay2, "ghost", { org: "acme", handle: "me", token: "tok" })).rejects.toMatchObject({
+      code: "status_unavailable",
+      message: expect.stringMatching(/does not exist or does not share a roster/i),
+    });
   });
   // The relay stopped serving presence anonymously (it was an enumeration and
   // "is this person at their desk" oracle), so every status check must carry

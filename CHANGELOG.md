@@ -6,6 +6,15 @@ which are released together.
 
 ## Unreleased
 
+### Changed — presence is roster-scoped and auditable
+
+- Handles can read their own presence or that of a peer in a shared roster.
+  Unrelated and nonexistent targets now return a byte-identical generic 404;
+  call delivery remains independent of roster membership.
+- Authenticated allowed and denied status reads are written to a dedicated
+  Analytics Engine dataset with viewer, target, timestamp, source location,
+  and decision, but never the target's online/offline state.
+
 ### Added — executable policy assertions
 
 - User and administrator-managed policy files can assert accepted and denied

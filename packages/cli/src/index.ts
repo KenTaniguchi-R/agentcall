@@ -162,8 +162,8 @@ program
   .argument("<address>", "contact name or handle@host to check")
   .action(async (address: string) => {
     const paths = getPaths();
-    // Presence is caller-only on the relay, so status now needs credentials —
-    // this used to fall back to the default relay with no config at all.
+    // Presence is self-or-shared-roster on the relay, so status needs the
+    // viewer's credentials rather than a default relay with no config.
     const cfg = loadConfig(paths);
     const cfgRelay = relayUrl(cfg);
     const parsed = resolveAddress(paths, address, cfgRelay, cfg.org);

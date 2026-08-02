@@ -5,7 +5,10 @@ import {
 } from "@benree/agentcall-shared";
 
 export class ApiError extends Error {
-  constructor(message: string, public code: "handle_taken" | "invite_invalid" | "invalid" | "unknown_handle" | "network") {
+  constructor(
+    message: string,
+    public code: "handle_taken" | "invite_invalid" | "invalid" | "unknown_handle" | "status_unavailable" | "network",
+  ) {
     super(message);
   }
 }
@@ -86,9 +89,8 @@ export async function createInvite(
   return CreateInviteResponse.parse(await res.json());
 }
 
-// Presence is caller-only on the relay now, so this always authenticates —
-// `auth` is required rather than optional to make that a compile-time fact
-// instead of a runtime 401.
+// Presence is self-or-shared-roster on the relay, so this always authenticates.
+// `auth` is required rather than optional to make that a compile-time fact.
 export async function getStatus(
   relay: string, handle: string, auth: Auth, opts: { timeoutMs?: number } = {},
 ): Promise<{ online: boolean }> {
@@ -100,7 +102,12 @@ export async function getStatus(
   );
   if (res.status === 401) throw new ApiError("Your credentials were rejected. Re-run `agentcall setup`.", "invalid");
   if (res.status === 429) throw new ApiError("Too many status checks — try again in a minute.", "network");
-  if (res.status === 404) throw new ApiError(`No agent registered as "${handle}".`, "unknown_handle");
+  if (res.status === 404) {
+    throw new ApiError(
+      `Status unavailable for "${handle}": the target does not exist or does not share a roster with you.`,
+      "status_unavailable",
+    );
+  }
   if (!res.ok) throw new ApiError(`Status check failed (${res.status}).`, "network");
   return (await res.json()) as { online: boolean };
 }

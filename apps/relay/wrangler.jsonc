@@ -12,6 +12,10 @@
     "database_id": "f67097f0-2521-4c41-a9d4-1402682038aa",
     "migrations_dir": "migrations"
   }],
+  "analytics_engine_datasets": [{
+    "binding": "STATUS_READS",
+    "dataset": "agentcall_status_reads"
+  }],
   "durable_objects": { "bindings": [
     { "name": "HANDLE_DO", "class_name": "HandleDO" },
     { "name": "RATE_LIMITER_DO", "class_name": "RateLimiterDO" }

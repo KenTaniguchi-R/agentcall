@@ -99,10 +99,13 @@ error message on stderr on failure (`unknown_handle`, `offline`, `busy`,
 `timeout`, `agent_error`, `unauthorized`, `rate_limited`, `message_too_large`,
 `protocol_error`).
 `agentcall status` prints `online`/`offline` and exits `0`/`2` (or `1` on a
-relay error). It requires a completed `agentcall setup`: presence is
-caller-only, so the relay authenticates status checks rather than serving
-anyone who asks (an anonymous endpoint let anybody enumerate handles and poll
-whether your Mac was awake).
+relay error). It requires a completed `agentcall setup`. You can always check
+your own status; checking another handle requires both handles to share at
+least one relay roster. An unrelated existing handle and an unknown handle
+return the same generic 404, so a free registration is not a namespace or
+working-hours oracle. Presence authorization does not affect calls: two
+independent handles can still call each other and receive the normal offline
+or unavailable result without first joining a roster.
 
 Remote card reads also require a completed setup. The relay authenticates the
 viewer before looking up either the native card or the per-agent A2A card, so
@@ -446,6 +449,13 @@ disabled/deferred so it cannot bypass an IT-pinned version.
 
 - Address = capability to call. Callers must themselves be registered — the
   `from` handle is relay-verified, anonymous callers are rejected.
+- Address is not a capability to monitor presence. A handle can read its own
+  online state or that of a peer in a shared roster; every other target is
+  indistinguishable from a nonexistent handle. The relay records each
+  authenticated allowed or denied status read in Analytics Engine with the
+  organization, viewer, target, timestamp, source IP/country, and decision. It
+  does not record the online/offline result, so the event is an access trail,
+  not an accumulated presence timeline.
 - **There is no OS-level sandbox.** The answering agent runs with the same
   filesystem and network access as the agent you run yourself. Enforcement is
   capability scoping (`--allowedTools` / codex's `--sandbox` level) plus
@@ -634,6 +644,10 @@ managed policy is present so IT can pin the deployed version.
 - **The relay operator sees message plaintext.** Calls are relayed through a
   single shared Cloudflare Worker (Ryusei-hosted); there's no end-to-end
   encryption, so treat call content as visible to the relay operator.
+- **The relay operator sees presence-access metadata.** Status-read events
+  contain viewer, target, time, source IP/country, and allow/deny outcome for
+  abuse detection and security review evidence. They deliberately omit the
+  target's online/offline state.
 - **Handles can't be released.** `agentcall rotate` replaces a token, but
   there's no way to give a handle back: the Durable Object is addressed by
   handle name, so a re-registered handle would inherit the previous owner's

@@ -1,6 +1,7 @@
 import { Hono } from "hono";
 import { BootstrapInviteRequest, CardUpload, RegisterRequest, visibleTasks } from "@benree/agentcall-shared";
 import { mountA2A } from "./a2a.js";
+import { mountPresence } from "./presence.js";
 import { mountRoster } from "./roster.js";
 import { constantTimeEqual, generateToken, sha256Hex } from "./auth.js";
 import { authenticateRequest, identityKey, registrationAddressHost } from "./tenant.js";
@@ -14,10 +15,12 @@ export { RateLimiterDO } from "./ratelimit/do.js";
 export type Env = RateLimitEnv & {
   DB: D1Database;
   HANDLE_DO: DurableObjectNamespace;
+  STATUS_READS: AnalyticsEngineDataset;
   BOOTSTRAP_TOKEN?: string;
 };
 const app = new Hono<{ Bindings: Env }>();
 mountA2A(app);
+mountPresence(app);
 mountRoster(app);
 
 async function handleExists(db: D1Database, org: string, handle: string): Promise<boolean> {
@@ -126,15 +129,6 @@ app.post("/v1/invite", async (c) => {
   return c.json(await createOrgInvite(c.env.DB, org, handle));
 });
 
-// Presence is caller-only. Anonymous, this endpoint was an oracle: 404-vs-200
-// enumerated registered handles (the namespace is first-name shaped, so a name
-// dictionary walks it in seconds) and polling `online` gave anyone a live "is
-// this person at their desk" feed. Placing a call already requires a token, so
-// requiring one to observe presence costs a legitimate caller nothing.
-//
-// Auth runs before the existence check — deliberately. A 404 to an
-// unauthenticated prober would still answer "does this handle exist?" without
-// any credential, which is most of what the oracle was worth.
 // Until this existed, a leaked token was permanent: register was the only
 // write to `handles` in the whole codebase, and `agentcall uninstall --purge`
 // clears the local copy while the relay row and its hash live on forever.
@@ -159,18 +153,6 @@ app.post("/v1/token/rotate", async (c) => {
   await c.env.DB.prepare("UPDATE handles SET token_hash = ? WHERE org = ? AND handle = ?")
     .bind(await sha256Hex(next), org, handle).run();
   return c.json({ token: next });
-});
-
-app.get("/v1/status/:handle", async (c) => {
-  const identity = await authenticateRequest(c.env.DB, c.req);
-  if (!identity) return c.json({ error: "unauthorized" }, 401);
-  const { org } = identity;
-  const ip = c.req.header("cf-connecting-ip") ?? "unknown";
-  if (!(await checkLimit(c.env, ip, NATIVE_READ))) return c.json({ error: "rate limited" }, 429);
-  const handle = c.req.param("handle");
-  if (!(await handleExists(c.env.DB, org, handle))) return c.json({ error: "unknown handle" }, 404);
-  const stub = c.env.HANDLE_DO.get(c.env.HANDLE_DO.idFromName(identityKey(org, handle)));
-  return stub.fetch("https://do/status");
 });
 
 app.put("/v1/card", async (c) => {
