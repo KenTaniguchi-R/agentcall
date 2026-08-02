@@ -59,9 +59,12 @@ is not configured.
 
 `agentcall setup` will:
 - detect `claude` / `codex` on your `PATH` (or prompt you to pick one)
-- derive the organization from the invite, prompt for a handle, then register that tenant-scoped identity (`POST /v1/register`)
-- write `~/.agentcall/config.json` (0600) with your organization, handle, token, agent kind, and relay URL
-- create `~/AgentCall/public/`, the callee agent's working directory
+- derive the organization from the invite, prompt for a handle, then register that
+  tenant-scoped identity (`POST /v1/register`)
+- write `~/.agentcall/lines/<name>/config.json` (0600) with your organization,
+  handle, token, agent kind, and relay URL — `<name>` defaults to the agent kind
+  (e.g. `claude`); see "Several agents, several addresses" below for adding more
+- create `~/AgentCall/<name>/public/`, the callee agent's working directory
 - install and load the `tech.benree.agentcall.listener` LaunchAgent
 - offer to append a short usage snippet to `~/.claude/CLAUDE.md` / `~/.codex/AGENTS.md`
   so *your own* agent knows how to call other people
@@ -130,6 +133,13 @@ working-hours oracle. Presence authorization does not affect calls: two
 independent handles can still call each other and receive the normal offline
 or unavailable result without first joining a roster.
 
+Both `call` and `status` place the call from whichever of your lines is registered
+on the destination's relay — normally invisible on a one-line machine. On a
+machine with several lines, pass `--as <line>` to pick one explicitly (needed only
+if more than one of your lines shares that relay); otherwise the primary line on
+that relay is used, and the command refuses with the candidates named if there's
+more than one and no primary among them.
+
 Remote card reads also require a completed setup. The relay authenticates the
 viewer before looking up either the native card or the per-agent A2A card, so
 an anonymous or wrong-tenant probe cannot use 404 responses to enumerate an
@@ -165,14 +175,34 @@ Tasks that grant `write` or `exec` are not conversational by default, because
 a caller's earlier messages stay in the agent's context across turns. Set
 `threadable: true` in a task's `SKILL.md` frontmatter to opt in.
 
+A conversation belongs to the line that opened it: `--continue` looks up the
+last open conversation for the line placing the call, so two lines calling the
+same address keep separate threads.
+
 ```bash
 # Replace your relay token if it may have leaked
 agentcall rotate
 ```
 
-`agentcall rotate` swaps this install's token for a fresh one, immediately
-invalidating the old one, and restarts the background listener so it picks the
-new one up. Releasing a handle entirely isn't supported yet — see Limitations.
+`agentcall rotate` swaps one line's token for a fresh one — pass `--line <name>`
+on a multi-line machine, or it rotates the primary line. The old token stops
+working for new connections immediately, but a listener that's already
+connected keeps its live socket and only starts using the new token on its
+next reconnect; other lines are unaffected. If the old token may have leaked,
+restart the listener right away instead of waiting for that reconnect:
+`agentcall listen` in the foreground, or the background one with
+
+```bash
+launchctl kickstart -k gui/$UID/tech.benree.agentcall.listener
+```
+
+Releasing a handle entirely isn't supported yet — see Limitations.
+
+`--line <name>` (or the `AGENTCALL_LINE` environment variable, same precedence
+order — an explicit `--line` wins) selects which line a command acts on wherever
+a machine has more than one: `rotate`, `card`, `task new`, and the six policy
+verbs (`allow`/`revoke`/`block`/`unblock`/`offer`/`unoffer`) all accept it. Omit
+it and these default to the primary line.
 
 Current relay tokens do not expire, cannot be listed or individually revoked,
 and have no last-used timestamp; rotation is the immediate hard swap described
@@ -206,7 +236,7 @@ for what is and is not visible through these logs.
 
 Plain calls (no `--task`) run the built-in read-only `ask` task. To offer more:
 
-    agentcall task new schedule-meeting   # scaffold ~/AgentCall/tasks/<id>/SKILL.md
+    agentcall task new schedule-meeting   # scaffold ~/AgentCall/<line>/tasks/<id>/SKILL.md
     # edit the SKILL.md (YAML frontmatter: description, tools, timeout_s, ...)
     agentcall lint                        # validate tasks, policy tests, and card
     agentcall policy                      # render who can run each task and what it can do
@@ -217,8 +247,10 @@ Plain calls (no `--task`) run the built-in read-only `ask` task. To offer more:
 
 Tasks are one markdown file each — YAML frontmatter (only `description` is
 required) over the instructions your agent follows. Grants and blocks live in
-`~/.agentcall/policy.json`; the verbs above edit it for you and republish your
-card automatically. Callers see your menu with `agentcall card <address>`.
+`~/.agentcall/lines/<line>/policy.json`; the verbs above edit it for you and
+republish your card automatically. Callers see your menu with
+`agentcall card <address>`. All of these act on the primary line unless you pass
+`--line <name>` (see above).
 
 `agentcall policy` renders the effective policy after any administrator ceiling
 and mandatory blocks are applied. It shows how the base, named-caller, and
@@ -279,6 +311,66 @@ listener from starting. Hot edits are also rechecked before every call.
 > **Codex support is experimental.** The `claude` path is the one that's
 > actually been live-tested end to end; `codex` support is implemented and
 > unit-tested but hasn't been verified against a real call yet.
+
+## Several agents, several addresses
+
+One Mac can hold more than one address — one per "line". A line is a full
+identity: its own handle, relay token, agent kind (or none, if it's caller-only),
+policy, tasks, and working directory, stored under `~/.agentcall/lines/<name>/`.
+One process (`agentcall listen`, run for you by the LaunchAgent) opens one socket
+per callable line, so a single Mac can answer as `ken@...` on one address and
+`ken-codex@...` on another at the same time.
+
+```bash
+# Add a second address — e.g. a codex line alongside your (probably claude) first one
+agentcall line add codex --handle ken-codex --agent codex --invite <token>
+
+# List every address this machine holds
+agentcall line list
+
+# Make a different line the default for outbound calls (see below)
+agentcall line primary codex
+
+# Remove one — see the warning below before you do
+agentcall line remove codex --yes
+```
+
+`agentcall line add <name>` registers a brand-new handle (a name is spent
+permanently the moment registration succeeds — see Limitations) and writes
+`~/.agentcall/lines/<name>/`. `<name>` is a local label only; it is never sent to
+the relay and nobody you call ever sees it — only the handle is shared. Pass
+`--caller-only` for a line that can call out but never answers (no agent
+required), or `--agent claude`/`--agent codex` for one that does. `--no-verify`
+skips the post-registration test call, same as `setup --no-verify`. `--invite` is
+required: every line enrols in its own organization, so a second line needs its
+own invite even on a machine that already has one — it may be joining a
+different tenant entirely, and only the relay can say which. Like `line
+remove` below, a callable `line add` reinstalls the LaunchAgent afterward
+(`--skip-launchd` to skip it) — since one process serves every line, adding one
+briefly drops every other line's socket and any calls in flight on them too.
+
+`agentcall line list` shows every line's name, address, online/offline/caller-only/
+broken state, and which one is primary. `agentcall line remove <name> --yes`
+archives that line's `calls.log` under `~/.agentcall/removed/` (or deletes it
+outright with `--purge`) and reinstalls the LaunchAgent to stop serving it — the
+`--yes` isn't a formality: **handle release isn't implemented (see
+Limitations), so a removed handle is gone for good, not freed for reuse.** You
+can't remove your only line or the current primary; promote another first with
+`agentcall line primary`.
+
+**Outbound calls use the primary line automatically.** `agentcall call`/`agentcall
+status` pick whichever of your lines is registered on the destination's relay —
+almost always just one, so this is invisible day to day. If more than one of your
+lines shares that relay, the primary is used; pass `--as <line>` to call from a
+different one on purpose. `agentcall line primary <name>` changes the default.
+
+**An address is not a security boundary between your lines.** Every line on a
+machine runs under the same account with the same filesystem access — a
+caller-only line and a callable one, or two callable lines with different agent
+kinds, share one guard, one Mac, one owner. Splitting into several lines
+separates *identities* (who you appear to be to which caller) and *task menus*
+(what each address is allowed to do), not *trust* — see Security model below for
+what the tool guard does and does not confine regardless of which line answers.
 
 ## Finding who to ask
 
@@ -366,6 +458,12 @@ Results are hints, not permission: a task can appear in search and still be
 refused when you call it, because the callee's policy is what actually
 decides.
 
+**Rosters belong to a line, not to the machine.** A roster is membership held by
+one handle on one relay, which is exactly what a line is — so `roster create`,
+`roster join`, `roster list`, `roster forget` and `search` all act as the primary
+line unless you pass `--line <name>`. Joining a roster on one line does not make
+it visible to another.
+
 ## Contacts
 
 Save addresses under a short name so you don't have to retype `handle@host`
@@ -402,9 +500,9 @@ and never leave your machine.
   against a 6-minute relay deadline, a queued call would not have enough
   budget left to finish in time, so pending capacity is zero rather than
   handing it a truncated execution window.
-- Each call spawns a fresh one-shot agent process in the working directory
-  (`~/AgentCall/public/` by default — see below), scoped to the capabilities
-  the resolved task grants:
+- Each call spawns a fresh one-shot agent process in that line's working
+  directory (`~/AgentCall/<line>/public/` by default — see below), scoped to the
+  capabilities the resolved task grants:
   - Claude: `claude -p --permission-mode dontAsk --allowedTools <tools>`, where
     the tool list is derived from the task's `tools:` frontmatter. Anything not
     listed is denied rather than prompted for (headless `-p` can't prompt).
@@ -414,22 +512,24 @@ and never leave your machine.
   - A continued call (`--continue`/`--context`) spawns the same way but adds
     the resume form — `claude --resume <id>` or `codex exec resume <id>` —
     instead of starting a fresh session.
-- Every call — accepted or not — appends a JSONL line to
-  `~/.agentcall/calls.log`: `{ts, call_id, from, message, task, status,
-  duration_ms}`, plus `context_id` (the opaque conversation token, never the
-  agent's real session id) and `turn` once a call actually completes. That's
-  your audit trail of who called and what happened.
+- Every call — accepted or not — appends a JSONL line to that line's
+  `~/.agentcall/lines/<line>/calls.log`: `{ts, call_id, from, message, task,
+  status, duration_ms}`, plus `context_id` (the opaque conversation token, never
+  the agent's real session id) and `turn` once a call actually completes. That's
+  your audit trail of who called and what happened, kept separate per line so one
+  address's history doesn't mix into another's.
 - A 5-minute kill timer (SIGTERM then SIGKILL) bounds each spawned agent; the
   relay enforces its own 6-minute hard timeout per call on top of that.
 
 ### Working directory
 
-By default the answering agent runs in `~/AgentCall/public/` — an empty share
-folder — and is told to stay there. That keeps `setup` free of a question most
-people can't answer, but it also means the agent has little to answer *from*.
+By default the answering agent runs in `~/AgentCall/<line>/public/` — an empty
+share folder — and is told to stay there. That keeps `setup`/`line add` free of a
+question most people can't answer, but it also means the agent has little to
+answer *from*.
 
-To have your agent answer with real context, set an absolute `workdir` in
-`~/.agentcall/config.json`:
+To have your agent answer with real context, set an absolute `workdir` in that
+line's `~/.agentcall/lines/<line>/config.json`:
 
 ```json
 { "handle": "ken", "token": "...", "agent_kind": "claude",
@@ -439,7 +539,7 @@ To have your agent answer with real context, set an absolute `workdir` in
 
 Restart the listener afterwards — it resolves `workdir` once at startup, and
 refuses to start if the path is relative, missing, or not a directory.
-`agentcall doctor` reports the resolved path (or the reason it failed).
+`agentcall doctor` reports the resolved path per line (or the reason it failed).
 
 Individual tasks can narrow this further with an absolute `workdir` in their
 `SKILL.md` frontmatter. It overrides the install-global directory for that task:
@@ -526,8 +626,8 @@ organization administrator, and the relay operator can see—read the
   filesystem and network access as the agent you run yourself. Enforcement is
   capability scoping (`--allowedTools` / codex's `--sandbox` level) plus
   pre-prompt task resolution: which task a caller may invoke is decided from
-  `policy.json` *before* their message is placed in any prompt, so the message
-  cannot influence what it is allowed to do. Within a granted capability, the
+  that line's `policy.json` *before* their message is placed in any prompt, so
+  the message cannot influence what it is allowed to do. Within a granted capability, the
   only thing constraining *where* the agent reads and writes is the tool guard
   below — and it covers file-shaped tool arguments, not `exec`.
   (An earlier version wrapped every spawn in Seatbelt via `sandbox-runtime`.
@@ -560,7 +660,8 @@ organization administrator, and the relay operator can see—read the
     contain pasted secrets and private code), API keys in `~/.claude.json`'s
     `mcpServers` entries, `~/.ssh`, `~/.aws`, `~/.codex` (which holds
     `auth.json` and a `config.toml` that routinely carries API keys in
-    plaintext), or the relay token in `~/.agentcall/config.json`. The tool
+    plaintext), or the relay token in that line's
+    `~/.agentcall/lines/<line>/config.json`. The tool
     guard below refuses these paths for a Claude answering agent's
     file-reading tools, but not for `exec`, and not at all for a Codex
     answering agent. **Treat every member of your organization as able to reach
@@ -571,9 +672,11 @@ organization administrator, and the relay operator can see—read the
     refuses `Write`/`Edit` to `~/.claude/**`, to its own installed package
     root (so a write-only call cannot neuter the guard for the next tool call
     in the same session — a fresh process re-imports it from disk on every
-    call), to `~/AgentCall/tasks` (so a write-only call cannot rewrite an
-    already-offered task's capability envelope, which is read verbatim from
-    frontmatter), to `~/Library/LaunchAgents`, and to shell startup files
+    call), to `~/AgentCall/<line>/tasks` for every line on the machine (so a
+    write-only call cannot rewrite an already-offered task's capability
+    envelope, which is read verbatim from frontmatter — not just the answering
+    line's own tasks, since a caller could otherwise widen a *different*
+    line's grants), to `~/Library/LaunchAgents`, and to shell startup files
     (`.zshrc` and friends). This risk remains live via `exec` and on a Codex
     answering agent, which has no read guard.
   - `~/.codex` is refused for a Claude answering agent, but a **Codex**
@@ -581,22 +684,26 @@ organization administrator, and the relay operator can see—read the
     `--ignore-user-config` stops that config being *loaded*, not being *read*.
 
 **Tool guard.** Tool calls a caller's agent makes on your machine are checked before
-they run. For Claude, file reads, writes, searches, and listings that reach
-credential paths (`~/.ssh`, `~/.aws`, `.env`, Keychains, `~/.agentcall`,
-`~/.claude`, `~/.codex`), the guard's own installed code, `~/AgentCall/tasks`,
-`~/Library/LaunchAgents`, and shell startup files
-are refused, and file-shaped tools outside the resolved task workdir are
-also refused. Every tool call reaching the guard is recorded to
-`~/.agentcall/tools.log`; on verified codex-cli 0.146.0, Codex runs the same
-hook in observe-only mode so long as `allow_managed_hooks_only` is not enabled,
-so it records attempts but does not refuse them.
-`agentcall doctor` verifies the Claude guard is in force: it asks a real
-`claude` spawn to read a canary `.env` and requires the denial to appear in the
-log. When the model refuses that read on its own the guard is never consulted
-and the run proves nothing, so doctor falls back to invoking the guard directly
-and reports `!` — unverified, not broken. For Codex, doctor makes no additional
-model call: it queries `hooks/list` with AgentCall's exact production overrides
-and fails unless the session hook is present, enabled, and trusted.
+they run. File reads, writes, searches, and listings that reach credential paths
+(`~/.ssh`, `~/.aws`, `.env`, Keychains, `~/.agentcall`, `~/.claude`, `~/.codex`), the guard's own
+installed code, `~/AgentCall/<line>/tasks` for every line, `~/Library/LaunchAgents`,
+and shell startup files are refused. For Claude, file-shaped tools outside the
+resolved task workdir are also refused. Every tool call reaching the guard is
+recorded to that line's `~/.agentcall/lines/<line>/tools.log`; on verified
+codex-cli 0.146.0, Codex runs the same hook in observe-only mode so long as
+`allow_managed_hooks_only` is not enabled, so it records attempts but does not
+refuse them.
+
+`agentcall doctor` verifies the Claude guard is in force — once per distinct agent
+kind rather than once per line, since the guard protects the binary, not any
+particular address, and claude lines sharing one machine share one guard: it asks a
+real `claude` spawn to read a canary `.env` and requires the denial to appear in the
+log. When the model refuses that read on its own the guard is never consulted and the
+run proves nothing, so doctor falls back to invoking the guard directly and reports
+`!` — unverified, not broken. For Codex, doctor makes no additional model call: it
+queries `hooks/list` with AgentCall's exact production overrides, per line (hook
+trust is per-directory, and each line has its own workdir), and fails unless the
+session hook is present, enabled, and trusted.
 
 Two limits, stated plainly:
 
@@ -691,7 +798,7 @@ Monorepo layout:
 agentcall/
 ├── apps/relay/          # CF Worker + Durable Object + D1 (wrangler)
 ├── packages/shared/     # zod protocol schemas — single source of truth
-└── packages/cli/        # @benree/agentcall — the `agentcall` command (setup/listen/call/status/uninstall)
+└── packages/cli/        # @benree/agentcall — the `agentcall` command (setup/line/listen/call/status/uninstall)
 ```
 
 See [CLAUDE.md](./CLAUDE.md) for dev conventions. Open work is tracked in GitHub

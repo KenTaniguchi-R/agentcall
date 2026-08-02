@@ -1,12 +1,50 @@
 import os from "node:os";
 import { join } from "node:path";
 
-export interface Paths {
-  home: string; dir: string; configFile: string;
-  callsLog: string; listenerLog: string; toolsLog: string; publicDir: string;
-  tasksDir: string; policyFile: string; managedPolicyFile: string; cardSnapshotFile: string;
+// Three concepts that used to be one string called `home`:
+//   userHome  — the real account home. The plist's HOME, ~/Library/LaunchAgents,
+//               and the guard's security root (the home whose .ssh/.claude/.codex
+//               get denied). Redirecting this is how a test home silently stopped
+//               protecting the real one.
+//   stateRoot — where agentcall keeps its own state. Redirectable via
+//               AGENTCALL_HOME, which is a TEST SEAM and not a user feature.
+//   authored  — owner-edited task markdown, kept outside the dotfile dir so it
+//               is visible in Finder. Follows stateRoot.
+export interface MachinePaths {
+  userHome: string;
+  stateRoot: string;
+  dir: string;
+  personFile: string;
   contactsFile: string;
-  rostersFile: string; rosterCacheFile: string;
+  linesDir: string;
+  removedDir: string;
+  listenerLog: string;
+  // Machine-scoped, not line-scoped, on purpose. It is an administrator ceiling:
+  // if it were per-line, adding a line would escape it. It is also deliberately
+  // independent of stateRoot/AGENTCALL_HOME — see managedPolicyPath below.
+  managedPolicyFile: string;
+}
+
+export interface LinePaths {
+  machine: MachinePaths;
+  name: string;
+  dir: string;
+  configFile: string;
+  policyFile: string;
+  cardSnapshotFile: string;
+  callsLog: string;
+  toolsLog: string;
+  tasksDir: string;
+  shareDir: string;
+  // Line-scoped, not machine-scoped, because every one of these is keyed to an
+  // audience. Rosters and the bundle cache are membership held by a handle on
+  // a relay, and a line is exactly "a handle on a relay" — a second line on a
+  // different relay must not read the first's memberships. contexts.json binds
+  // an agent session to (caller, task, agent_kind, workdir), all of which are
+  // per-line, and contexts-out.json is keyed by the `from` handle placing the
+  // call. Machine-scoping any of them would leak one audience into another.
+  rostersFile: string;
+  rosterCacheFile: string;
   contextsFile: string;
   contextsOutFile: string;
 }
@@ -17,25 +55,42 @@ export function managedPolicyPath(platform: NodeJS.Platform = process.platform):
   throw new Error(`Managed policy is not supported on ${platform}`);
 }
 
-export function getPaths(
-  home: string = process.env.AGENTCALL_HOME ?? os.homedir(),
+export function getMachinePaths(
+  stateRoot: string = process.env.AGENTCALL_HOME ?? os.homedir(),
+  userHome: string = os.homedir(),
   platform: NodeJS.Platform = process.platform,
-): Paths {
-  const dir = join(home, ".agentcall");
+): MachinePaths {
+  const dir = join(stateRoot, ".agentcall");
   return {
-    home, dir,
-    configFile: join(dir, "config.json"),
-    callsLog: join(dir, "calls.log"),
+    userHome,
+    stateRoot,
+    dir,
+    personFile: join(dir, "person.json"),
+    contactsFile: join(dir, "contacts.json"),
+    linesDir: join(dir, "lines"),
+    removedDir: join(dir, "removed"),
+    // One process serves every line, so there is one listener log.
     listenerLog: join(dir, "listener.log"),
-    toolsLog: join(dir, "tools.log"),
-    publicDir: join(home, "AgentCall", "public"),
-    policyFile: join(dir, "policy.json"),
-    // Deliberately independent of home and AGENTCALL_HOME: an unprivileged
+    // Deliberately independent of stateRoot and AGENTCALL_HOME: an unprivileged
     // user must not be able to relocate the administrator-owned policy.
     managedPolicyFile: managedPolicyPath(platform),
-    tasksDir: join(home, "AgentCall", "tasks"),
+  };
+}
+
+export function getLinePaths(machine: MachinePaths, name: string): LinePaths {
+  const dir = join(machine.linesDir, name);
+  const authored = join(machine.stateRoot, "AgentCall", name);
+  return {
+    machine,
+    name,
+    dir,
+    configFile: join(dir, "config.json"),
+    policyFile: join(dir, "policy.json"),
     cardSnapshotFile: join(dir, "card.pushed.json"),
-    contactsFile: join(dir, "contacts.json"),
+    callsLog: join(dir, "calls.log"),
+    toolsLog: join(dir, "tools.log"),
+    tasksDir: join(authored, "tasks"),
+    shareDir: join(authored, "public"),
     rostersFile: join(dir, "rosters.json"),
     rosterCacheFile: join(dir, "roster-cache.json"),
     contextsFile: join(dir, "contexts.json"),

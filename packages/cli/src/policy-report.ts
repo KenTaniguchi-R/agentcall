@@ -1,9 +1,9 @@
-import type { CallableConfig } from "./config.js";
+import type { CallableLineConfig } from "./config.js";
 import { offeredFor, stripPlus, type Policy } from "./policy.js";
 import { CAPS, type Cap, type Task } from "./tasks.js";
 
 export interface PolicyReportOptions {
-  agentKind: CallableConfig["agent_kind"];
+  agentKind: CallableLineConfig["agent_kind"];
   managed: boolean;
   defaultWorkdir: string;
 }

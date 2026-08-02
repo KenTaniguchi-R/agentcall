@@ -6,6 +6,49 @@ which are released together.
 
 ## Unreleased
 
+### Added — Multiple lines: several agentcall addresses on one machine
+
+A single Mac can now hold more than one agentcall address ("line"), each with its
+own handle, relay token, agent kind (or none, for caller-only), policy, tasks, and
+working directory under `~/.agentcall/lines/<name>/`. One supervised process still
+runs — `agentcall listen` now opens one socket per callable line instead of
+assuming exactly one.
+
+- `agentcall line add <name> --handle <h> --agent <claude|codex>` registers another
+  address; `--caller-only` for a line that only calls out. `agentcall line list`,
+  `agentcall line remove <name> --yes`, and `agentcall line primary <name>` round
+  out the group.
+- `agentcall call`/`agentcall status` pick whichever line is registered on the
+  destination's relay automatically (the primary, when more than one line shares
+  it); `--as <line>` overrides. `agentcall listen --line <name>` runs a single line
+  in the foreground instead of every callable one.
+- `--line <name>` (or `AGENTCALL_LINE`) now selects which line `rotate`, `card`,
+  `lint`, `policy`, `task new`, the roster/search/key commands, and the six
+  policy verbs act on.
+- `agentcall setup` is first-run only now: run again on a machine that already has
+  a line and it prints the existing lines and points at `line add` instead of
+  clobbering the one config.json that used to exist.
+- The tool guard's task-directory denial and per-call audit log (`calls.log`,
+  `tools.log`) are per line, so an answering agent on one address can't rewrite or
+  read another address's task grants or history.
+- **An address is not a security boundary between lines on the same machine** —
+  see the README's "Several agents, several addresses" section for what splitting
+  into lines does and does not separate.
+
+This removes the single flat `~/.agentcall/config.json` (and `Config`/`Paths`/
+`loadConfig`/`assertCallableConfig`) entirely; every command now resolves a
+`LineContext` instead. `AddLineOpts.verify` (accepted, previously unread) now runs
+a post-registration verify pass by default, mirroring `setup`'s; `--no-verify` on
+`line add` skips it.
+
+Tenancy is a property of the LINE, not the machine: `org` sits in each line's
+`config.json` alongside `relay`, because an org names a tenant *on a relay* and
+the relay was already per-line. Rosters, `agentcall search`, tenant invites and
+conversation bindings follow it — each is scoped to one line and takes
+`--line <name>` (defaulting to the primary line), so a machine can hold lines in
+two organizations without either seeing the other's memberships, invites, or
+open conversations.
+
 ### Recoverable roster audit-budget exhaustion
 
 - Members can always leave a roster after its 10,000-event membership audit
@@ -99,7 +142,6 @@ which are released together.
 - `last_used_at` is a coarsened liveness signal updated at most hourly, not a
   per-request D1 write, audit trail, or automatic reclaim authority. The
   obsolete `handles` row receives no temporary lifecycle fields before #154.
-
 ### Documentation — identity and address separation
 
 - Agent identity is now decided as an opaque, organization-scoped lifetime
@@ -200,7 +242,8 @@ which are released together.
 
 ### Added — readable effective capability policy
 
-- `agentcall policy` renders the composed user and administrator policy as a
+- `agentcall policy [--line <name>]` renders the composed user and administrator
+  policy for one line as a
   per-caller, per-roster, and per-task capability report, including blocks,
   ignored missing tasks, assertion status, and the runtime-specific Claude or
   Codex enforcement boundary.
@@ -223,6 +266,9 @@ which are released together.
 ### Changed — presence is roster-scoped and auditable
 
 - Handles can read their own presence or that of a peer in a shared roster.
+  `agentcall status` therefore reads as a line: it uses the line registered on
+  the destination's relay (`--as <line>` overrides), and roster sharing is
+  evaluated for that line's handle.
   Unrelated and nonexistent targets now return a byte-identical generic 404;
   call delivery remains independent of roster membership.
 - Authenticated allowed and denied status reads are written to a dedicated
@@ -243,9 +289,10 @@ which are released together.
 - The single roster-wide join secret is replaced by keyed credentials with a
   stable public prefix, reveal-once secret, mandatory expiry, one-off or
   reusable scope, metadata-only listing, and individual revocation.
-- `agentcall roster key issue|list|revoke` replaces roster-wide rotation.
-  Revocation retains members by default; `--evict` removes only members that
-  joined through the selected key.
+- `agentcall roster key issue|list|revoke` replaces roster-wide rotation
+  (`agentcall roster rotate` is gone). Each takes `--line <name>`, since a
+  roster membership belongs to a line. Revocation retains members by default;
+  `--evict` removes only members that joined through the selected key.
 - Roster creation still has a one-paste onboarding path by returning an
   initial reusable key with a 30-day expiry. The relay retains only the secret
   half's SHA-256 digest and each member's admission-key provenance.
@@ -254,7 +301,9 @@ which are released together.
 
 - macOS and Linux now have fixed, `AGENTCALL_HOME`-independent managed-policy
   paths. Administrators can cap every task grant and impose unoverridable caller
-  blocks without rewriting the user's policy.
+  blocks without rewriting the user's policy. The ceiling is machine-scoped and
+  applies to every line, so adding a line cannot escape it; each line keeps its
+  own user policy underneath it.
 - Missing managed policy remains unmanaged behavior; unreadable, malformed, or
   invalid managed policy fails closed instead of falling back to user defaults.
 

@@ -3,7 +3,7 @@ import { z } from "zod";
 import { BundleEntry, ROSTER_ID_RE } from "@benree/agentcall-shared";
 import { NAME_RE } from "./contacts.js";
 import { writeJsonAtomic } from "./json-store.js";
-import type { Paths } from "./paths.js";
+import type { LinePaths } from "./paths.js";
 
 // Two stores with DELIBERATELY OPPOSITE corruption policies, kept in one file
 // so the contrast is visible where someone might get it wrong:
@@ -38,7 +38,7 @@ const CachedBundle = z.object({
 const CacheFile = z.object({ version: z.literal(1), rosters: z.record(z.string(), CachedBundle) });
 export type CachedBundle = z.infer<typeof CachedBundle>;
 
-export function loadMemberships(p: Paths): Membership[] {
+export function loadMemberships(p: LinePaths): Membership[] {
   if (!existsSync(p.rostersFile)) return [];
   try {
     return MembershipsFile.parse(JSON.parse(readFileSync(p.rostersFile, "utf8"))).rosters;
@@ -55,7 +55,7 @@ export function loadMemberships(p: Paths): Membership[] {
 // computed __proto__ key does not trigger prototype mutation here, and a
 // builtin-shadowing name like "constructor" is caught downstream by
 // readCached's mandatory relay/caller check.
-export function saveMembership(p: Paths, m: Membership): void {
+export function saveMembership(p: LinePaths, m: Membership): void {
   if (!NAME_RE.test(m.name)) {
     throw new Error(`Invalid roster name "${m.name}" — start with a letter or digit, then letters, digits, ".", "_", "-" (no @).`);
   }
@@ -86,7 +86,7 @@ export function saveMembership(p: Paths, m: Membership): void {
   writeJsonAtomic(p.rostersFile, { rosters });
 }
 
-export function forgetMembership(p: Paths, name: string): void {
+export function forgetMembership(p: LinePaths, name: string): void {
   const rosters = loadMemberships(p);
   const next = rosters.filter((r) => r.name.toLowerCase() !== name.toLowerCase());
   if (next.length === rosters.length) {
@@ -95,7 +95,7 @@ export function forgetMembership(p: Paths, name: string): void {
   writeJsonAtomic(p.rostersFile, { rosters: next });
 }
 
-export function loadCache(p: Paths): Record<string, CachedBundle> {
+export function loadCache(p: LinePaths): Record<string, CachedBundle> {
   if (!existsSync(p.rosterCacheFile)) return {};
   try {
     return CacheFile.parse(JSON.parse(readFileSync(p.rosterCacheFile, "utf8"))).rosters;
@@ -113,7 +113,7 @@ export function loadCache(p: Paths): Record<string, CachedBundle> {
 // rejoining a *different* roster as `--as acme` must not resurrect the old
 // roster's bundle under the reused name.
 export function readCached(
-  p: Paths, name: string, identity: { relay: string; caller: string; roster_id: string },
+  p: LinePaths, name: string, identity: { relay: string; caller: string; roster_id: string },
 ): CachedBundle | null {
   const hit = loadCache(p)[name];
   if (!hit) return null;
@@ -123,14 +123,14 @@ export function readCached(
   return hit;
 }
 
-export function writeCached(p: Paths, name: string, bundle: CachedBundle): void {
+export function writeCached(p: LinePaths, name: string, bundle: CachedBundle): void {
   writeJsonAtomic(p.rosterCacheFile, { version: 1, rosters: { ...loadCache(p), [name]: bundle } });
 }
 
 // Derived data: dropping an entry costs one refetch, never user data. Used
 // on a 404 (see searchRefresh.ts) so a revoked roster's cache cannot outlive
 // the revocation under --offline.
-export function deleteCached(p: Paths, name: string): void {
+export function deleteCached(p: LinePaths, name: string): void {
   const rosters = { ...loadCache(p) };
   delete rosters[name];
   writeJsonAtomic(p.rosterCacheFile, { version: 1, rosters });

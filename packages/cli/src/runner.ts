@@ -1,9 +1,11 @@
 import { execFileSync, spawn } from "node:child_process";
 import { createHash } from "node:crypto";
 import { fileURLToPath } from "node:url";
-import { AGENT_TIMEOUT_MS, MAX_REPLY_BYTES } from "@benree/agentcall-shared";
+import { AGENT_TIMEOUT_MS, MAX_REPLY_BYTES, type AgentKind } from "@benree/agentcall-shared";
 import { resolveAgentBin } from "./bin.js";
 import { CAPS, FULL_ACCESS_ENVELOPE, type Cap, type Envelope } from "./tasks.js";
+
+export type { AgentKind };
 
 // The exact codex-cli release against which the live resume-sandbox probe
 // passed. Threading fails closed on every other version: a CLI upgrade changes
@@ -28,7 +30,6 @@ export function codexThreadingEnabled(
   }
 }
 
-export type AgentKind = "claude" | "codex";
 export interface SpawnSpec { cmd: string; args: string[]; cwd: string; env?: NodeJS.ProcessEnv }
 export interface AgentOutput { text: string; session_id?: string }
 
@@ -174,9 +175,10 @@ export function claudeAllowedTools(envelope: Envelope): string {
 // between a caller and the machine.
 export function buildSpawnSpec(
   kind: AgentKind, prompt: string, workdir: string, resolveBin: (kind: AgentKind) => string = resolveAgentBin,
-  envelope: Envelope = FULL_ACCESS_ENVELOPE, callId: string = "unknown",
+  envelope: Envelope = FULL_ACCESS_ENVELOPE, callId: string = "unknown", lineName: string,
   // The REAL agent session id, resolved from a context binding by the listener.
-  // A caller-supplied context id must never reach this parameter.
+  // A caller-supplied context id must never reach this parameter. Sits AFTER
+  // lineName so lineName stays the last required parameter — see runAgent.
   resume?: string,
 ): SpawnSpec {
   if (kind === "claude") {
@@ -189,7 +191,10 @@ export function buildSpawnSpec(
         "--settings", guardSettingsJson(),
       ],
       cwd: workdir,
-      env: { ...process.env, AGENTCALL_CALL_ID: callId, AGENTCALL_ALLOWED_ROOT: workdir },
+      env: {
+        ...process.env, AGENTCALL_CALL_ID: callId, AGENTCALL_LINE: lineName,
+        AGENTCALL_ALLOWED_ROOT: workdir,
+      },
     };
   }
   // Codex has no per-tool granularity, so the envelope's write cap maps onto
@@ -211,7 +216,10 @@ export function buildSpawnSpec(
         "--json", "-c", guardCodexConfigArg(), "-c", guardCodexTrustArg(),
         "-c", `sandbox_mode="${sandbox}"`, prompt],
       cwd: workdir,
-      env: { ...process.env, AGENTCALL_CALL_ID: callId, AGENTCALL_GUARD_MODE: "observe" },
+      // AGENTCALL_LINE is as required here as on the non-resume branch: the
+      // guard resolves the line's tasksDir from it and fails closed without
+      // it, so omitting it would deny every tool call on a resumed session.
+      env: { ...process.env, AGENTCALL_CALL_ID: callId, AGENTCALL_GUARD_MODE: "observe", AGENTCALL_LINE: lineName },
     };
   }
   return {
@@ -229,7 +237,7 @@ export function buildSpawnSpec(
       "--skip-git-repo-check", "--json", "-c", guardCodexConfigArg(),
       "-c", guardCodexTrustArg(), prompt],
     cwd: workdir,
-    env: { ...process.env, AGENTCALL_CALL_ID: callId, AGENTCALL_GUARD_MODE: "observe" },
+    env: { ...process.env, AGENTCALL_CALL_ID: callId, AGENTCALL_GUARD_MODE: "observe", AGENTCALL_LINE: lineName },
   };
 }
 
@@ -273,15 +281,30 @@ export function truncateUtf8(text: string, maxBytes: number): string {
   return buf.subarray(0, maxBytes).toString("utf8").replace(/�+$/, "");
 }
 
+// specOverride and signal are given explicit `= undefined` defaults, not `?`,
+// so lineName below can be a trailing REQUIRED parameter: TS forbids a
+// required parameter from following a `?`-marked one, but not one that
+// follows a defaulted one. lineName has no default on purpose — it used to
+// (silently defaulting to "", which makes the PreToolUse guard fail closed on
+// every tool call, see runner.ts history) — so the only production caller
+// (the listener) is forced to pass the real line name or fail to compile,
+// instead of a caller forgetting it and getting a silently-broken guard.
 export function runAgent(
-  kind: AgentKind, prompt: string, workdir: string, timeoutMs: number = AGENT_TIMEOUT_MS, specOverride?: SpawnSpec,
-  envelope: Envelope = FULL_ACCESS_ENVELOPE, callId: string = "unknown", signal?: AbortSignal,
-  // Note for a later cleanup (not done here): runAgent now takes nine
+  kind: AgentKind, prompt: string, workdir: string, timeoutMs: number = AGENT_TIMEOUT_MS,
+  specOverride: SpawnSpec | undefined = undefined,
+  envelope: Envelope = FULL_ACCESS_ENVELOPE, callId: string = "unknown",
+  signal: AbortSignal | undefined = undefined, lineName: string,
+  // The REAL agent session id, resolved from a context binding by the
+  // listener. A caller-supplied context id must never reach this parameter.
+  // Optional, so it goes after the required lineName.
+  //
+  // Note for a later cleanup (not done here): runAgent now takes ten
   // positional parameters and should become an options object. That belongs
   // with the #49 work in #48 Phase 1, not in this change.
   resume?: string,
 ): Promise<AgentOutput> {
-  const spec = specOverride ?? buildSpawnSpec(kind, prompt, workdir, resolveAgentBin, envelope, callId, resume);
+  const spec = specOverride
+    ?? buildSpawnSpec(kind, prompt, workdir, resolveAgentBin, envelope, callId, lineName, resume);
   return new Promise<AgentOutput>((resolve, reject) => {
     // detached: true makes the child its own process group leader, so any
     // grandchildren it forks share its process group unless they detach

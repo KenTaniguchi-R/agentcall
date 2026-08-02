@@ -1,6 +1,7 @@
 import { basename, dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
 import { fileURLToPath } from "node:url";
-import type { Paths } from "./paths.js";
+import { lineTaskDirs } from "./lineTaskDirs.js";
+import { getMachinePaths, type LinePaths } from "./paths.js";
 
 export type GuardInput = {
   tool_name: string;
@@ -44,8 +45,23 @@ const DENIED_DIRS = [
   ".agentcall",   // holds config.json and the relay token
   ".claude",      // executable configuration; cf. CVE-2025-59536
   ".codex",       // auth.json, plus a config.toml that routinely holds API keys
-  "AgentCall/tasks",       // task frontmatter sets the envelope's caps verbatim
   "Library/LaunchAgents",  // how the listener itself gets launched
+  // Legacy flat layout. As of Task 12, nothing in this codebase reads or
+  // writes this path anymore — card.ts, index.ts, and lint.ts all moved to
+  // the per-line AgentCall/<line>/tasks layout, and setup.ts no longer
+  // creates it. It stays denied because it may still exist on disk, holding
+  // real SKILL.md files from an install made before Task 12: a stale entry
+  // over-denies (fails safe), while removing it would leave genuine content
+  // from a previous install unprotected. The per-line entries below cover
+  // AgentCall/<line>/tasks; this covers the pre-multi-line AgentCall/tasks
+  // that may still be sitting there regardless. This is also the reason
+  // "tasks" and "public" are reserved line names — see RESERVED_LINE_NAMES in
+  // lineName.ts for the other half of this.
+  "AgentCall/tasks",
+  // AgentCall/<line>/tasks, one directory per line, has no single
+  // home-relative entry that can name them all — see runGuard, which
+  // enumerates every line's tasksDir and passes it in as an extra denied
+  // root, alongside this legacy path.
 ];
 
 // Home-relative single files.
@@ -173,17 +189,28 @@ function globLiteralPrefix(pattern: string): string {
 
 export function decide(
   input: GuardInput,
-  home: string,
+  userHome: string,
   realpath: (p: string) => string,
   guardRoot: string = DEFAULT_PACKAGE_ROOT,
+  // Two orthogonal restrictions, and both apply. `allowedRoot` confines a task
+  // to one workdir (an allow-list); `extraDeniedRoots` adds paths that are
+  // denied wherever they sit (a deny-list). allowedRoot keeps position 5
+  // because its callers pass it positionally in quantity; extraDeniedRoots is
+  // 6th. Do not swap them — allowedRoot is a string and extraDeniedRoots is
+  // spread, so passing one where the other is expected silently explodes a
+  // path into single-character denied roots rather than failing loudly.
   allowedRoot?: string,
+  extraDeniedRoots: string[] = [],
 ): GuardVerdict {
   const { tool_name: tool, tool_input: args, cwd } = input;
   if (args === null || typeof args !== "object" || Array.isArray(args)) {
     return { allow: false, rule: "unparseable-input", detail: tool };
   }
-  const denied = deniedPaths(home, realpath, [guardRoot]);
-  const canon = (p: string) => canonical(p, cwd, home, realpath);
+  // userHome, never a redirectable state root: AGENTCALL_HOME can move the
+  // latter, which would have the guard diligently protecting a temp directory
+  // while the real ~/.ssh stood open.
+  const denied = deniedPaths(userHome, realpath, [guardRoot, ...extraDeniedRoots]);
+  const canon = (p: string) => canonical(p, cwd, userHome, realpath);
   const allowed = allowedRoot === undefined ? undefined : canon(allowedRoot);
   const outsideAllowed = (target: string) => allowed !== undefined && !isInside(target, allowed);
   const reached = (t: string, withAncestors: boolean) =>
@@ -192,7 +219,7 @@ export function decide(
   if (tool === "Bash") {
     const command = typeof args.command === "string" ? args.command : "";
     const hit = denied.find((d) =>
-      fold(command).includes(fold(d)) || fold(command).includes(fold(d.replace(home, "~"))));
+      fold(command).includes(fold(d)) || fold(command).includes(fold(d.replace(userHome, "~"))));
     // Record and allow: string matching is too weak to be a boundary and too
     // eager to be harmless. See the spec's Bash section — and note this means
     // an `exec`-granted task has NO read floor.
@@ -257,7 +284,7 @@ export function decide(
     if (basenameDenied(selector)) return { allow: false, rule: "denied-basename-pattern", detail: selector };
     const prefix = globLiteralPrefix(selector);
     if (prefix === "") return { allow: true };
-    const selectorRoot = canon(isAbsolute(expandHome(prefix, home)) ? prefix : join(rawRoot, prefix));
+    const selectorRoot = canon(isAbsolute(expandHome(prefix, userHome)) ? prefix : join(rawRoot, prefix));
     const hit = reached(selectorRoot, true);
     if (hit) return { allow: false, rule: "root-reaches-denied-path", detail: selectorRoot };
     return outsideAllowed(selectorRoot)
@@ -271,7 +298,7 @@ export function decide(
 }
 
 export interface GuardDeps {
-  paths: Paths;
+  line: LinePaths;
   callId: string;
   now: () => string;
   realpath: (p: string) => string;
@@ -298,7 +325,7 @@ export function runGuard(raw: string, deps: GuardDeps, mode: GuardMode = "enforc
     input = {
       tool_name: parsed.tool_name,
       tool_input: (parsed.tool_input ?? {}) as Record<string, unknown>,
-      cwd: typeof parsed.cwd === "string" ? parsed.cwd : deps.paths.home,
+      cwd: typeof parsed.cwd === "string" ? parsed.cwd : deps.line.machine.userHome,
     };
   } catch {
     // Exit 2 blocks bluntly. The guard never allows because it failed to decide.
@@ -310,7 +337,25 @@ export function runGuard(raw: string, deps: GuardDeps, mode: GuardMode = "enforc
   // any exit other than 0 or 2 as a non-blocking error — so a full disk or a
   // read-only home would silently turn the guard off. Fail closed instead.
   try {
-    const verdict = decide(input, deps.paths.home, deps.realpath, undefined, deps.allowedRoot);
+    // Task frontmatter sets the envelope's caps verbatim, so it is as
+    // sensitive as policy.json. Under the per-line layout these live at
+    // ~/AgentCall/<line>/tasks, which no fixed home-relative rule can match —
+    // enumerate them instead. Every line's, not just this one's: one line's
+    // agent must not rewrite another line's tasks either. lineTaskDirs, not
+    // listLines: this runs on every tool call, and listLines readFileSync's
+    // and zod-parses every line's config.json just to build a LineSummary
+    // this call only ever wants the tasksDir out of.
+    //
+    // Enumerated from a machine rooted at userHome — NOT deps.line.machine as
+    // given: deps.line.machine.linesDir sits under stateRoot, the exact
+    // AGENTCALL_HOME-redirectable value defect (a) exists to keep out of
+    // decide(). Passing deps.line.machine through unchanged would enumerate
+    // an empty (or nonexistent) redirected state dir, silently deny nothing,
+    // and leave the real machine's per-line task directories wide open —
+    // defect (a) fixed for .ssh and quietly reopened for tasks.
+    const userHome = deps.line.machine.userHome;
+    const taskRoots = lineTaskDirs(getMachinePaths(userHome, userHome));
+    const verdict = decide(input, userHome, deps.realpath, undefined, deps.allowedRoot, taskRoots);
     const ts = deps.now();
     const write = (file: string, obj: Record<string, unknown>) =>
       deps.appendLine(file, JSON.stringify({ ts, ...obj }));
@@ -320,13 +365,13 @@ export function runGuard(raw: string, deps: GuardDeps, mode: GuardMode = "enforc
     // observe mode it is not: the tool proceeds regardless of the verdict, and
     // may still be stopped downstream by codex's sandbox. Recording `allowed`
     // there would assert an outcome this hook never sees.
-    write(deps.paths.toolsLog, mode === "observe"
+    write(deps.line.toolsLog, mode === "observe"
       ? { type: "tool_call", call_id: deps.callId, tool: input.tool_name, mode }
       : { type: "tool_call", call_id: deps.callId, tool: input.tool_name, allowed: verdict.allow });
 
     const noteworthy = verdict.allow ? verdict.flag : verdict;
     if (noteworthy) {
-      write(deps.paths.callsLog, {
+      write(deps.line.callsLog, {
         // Three distinct names, because they are three distinct claims:
         // denied = we stopped it; flagged = we let it through and noticed;
         // attempt_flagged = we only ever watched.

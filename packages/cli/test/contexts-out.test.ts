@@ -3,9 +3,12 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 import { findOutbound, loadOutbound, rememberOutbound, type OutboundContext } from "../src/contextsOut.js";
-import { getPaths } from "../src/paths.js";
+import { getLinePaths, getMachinePaths } from "../src/paths.js";
 
-const paths = () => getPaths(mkdtempSync(join(tmpdir(), "agentcall-out-")));
+const paths = () => {
+  const root = mkdtempSync(join(tmpdir(), "agentcall-out-"));
+  return getLinePaths(getMachinePaths(root, root), "claude");
+};
 const entry = (over: Partial<OutboundContext> = {}): OutboundContext => ({
   relay: "https://r", from: "ken", to: "sota", task: "ask",
   context_id: "ctx_AAAAAAAAAAAAAAAAAAAAAA", at: 1, ...over,

@@ -1,6 +1,5 @@
 import { closeSync, fstatSync, openSync, readSync } from "node:fs";
 import { basename } from "node:path";
-import type { Paths } from "./paths.js";
 
 const HISTORY_SCAN_BYTES = 4 * 1024 * 1024;
 const GUARD_EVENT_TYPES = new Set(["tool_denied", "tool_flagged", "tool_attempt_flagged"]);
@@ -115,7 +114,9 @@ export interface LocalHistory {
   truncatedFiles: string[];
 }
 
-export function loadLocalHistory(paths: Paths, limit: number): LocalHistory {
+// Structural, not `LinePaths`: this only ever reads the two logs, and both are
+// per-line. Kept narrow so a caller cannot hand it a mismatched pair.
+export function loadLocalHistory(paths: { callsLog: string; toolsLog: string }, limit: number): LocalHistory {
   const callsLog = readRecentJsonLines(paths.callsLog);
   let malformed = callsLog.malformed;
   const calls: LocalHistoryEntry[] = [];

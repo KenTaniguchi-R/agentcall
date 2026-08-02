@@ -2,13 +2,14 @@ import { mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, it, vi } from "vitest";
-import { getPaths } from "../src/paths.js";
+import { getLinePaths, getMachinePaths } from "../src/paths.js";
 import { readCached, saveMembership, writeCached } from "../src/rosters.js";
 import { ApiError } from "../src/api.js";
 import { refreshRoster } from "../src/searchRefresh.js";
 
 const setup = () => {
-  const p = getPaths(mkdtempSync(join(tmpdir(), "agentcall-refresh-")));
+  const root = mkdtempSync(join(tmpdir(), "agentcall-refresh-"));
+  const p = getLinePaths(getMachinePaths(root, root), "claude");
   saveMembership(p, { name: "acme", relay: "https://r.test", roster_id: "a".repeat(22) });
   return p;
 };

@@ -2,7 +2,9 @@ import {
   HANDLE_RE, AgentCard, CreateOrgInviteResponse, CreateRosterResponse, IssueRosterJoinKeyResponse,
   ListOrgInvitesResponse, ListRosterJoinKeysResponse, RegisterResponse, RevokeOrgInviteResponse,
   RevokeRosterJoinKeyResponse, RosterBundle,
-  type AgentCardType, type CardUploadType, type OrgInviteMetadataType, type RosterBundleType,
+  // AgentKind is ours: registerHandle takes it, and it is the shared type that
+  // replaced the inline "claude" | "codex" unions.
+  type AgentCardType, type AgentKind, type CardUploadType, type OrgInviteMetadataType, type RosterBundleType,
   type RosterJoinKeyMetadataType,
 } from "@benree/agentcall-shared";
 
@@ -53,7 +55,7 @@ async function relayFetch(relay: string, path: string, init: RequestInit, timeou
 }
 
 export async function registerHandle(
-  relay: string, invite: string, handle: string, agentKind?: "claude" | "codex", opts: { timeoutMs?: number } = {},
+  relay: string, invite: string, handle: string, agentKind?: AgentKind, opts: { timeoutMs?: number } = {},
 ): Promise<{ org: string; token: string; address: string }> {
   if (!invite) throw new ApiError("An organization invite is required.", "invite_invalid");
   assertValidHandle(handle);

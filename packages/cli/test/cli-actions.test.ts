@@ -6,18 +6,26 @@ import { join } from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { WebSocketServer } from "ws";
 import { runCli } from "../src/index.js";
-import { getPaths } from "../src/paths.js";
-import { saveConfig } from "../src/config.js";
+import { getLinePaths, getMachinePaths, type LinePaths } from "../src/paths.js";
+import { saveLineConfig } from "../src/lines.js";
 import { loadMemberships, readCached, saveMembership, writeCached } from "../src/rosters.js";
 import { loadOutbound, rememberOutbound } from "../src/contextsOut.js";
 
+// The "local-sota" contact stands in for an address on whichever relay the
+// current test spun up. pickOutboundLine (src/outbound.ts) now matches the
+// destination's host against a LINE's own configured relay before placing a
+// call, so a fixed placeholder host could never match a real seeded line.
+// routing.host lets each test point the mocked resolution at its own
+// ephemeral relay's host; vi.hoisted keeps the mutable ref safe against
+// vi.mock's hoisting to the top of the module.
+const routing = vi.hoisted(() => ({ host: "local.test" }));
 vi.mock("../src/contacts.js", async (importOriginal) => {
   const actual = await importOriginal<typeof import("../src/contacts.js")>();
   return {
     ...actual,
     resolveAddress: (...args: Parameters<typeof actual.resolveAddress>) =>
       args[1] === "local-sota"
-        ? { ok: true as const, handle: "sota", host: "local.test", address: "sota@local.test" }
+        ? { ok: true as const, handle: "sota", host: routing.host, address: `sota@${routing.host}` }
         : actual.resolveAddress(...args),
   };
 });
@@ -115,8 +123,13 @@ function startCallRelay(
   });
 }
 
-function seedConfig(testHome: string, relay: string): void {
-  saveConfig(getPaths(testHome), { org: "acme", handle: "ken", token: "tok", relay });
+// Every cli-actions test runs a single line named "claude". With only one
+// line on the machine, resolveLine/resolvePrimary (person.ts) picks it
+// automatically, so no separate savePerson call is needed here.
+function seedConfig(testHome: string, relay: string): LinePaths {
+  const paths = getLinePaths(getMachinePaths(testHome), "claude");
+  saveLineConfig(paths, { org: "acme", handle: "ken", token: "tok", relay });
+  return paths;
 }
 
 const A = "a".repeat(22);
@@ -138,7 +151,7 @@ const bundle = (rosterId: string, handle = "sota") => ({
 describe.sequential("CLI command actions", () => {
   it("renders the employee's local call and tool history", async () => {
     const testHome = home();
-    const paths = getPaths(testHome);
+    const paths = seedConfig(testHome, "https://relay.example");
     mkdirSync(paths.dir, { recursive: true });
     writeFileSync(paths.callsLog, [
       JSON.stringify({
@@ -168,7 +181,7 @@ describe.sequential("CLI command actions", () => {
 
   it("returns newest local history as JSON and discloses malformed log records", async () => {
     const testHome = home();
-    const paths = getPaths(testHome);
+    const paths = seedConfig(testHome, "https://relay.example");
     mkdirSync(paths.dir, { recursive: true });
     writeFileSync(paths.callsLog, [
       JSON.stringify({
@@ -202,7 +215,7 @@ describe.sequential("CLI command actions", () => {
 
   it("bounds local history scanning and discloses partial logs", async () => {
     const testHome = home();
-    const paths = getPaths(testHome);
+    const paths = seedConfig(testHome, "https://relay.example");
     mkdirSync(paths.dir, { recursive: true });
     writeFileSync(paths.callsLog,
       JSON.stringify({
@@ -276,8 +289,8 @@ describe.sequential("CLI command actions", () => {
 
   it("exposes policy assertion failures through agentcall lint", async () => {
     const testHome = home();
-    const paths = getPaths(testHome);
-    saveConfig(paths, { org: "acme", handle: "ken", token: "tok", relay: "https://relay.test", agent_kind: "claude" });
+    const paths = getLinePaths(getMachinePaths(testHome), "claude");
+    saveLineConfig(paths, { org: "acme", handle: "ken", token: "tok", relay: "https://relay.test", agent_kind: "claude" });
     mkdirSync(join(testHome, ".agentcall"), { recursive: true });
     writeFileSync(paths.policyFile, JSON.stringify({
       default_offer: ["ask"], tests: [{ caller: "mia", deny: ["ask"] }],
@@ -291,8 +304,8 @@ describe.sequential("CLI command actions", () => {
 
   it("renders the effective policy as a per-caller and per-task capability report", async () => {
     const testHome = home();
-    const paths = getPaths(testHome);
-    saveConfig(paths, {
+    const paths = getLinePaths(getMachinePaths(testHome), "claude");
+    saveLineConfig(paths, {
       org: "acme", handle: "ken", token: "tok", relay: "https://relay.test", agent_kind: "claude",
     });
     mkdirSync(join(paths.tasksDir, "deploy"), { recursive: true });
@@ -317,7 +330,7 @@ describe.sequential("CLI command actions", () => {
     expect(out.code).toBe(0);
     expect(out.stderr).toBe("");
     expect(out.stdout).toContain("Effective capability policy");
-    expect(out.stdout).toMatch(new RegExp(`Everyone registered[\\s\\S]*ask — Ask a question[\\s\\S]*Working directory: ${paths.publicDir}`));
+    expect(out.stdout).toMatch(new RegExp(`Everyone registered[\\s\\S]*ask — Ask a question[\\s\\S]*Working directory: ${paths.shareDir}`));
     expect(out.stdout).toMatch(/Named caller rule: alice \(before roster grants\)[\s\S]*deploy — Deploy production[\s\S]*exec — run shell commands/);
     expect(out.stdout).toContain("WARNING: exec can read, change, and send data outside this working directory");
     expect(out.stdout).toMatch(/Named caller rule: blocked-bot \(before roster grants\)[\s\S]*BLOCKED — no task can run/);
@@ -325,8 +338,8 @@ describe.sequential("CLI command actions", () => {
 
   it("rejects a CLI policy edit that would break an assertion and preserves the file", async () => {
     const testHome = home();
-    const paths = getPaths(testHome);
-    saveConfig(paths, { org: "acme", handle: "ken", token: "tok", relay: "https://relay.test", agent_kind: "claude" });
+    const paths = getLinePaths(getMachinePaths(testHome), "claude");
+    saveLineConfig(paths, { org: "acme", handle: "ken", token: "tok", relay: "https://relay.test", agent_kind: "claude" });
     mkdirSync(join(testHome, ".agentcall"), { recursive: true });
     const original = {
       default_offer: ["ask"], tests: [{ caller: "mia", accept: ["ask"] }],
@@ -351,7 +364,7 @@ describe.sequential("CLI command actions", () => {
     });
     const testHome = home();
     seedConfig(testHome, relay);
-    saveMembership(getPaths(testHome), { name: "roster", relay, roster_id: A });
+    saveMembership(getLinePaths(getMachinePaths(testHome), "claude"), { name: "roster", relay, roster_id: A });
 
     const out = await runCommand(testHome, ["roster", "create"]);
 
@@ -362,7 +375,7 @@ describe.sequential("CLI command actions", () => {
     expect(out.stdout).toContain("admin-once");
     expect(out.stderr).toMatch(/roster was created.*not saved locally/is);
     expect(out.stderr).toContain(`agentcall roster join ${B}`);
-    expect(loadMemberships(getPaths(testHome))).toEqual([{ name: "roster", relay, roster_id: A }]);
+    expect(loadMemberships(getLinePaths(getMachinePaths(testHome), "claude"))).toEqual([{ name: "roster", relay, roster_id: A }]);
   });
 
   it("persists a roster only after the relay accepts the join", async () => {
@@ -372,13 +385,13 @@ describe.sequential("CLI command actions", () => {
       return { status: 200 };
     });
     const testHome = home();
-    seedConfig(testHome, relay);
+    const paths = seedConfig(testHome, relay);
 
     const out = await runCommand(testHome, ["roster", "join", A, "--key", JOIN_KEY, "--as", "acme"]);
 
     expect(out.code).toBe(0);
     expect(seen).toEqual({ url: `/v1/roster/${A}/join`, method: "POST", body: JSON.stringify({ join_key: JOIN_KEY }) });
-    expect(loadMemberships(getPaths(testHome))).toEqual([{ name: "acme", relay, roster_id: A }]);
+    expect(loadMemberships(paths)).toEqual([{ name: "acme", relay, roster_id: A }]);
   });
 
   it("preserves an existing local membership when a successful relay join collides", async () => {
@@ -388,8 +401,8 @@ describe.sequential("CLI command actions", () => {
       return { status: 200 };
     });
     const testHome = home();
-    seedConfig(testHome, relay);
-    saveMembership(getPaths(testHome), { name: "acme", relay, roster_id: A });
+    const paths = seedConfig(testHome, relay);
+    saveMembership(paths, { name: "acme", relay, roster_id: A });
 
     const out = await runCommand(testHome, ["roster", "join", B, "--key", JOIN_KEY, "--as", "acme"]);
 
@@ -397,7 +410,7 @@ describe.sequential("CLI command actions", () => {
     expect(out.code).toBe(1);
     expect(out.stderr).toMatch(/joined.*not saved locally/is);
     expect(out.stderr).toContain(`agentcall roster join ${B}`);
-    expect(loadMemberships(getPaths(testHome))).toEqual([{ name: "acme", relay, roster_id: A }]);
+    expect(loadMemberships(paths)).toEqual([{ name: "acme", relay, roster_id: A }]);
   });
 
   it("removes local membership only after the relay accepts leave", async () => {
@@ -407,14 +420,14 @@ describe.sequential("CLI command actions", () => {
       return { status: 200 };
     });
     const testHome = home();
-    seedConfig(testHome, relay);
-    saveMembership(getPaths(testHome), { name: "acme", relay, roster_id: A });
+    const paths = seedConfig(testHome, relay);
+    saveMembership(paths, { name: "acme", relay, roster_id: A });
 
     const out = await runCommand(testHome, ["roster", "leave", "acme"]);
 
     expect(out.code).toBe(0);
     expect(seen).toBe(`/v1/roster/${A}/leave`);
-    expect(loadMemberships(getPaths(testHome))).toEqual([]);
+    expect(loadMemberships(paths)).toEqual([]);
   });
 
   it("passes explicit confirmation for join-key-scoped eviction", async () => {
@@ -424,8 +437,8 @@ describe.sequential("CLI command actions", () => {
       return { status: 200, body: { prefix: KEY_PREFIX, revoked_at: 3, evicted: 2 } };
     });
     const testHome = home();
-    seedConfig(testHome, relay);
-    saveMembership(getPaths(testHome), { name: "acme", relay, roster_id: A });
+    const paths = seedConfig(testHome, relay);
+    saveMembership(paths, { name: "acme", relay, roster_id: A });
 
     const out = await runCommand(testHome, [
       "roster", "key", "revoke", "acme", KEY_PREFIX, "--evict", "--yes", "--admin-secret", "admin-secret",
@@ -453,7 +466,7 @@ describe.sequential("CLI command actions", () => {
     });
     const testHome = home();
     seedConfig(testHome, relay);
-    saveMembership(getPaths(testHome), { name: "acme", relay, roster_id: A });
+    saveMembership(getLinePaths(getMachinePaths(testHome), "claude"), { name: "acme", relay, roster_id: A });
 
     const issued = await runCommand(testHome, [
       "roster", "key", "issue", "acme", "--description", "contractor", "--expires-in", "14",
@@ -483,9 +496,9 @@ describe.sequential("CLI command actions", () => {
     const relay = await startRelay((url) =>
       url.includes(A) ? { status: 200, body: bundle(A), headers: { ETag: '"a1"' } } : { status: 500, body: { error: "down" } });
     const testHome = home();
-    seedConfig(testHome, relay);
-    saveMembership(getPaths(testHome), { name: "working", relay, roster_id: A });
-    saveMembership(getPaths(testHome), { name: "broken", relay, roster_id: B });
+    const paths = seedConfig(testHome, relay);
+    saveMembership(paths, { name: "working", relay, roster_id: A });
+    saveMembership(paths, { name: "broken", relay, roster_id: B });
 
     const out = await runCommand(testHome, ["search", "typescript", "--json"]);
 
@@ -498,9 +511,9 @@ describe.sequential("CLI command actions", () => {
   it("returns failure when every roster refresh fails", async () => {
     const relay = await startRelay(() => ({ status: 500, body: { error: "down" } }));
     const testHome = home();
-    seedConfig(testHome, relay);
-    saveMembership(getPaths(testHome), { name: "one", relay, roster_id: A });
-    saveMembership(getPaths(testHome), { name: "two", relay, roster_id: B });
+    const paths = seedConfig(testHome, relay);
+    saveMembership(paths, { name: "one", relay, roster_id: A });
+    saveMembership(paths, { name: "two", relay, roster_id: B });
 
     const out = await runCommand(testHome, ["search", "typescript", "--json"]);
 
@@ -511,8 +524,7 @@ describe.sequential("CLI command actions", () => {
   it("does not resurrect a revoked roster in a later offline invocation", async () => {
     const relay = await startRelay(() => ({ status: 404, body: { error: "gone" } }));
     const testHome = home();
-    const paths = getPaths(testHome);
-    seedConfig(testHome, relay);
+    const paths = seedConfig(testHome, relay);
     saveMembership(paths, { name: "acme", relay, roster_id: A });
     writeCached(paths, "acme", {
       relay, caller: "ken", roster_id: A, fetched_at: 0,
@@ -530,6 +542,7 @@ describe.sequential("CLI command actions", () => {
 
   it("rejects --continue with no stored conversation before opening a WebSocket", async () => {
     const callRelay = await startCallRelay(() => {});
+    routing.host = new URL(callRelay.relay).host;
     const testHome = home();
     seedConfig(testHome, callRelay.relay);
 
@@ -543,6 +556,7 @@ describe.sequential("CLI command actions", () => {
 
   it("rejects --continue with --context before opening a WebSocket", async () => {
     const callRelay = await startCallRelay(() => {});
+    routing.host = new URL(callRelay.relay).host;
     const testHome = home();
     seedConfig(testHome, callRelay.relay);
 
@@ -558,9 +572,9 @@ describe.sequential("CLI command actions", () => {
 
   it("rejects a --task that conflicts with the continued conversation before opening a WebSocket", async () => {
     const callRelay = await startCallRelay(() => {});
+    routing.host = new URL(callRelay.relay).host;
     const testHome = home();
-    const paths = getPaths(testHome);
-    seedConfig(testHome, callRelay.relay);
+    const paths = seedConfig(testHome, callRelay.relay);
     rememberOutbound(paths, {
       relay: callRelay.relay, from: "ken", to: "sota", task: "resolved-task",
       context_id: "ctx_AAAAAAAAAAAAAAAAAAAAAA", at: 1,
@@ -586,9 +600,9 @@ describe.sequential("CLI command actions", () => {
         task: "resolved-task", context_id: contextId,
       }));
     });
+    routing.host = new URL(callRelay.relay).host;
     const testHome = home();
-    const paths = getPaths(testHome);
-    seedConfig(testHome, callRelay.relay);
+    const paths = seedConfig(testHome, callRelay.relay);
 
     const first = await runCommand(testHome, ["call", "local-sota", "hello", "--json"]);
     expect(first.code).toBe(0);
@@ -612,6 +626,7 @@ describe.sequential("CLI command actions", () => {
     const callRelay = await startCallRelay((_frame, ws) => {
       ws.send(JSON.stringify({ type: "call_reply", call_id: "call-1", text: hostile }));
     });
+    routing.host = new URL(callRelay.relay).host;
     const testHome = home();
     seedConfig(testHome, callRelay.relay);
 
@@ -628,6 +643,7 @@ describe.sequential("CLI command actions", () => {
     const callRelay = await startCallRelay((_frame, ws) => {
       ws.send(JSON.stringify({ type: "call_reply", call_id: "call-1", text: hostile }));
     });
+    routing.host = new URL(callRelay.relay).host;
     const testHome = home();
     seedConfig(testHome, callRelay.relay);
 

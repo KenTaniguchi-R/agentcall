@@ -2,13 +2,16 @@ import { mkdtempSync, readFileSync, statSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
-import { getPaths } from "../src/paths.js";
+import { getLinePaths, getMachinePaths } from "../src/paths.js";
 import {
   CACHE_TTL_MS, forgetMembership, loadCache, loadMemberships, readCached,
   saveMembership, writeCached,
 } from "../src/rosters.js";
 
-const paths = () => getPaths(mkdtempSync(join(tmpdir(), "agentcall-roster-")));
+const paths = () => {
+  const root = mkdtempSync(join(tmpdir(), "agentcall-roster-"));
+  return getLinePaths(getMachinePaths(root, root), "claude");
+};
 const IDENTITY = { relay: "https://r.test", caller: "ken", roster_id: "a".repeat(22) };
 const BUNDLE = {
   relay: "https://r.test", caller: "ken", roster_id: "a".repeat(22),

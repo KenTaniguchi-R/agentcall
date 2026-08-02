@@ -2,8 +2,8 @@ import WebSocket from "ws";
 import {
   AGENT_TIMEOUT_MS, RelayToListenerFrame, safeParseFrame,
 } from "@benree/agentcall-shared";
-import { resolveWorkdir, type CallableConfig } from "./config.js";
-import type { Paths } from "./paths.js";
+import { resolveLineWorkdir, type CallableLineConfig } from "./config.js";
+import type { LinePaths } from "./paths.js";
 import { buildPrompt } from "./prompt.js";
 import { AgentRunError, codexThreadingEnabled, CODEX_THREADING_VERIFIED_VERSION, runAgent } from "./runner.js";
 import {
@@ -17,32 +17,47 @@ import { appendPrivateLogLine } from "./audit-log.js";
 
 export interface ListenerDeps {
   relay: string;
-  config: CallableConfig;
-  paths: Paths;
+  paths: LinePaths;
+  /** Called on every (re)connect — a rotated token takes effect without a restart. */
+  loadConfig: () => CallableLineConfig;
   run?: typeof runAgent;
   saveContexts?: typeof saveContexts;
   maxPending?: number;
   backoffMs?: (attempt: number) => number;
+  // Test seam so a test can assert on what each (re)connect sends — a
+  // WebSocketServer round-trip works but makes asserting per-attempt
+  // Authorization headers awkward. Production leaves this unset and gets a
+  // real `ws` socket.
+  socketFactory?: (url: string, opts: { headers: Record<string, string> }) => WebSocket;
   codexThreadingEnabled?: () => boolean;
 }
 
 export function startListener(deps: ListenerDeps): { stop(): void } {
   const run = deps.run ?? runAgent;
+  const newSocket = deps.socketFactory ?? ((url: string, opts: { headers: Record<string, string> }) => new WebSocket(url, opts));
   const persistContexts = deps.saveContexts ?? saveContexts;
-  // Resolved once, up front: a bad `workdir` in config.json should stop
-  // `agentcall listen` with a clear message, not fail every inbound call
-  // individually. Changing it therefore needs a listener restart.
-  const workdir = resolveWorkdir(deps.config, deps.paths);
   // Validate before opening the socket. Hot edits are still loaded per call
   // below, but a listener must never advertise availability when its initial
-  // effective policy is malformed or contradicts an assertion.
+  // effective policy (user layer + the machine's managed ceiling) is malformed
+  // or contradicts an assertion. Throwing here is contained to this one line:
+  // startAllListeners catches per-line startup failures so the other lines'
+  // sockets survive (listenAll.ts). The workdir gets the same up-front check,
+  // but per-connect rather than here — see connect() below.
   loadPolicy(deps.paths);
+
   const queue = new SerialQueue(deps.maxPending ?? 0);
   const backoff = deps.backoffMs ?? ((n) => Math.min(1000 * 2 ** n, 60_000) + Math.random() * 500);
-  const codexCanThread = deps.config.agent_kind === "codex"
+  // One startup read, purely to decide codex threading. Everything else reads
+  // config per-connect (see connect() below), but agent_kind is what the
+  // threading probe keys off and the probe shells out to `codex --version` —
+  // re-running it on every reconnect would spawn a process per backoff tick,
+  // and the warning below would repeat forever in listener.log. Editing
+  // agent_kind therefore needs a listener restart, same as changing the relay.
+  const startupKind = deps.loadConfig().agent_kind;
+  const codexCanThread = startupKind === "codex"
     ? (deps.codexThreadingEnabled ?? codexThreadingEnabled)()
     : false;
-  if (deps.config.agent_kind === "codex" && !codexCanThread) {
+  if (startupKind === "codex" && !codexCanThread) {
     console.error(
       `Warning: Codex conversation threading is disabled because this codex-cli release has not passed ` +
         `the resume sandbox probe (last verified: ${CODEX_THREADING_VERIFIED_VERSION}).`,
@@ -67,14 +82,37 @@ export function startListener(deps: ListenerDeps): { stop(): void } {
     }
   };
 
+  // Config (and therefore workdir) is re-read on every (re)connect, not just
+  // once at startup: a rotated token (`agentcall rotate`) or an edited
+  // workdir then takes effect on the next reconnect instead of needing the
+  // whole multi-line process restarted. A bad workdir/config still stops the
+  // FIRST connect() (called synchronously below, not through
+  // scheduleReconnect) with a thrown error — same "fail loudly at start"
+  // contract `agentcall listen` had before lines existed. A config that goes
+  // bad LATER, discovered on a scheduled reconnect, must NOT throw all the
+  // way out: this one process holds every line's socket, and an uncaught
+  // throw from inside a bare `setTimeout` callback would crash all of them,
+  // not just the line whose config broke — see scheduleReconnect below,
+  // which is what catches that case.
   const connect = () => {
     if (stopped) return;
+    const config = deps.loadConfig();
+    const workdir = resolveLineWorkdir(config, deps.paths);
+    // `deps.relay`, not `config.relay`: the relay host is fixed at
+    // `startListener()` entry (set by `startAllListeners` from the config it
+    // read at process startup), so unlike the token/handle/workdir above,
+    // a changed relay host in config.json does NOT take effect on
+    // reconnect — only a full listener restart picks up a new relay. This is
+    // spec-faithful, not an oversight: `ListenerDeps.relay` was never
+    // re-derived from `loadConfig()`'s return value, only its other fields
+    // were. Deliberate partial reload, documented here so it doesn't read as
+    // a bug to the next person tracing a relay-host change that didn't take.
     const url = deps.relay.replace(/^http/, "ws") + "/v1/ws?role=listen";
-    ws = new WebSocket(url, {
+    ws = newSocket(url, {
       headers: {
-        Authorization: `Bearer ${deps.config.token}`,
-        "X-AgentCall-Org": deps.config.org,
-        "X-AgentCall-Handle": deps.config.handle,
+        Authorization: `Bearer ${config.token}`,
+        "X-AgentCall-Org": config.org,
+        "X-AgentCall-Handle": config.handle,
       },
     });
     ws.on("open", () => {
@@ -126,7 +164,7 @@ export function startListener(deps: ListenerDeps): { stop(): void } {
         dir: task.workdir ?? workdir.dir,
         // Claude's file-shaped tools are bounded by AGENTCALL_ALLOWED_ROOT.
         // Codex has no equivalent read boundary, so do not claim confinement.
-        confined: deps.config.agent_kind === "claude",
+        confined: config.agent_kind === "claude",
       };
 
       // Task resolution above ran on the verified `from` and local files only
@@ -136,7 +174,7 @@ export function startListener(deps: ListenerDeps): { stop(): void } {
       // this order reopens the hole the design exists to close.
       const now = Date.now();
       const threadingAvailable =
-        task.threadable && (deps.config.agent_kind === "claude" || codexCanThread);
+        task.threadable && (config.agent_kind === "claude" || codexCanThread);
       const contexts = pruneContexts(loadContexts(deps.paths), now);
       // Explicitly typed: `let binding = undefined` infers the type `undefined`
       // and rejects the assignment below.
@@ -152,7 +190,7 @@ export function startListener(deps: ListenerDeps): { stop(): void } {
         binding = threadingAvailable
           ? admitContext(contexts, {
               context_id, caller: from, task: task.id,
-              agent_kind: deps.config.agent_kind, workdir: taskWorkdir.dir, now,
+              agent_kind: config.agent_kind, workdir: taskWorkdir.dir, now,
             })
           : undefined;
         // One code for every failure — expired, not yours, wrong task, wrong
@@ -186,14 +224,18 @@ export function startListener(deps: ListenerDeps): { stop(): void } {
         send({ type: "call_started", call_id });
         try {
           const out = await run(
-            deps.config.agent_kind,
-            buildPrompt(deps.config.handle, from, message, task, taskWorkdir, binding !== undefined),
+            config.agent_kind,
+            buildPrompt(config.handle, from, message, task, taskWorkdir, binding !== undefined),
             taskWorkdir.dir,
             timeoutMs,
             undefined,
             task.envelope,
             call_id,
             signal,
+            // The line this call came in on — required (see runner.ts): the
+            // PreToolUse guard needs it to know which line's calls.log and
+            // task dirs it's policing, and fails closed without it.
+            deps.paths.name,
             binding?.agent_session_id,
           );
 
@@ -219,7 +261,7 @@ export function startListener(deps: ListenerDeps): { stop(): void } {
               agent_session_id: sessionId,
               caller: from,
               task: task.id,
-              agent_kind: deps.config.agent_kind,
+              agent_kind: config.agent_kind,
               workdir: taskWorkdir.dir,
               turns: (binding?.turns ?? 0) + 1,
               created_at: binding?.created_at ?? now,
@@ -280,7 +322,30 @@ export function startListener(deps: ListenerDeps): { stop(): void } {
     const scheduleReconnect = () => {
       if (pingTimer) clearInterval(pingTimer);
       if (stopped) return;
-      setTimeout(connect, backoff(attempt++)).unref?.();
+      setTimeout(() => {
+        try {
+          connect();
+        } catch (e) {
+          // loadConfig/resolveLineWorkdir threw on this reconnect attempt —
+          // corrupt config.json, a workdir deleted out from under a running
+          // listener, etc. See the comment above connect(): this must not
+          // propagate, or one line's bad config takes down every other
+          // line's socket in this same process — an unhandled throw here is
+          // a multi-line outage, not a single-line one. console.error, not a
+          // new log file: the launchd plist already routes stderr to
+          // listenerLog, so this lands in the right place with no plumbing,
+          // and it's visible in a foreground `agentcall listen` too. Named by
+          // line, since with N lines in one process an error that doesn't
+          // say which one is nearly useless. Keep retrying rather than
+          // giving up: the owner may be mid-edit, or `rotate` may be
+          // rewriting the file underneath this read, and a line that
+          // permanently drops out on one bad read would need a full process
+          // restart to come back — worse than a noisy retry loop. `doctor`
+          // and `line list` are what surface a line stuck offline.
+          console.error(`agentcall: line "${deps.paths.name}" reconnect failed, retrying: ${String(e)}`);
+          scheduleReconnect();
+        }
+      }, backoff(attempt++)).unref?.();
     };
     ws.on("close", scheduleReconnect);
     ws.on("error", () => { /* close fires next */ });

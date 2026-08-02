@@ -5,6 +5,7 @@ import {
   RegisterRequest, CallReply, CallError, MAX_DETAIL_LENGTH, sanitizeDetail, sanitizeTerminalOutput,
   stringifyTerminalSafeJson,
   CallAccepted, CallStarted, CancelCall, CallCancelled, CallNotCancelled, RelayToListenerFrame,
+  AGENT_KINDS, AgentKindSchema,
   TASK_ID_RE, MAX_TASK_ID_LENGTH,
 } from "../src/index.js";
 
@@ -168,6 +169,17 @@ describe("RegisterRequest", () => {
   });
   it("still rejects invalid agent kinds", () => {
     expect(RegisterRequest.safeParse({ invite: "i".repeat(40), handle: "ken", agent_kind: "vim" }).success).toBe(false);
+  });
+});
+
+describe("AgentKind", () => {
+  it("exposes the known agent kinds", () => {
+    expect(AGENT_KINDS).toEqual(["claude", "codex"]);
+  });
+
+  it("accepts a known kind and rejects an unknown one", () => {
+    expect(AgentKindSchema.parse("codex")).toBe("codex");
+    expect(AgentKindSchema.safeParse("hermes").success).toBe(false);
   });
 });
 

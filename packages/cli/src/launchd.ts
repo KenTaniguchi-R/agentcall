@@ -2,7 +2,7 @@ import { execFileSync } from "node:child_process";
 import { existsSync, mkdirSync, rmSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
-import type { Paths } from "./paths.js";
+import type { MachinePaths } from "./paths.js";
 
 export const LAUNCH_LABEL = "tech.benree.agentcall.listener";
 type ExecCmd = (cmd: string[]) => void;
@@ -11,12 +11,14 @@ type ExecCmd = (cmd: string[]) => void;
 // macOS LaunchAgent. Everything outside it asks "is the listener installed?"
 // rather than reaching for a plist path, so adding a systemd (or other)
 // supervisor later is a sibling module rather than surgery across the CLI.
-export function launchAgentFile(p: Paths): string {
-  return join(p.home, "Library", "LaunchAgents", `${LAUNCH_LABEL}.plist`);
+export function launchAgentFile(m: MachinePaths): string {
+  // userHome, not stateRoot: launchd only loads plists from the real account's
+  // LaunchAgents directory, and a redirected state root must not move it.
+  return join(m.userHome, "Library", "LaunchAgents", `${LAUNCH_LABEL}.plist`);
 }
 
-export function isLaunchAgentInstalled(p: Paths): boolean {
-  return existsSync(launchAgentFile(p));
+export function isLaunchAgentInstalled(m: MachinePaths): boolean {
+  return existsSync(launchAgentFile(m));
 }
 
 const defaultExec: ExecCmd = (cmd) => {
@@ -55,7 +57,9 @@ function xmlEscape(value: string): string {
     .replaceAll(">", "&gt;");
 }
 
-export function plistContent(nodeBin: string, cliScript: string, p: Paths, extraPathDirs: string[] = []): string {
+export function plistContent(
+  nodeBin: string, cliScript: string, m: MachinePaths, extraPathDirs: string[] = [],
+): string {
   const pathDirs = [...new Set([...extraPathDirs, dirname(nodeBin), ...BASE_PATH_DIRS])];
   return `<?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
@@ -70,12 +74,12 @@ export function plistContent(nodeBin: string, cliScript: string, p: Paths, extra
   </array>
   <key>RunAtLoad</key><true/>
   <key>KeepAlive</key><true/>
-  <key>StandardOutPath</key><string>${xmlEscape(p.listenerLog)}</string>
-  <key>StandardErrorPath</key><string>${xmlEscape(p.listenerLog)}</string>
+  <key>StandardOutPath</key><string>${xmlEscape(m.listenerLog)}</string>
+  <key>StandardErrorPath</key><string>${xmlEscape(m.listenerLog)}</string>
   <key>EnvironmentVariables</key>
   <dict>
     <key>PATH</key><string>${xmlEscape(pathDirs.join(":"))}</string>
-    <key>HOME</key><string>${xmlEscape(p.home)}</string>
+    <key>HOME</key><string>${xmlEscape(m.userHome)}</string>
   </dict>
 </dict>
 </plist>
@@ -88,12 +92,12 @@ const defaultSleep: SleepFn = () => {
 };
 
 export function installLaunchAgent(
-  p: Paths, execCmd: ExecCmd = defaultExec, extraPathDirs: string[] = [], sleep: SleepFn = defaultSleep,
+  m: MachinePaths, execCmd: ExecCmd = defaultExec, extraPathDirs: string[] = [], sleep: SleepFn = defaultSleep,
 ): void {
   const cliScript = fileURLToPath(new URL("../dist/index.js", import.meta.url));
-  const plistFile = launchAgentFile(p);
+  const plistFile = launchAgentFile(m);
   mkdirSync(dirname(plistFile), { recursive: true });
-  writeFileSync(plistFile, plistContent(process.execPath, cliScript, p, extraPathDirs));
+  writeFileSync(plistFile, plistContent(process.execPath, cliScript, m, extraPathDirs));
   try {
     execCmd(["launchctl", "bootout", `gui/${uid()}/${LAUNCH_LABEL}`]);
   } catch {
@@ -114,12 +118,12 @@ export function installLaunchAgent(
   }
 }
 
-export function uninstallLaunchAgent(p: Paths, execCmd: ExecCmd = defaultExec): void {
+export function uninstallLaunchAgent(m: MachinePaths, execCmd: ExecCmd = defaultExec): void {
   try {
     execCmd(["launchctl", "bootout", `gui/${uid()}/${LAUNCH_LABEL}`]);
   } catch {
     /* not loaded */
   }
-  const plistFile = launchAgentFile(p);
+  const plistFile = launchAgentFile(m);
   if (existsSync(plistFile)) rmSync(plistFile);
 }

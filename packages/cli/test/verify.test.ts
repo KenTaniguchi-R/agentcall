@@ -1,10 +1,10 @@
 import { existsSync, mkdirSync, mkdtempSync, readdirSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 import { describe, expect, it } from "vitest";
 import { runGuard } from "../src/guard.js";
-import { getPaths } from "../src/paths.js";
-import { AgentRunError } from "../src/runner.js";
+import { getLinePaths, getMachinePaths } from "../src/paths.js";
+import { AgentRunError, type AgentKind } from "../src/runner.js";
 import { ASK_TASK } from "../src/tasks.js";
 import {
   checkAgentBinary,
@@ -16,6 +16,7 @@ import {
   classifyAgentFailure,
   formatCheck,
   guardDenied,
+  GUARD_PROBE_LINE,
   HINTS,
   runCodexGuardProbe,
   VERIFY_PROMPT,
@@ -157,11 +158,20 @@ describe("checkCodexAuth", () => {
   });
 });
 
-const fakeWorkdir = getPaths("/tmp/agentcall-verify-test-home").publicDir;
+const fakeWorkdir = getLinePaths(getMachinePaths("/tmp/agentcall-verify-test-home"), "line").shareDir;
+
+// checkAgentSpawn now builds its own SpawnSpec (to apply the AGENTCALL_HOME
+// override below), which moved a real binary-on-PATH lookup above the runFn
+// injection seam — resolveAgentBin throws when the binary isn't on PATH. This
+// fake stands in everywhere runFn is also faked, so these tests don't depend
+// on claude/codex actually being installed on whatever machine runs them
+// (this repo's CI runners among them — see CLAUDE.md's TDD section: no live
+// claude/codex spawn in CI).
+const fakeResolveBin = () => "/fake/bin/claude";
 
 describe("checkAgentSpawn", () => {
   it("passes when runFn resolves, without asserting reply text", async () => {
-    const c = await checkAgentSpawn("claude", fakeWorkdir, async () => ({ text: "OK, got it!" }));
+    const c = await checkAgentSpawn("claude", fakeWorkdir, async () => ({ text: "OK, got it!" }), fakeResolveBin);
     expect(c).toMatchObject({ name: "agent run", ok: true });
   });
 
@@ -170,17 +180,72 @@ describe("checkAgentSpawn", () => {
     await checkAgentSpawn("claude", fakeWorkdir, async (kind, prompt, _p, timeoutMs, _specOverride, envelope) => {
       seen.push(kind, prompt, timeoutMs, envelope);
       return { text: "OK" };
-    });
+    }, fakeResolveBin);
     expect(seen).toEqual(["claude", VERIFY_PROMPT, VERIFY_TIMEOUT_MS, ASK_TASK.envelope]);
   });
 
   it("classifies an auth failure into a hint", async () => {
     const c = await checkAgentSpawn("claude", fakeWorkdir, async () => {
       throw new AgentRunError("could not parse agent output: Error: claude reported an error: Invalid API key · Please run /login", "agent_error");
-    });
+    }, fakeResolveBin);
     expect(c.ok).toBe(false);
     expect(c.hint).toBe(HINTS.claudeAuth);
     expect(c.detail).toContain("Invalid API key");
+  });
+
+  // Regression for the doctor-probe orphan-line bug: this spawn runs under
+  // GUARD_PROBE_LINE ("doctor-probe"), a synthetic name with no real line
+  // behind it — same as the two guard probes in this file, which each
+  // mkdtemp their own AGENTCALL_HOME for exactly this reason (see
+  // defaultGuardProbe/defaultGuardBinaryProbe below). checkAgentSpawn never
+  // got that treatment because before per-line directories existed there was
+  // nothing to orphan. Without it: buildSpawnSpec spreads the REAL
+  // process.env with no AGENTCALL_HOME override, so if the probed agent
+  // calls any tool, guard.ts's toolsLog write (enforce AND observe mode)
+  // mkdirSync's a real ~/.agentcall/lines/doctor-probe/ with no config.json —
+  // an orphan `listLines` reports forever after, which makes `doctor` fail
+  // "config" and exit 1 on every future run, including future doctor runs
+  // meant to diagnose it.
+  //
+  // A real agent spawn is not exercised here (no live claude/codex in CI —
+  // see CLAUDE.md's TDD section), so this asserts the narrowest observable
+  // proxy: the SpawnSpec actually handed to runFn carries a redirected
+  // AGENTCALL_HOME, distinct from whatever the ambient process.env has (or
+  // doesn't have). Before the fix, checkAgentSpawn passed no specOverride at
+  // all (runFn's 5th argument was `undefined`), so this fails against the
+  // current code — there is no spec to inspect.
+  it("spawns under a throwaway AGENTCALL_HOME so a real ~/.agentcall/lines/doctor-probe is never created", async () => {
+    const seenSpecs: Array<{ env?: NodeJS.ProcessEnv } | undefined> = [];
+    await checkAgentSpawn("claude", fakeWorkdir, async (_kind, _prompt, _workdir, _timeoutMs, specOverride) => {
+      seenSpecs.push(specOverride);
+      return { text: "OK" };
+    }, fakeResolveBin);
+    expect(seenSpecs).toHaveLength(1);
+    const spec = seenSpecs[0];
+    expect(spec).toBeDefined();
+    expect(spec!.env?.AGENTCALL_HOME).toBeTruthy();
+    expect(spec!.env?.AGENTCALL_HOME).not.toBe(process.env.AGENTCALL_HOME);
+    // The line name the spawn's guard is wired up under must still be
+    // GUARD_PROBE_LINE, unaffected by the AGENTCALL_HOME redirection.
+    expect(spec!.env?.AGENTCALL_LINE).toBe(GUARD_PROBE_LINE);
+  });
+
+  // Regression for the CI breakage the AGENTCALL_HOME fix above introduced:
+  // building the SpawnSpec here (to apply that override) moved a real
+  // binary-on-PATH lookup above the runFn injection seam. Without threading
+  // a resolveBin parameter through, checkAgentSpawn always called the real
+  // resolveAgentBin regardless of what a test injected, which throws when
+  // the binary isn't on PATH — passing locally only because the dev machine
+  // happens to have claude installed, and failing on any CI runner (no live
+  // claude/codex spawn there — see CLAUDE.md's TDD section). This wouldn't
+  // even compile against the pre-fix signature, which took no resolveBin
+  // parameter at all.
+  it("uses the injected resolveBin instead of the real PATH lookup", async () => {
+    const seen: AgentKind[] = [];
+    const resolveBin = (kind: AgentKind) => { seen.push(kind); return "/custom/bin/claude"; };
+    const c = await checkAgentSpawn("claude", fakeWorkdir, async () => ({ text: "OK" }), resolveBin);
+    expect(seen).toEqual(["claude"]);
+    expect(c.ok).toBe(true);
   });
 });
 
@@ -398,11 +463,14 @@ describe("checkRelaySelfCall", () => {
 });
 
 // A temp home whose calls.log already contains a denial, as a real guard run
-// would have left behind.
+// would have left behind. Per-line layout: checkGuard's default probes run
+// under GUARD_PROBE_LINE (verify.ts), so deniedInLog reads
+// .agentcall/lines/<GUARD_PROBE_LINE>/calls.log, not the flat legacy path.
 function homeWithDenial(): string {
   const home = mkdtempSync(join(tmpdir(), "guardcheck-"));
-  mkdirSync(join(home, ".agentcall"), { recursive: true });
-  writeFileSync(join(home, ".agentcall", "calls.log"),
+  const callsLog = getLinePaths(getMachinePaths(home), GUARD_PROBE_LINE).callsLog;
+  mkdirSync(dirname(callsLog), { recursive: true });
+  writeFileSync(callsLog,
     JSON.stringify({ ts: "2026-07-31T00:00:00.000Z", type: "tool_denied", tool: "Read" }) + "\n");
   return home;
 }
@@ -412,9 +480,10 @@ function homeWithDenial(): string {
 // a literal here would keep passing after the shape changed.
 function realDenialStdout(): string {
   const home = mkdtempSync(join(tmpdir(), "guardout-"));
+  const line = getLinePaths(getMachinePaths(home, home), "probe-line");
   return runGuard(
     JSON.stringify({ tool_name: "Read", tool_input: { file_path: join(home, ".env") }, cwd: home }),
-    { paths: getPaths(home), callId: "probe", now: () => "2026-08-01T00:00:00.000Z", realpath: (p) => p, appendLine: () => {} },
+    { line, callId: "probe", now: () => "2026-08-01T00:00:00.000Z", realpath: (p) => p, appendLine: () => {} },
   ).stdout;
 }
 

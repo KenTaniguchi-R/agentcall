@@ -1,6 +1,7 @@
 import { existsSync, realpathSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { delimiter, dirname, join, resolve } from "node:path";
+import type { AgentKind } from "@benree/agentcall-shared";
 
 // Roots whose contents don't survive the session that created them. A dir
 // under any of these must never be treated as the preferred resolution of a
@@ -59,7 +60,7 @@ function resolveOnPath(
 // empty-handed where an interactive shell would have succeeded. `env` is
 // overridable for tests; production callers should leave it as process.env.
 export function resolveAgentBin(
-  agentKind: "claude" | "codex",
+  agentKind: AgentKind,
   env: NodeJS.ProcessEnv = process.env,
   ephemeralRoots: readonly string[] = EPHEMERAL_ROOTS,
 ): string {

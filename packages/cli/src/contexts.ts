@@ -2,7 +2,7 @@ import { randomBytes } from "node:crypto";
 import { chmodSync, existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { z } from "zod";
 import { CONTEXT_ID_RE, CONTEXT_TTL_MS, MAX_CONTEXTS, MAX_CONTEXT_TURNS } from "@benree/agentcall-shared";
-import type { Paths } from "./paths.js";
+import type { LinePaths } from "./paths.js";
 
 // The binding is the whole security design in one shape. `context_id` is the
 // only field that ever travels; `agent_session_id` is the capability it stands
@@ -70,7 +70,7 @@ export function upsertContext(list: ContextBinding[], binding: ContextBinding): 
 // resume is refused and every call still works as a fresh one. This is the
 // opposite of loadPolicy's deliberate throw — there, a silent default would
 // GRANT what the owner withheld; here, a silent empty only DENIES.
-export function loadContexts(p: Paths): ContextBinding[] {
+export function loadContexts(p: LinePaths): ContextBinding[] {
   if (!existsSync(p.contextsFile)) return [];
   try {
     const parsed = z.array(ContextBindingSchema).safeParse(JSON.parse(readFileSync(p.contextsFile, "utf8")));
@@ -82,10 +82,10 @@ export function loadContexts(p: Paths): ContextBinding[] {
 
 // 0600, same posture as config.json: this file holds real agent session ids and
 // the handle of everyone who has held a conversation with this agent.
-export function saveContexts(p: Paths, list: ContextBinding[]): void {
+export function saveContexts(p: LinePaths, list: ContextBinding[]): void {
   // mkdirSync's mode is silently ignored when the directory already exists
   // (e.g. savePolicy creates it first, with no mode at all) — the chmodSync
-  // is the actual guard, same as saveConfig.
+  // is the actual guard, same as saveLineConfig.
   mkdirSync(p.dir, { recursive: true, mode: 0o700 });
   chmodSync(p.dir, 0o700);
   writeFileSync(p.contextsFile, JSON.stringify(list, null, 2) + "\n", { mode: 0o600 });
