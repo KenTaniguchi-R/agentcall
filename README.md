@@ -488,6 +488,25 @@ pnpm -r build
 cd apps/relay && pnpm dev   # local Worker + DO + D1 via wrangler
 ```
 
+### Relay deployment
+
+Build the workspace before validating or deploying the relay so Wrangler can
+resolve the shared package. Then run:
+
+```bash
+cd apps/relay
+pnpm exec wrangler deploy --dry-run  # local config and bundle checks only
+pnpm deploy                          # real deployment
+```
+
+The dry run does not compare Durable Object state with Cloudflare. Durable
+Object lifecycle changes are atomic and cannot be rolled back, and Wrangler's
+reconciliation report arrives only after a successful deployment. Before
+deploying, compare the `exports` map with the intended live classes and prepare
+the documented staged rollout for any create, delete, rename, or transfer. Read
+the post-deploy report as confirmation; treat any unexpected action as an
+incident and make no further production changes until it is understood.
+
 Monorepo layout:
 
 ```
