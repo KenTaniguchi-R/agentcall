@@ -1,8 +1,8 @@
-import { mkdirSync, mkdtempSync, writeFileSync } from "node:fs";
+import { chmodSync, mkdirSync, mkdtempSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { describe, expect, it } from "vitest";
-import { DEFAULT_POLICY, loadPolicy, offeredFor, resolveTask, savePolicy, type Policy } from "../src/policy.js";
+import { DEFAULT_POLICY, loadPolicy, loadUserPolicy, offeredFor, resolveTask, savePolicy, type Policy } from "../src/policy.js";
 import { ASK_TASK, type Task } from "../src/tasks.js";
 import { getPaths } from "../src/paths.js";
 
@@ -64,6 +64,86 @@ describe("loadPolicy", () => {
       default_offer: ["ask"], callers: { ken: { offer: ["+schedule-meeting"] } },
     }));
     expect(offeredFor(loadPolicy(p), "ken")).toEqual(["ask", "schedule-meeting"]);
+  });
+
+  it("applies a managed task ceiling to defaults, callers, and attested groups", () => {
+    const home = mkdtempSync(join(tmpdir(), "agentcall-pol-"));
+    const p = { ...getPaths(home), managedPolicyFile: join(home, "managed-policy.json") };
+    mkdirSync(dirname(p.policyFile), { recursive: true });
+    writeFileSync(p.policyFile, JSON.stringify(policy));
+    writeFileSync(p.managedPolicyFile, JSON.stringify({
+      version: 1,
+      allowed_tasks: ["ask", "schedule-meeting"],
+    }));
+
+    const effective = loadPolicy(p);
+    expect(effective.default_offer).toEqual(["ask"]);
+    expect(effective.callers.ken.offer).toEqual(["schedule-meeting"]);
+    expect(effective.groups.eng.offer).toEqual(["schedule-meeting"]);
+    expect(offeredFor(effective, "ken")).toEqual(["ask", "schedule-meeting"]);
+  });
+
+  it("makes managed caller blocks unoverridable without rewriting user policy", () => {
+    const home = mkdtempSync(join(tmpdir(), "agentcall-pol-"));
+    const p = { ...getPaths(home), managedPolicyFile: join(home, "managed-policy.json") };
+    mkdirSync(dirname(p.policyFile), { recursive: true });
+    writeFileSync(p.policyFile, JSON.stringify(policy));
+    writeFileSync(p.managedPolicyFile, JSON.stringify({
+      version: 1,
+      blocked_callers: ["ken", "constructor"],
+    }));
+
+    const effective = loadPolicy(p);
+    expect(offeredFor(effective, "ken")).toBe("blocked");
+    expect(offeredFor(effective, "constructor")).toBe("blocked");
+    expect(Object.hasOwn(effective.callers, "constructor")).toBe(true);
+    expect(offeredFor(loadUserPolicy(p), "ken")).toEqual([
+      "ask", "owner-introduction", "schedule-meeting",
+    ]);
+  });
+
+  it("fails closed when a managed policy exists but is invalid", () => {
+    const home = mkdtempSync(join(tmpdir(), "agentcall-pol-"));
+    const p = { ...getPaths(home), managedPolicyFile: join(home, "managed-policy.json") };
+    writeFileSync(p.managedPolicyFile, JSON.stringify({ version: 1, allowed_tasks: "ask" }));
+    expect(() => loadPolicy(p)).toThrow(/managed policy/i);
+  });
+
+  it("fails closed when a managed policy exists but cannot be read", () => {
+    const home = mkdtempSync(join(tmpdir(), "agentcall-pol-"));
+    const p = { ...getPaths(home), managedPolicyFile: join(home, "managed-policy.json") };
+    writeFileSync(p.managedPolicyFile, JSON.stringify({ version: 1 }));
+    chmodSync(p.managedPolicyFile, 0o000);
+    try {
+      expect(() => loadPolicy(p)).toThrow(/managed policy.*unreadable/i);
+    } finally {
+      chmodSync(p.managedPolicyFile, 0o600);
+    }
+  });
+
+  it("treats a missing managed policy as no administrator restriction", () => {
+    const home = mkdtempSync(join(tmpdir(), "agentcall-pol-"));
+    const p = { ...getPaths(home), managedPolicyFile: join(home, "missing-managed-policy.json") };
+    mkdirSync(dirname(p.policyFile), { recursive: true });
+    writeFileSync(p.policyFile, JSON.stringify(policy));
+    expect(loadPolicy(p)).toEqual(policy);
+  });
+
+  it("rejects an effective block union too large for the relay card", () => {
+    const home = mkdtempSync(join(tmpdir(), "agentcall-pol-"));
+    const p = { ...getPaths(home), managedPolicyFile: join(home, "managed-policy.json") };
+    mkdirSync(dirname(p.policyFile), { recursive: true });
+    const callers = Object.fromEntries(Array.from({ length: 200 }, (_, i) => [
+      `user-${i}`,
+      { offer: [], block: true },
+    ]));
+    writeFileSync(p.policyFile, JSON.stringify({ default_offer: ["ask"], callers }));
+
+    writeFileSync(p.managedPolicyFile, JSON.stringify({ version: 1, blocked_callers: ["user-0"] }));
+    expect(() => loadPolicy(p)).not.toThrow();
+
+    writeFileSync(p.managedPolicyFile, JSON.stringify({ version: 1, blocked_callers: ["extra-user"] }));
+    expect(() => loadPolicy(p)).toThrow(/at most 200.*enforced and published/i);
   });
 });
 
