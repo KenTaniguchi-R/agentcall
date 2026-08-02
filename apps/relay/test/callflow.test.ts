@@ -99,8 +99,8 @@ describe("call flow", () => {
     expect(await nextFrame(caller)).toMatchObject({ type: "call_error", code: "busy" });
   });
 
-  // `detail` is the one free-form string a callee puts in front of a caller's
-  // eyes, and the CLI prints it straight to the terminal. The relay must not
+  // `detail` is peer-controlled free-form text the CLI puts in front of a
+  // caller. The relay must not
   // pass raw control bytes or an unbounded string through, the same way it
   // already truncates call_result text.
   it("sanitizes and bounds call_failed detail before relaying it", async () => {
