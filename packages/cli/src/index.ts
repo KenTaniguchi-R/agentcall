@@ -1,16 +1,17 @@
-import { rmSync } from "node:fs";
+import { existsSync, rmSync } from "node:fs";
 import { Command, CommanderError } from "commander";
 import type { AgentKind } from "@benree/agentcall-shared";
 import { getMachinePaths, type LinePaths } from "./paths.js";
-import { addressHost, assertCallableLine, relayUrl, type LineConfig } from "./config.js";
-import { callAgent, CallError } from "./callClient.js";
-import { getStatus, fetchCard, createInvite, createRoster, joinRoster, leaveRoster, expelRosterMember, rotateRoster, deleteRoster, ApiError } from "./api.js";
+import { addressHost, assertCallableLine, relayUrl, resolveLineWorkdir, type LineConfig } from "./config.js";
+import { callAgent, callStatusMessage, CallError } from "./callClient.js";
+import { getStatus, fetchCard, createInvite, createRoster, joinRoster, leaveRoster,
+  expelRosterMember, issueRosterJoinKey, listRosterJoinKeys, revokeRosterJoinKey, deleteRoster, ApiError } from "./api.js";
 import { startAllListeners } from "./listenAll.js";
 import { startListener } from "./listener.js";
 import { runSetup } from "./setup.js";
 import { uninstallLaunchAgent } from "./launchd.js";
 import { publishCard } from "./card.js";
-import { loadPolicy, savePolicy } from "./policy.js";
+import { loadPolicy, loadUserPolicy, savePolicy, validatePolicy } from "./policy.js";
 import { assertValidLineName, loadLineConfig, readyLines } from "./lines.js";
 import { loadTasks, scaffoldTask } from "./tasks.js";
 import { execVerb, type Verb } from "./verbs.js";
@@ -28,6 +29,7 @@ import { deleteCached, forgetMembership, loadMemberships, saveMembership } from 
 import { allRostersFailed, DEFAULT_SEARCH_LIMIT, rank, renderResults, sanitize, toEntries, type RosterStatus, type SearchEntry } from "./search.js";
 import { refreshRoster } from "./searchRefresh.js";
 import { ask } from "./tty.js";
+import { renderPolicyReport } from "./policy-report.js";
 
 export function createProgram(): Command {
 const program = new Command();
@@ -182,7 +184,7 @@ program
         message,
         task,
         contextId,
-        onStatus: (s) => console.error(s === "ringing" ? "ringing..." : "answered, agent working..."),
+        onStatus: (s) => console.error(callStatusMessage(s)),
       });
       if (reply.context_id && reply.task) {
         rememberOutbound(ctx.paths, {
@@ -208,11 +210,13 @@ program
   .option("--as <line>", "line to check from (defaults to the primary line on the destination's relay)")
   .action(async (address: string, o: { as?: string }) => {
     const machine = getMachinePaths();
-    // Presence is caller-only on the relay, so status needs credentials —
-    // same reasoning as `call` above for resolving the address before the
-    // line: which line has credentials for this relay depends on the
-    // destination's host. The second pass below re-checks it against the
-    // chosen line's tenant, exactly as `call` does.
+    // Presence is self-or-shared-roster on the relay (#116), so status needs
+    // the viewer's credentials — and WHICH line's credentials matters twice
+    // over: it decides both which relay is asked and whether the viewer shares
+    // a roster with the target. Same reasoning as `call` above for resolving
+    // the address before the line: which line has credentials for this relay
+    // depends on the destination's host. The second pass below re-checks the
+    // address against the chosen line's tenant, exactly as `call` does.
     const firstPass = resolveAddress(machine, address);
     if (!firstPass.ok) {
       console.error(firstPass.error);
@@ -248,9 +252,70 @@ program
 
 program
   .command("doctor")
-  .description("verify this install can answer calls: binary, auth, agent spawn, listener, relay self-call")
+  .description("verify this install can answer calls: binary, auth, agent spawn, tool telemetry, listener, relay self-call")
   .action(async () => {
     process.exitCode = await runDoctor({ machine: getMachinePaths() });
+  });
+
+// Shared by `lint` and a bare `card`. Per-line, like everything else that
+// reads a policy or a card: `--line` picks which one, defaulting to primary.
+const reviewOwnCard = (o: { line?: string }) => {
+  let ctx: LineContext;
+  try {
+    ctx = resolveLine(getMachinePaths(), { line: o.line });
+    assertCallableLine(ctx.config);
+  } catch (e) {
+    console.error(String(e instanceof Error ? e.message : e));
+    process.exitCode = 1;
+    return;
+  }
+  const report = buildCardReport(ctx.config, ctx.paths);
+  for (const line of report.menu) console.log(line);
+  if (report.problems.length > 0) {
+    console.log("\nProblems:");
+    for (const p of report.problems) console.log(`  ✗ ${p}`);
+  }
+  if (report.notices.length > 0) {
+    console.log("\nNotes:");
+    for (const n of report.notices) console.log(`  ! ${n}`);
+  }
+  if (report.problems.length > 0) process.exitCode = 1;
+};
+
+program
+  .command("lint")
+  .description("validate tasks, effective policy assertions, and the published card")
+  .option("--line <name>", "line to lint (defaults to the primary line)")
+  .action(reviewOwnCard);
+
+program
+  .command("policy")
+  .description("show the effective per-caller and per-task capability policy")
+  .option("--line <name>", "line to report on (defaults to the primary line)")
+  .action((o: { line?: string }) => {
+    let ctx: LineContext;
+    try {
+      ctx = resolveLine(getMachinePaths(), { line: o.line });
+      assertCallableLine(ctx.config);
+    } catch (e) {
+      console.error(String(e instanceof Error ? e.message : e));
+      process.exitCode = 1;
+      return;
+    }
+    const cfg = ctx.config;
+    try {
+      const report = renderPolicyReport(loadPolicy(ctx.paths), loadTasks(ctx.paths), {
+        agentKind: cfg.agent_kind,
+        // Machine-scoped, not line-scoped: the administrator ceiling applies
+        // to every line on this machine (see paths.ts).
+        managed: existsSync(ctx.paths.machine.managedPolicyFile),
+        defaultWorkdir: resolveLineWorkdir(cfg, ctx.paths).dir,
+      });
+      console.log(report.trimEnd());
+    } catch (e) {
+      console.error(String(e instanceof Error ? e.message : e));
+      process.exitCode = 1;
+    }
   });
 
 program
@@ -261,26 +326,7 @@ program
   .action(async (target: string | undefined, o: { line?: string }) => {
     const machine = getMachinePaths();
     if (target === undefined) {
-      let ctx: LineContext;
-      try {
-        ctx = resolveLine(machine, { line: o.line });
-        assertCallableLine(ctx.config);
-      } catch (e) {
-        console.error(String(e instanceof Error ? e.message : e));
-        process.exitCode = 1;
-        return;
-      }
-      const report = buildCardReport(ctx.config, ctx.paths);
-      for (const line of report.menu) console.log(line);
-      if (report.problems.length > 0) {
-        console.log("\nProblems:");
-        for (const p of report.problems) console.log(`  ✗ ${p}`);
-      }
-      if (report.notices.length > 0) {
-        console.log("\nNotes:");
-        for (const n of report.notices) console.log(`  ! ${n}`);
-      }
-      if (report.problems.length > 0) process.exitCode = 1;
+      reviewOwnCard(o);
       return;
     }
     if (target === "push") {
@@ -410,7 +456,7 @@ function rosterLine(line: string | undefined): LineContext | undefined {
 
 roster
   .command("create")
-  .description("create a roster and print its id and join secret")
+  .description("create a roster and print its initial reusable join key")
   .option("--as <name>", "local name to record it under", "roster")
   .option("--line <name>", "line to create it as (defaults to the primary line)")
   .action(async (o: { as: string; line?: string }) => {
@@ -418,15 +464,25 @@ roster
     if (!ctx) return;
     const cfg = ctx.config;
     try {
-      const { roster_id, join_secret, admin_secret } = await createRoster(relayUrl(cfg), { org: cfg.org, handle: cfg.handle, token: cfg.token });
-      saveMembership(ctx.paths, { name: o.as, relay: relayUrl(cfg), roster_id });
-      console.log(`Roster created and saved locally as "${o.as}".\n`);
+      const { roster_id, join_key, admin_secret } = await createRoster(relayUrl(cfg), { org: cfg.org, handle: cfg.handle, token: cfg.token });
+      console.log("Roster created.\n");
       console.log(`  id:     ${roster_id}`);
-      console.log(`  join secret:  ${join_secret}`);
+      console.log(`  join key:     ${join_key}`);
       console.log(`  admin secret: ${admin_secret}\n`);
-      console.log("Both secrets are shown once and are not recoverable. Store the admin secret in a password manager.");
-      console.log("Share only the id and join secret with colleagues:");
-      console.log(`  agentcall roster join ${roster_id} --secret ${join_secret} --as ${o.as}`);
+      console.log("Both credentials are shown once and are not recoverable. Store the admin secret in a password manager.");
+      console.log("Share only the id and join key with colleagues:");
+      console.log(`  agentcall roster join ${roster_id} --key ${join_key} --as ${o.as}`);
+      try {
+        saveMembership(ctx.paths, { name: o.as, relay: relayUrl(cfg), roster_id });
+        console.log(`\nSaved locally as "${o.as}".`);
+      } catch (e) {
+        const message = e instanceof Error ? e.message : String(e);
+        console.error(
+          `${message}\nRoster was created but not saved locally. Save it with a different name:\n` +
+          `  agentcall roster join ${roster_id} --key ${join_key} --as <name>`,
+        );
+        process.exitCode = 1;
+      }
     } catch (e) {
       console.error(e instanceof Error ? e.message : String(e));
       process.exitCode = 1;
@@ -437,20 +493,29 @@ roster
   .command("join")
   .description("join a roster so `agentcall search` can see its members")
   .argument("<roster-id>", "roster id shared by whoever created it")
-  .requiredOption("--secret <secret>", "the roster's join secret")
+  .requiredOption("--key <key>", "a roster join key")
   .option("--as <name>", "local name for this roster", "roster")
   .option("--line <name>", "line to join as (defaults to the primary line)")
-  .action(async (rosterId: string, o: { secret: string; as: string; line?: string }) => {
+  .action(async (rosterId: string, o: { key: string; as: string; line?: string }) => {
     const ctx = rosterLine(o.line);
     if (!ctx) return;
     const cfg = ctx.config;
     try {
-      await joinRoster(relayUrl(cfg), { org: cfg.org, handle: cfg.handle, token: cfg.token }, rosterId, o.secret);
-      // The secret is spent here and never written to disk: from now on the
+      await joinRoster(relayUrl(cfg), { org: cfg.org, handle: cfg.handle, token: cfg.token }, rosterId, o.key);
+      // The key is spent here and never written to disk: from now on the
       // handle token plus the relay-side membership row is what authorizes.
-      saveMembership(ctx.paths, { name: o.as, relay: relayUrl(cfg), roster_id: rosterId });
-      console.log(`Joined. Saved locally as "${o.as}".`);
-      console.log(`Try: agentcall search "<what you need to know>"`);
+      try {
+        saveMembership(ctx.paths, { name: o.as, relay: relayUrl(cfg), roster_id: rosterId });
+        console.log(`Joined. Saved locally as "${o.as}".`);
+        console.log(`Try: agentcall search "<what you need to know>"`);
+      } catch (e) {
+        const message = e instanceof Error ? e.message : String(e);
+        console.error(
+          `${message}\nYou joined roster ${rosterId}, but it was not saved locally. Re-run with a different name:\n` +
+          `  agentcall roster join ${rosterId} --key <same-key> --as <name>`,
+        );
+        process.exitCode = 1;
+      }
     } catch (e) {
       console.error(e instanceof Error ? e.message : String(e));
       process.exitCode = 1;
@@ -466,7 +531,7 @@ roster
     if (!ctx) return;
     const rosters = loadMemberships(ctx.paths);
     if (rosters.length === 0) {
-      console.log("No rosters joined. Ask a colleague for a roster id and secret, then:\n  agentcall roster join <id> --secret <secret> --as <name>");
+      console.log("No rosters joined. Ask a colleague for a roster id and join key, then:\n  agentcall roster join <id> --key <key> --as <name>");
       return;
     }
     for (const r of rosters) console.log(`${r.name}\t${r.roster_id}\t${r.relay}`);
@@ -527,28 +592,88 @@ roster
     try {
       const membership = namedRoster(ctx.paths, name);
       await expelRosterMember(membership.relay, { org: cfg.org, handle: cfg.handle, token: cfg.token }, membership.roster_id, handle, await adminSecret(o.adminSecret));
-      console.log(`Expelled ${handle}. Rotate the join secret too if that member may still know it.`);
+      console.log(`Expelled ${handle}. Revoke any join key they may still know.`);
     } catch (e) { console.error(e instanceof Error ? e.message : String(e)); process.exitCode = 1; }
   });
 
-roster
-  .command("rotate")
-  .description("replace a roster join secret; --evict also removes every member")
+const rosterKey = roster.command("key").description("issue, list, and revoke scoped roster join keys");
+
+rosterKey
+  .command("issue")
+  .description("issue a one-off join key (use --reusable for a shared key)")
   .argument("<name>", "local roster name")
   .option("--admin-secret <secret>", "admin secret (prefer AGENTCALL_ADMIN_SECRET to avoid shell history)")
-  .option("--evict", "remove every current member")
-  .option("--yes", "confirm destructive eviction")
+  .option("--description <text>", "short label shown by `roster key list`", "")
+  .option("--expires-in <days>", "expiry in days (1-90)", (v) => Number.parseInt(v, 10), 30)
+  .option("--reusable", "allow more than one member to use this key")
   .option("--line <name>", "line to act as (defaults to the primary line)")
-  .action(async (name: string, o: { adminSecret?: string; evict?: boolean; yes?: boolean; line?: string }) => {
+  .action(async (name: string, o: { adminSecret?: string; description: string; expiresIn: number; reusable?: boolean; line?: string }) => {
     const ctx = rosterLine(o.line);
     if (!ctx) return;
     const cfg = ctx.config;
     try {
       const membership = namedRoster(ctx.paths, name);
-      if (o.evict) await confirmRoster(name, "This removes every current member.", o.yes);
-      const out = await rotateRoster(membership.relay, { org: cfg.org, handle: cfg.handle, token: cfg.token }, membership.roster_id, await adminSecret(o.adminSecret), Boolean(o.evict));
+      if (!Number.isInteger(o.expiresIn) || o.expiresIn < 1 || o.expiresIn > 90) {
+        throw new Error("--expires-in must be an integer from 1 to 90.");
+      }
+      const out = await issueRosterJoinKey(
+        membership.relay, { org: cfg.org, handle: cfg.handle, token: cfg.token }, membership.roster_id,
+        await adminSecret(o.adminSecret), {
+          description: o.description, expiresInDays: o.expiresIn, reusable: Boolean(o.reusable),
+        },
+      );
+      console.log(`Join key (shown once): ${out.join_key}`);
+      console.log(`Prefix: ${out.key.prefix}  Expires: ${new Date(out.key.expires_at).toISOString()}`);
+    } catch (e) { console.error(e instanceof Error ? e.message : String(e)); process.exitCode = 1; }
+  });
+
+rosterKey
+  .command("list")
+  .description("list join-key metadata without revealing secrets")
+  .argument("<name>", "local roster name")
+  .option("--admin-secret <secret>", "admin secret (prefer AGENTCALL_ADMIN_SECRET to avoid shell history)")
+  .option("--line <name>", "line to act as (defaults to the primary line)")
+  .action(async (name: string, o: { adminSecret?: string; line?: string }) => {
+    const ctx = rosterLine(o.line);
+    if (!ctx) return;
+    const cfg = ctx.config;
+    try {
+      const membership = namedRoster(ctx.paths, name);
+      const keys = await listRosterJoinKeys(
+        membership.relay, { org: cfg.org, handle: cfg.handle, token: cfg.token }, membership.roster_id,
+        await adminSecret(o.adminSecret),
+      );
+      if (keys.length === 0) { console.log("No join keys."); return; }
+      const now = Date.now();
+      for (const key of keys) {
+        const state = key.revoked_at !== null ? "revoked" : key.expires_at <= now ? "expired" : key.used && !key.reusable ? "used" : "active";
+        console.log(`${key.prefix}\t${state}\t${key.reusable ? "reusable" : "one-off"}\t${new Date(key.expires_at).toISOString()}\t${key.created_by}\t${key.description}`);
+      }
+    } catch (e) { console.error(e instanceof Error ? e.message : String(e)); process.exitCode = 1; }
+  });
+
+rosterKey
+  .command("revoke")
+  .description("revoke one join key; --evict removes only members admitted by it")
+  .argument("<name>", "local roster name")
+  .argument("<prefix>", "12-character public key prefix from `roster key list`")
+  .option("--admin-secret <secret>", "admin secret (prefer AGENTCALL_ADMIN_SECRET to avoid shell history)")
+  .option("--evict", "remove members admitted by this key")
+  .option("--yes", "confirm targeted eviction")
+  .option("--line <name>", "line to act as (defaults to the primary line)")
+  .action(async (name: string, prefix: string, o: { adminSecret?: string; evict?: boolean; yes?: boolean; line?: string }) => {
+    const ctx = rosterLine(o.line);
+    if (!ctx) return;
+    const cfg = ctx.config;
+    try {
+      const membership = namedRoster(ctx.paths, name);
+      if (o.evict) await confirmRoster(name, `This removes members admitted by key ${prefix}.`, o.yes);
+      const out = await revokeRosterJoinKey(
+        membership.relay, { org: cfg.org, handle: cfg.handle, token: cfg.token }, membership.roster_id,
+        prefix, await adminSecret(o.adminSecret), Boolean(o.evict),
+      );
       if (o.evict) deleteCached(ctx.paths, name);
-      console.log(`New join secret: ${out.join_secret}`);
+      console.log(`Revoked ${out.prefix}.${o.evict ? ` Evicted ${out.evicted} member(s).` : " Existing members were retained."}`);
     } catch (e) { console.error(e instanceof Error ? e.message : String(e)); process.exitCode = 1; }
   });
 
@@ -613,7 +738,7 @@ program
       console.error(
         o.roster
           ? `No roster named "${o.roster}" on ${relay} — run \`agentcall roster list\`.`
-          : `No rosters joined on ${relay}. Ask a colleague for a roster id and secret, then:\n  agentcall roster join <id> --secret <secret> --as <name>`,
+          : `No rosters joined on ${relay}. Ask a colleague for a roster id and join key, then:\n  agentcall roster join <id> --key <key> --as <name>`,
       );
       process.exitCode = 1;
       return;
@@ -672,7 +797,13 @@ async function runPolicyVerb(verb: Verb, a: string, b: string | undefined, opts:
     return;
   }
   try {
-    const { policy, lines } = execVerb(loadPolicy(ctx.paths), loadTasks(ctx.paths), verb, a, b);
+    // Mutations edit user intent, never the administrator-filtered view.
+    // Enforcement and card publication apply the machine's managed ceiling
+    // separately. validatePolicy runs BEFORE the write so a change that would
+    // break an assertion leaves the last known-good file (and the listener)
+    // intact.
+    const { policy, lines } = execVerb(loadUserPolicy(ctx.paths), loadTasks(ctx.paths), verb, a, b);
+    validatePolicy(ctx.paths, policy);
     savePolicy(ctx.paths, policy);
     for (const line of lines) console.log(line);
     try {

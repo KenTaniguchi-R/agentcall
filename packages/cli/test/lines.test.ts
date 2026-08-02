@@ -1,5 +1,5 @@
 import { describe, expect, it, beforeEach } from "vitest";
-import { mkdtempSync, mkdirSync, writeFileSync, statSync } from "node:fs";
+import { mkdtempSync, mkdirSync, readFileSync, writeFileSync, statSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { getLinePaths, getMachinePaths, type MachinePaths } from "../src/paths.js";
@@ -73,6 +73,54 @@ describe("saveLineConfig / loadLineConfig", () => {
     mkdirSync(l.dir, { recursive: true });
     writeFileSync(l.configFile, JSON.stringify({ ...cfg, org: "Not A Slug" }));
     expect(() => loadLineConfig(l)).toThrow(/corrupt config\.json/i);
+  });
+
+  // The rest of #131's credential-store validation, re-homed from main's
+  // config.test.ts (loadConfig/saveConfig) onto the per-line store that
+  // replaced it.
+  it("names an invalid JSON config and explains how to recover", () => {
+    const l = getLinePaths(m, "badjson");
+    mkdirSync(l.dir, { recursive: true });
+    writeFileSync(l.configFile, "{\n");
+    expect(() => loadLineConfig(l)).toThrow(
+      new RegExp(`corrupt config\\.json.*${l.configFile}.*invalid JSON.*line add`, "i"),
+    );
+  });
+
+  it("rejects valid JSON when credential fields have the wrong shape", () => {
+    const l = getLinePaths(m, "badshape");
+    mkdirSync(l.dir, { recursive: true });
+    writeFileSync(l.configFile, JSON.stringify({ org: "acme", handle: 42, token: [], relay: false }));
+    expect(() => loadLineConfig(l)).toThrow(/corrupt config\.json.*handle.*token.*relay.*line add/i);
+  });
+
+  // Falling back to the public default for a missing relay would silently
+  // address the line at the wrong tenant.
+  it("does not silently fall back to the public relay when relay is missing", () => {
+    const l = getLinePaths(m, "norelay");
+    mkdirSync(l.dir, { recursive: true });
+    writeFileSync(l.configFile, JSON.stringify({ org: "acme", handle: "ken", token: "secret" }));
+    expect(() => loadLineConfig(l)).toThrow(/corrupt config\.json.*relay.*line add/i);
+  });
+
+  // Deliberately the opposite of a missing relay: a syntactically broken one
+  // still LOADS, so `doctor` and `line list` can name it per line instead of
+  // one typo making the line unreportable. See LineConfigSchema's comment.
+  it("loads a syntactically invalid relay so it can be diagnosed per line", () => {
+    const l = getLinePaths(m, "badrelay");
+    mkdirSync(l.dir, { recursive: true });
+    writeFileSync(l.configFile, JSON.stringify({ ...cfg, relay: "not a url" }));
+    expect(loadLineConfig(l).relay).toBe("not a url");
+  });
+
+  // An older CLI reading, updating, and saving a config written by a newer
+  // release must not silently drop the fields it doesn't know about.
+  it("preserves unknown fields across a load and save", () => {
+    const l = getLinePaths(m, "future");
+    mkdirSync(l.dir, { recursive: true });
+    writeFileSync(l.configFile, JSON.stringify({ ...cfg, future_option: true }));
+    saveLineConfig(l, loadLineConfig(l));
+    expect(JSON.parse(readFileSync(l.configFile, "utf8"))).toMatchObject({ future_option: true });
   });
 });
 

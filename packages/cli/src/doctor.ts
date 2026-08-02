@@ -6,7 +6,11 @@ import { isLaunchAgentInstalled, LAUNCH_LABEL } from "./launchd.js";
 import { listLines } from "./lines.js";
 import type { MachinePaths } from "./paths.js";
 import type { AgentKind } from "./runner.js";
-import { checkGuard, checkRelaySelfCall, formatCheck, short, verifyAgent, type GuardBinaryProbeFn, type GuardProbeFn, type VerifyCheck, type VerifyFns } from "./verify.js";
+import {
+  checkCodexGuard, checkGuard, checkRelaySelfCall, formatCheck, short, verifyAgent,
+  type CodexGuardProbeFn, type GuardBinaryProbeFn, type GuardProbeFn,
+  type VerifyCheck, type VerifyFns,
+} from "./verify.js";
 
 export interface DoctorDeps {
   machine: MachinePaths;
@@ -19,6 +23,7 @@ export interface DoctorDeps {
   log?: (line: string) => void;
   guardFn?: GuardProbeFn;
   guardBinaryFn?: GuardBinaryProbeFn;
+  codexGuardFn?: CodexGuardProbeFn;
 }
 
 const defaultLaunchctlList = () =>
@@ -83,9 +88,12 @@ export async function runDoctor(deps: DoctorDeps): Promise<number> {
   }
 
   // Probed once per distinct agent_kind across all lines, not once per
-  // line — the guard protects the binary, not any particular line, so
+  // line — the claude guard protects the binary, not any particular line, so
   // re-probing it for every line sharing that kind would just be N-1 wasted
-  // (and slow) spawns proving the same fact again.
+  // (and slow) spawns proving the same fact again. Only claude is cached: the
+  // codex probe takes the line's workdir as an input (hooks/list is asked
+  // about a specific cwd, and trust is per-directory), so its answer is not
+  // shared across lines.
   const guardCache = new Map<AgentKind, VerifyCheck>();
 
   for (const line of lineList) {
@@ -162,13 +170,15 @@ export async function runDoctor(deps: DoctorDeps): Promise<number> {
     // Falls back to shareDir when workdir didn't resolve: per the ladder
     // semantics above, a static-check failure reports itself but must not
     // stop the agent checks from running.
-    const agentChecks = await verifyAgent(cfg.agent_kind, workdir?.dir ?? line.paths.shareDir, deps.verifyFns);
+    const agentWorkdir = workdir?.dir ?? line.paths.shareDir;
+    const agentChecks = await verifyAgent(cfg.agent_kind, agentWorkdir, deps.verifyFns);
     for (const c of agentChecks) report(c);
     const agentOk = agentChecks.every((c) => c.ok);
 
-    // Claude-only: the guard is registered on claude spawns, and checkGuard
-    // spawns claude to probe it. Gated on agentOk because probing through a
-    // broken agent tests nothing.
+    // Runtime-specific guard evidence. Claude needs a real tool attempt plus a
+    // direct binary fallback; Codex exposes its effective hook status through
+    // app-server without another model call. Gated on agentOk because probing
+    // through a broken agent install tests nothing.
     if (cfg.agent_kind === "claude" && agentOk) {
       let guardCheck = guardCache.get(cfg.agent_kind);
       if (!guardCheck) {
@@ -176,6 +186,8 @@ export async function runDoctor(deps: DoctorDeps): Promise<number> {
         guardCache.set(cfg.agent_kind, guardCheck);
       }
       report(guardCheck);
+    } else if (cfg.agent_kind === "codex" && agentOk) {
+      report(await checkCodexGuard(agentWorkdir, deps.codexGuardFn));
     }
 
     if (agentOk && online) {

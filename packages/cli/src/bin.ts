@@ -12,16 +12,21 @@ import type { AgentKind } from "@benree/agentcall-shared";
 // realpath) because the per-user temp tree differs per machine.
 const EPHEMERAL_ROOTS = [tmpdir(), "/tmp", "/private/tmp", "/var/folders", "/private/var/folders"];
 
-export function isEphemeralDir(dir: string): boolean {
+export function isEphemeralDir(dir: string, ephemeralRoots: readonly string[] = EPHEMERAL_ROOTS): boolean {
   const normalized = resolve(dir);
-  return EPHEMERAL_ROOTS.some((root) => normalized === root || normalized.startsWith(root + "/"));
+  return ephemeralRoots.some((root) => {
+    const normalizedRoot = resolve(root);
+    return normalized === normalizedRoot || normalized.startsWith(normalizedRoot + "/");
+  });
 }
 
 // First candidate whose dir survives the current session; falls back to the
 // first match (better a warning-producing shim than claiming the binary
 // doesn't exist at all) and null when there are no candidates.
-export function preferDurableBin(candidates: string[]): string | null {
-  return candidates.find((c) => !isEphemeralDir(dirname(c))) ?? candidates[0] ?? null;
+export function preferDurableBin(
+  candidates: string[], ephemeralRoots: readonly string[] = EPHEMERAL_ROOTS,
+): string | null {
+  return candidates.find((c) => !isEphemeralDir(dirname(c), ephemeralRoots)) ?? candidates[0] ?? null;
 }
 
 // which()-style PATH search, resolving every match's real (symlink-
@@ -31,7 +36,9 @@ export function preferDurableBin(candidates: string[]): string | null {
 // $TMPDIR/cmux-cli-shims/<uuid>/claude, which fails with exit 127 once the
 // session that created it is gone. Returns null rather than throwing so
 // callers that only want a best-effort answer can skip a missing binary.
-function resolveOnPath(name: string, pathEnv: string): string | null {
+function resolveOnPath(
+  name: string, pathEnv: string, ephemeralRoots: readonly string[] = EPHEMERAL_ROOTS,
+): string | null {
   const matches: string[] = [];
   for (const dir of pathEnv.split(delimiter)) {
     if (!dir) continue;
@@ -43,7 +50,7 @@ function resolveOnPath(name: string, pathEnv: string): string | null {
       continue;
     }
   }
-  return preferDurableBin(matches);
+  return preferDurableBin(matches, ephemeralRoots);
 }
 
 // Resolves the absolute, symlink-followed path to the claude/codex binary
@@ -52,8 +59,12 @@ function resolveOnPath(name: string, pathEnv: string): string | null {
 // listener's environment (launchd's fixed PATH, no shell rc) can't come up
 // empty-handed where an interactive shell would have succeeded. `env` is
 // overridable for tests; production callers should leave it as process.env.
-export function resolveAgentBin(agentKind: AgentKind, env: NodeJS.ProcessEnv = process.env): string {
-  const resolved = resolveOnPath(agentKind, env.PATH ?? "");
+export function resolveAgentBin(
+  agentKind: AgentKind,
+  env: NodeJS.ProcessEnv = process.env,
+  ephemeralRoots: readonly string[] = EPHEMERAL_ROOTS,
+): string {
+  const resolved = resolveOnPath(agentKind, env.PATH ?? "", ephemeralRoots);
   if (!resolved) {
     throw new Error(
       `Could not find \`${agentKind}\` on PATH. Install it, or make sure it's discoverable via PATH before running agentcall.`,

@@ -54,10 +54,14 @@ export const AGENT_TIMEOUT_MS = 300_000;
 export const RATE_LIMIT_PER_HOUR = 30;
 
 export const ErrorCode = z.enum([
-  "unknown_handle", "offline", "busy", "timeout", "agent_error",
+  "unknown_handle", "offline", "busy", "timeout", "canceled", "agent_error",
   "unauthorized", "rate_limited", "message_too_large", "protocol_error",
   "blocked", "task_not_offered", "task_unknown", "context_unknown",
 ]);
+// A listener may only claim cancellation with CallCancelled, whose phase says
+// whether queued work was removed or a running process was observed exited.
+// Generic call_failed must not bypass that confirmation contract.
+export const CallFailureCode = ErrorCode.exclude(["canceled"]);
 
 export const CallRequest = z.object({
   type: z.literal("call_request"),
@@ -112,7 +116,7 @@ export const CallResult = z.object({
 export const CallFailed = z.object({
   type: z.literal("call_failed"),
   call_id: z.string(),
-  code: ErrorCode,
+  code: CallFailureCode,
   detail: z.string().optional(),
   offered: z.array(z.string().regex(TASK_ID_RE)).max(MAX_OFFERED_TASKS).optional(),
 });

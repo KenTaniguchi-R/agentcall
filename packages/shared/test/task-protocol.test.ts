@@ -48,9 +48,13 @@ describe("task fields on call frames", () => {
     }).success).toBe(true);
   });
   it("accepts the new error codes", () => {
-    for (const code of ["blocked", "task_not_offered", "task_unknown"]) {
+    for (const code of ["blocked", "task_not_offered", "task_unknown", "canceled"]) {
       expect(ErrorCode.safeParse(code).success).toBe(true);
     }
+  });
+  it("requires the dedicated confirmation frame for cancellation", () => {
+    expect(CallError.safeParse({ type: "call_error", code: "canceled" }).success).toBe(true);
+    expect(CallFailed.safeParse({ type: "call_failed", call_id: "c1", code: "canceled" }).success).toBe(false);
   });
 });
 

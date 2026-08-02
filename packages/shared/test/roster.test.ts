@@ -1,8 +1,9 @@
 import { describe, expect, it } from "vitest";
 import { CardTask, MAX_TASK_KEYWORDS, MAX_KEYWORD_LENGTH } from "../src/card.js";
 import {
-  BundleEntry, CreateRosterResponse, ExpelRosterRequest, JoinRosterRequest, MAX_BUNDLE_BYTES,
-  MAX_BUNDLE_TASKS_PER_CARD, MAX_ROSTER_MEMBERS, ROSTER_ID_RE, RosterBundle, RotateRosterRequest,
+  BundleEntry, CreateRosterResponse, ExpelRosterRequest, IssueRosterJoinKeyRequest,
+  JoinRosterRequest, ListRosterJoinKeysResponse, MAX_BUNDLE_BYTES, MAX_BUNDLE_TASKS_PER_CARD,
+  MAX_ROSTER_MEMBERS, RevokeRosterJoinKeyRequest, ROSTER_ID_RE, RosterBundle,
 } from "../src/roster.js";
 import { MAX_TASK_ID_LENGTH } from "../src/protocol.js";
 
@@ -23,19 +24,32 @@ describe("roster ids", () => {
 });
 
 describe("roster lifecycle protocol", () => {
-  it("keeps join and administrative authority separate", () => {
+  it("keeps keyed join and administrative authority separate", () => {
     expect(CreateRosterResponse.parse({
-      roster_id: "a".repeat(22), join_secret: "join", admin_secret: "admin",
+      roster_id: "a".repeat(22), join_key: `agjk_${"a".repeat(12)}_${"s".repeat(32)}`, admin_secret: "admin",
     })).toBeTruthy();
-    expect(JoinRosterRequest.safeParse({ join_secret: "join" }).success).toBe(true);
-    expect(JoinRosterRequest.safeParse({ secret: "old-wire-shape" }).success).toBe(false);
+    expect(JoinRosterRequest.safeParse({ join_key: `agjk_${"a".repeat(12)}_${"s".repeat(32)}` }).success).toBe(true);
+    expect(JoinRosterRequest.safeParse({ join_secret: "old-wire-shape" }).success).toBe(false);
   });
 
   it("validates lifecycle inputs", () => {
     expect(ExpelRosterRequest.safeParse({ admin_secret: "admin", handle: "valid-handle" }).success).toBe(true);
     expect(ExpelRosterRequest.safeParse({ admin_secret: "admin", handle: "INVALID" }).success).toBe(false);
-    expect(RotateRosterRequest.parse({ admin_secret: "admin" }).evict).toBe(false);
-    expect(RotateRosterRequest.parse({ admin_secret: "admin", evict: true }).evict).toBe(true);
+    expect(IssueRosterJoinKeyRequest.parse({ admin_secret: "admin" })).toMatchObject({
+      description: "", expires_in_days: 30, reusable: false,
+    });
+    expect(IssueRosterJoinKeyRequest.safeParse({ admin_secret: "admin", expires_in_days: 91 }).success).toBe(false);
+    expect(RevokeRosterJoinKeyRequest.parse({ admin_secret: "admin", prefix: "a".repeat(12) }).evict).toBe(false);
+    expect(RevokeRosterJoinKeyRequest.safeParse({ admin_secret: "admin", prefix: "not-a-prefix" }).success).toBe(false);
+  });
+
+  it("lists metadata without returning join key secrets", () => {
+    const response = ListRosterJoinKeysResponse.parse({ keys: [{
+      prefix: "a".repeat(12), description: "contractor", created_by: "tanaka", created_at: 1, expires_at: 2,
+      reusable: false, used: true, revoked_at: null,
+    }] });
+    expect(response.keys[0]).not.toHaveProperty("join_key");
+    expect(response.keys[0]).not.toHaveProperty("secret_hash");
   });
 });
 

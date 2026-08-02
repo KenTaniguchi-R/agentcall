@@ -3,19 +3,24 @@ import type { Hono } from "hono";
 // never exists at runtime. Do not turn this into a value import.
 import type { Env } from "./index.js";
 import {
-  A2A_VERSION_HEADER, CardUpload, a2aError, isSupportedA2AVersion,
+  A2A_VERSION_HEADER, a2aError, isSupportedA2AVersion,
   standardError, toAgentCard, toDirectoryCard, visibleTasks,
 } from "@benree/agentcall-shared";
 import { authenticateRequest } from "./tenant.js";
 import { sharedRosterIds } from "./groups.js";
+import { checkLimit, NATIVE_READ } from "./ratelimit/index.js";
+import { parseStoredCard } from "./stored-card.js";
 
 // The card endpoint is public and cheap; a short TTL keeps the TCK's
 // Cache-Control/ETag checks satisfied without making policy edits slow to
 // propagate. `updated_at` supplies a real Last-Modified and a stable ETag.
 const CARD_MAX_AGE = 300;
+const A2A_CONTENT_TYPE = "application/a2a+json";
+const A2A_HEADERS = { "Content-Type": A2A_CONTENT_TYPE } as const;
 
 function cardHeaders(etagSource: string, updatedAtMs: number): Record<string, string> {
   return {
+    ...A2A_HEADERS,
     "Cache-Control": `public, max-age=${CARD_MAX_AGE}`,
     ETag: `"${etagSource}"`,
     "Last-Modified": new Date(updatedAtMs).toUTCString(),
@@ -24,6 +29,7 @@ function cardHeaders(etagSource: string, updatedAtMs: number): Record<string, st
 
 function privateCardHeaders(etagSource: string, updatedAtMs: number): Record<string, string> {
   return {
+    ...A2A_HEADERS,
     "Cache-Control": "private, no-store",
     ETag: `"${etagSource}"`,
     "Last-Modified": new Date(updatedAtMs).toUTCString(),
@@ -35,7 +41,7 @@ export function mountA2A(app: Hono<{ Bindings: Env }>): void {
     const version = c.req.header(A2A_VERSION_HEADER);
     if (!isSupportedA2AVersion(version)) {
       const { status, body } = a2aError("VersionNotSupported", `unsupported A2A-Version: ${version}`);
-      return c.json(body, status as 400);
+      return c.json(body, status as 400, A2A_HEADERS);
     }
     const origin = new URL(c.req.url).origin;
     const card = toDirectoryCard({ origin });
@@ -46,20 +52,20 @@ export function mountA2A(app: Hono<{ Bindings: Env }>): void {
     const version = c.req.header(A2A_VERSION_HEADER);
     if (!isSupportedA2AVersion(version)) {
       const { status, body } = a2aError("VersionNotSupported", `unsupported A2A-Version: ${version}`);
-      return c.json(body, status as 400);
+      return c.json(body, status as 400, A2A_HEADERS);
     }
 
     const identity = await authenticateRequest(c.env.DB, c.req);
     if (!identity) {
       const { status, body } = standardError(401, "unauthorized");
-      return c.json(body, status as 401);
+      return c.json(body, status as 401, A2A_HEADERS);
     }
     const { org, handle: viewer } = identity;
 
     const ip = c.req.header("cf-connecting-ip") ?? "unknown";
-    if (!(await c.env.READ_RL.limit({ key: ip })).success) {
+    if (!(await checkLimit(c.env, ip, NATIVE_READ))) {
       const { status, body } = standardError(429, "rate limited");
-      return c.json(body, status as 429);
+      return c.json(body, status as 429, A2A_HEADERS);
     }
 
     const handle = c.req.param("handle");
@@ -74,16 +80,14 @@ export function mountA2A(app: Hono<{ Bindings: Env }>): void {
     // SHOULD NOT distinguish "does not exist" from "not authorized", so an
     // unknown handle and a blocked caller must be indistinguishable here. Keep
     // the message generic for that reason.
-    if (!row) {
+    const notFound = () => {
       const { status, body } = standardError(404, "no such agent");
-      return c.json(body, status as 404);
-    }
+      return c.json(body, status as 404, A2A_HEADERS);
+    };
+    if (!row) return notFound();
 
-    const upload = CardUpload.parse(JSON.parse(row.card_json));
-    if (upload.blocked.includes(viewer)) {
-      const { status, body } = standardError(404, "no such agent");
-      return c.json(body, status as 404);
-    }
+    const upload = parseStoredCard(row.card_json, org, handle);
+    if (!upload || upload.blocked.includes(viewer)) return notFound();
     const origin = new URL(c.req.url).origin;
     const card = toAgentCard({
       handle,

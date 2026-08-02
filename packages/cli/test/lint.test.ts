@@ -12,6 +12,12 @@ const cfg: LineConfig = { org: "acme", handle: "ken", token: "t", agent_kind: "c
 function linePaths(h: string) {
   return getLinePaths(getMachinePaths(h, h), "line");
 }
+// The managed ceiling is machine-scoped and unredirectable in production, so
+// tests override it on MachinePaths rather than through AGENTCALL_HOME.
+function managedLinePaths(h: string) {
+  const m = getMachinePaths(h, h);
+  return getLinePaths({ ...m, managedPolicyFile: join(h, "managed-policy.json") }, "line");
+}
 function home() {
   const h = mkdtempSync(join(tmpdir(), "agentcall-lint-"));
   mkdirSync(linePaths(h).dir, { recursive: true });
@@ -50,11 +56,32 @@ describe("buildCardReport", () => {
     expect(r.problems.join("\n")).toContain('"also-gone"');
   });
 
+  it("flags group grants to missing tasks even when an assertion accepts them", () => {
+    const h = home();
+    const p = linePaths(h);
+    writeFileSync(p.policyFile, JSON.stringify({
+      default_offer: ["ask"],
+      groups: { eng: { roster_id: "e".repeat(22), offer: ["group-gone"] } },
+      tests: [{ caller: "mia", groups: ["eng"], accept: ["group-gone"] }],
+    }));
+    const r = buildCardReport(cfg, p);
+    expect(r.problems.join("\n")).toContain('grant for group eng references "group-gone"');
+  });
+
   it("reports a malformed policy file as a problem instead of throwing", () => {
     const p = linePaths(home());
     writeFileSync(p.policyFile, "{corrupt");
     const r = buildCardReport(cfg, p);
     expect(r.problems.join("\n")).toContain("policy.json");
+  });
+
+  it("reports a broken policy assertion as a problem", () => {
+    const p = linePaths(home());
+    writeFileSync(p.policyFile, JSON.stringify({
+      default_offer: ["ask"], tests: [{ caller: "mia", deny: ["ask"] }],
+    }));
+    const r = buildCardReport(cfg, p);
+    expect(r.problems.join("\n")).toMatch(/assertion 1.*ask/i);
   });
 
   it("is quiet after a push and stale after a change", async () => {
@@ -117,5 +144,17 @@ describe("buildCardReport", () => {
     const text = buildCardReport(cfg, p).menu.join("\n");
     expect(text).toContain("mia: intro");
     expect(text).toContain("Blocked: spammer");
+  });
+
+  it("renders the administrator-filtered menu rather than raw user grants", () => {
+    const h = home();
+    const p = managedLinePaths(h);
+    writeSkill(h, "intro", "---\ndescription: d\n---\n");
+    writeFileSync(p.policyFile, JSON.stringify({ default_offer: ["ask", "intro"] }));
+    writeFileSync(p.machine.managedPolicyFile, JSON.stringify({ version: 1, allowed_tasks: ["ask"] }));
+
+    const text = buildCardReport(cfg, p).menu.join("\n");
+    expect(text).toContain("ask");
+    expect(text).not.toContain("intro");
   });
 });

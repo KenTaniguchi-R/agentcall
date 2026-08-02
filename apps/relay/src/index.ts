@@ -1,64 +1,91 @@
 import { Hono } from "hono";
 import { BootstrapInviteRequest, CardUpload, RegisterRequest, visibleTasks } from "@benree/agentcall-shared";
 import { mountA2A } from "./a2a.js";
+import { mountPresence } from "./presence.js";
 import { mountRoster } from "./roster.js";
 import { constantTimeEqual, generateToken, sha256Hex } from "./auth.js";
 import { authenticateRequest, identityKey, registrationAddressHost } from "./tenant.js";
 import { sharedRosterIds } from "./groups.js";
+import { checkLimit, NATIVE_CARD, NATIVE_READ, REGISTER, type RateLimitEnv } from "./ratelimit/index.js";
+import { parseStoredCard } from "./stored-card.js";
 
 export { HandleDO } from "./do.js";
+export { RateLimiterDO } from "./ratelimit/do.js";
 
-export type Env = {
+export type Env = RateLimitEnv & {
   DB: D1Database;
   HANDLE_DO: DurableObjectNamespace;
-  REGISTER_RL: RateLimit;
-  CARD_RL: RateLimit;
-  // Shared ceiling for status and the two card representations, keyed by
-  // source IP. They were previously unbounded, which left the handle
-  // namespace scrapeable for free and every probe waking a Durable Object at
-  // the operator's expense.
-  READ_RL: RateLimit;
-  // Roster join + bundle. Join verifies a shared secret; bundle returns up to
-  // MAX_ROSTER_MEMBERS records at once. Neither belongs under READ_RL.
-  ROSTER_RL: RateLimit;
+  STATUS_READS: AnalyticsEngineDataset;
   BOOTSTRAP_TOKEN?: string;
 };
 const app = new Hono<{ Bindings: Env }>();
 mountA2A(app);
+mountPresence(app);
 mountRoster(app);
 
 async function handleExists(db: D1Database, org: string, handle: string): Promise<boolean> {
   return !!(await db.prepare("SELECT 1 FROM handles WHERE org = ? AND handle = ?").bind(org, handle).first());
 }
 
+function registrationDatabaseFailure(error: unknown) {
+  const message = error instanceof Error ? error.message : "";
+  let kind = "unknown";
+  if (/no such (?:table|column)|has no column named|database schema/i.test(message)) kind = "schema";
+  else if (/constraint failed|SQLITE_CONSTRAINT/i.test(message)) kind = "constraint";
+  else if (/timeout|timed out|connection|network|unavailable|internal error/i.test(message)) kind = "unavailable";
+  // Do not log the raw D1 message: wrappers may include SQL or bound values.
+  console.error("registration database failure", {
+    name: error instanceof Error ? error.name : "UnknownError",
+    kind,
+  });
+  return { error: "registration temporarily unavailable" } as const;
+}
+
 app.post("/v1/register", async (c) => {
   const ip = c.req.header("cf-connecting-ip") ?? "unknown";
-  if (!(await c.env.REGISTER_RL.limit({ key: ip })).success) return c.json({ error: "rate limited" }, 429);
+  if (!(await checkLimit(c.env, ip, REGISTER))) return c.json({ error: "rate limited" }, 429);
   const body = RegisterRequest.safeParse(await c.req.json().catch(() => null));
   if (!body.success) return c.json({ error: "invalid request" }, 400);
   const { invite, handle, agent_kind } = body.data;
   const inviteHash = await sha256Hex(invite);
-  const inviteRow = await c.env.DB.prepare(
-    "SELECT org FROM invites WHERE token_hash = ? AND used_at IS NULL AND expires_at > ?",
-  ).bind(inviteHash, Date.now()).first<{ org: string }>();
+  let inviteRow: { org: string } | null;
+  try {
+    inviteRow = await c.env.DB.prepare(
+      "SELECT org FROM invites WHERE token_hash = ? AND used_at IS NULL AND expires_at > ?",
+    ).bind(inviteHash, Date.now()).first<{ org: string }>();
+  } catch (error) {
+    return c.json(registrationDatabaseFailure(error), 503, { "Retry-After": "5" });
+  }
   if (!inviteRow) return c.json({ error: "invalid invite" }, 404);
   const org = inviteRow.org;
   const token = generateToken();
   try {
     const now = Date.now();
+    const tokenHash = await sha256Hex(token);
     const results = await c.env.DB.batch([
       c.env.DB.prepare(
         "INSERT INTO handles (org, handle, token_hash, agent_kind, created_at) " +
           "SELECT org, ?, ?, ?, ? FROM invites " +
-          "WHERE token_hash = ? AND used_at IS NULL AND expires_at > ?",
-      ).bind(handle, await sha256Hex(token), agent_kind ?? null, now, inviteHash, now),
+          "WHERE token_hash = ? AND used_at IS NULL AND expires_at > ? " +
+          "ON CONFLICT(org, handle) DO NOTHING",
+      ).bind(handle, tokenHash, agent_kind ?? null, now, inviteHash, now),
       c.env.DB.prepare(
-        "UPDATE invites SET used_at = ?, used_by = ? WHERE token_hash = ? AND used_at IS NULL",
-      ).bind(now, handle, inviteHash),
+        "UPDATE invites SET used_at = ?, used_by = ? " +
+          "WHERE token_hash = ? AND used_at IS NULL AND EXISTS (" +
+          "SELECT 1 FROM handles WHERE org = invites.org AND handle = ? AND token_hash = ?)",
+      ).bind(now, handle, inviteHash, handle, tokenHash),
     ]);
-    if ((results[0].meta.changes ?? 0) !== 1) return c.json({ error: "invalid invite" }, 404);
-  } catch {
-    return c.json({ error: "handle taken" }, 409);
+    if ((results[0].meta.changes ?? 0) !== 1) {
+      if (await handleExists(c.env.DB, org, handle)) return c.json({ error: "handle taken" }, 409);
+      return c.json({ error: "invalid invite" }, 404);
+    }
+    if ((results[1].meta.changes ?? 0) !== 1) throw new Error("registration invite update invariant failed");
+  } catch (error) {
+    return c.json(
+      registrationDatabaseFailure(error),
+      503,
+      { "Retry-After": "5" },
+    );
   }
   return c.json({ org, token, address: `${handle}@${registrationAddressHost(org, c.req.url)}` });
 });
@@ -84,7 +111,7 @@ app.post("/v1/admin/invite", async (c) => {
   const [expectedHash, suppliedHash] = await Promise.all([sha256Hex(configured), sha256Hex(supplied)]);
   if (!constantTimeEqual(expectedHash, suppliedHash)) return c.json({ error: "unauthorized" }, 401);
   const ip = c.req.header("cf-connecting-ip") ?? "unknown";
-  if (!(await c.env.REGISTER_RL.limit({ key: `bootstrap:${ip}` })).success) {
+  if (!(await checkLimit(c.env, `bootstrap:${ip}`, REGISTER))) {
     return c.json({ error: "rate limited" }, 429);
   }
   const body = BootstrapInviteRequest.safeParse(await c.req.json().catch(() => null));
@@ -96,21 +123,12 @@ app.post("/v1/invite", async (c) => {
   const identity = await authenticateRequest(c.env.DB, c.req);
   if (!identity) return c.json({ error: "unauthorized" }, 401);
   const { org, handle } = identity;
-  if (!(await c.env.REGISTER_RL.limit({ key: `invite:${org}:${handle}` })).success) {
+  if (!(await checkLimit(c.env, `invite:${org}:${handle}`, REGISTER))) {
     return c.json({ error: "rate limited" }, 429);
   }
   return c.json(await createOrgInvite(c.env.DB, org, handle));
 });
 
-// Presence is caller-only. Anonymous, this endpoint was an oracle: 404-vs-200
-// enumerated registered handles (the namespace is first-name shaped, so a name
-// dictionary walks it in seconds) and polling `online` gave anyone a live "is
-// this person at their desk" feed. Placing a call already requires a token, so
-// requiring one to observe presence costs a legitimate caller nothing.
-//
-// Auth runs before the existence check — deliberately. A 404 to an
-// unauthenticated prober would still answer "does this handle exist?" without
-// any credential, which is most of what the oracle was worth.
 // Until this existed, a leaked token was permanent: register was the only
 // write to `handles` in the whole codebase, and `agentcall uninstall --purge`
 // clears the local copy while the relay row and its hash live on forever.
@@ -120,14 +138,13 @@ app.post("/v1/invite", async (c) => {
 // identity still needs an explicit generation/recovery design so a replacement
 // owner cannot inherit the prior owner's stored state.
 //
-// Reuses REGISTER_RL rather than adding a binding: 5/min is the right ceiling
-// for an operation a human runs once in a blue moon, and the distinct key
-// prefix keeps it from sharing a budget with actual registrations.
+// Token rotation shares the 5/min credential-operation policy. Its distinct
+// key keeps it from sharing a budget with registrations or invite creation.
 app.post("/v1/token/rotate", async (c) => {
   const identity = await authenticateRequest(c.env.DB, c.req);
   if (!identity) return c.json({ error: "unauthorized" }, 401);
   const { org, handle } = identity;
-  if (!(await c.env.REGISTER_RL.limit({ key: `rotate:${org}:${handle}` })).success) {
+  if (!(await checkLimit(c.env, `rotate:${org}:${handle}`, REGISTER))) {
     return c.json({ error: "rate limited" }, 429);
   }
   const next = generateToken();
@@ -138,23 +155,11 @@ app.post("/v1/token/rotate", async (c) => {
   return c.json({ token: next });
 });
 
-app.get("/v1/status/:handle", async (c) => {
-  const identity = await authenticateRequest(c.env.DB, c.req);
-  if (!identity) return c.json({ error: "unauthorized" }, 401);
-  const { org } = identity;
-  const ip = c.req.header("cf-connecting-ip") ?? "unknown";
-  if (!(await c.env.READ_RL.limit({ key: ip })).success) return c.json({ error: "rate limited" }, 429);
-  const handle = c.req.param("handle");
-  if (!(await handleExists(c.env.DB, org, handle))) return c.json({ error: "unknown handle" }, 404);
-  const stub = c.env.HANDLE_DO.get(c.env.HANDLE_DO.idFromName(identityKey(org, handle)));
-  return stub.fetch("https://do/status");
-});
-
 app.put("/v1/card", async (c) => {
   const identity = await authenticateRequest(c.env.DB, c.req);
   if (!identity) return c.json({ error: "unauthorized" }, 401);
   const { org, handle } = identity;
-  if (!(await c.env.CARD_RL.limit({ key: `${org}:${handle}` })).success) return c.json({ error: "rate limited" }, 429);
+  if (!(await checkLimit(c.env, `${org}:${handle}`, NATIVE_CARD))) return c.json({ error: "rate limited" }, 429);
   const body = CardUpload.safeParse(await c.req.json().catch(() => null));
   if (!body.success) return c.json({ error: "invalid card" }, 400);
   await c.env.DB.prepare(
@@ -169,13 +174,14 @@ app.get("/v1/card/:handle", async (c) => {
   if (!identity) return c.json({ error: "unauthorized" }, 401);
   const { org, handle: viewer } = identity;
   const ip = c.req.header("cf-connecting-ip") ?? "unknown";
-  if (!(await c.env.READ_RL.limit({ key: ip })).success) return c.json({ error: "rate limited" }, 429);
+  if (!(await checkLimit(c.env, ip, NATIVE_READ))) return c.json({ error: "rate limited" }, 429);
   const handle = c.req.param("handle");
   const row = await c.env.DB.prepare("SELECT card_json, updated_at FROM cards WHERE org = ? AND handle = ?")
     .bind(org, handle).first<{ card_json: string; updated_at: number }>();
   if (!row) return c.json({ error: "no card" }, 404);
 
-  const upload = CardUpload.parse(JSON.parse(row.card_json));
+  const upload = parseStoredCard(row.card_json, org, handle);
+  if (!upload) return c.json({ error: "no card" }, 404);
   return c.json({
     handle,
     description: upload.description,

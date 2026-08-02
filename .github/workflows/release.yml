@@ -1,0 +1,159 @@
+name: Release npm packages
+
+on:
+  release:
+    types: [published]
+
+# Each job grants only the authority it uses. In particular, the job that can
+# publish to npm cannot mutate the repository or the GitHub release.
+permissions: {}
+
+concurrency:
+  group: npm-release-${{ github.event.release.tag_name }}
+  cancel-in-progress: false
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          ref: ${{ github.event.release.tag_name }}
+          fetch-depth: 0
+      - uses: pnpm/action-setup@0ebf47130e4866e96fce0953f49152a61190b271 # v6
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7
+        with:
+          node-version: 24
+          package-manager-cache: false
+      - name: Validate release identity
+        env:
+          RELEASE_TAG: ${{ github.event.release.tag_name }}
+        run: |
+          git fetch --no-tags origin main
+          git merge-base --is-ancestor HEAD origin/main || {
+            echo "Release tags must point at a commit in main's history."
+            exit 1
+          }
+          shared_version=$(node -p "require('./packages/shared/package.json').version")
+          cli_version=$(node -p "require('./packages/cli/package.json').version")
+          test "$shared_version" = "$cli_version" || {
+            echo "Package versions differ: shared=$shared_version cli=$cli_version"
+            exit 1
+          }
+          test "$RELEASE_TAG" = "v$cli_version" || {
+            echo "Release tag $RELEASE_TAG does not match package version $cli_version."
+            exit 1
+          }
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm -r build
+      - run: pnpm -r typecheck
+      - run: pnpm -r test
+      - name: Pack and preflight public packages
+        env:
+          RELEASE_TAG: ${{ github.event.release.tag_name }}
+        run: |
+          version=${RELEASE_TAG#v}
+          release_dir="$RUNNER_TEMP/agentcall-release"
+          mkdir -p "$release_dir"
+          pnpm --filter @benree/agentcall-shared pack --pack-destination "$release_dir"
+          pnpm --filter @benree/agentcall pack --pack-destination "$release_dir"
+          shared_tarball="$release_dir/benree-agentcall-shared-$version.tgz"
+          cli_tarball="$release_dir/benree-agentcall-$version.tgz"
+          test -f "$shared_tarball"
+          test -f "$cli_tarball"
+          test "$(node packages/cli/bin/agentcall.js --version)" = "$version"
+
+          sbom_dir="$RUNNER_TEMP/agentcall-sbom"
+          mkdir -p "$sbom_dir"
+          cd "$sbom_dir"
+          npm init --yes
+          npm install --package-lock-only --ignore-scripts --force "$shared_tarball" "$cli_tarball"
+          npm sbom --package-lock-only --omit dev --sbom-format cyclonedx \
+            --sbom-type application > "$release_dir/agentcall-$version.cdx.json"
+          cd "$release_dir"
+          shasum -a 256 ./* > SHA256SUMS
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        with:
+          name: npm-release
+          path: ${{ runner.temp }}/agentcall-release/*
+          if-no-files-found: error
+          retention-days: 90
+
+  publish:
+    needs: build
+    runs-on: ubuntu-latest
+    environment: npm
+    permissions:
+      contents: read
+      id-token: write
+    steps:
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7
+        with:
+          node-version: 24
+          registry-url: https://registry.npmjs.org
+          package-manager-cache: false
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8
+        with:
+          name: npm-release
+          path: ${{ runner.temp }}/agentcall-release
+      - name: Verify artifacts and npm client
+        env:
+          RELEASE_TAG: ${{ github.event.release.tag_name }}
+        run: |
+          cd "$RUNNER_TEMP/agentcall-release"
+          shasum -a 256 --check SHA256SUMS
+          npm_version=$(npm --version)
+          minimum=11.5.1
+          test "$(printf '%s\n' "$minimum" "$npm_version" | sort -V | head -n1)" = "$minimum" || {
+            echo "npm $minimum or newer is required for trusted publishing; found $npm_version."
+            exit 1
+          }
+          test -z "$NODE_AUTH_TOKEN" || {
+            echo "Release must use OIDC trusted publishing, not NODE_AUTH_TOKEN."
+            exit 1
+          }
+      - name: Publish with keyless provenance
+        env:
+          RELEASE_TAG: ${{ github.event.release.tag_name }}
+          NPM_DIST_TAG: ${{ github.event.release.prerelease && 'next' || 'latest' }}
+        run: |
+          version=${RELEASE_TAG#v}
+          release_dir="$RUNNER_TEMP/agentcall-release"
+
+          publish_one() {
+            package_name=$1
+            tarball=$2
+            expected_integrity="sha512-$(openssl dgst -sha512 -binary "$tarball" | openssl base64 -A)"
+            if published_integrity=$(npm view "$package_name@$version" dist.integrity 2>/dev/null); then
+              test "$published_integrity" = "$expected_integrity" || {
+                echo "$package_name@$version already exists with different contents."
+                exit 1
+              }
+              echo "$package_name@$version is already published with the identical tarball."
+              return
+            fi
+            npm publish "$tarball" --provenance --access public --tag "$NPM_DIST_TAG"
+          }
+
+          publish_one @benree/agentcall-shared \
+            "$release_dir/benree-agentcall-shared-$version.tgz"
+          publish_one @benree/agentcall \
+            "$release_dir/benree-agentcall-$version.tgz"
+
+  attach:
+    needs: publish
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8
+        with:
+          name: npm-release
+          path: ${{ runner.temp }}/agentcall-release
+      - name: Attach tarballs, SBOM, and checksums
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_TAG: ${{ github.event.release.tag_name }}
+        run: gh release upload "$RELEASE_TAG" "$RUNNER_TEMP"/agentcall-release/* --clobber

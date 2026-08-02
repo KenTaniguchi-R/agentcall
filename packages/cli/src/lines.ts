@@ -16,14 +16,25 @@ import type { LineConfig } from "./config.js";
 import { assertValidLineName, LINE_NAME_RE } from "./lineName.js";
 export { assertValidLineName, LINE_NAME_RE };
 
+// Keep unknown top-level keys (`.loose()`) so an older CLI does not discard
+// fields added by a newer release when a command loads, updates, and saves
+// this credential store (main's #131, re-homed onto the per-line store).
+//
+// `relay` is a REQUIRED non-empty string but deliberately NOT parsed as a URL
+// here, unlike main's flat ConfigSchema. Requiring it is what stops a silent
+// fall-through to the public default; validating its syntax at load would make
+// a typo'd relay fatal to loading the line at all, and one line's typo must
+// not make the line unreportable. `doctor` (relay config check) and
+// `line list` validate the syntax where they can name it, which is strictly
+// more diagnosable than a load-time schema error — see doctor.ts.
 export const LineConfigSchema = z.object({
   org: z.string().regex(ORG_RE),
-  handle: z.string(),
-  token: z.string(),
-  relay: z.string(),
+  handle: z.string().min(1),
+  token: z.string().min(1),
+  relay: z.string().min(1),
   agent_kind: AgentKindSchema.optional(),
   workdir: z.string().optional(),
-});
+}).loose();
 
 export function loadLineConfig(l: LinePaths): LineConfig {
   if (!existsSync(l.configFile)) {
@@ -33,7 +44,7 @@ export function loadLineConfig(l: LinePaths): LineConfig {
   try {
     raw = JSON.parse(readFileSync(l.configFile, "utf8"));
   } catch (e) {
-    throw new Error(`Corrupt config.json for line "${l.name}": ${e instanceof Error ? e.message : String(e)}`);
+    throw new Error(`Corrupt config.json for line "${l.name}" at ${l.configFile}: invalid JSON (${e instanceof Error ? e.message : String(e)}). Fix or remove this file, then re-run \`agentcall line add ${l.name} --invite <token>\`.`);
   }
   // Checked ahead of the schema so a line written before tenancy existed gets
   // the actionable re-enroll instruction rather than a zod "required" error
@@ -48,7 +59,14 @@ export function loadLineConfig(l: LinePaths): LineConfig {
   try {
     return LineConfigSchema.parse(raw);
   } catch (e) {
-    throw new Error(`Corrupt config.json for line "${l.name}": ${e instanceof Error ? e.message : String(e)}`);
+    const problem = e instanceof z.ZodError
+      ? e.issues.map((issue) => `${issue.path.join(".") || "config"}: ${issue.message}`).join("; ")
+      : e instanceof Error ? e.message : String(e);
+    throw new Error(
+      `Corrupt config.json for line "${l.name}" at ${l.configFile}: ${problem}. ` +
+        `Fix or remove this file, then re-run \`agentcall line add ${l.name} --invite <token>\`.`,
+      { cause: e },
+    );
   }
 }
 

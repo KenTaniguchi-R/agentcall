@@ -23,7 +23,8 @@ assuming exactly one.
   it); `--as <line>` overrides. `agentcall listen --line <name>` runs a single line
   in the foreground instead of every callable one.
 - `--line <name>` (or `AGENTCALL_LINE`) now selects which line `rotate`, `card`,
-  `task new`, and the six policy verbs act on.
+  `lint`, `policy`, `task new`, the roster/search/key commands, and the six
+  policy verbs act on.
 - `agentcall setup` is first-run only now: run again on a machine that already has
   a line and it prints the existing lines and points at `line add` instead of
   clobbering the one config.json that used to exist.
@@ -47,6 +48,197 @@ conversation bindings follow it — each is scoped to one line and takes
 `--line <name>` (defaulting to the primary line), so a machine can hold lines in
 two organizations without either seeing the other's memberships, invites, or
 open conversations.
+### Documentation — identity and address separation
+
+- Agent identity is now decided as an opaque, organization-scoped lifetime
+  separate from the reclaimable `handle@host` routing address, rotatable
+  credentials, and future lines/sessions.
+- Durable state, cards, roster membership, policy subjects, and audit actors
+  will attach to stable identity so handle reassignment cannot inherit the
+  previous owner's authority or data. Credential and signing-key rotation will
+  not change identity.
+- The runtime change is deliberately a coordinated zero-user cutover after the
+  recovery-credential change and before SSO/SCIM, reclaim, or card signing. It will
+  have no dual-read compatibility path and must fail closed if production row
+  counts contradict the zero-user premise.
+
+### Documentation — Cloudflare Access boundary
+
+- Cloudflare Access is selected for the future human admin hostname and as a
+  customer-owned SSO profile for self-hosted relays, with mandatory Worker-side
+  JWT validation and separate human and service actor types.
+- Access will not protect the current relay API, replace AgentCall application
+  authorization, reuse the existing `Authorization` header for service tokens,
+  or serve as the hosted multi-tenant customer IdP control plane.
+- The deployment acceptance contract covers alternate-origin bypasses,
+  issuer/audience/key validation, application RBAC, redaction, negative tests,
+  service-token rotation, and break-glass operations. No runtime integration is
+  claimed before an admin UI or supported self-hosted distribution exists.
+
+### Documentation — trust-domain-scoped agent identity
+
+- The future Agent Card signing design now preserves `handle@host` as a
+  trust-domain-scoped name while separating identity, routing, and rotatable
+  credentials. Ed25519 uses RFC 9864's fully specified `alg: Ed25519` with
+  RFC 8037's `kty: OKP` / `crv: Ed25519` key representation; the deprecated
+  polymorphic `EdDSA` algorithm is rejected by default.
+- Verification must select a configured JWKS by the expected host and handle
+  before resolving `kid`; cross-domain/cross-handle key pools and arbitrary
+  card-supplied `jku` fetches are explicitly rejected. Same-relay discovery is
+  documented as host-authorized or trust-on-first-use, not proof against a
+  malicious relay operator. The current unsigned-card trust boundary remains
+  documented until #101 implements the zero-user cutover.
+- The living reference index records the date-sensitive IETF, A2A, and MCP
+  watch points without prematurely adopting a pre-consensus identity protocol.
+
+### Documentation — cloud data map and residency decision
+
+- A living inventory now covers every D1 table, Durable Object storage shape,
+  native rate-limit counter, Analytics Engine dataset, log surface, transient
+  call-content path, and endpoint-local boundary, with sensitivity and actual
+  application retention.
+- Production D1 is recorded as WNAM with no jurisdiction and replication off.
+  The decision rejects pinning Durable Objects alone: jurisdictional ID
+  derivation would strand current objects while D1, analytics, processing, and
+  logs remained outside the claim.
+- Regional conclusions are explicit: a coordinated new EU deployment is
+  possible with caveats; complete US residency is blocked by D1's lack of a US
+  jurisdiction; Japan has no D1 or Durable Objects jurisdiction.
+
+### Documentation — organization-scoped call reachability
+
+- The security model now states the implemented boundary explicitly: every
+  authenticated handle can call every registered peer in its organization,
+  while cross-organization routing is rejected. Rosters scope discovery,
+  presence, and task policy; they are not a second tenancy boundary.
+- A member-minted-invite amplification risk is documented as accepted: one
+  compromised member can enroll multiple handles, each with its own per-caller
+  call budget. A relay regression test pins open same-organization delivery
+  between handles in disjoint rosters.
+
+### Fixed — doctor detects Codex policies that suppress tool telemetry
+
+- `agentcall doctor` now queries Codex's read-only `hooks/list` endpoint with
+  the exact production hook and trust overrides. It succeeds only when
+  AgentCall's session hook is present, enabled, and trusted; no additional
+  model call or effective-config dump is required.
+- `allow_managed_hooks_only = true`, hook normalization drift, disabled hooks,
+  malformed responses, and app-server failures now make doctor exit nonzero
+  with an actionable diagnostic instead of silently claiming telemetry.
+- AgentCall still does not install an administrator-managed guard. An
+  administrator who requires managed-only hooks must leave that setting unset
+  until a managed installation flow ships.
+
+### Fixed — the Codex guard now runs without trusting foreign hooks
+
+- Codex spawns now supply the exact trusted hash for AgentCall's inline
+  `PreToolUse` hook. The trust grant is scoped to that synthetic session-hook
+  key; AgentCall does not use `--dangerously-bypass-hook-trust`, so unrelated
+  user, project, plugin, and managed hooks do not inherit execution trust.
+- The normalized hash and whole-table `hooks.state` override are pinned to
+  codex-cli 0.146.0. A live env-gated regression proves the AgentCall hook runs
+  on a real tool call while an unrelated `$CODEX_HOME/hooks.json` hook remains
+  untrusted. A Codex normalization change fails closed by skipping the hook.
+- Codex telemetry remains observe-only and incomplete: tool attempts that emit
+  `PreToolUse` are recorded, but the hook does not enforce a read boundary and
+  non-hooked routes such as `view_image` remain absent from `tools.log`. An
+  administrator setting `allow_managed_hooks_only = true` disables this session
+  hook; doctor now detects that condition, while managed-hook installation
+  remains future work.
+
+### Added — readable effective capability policy
+
+- `agentcall policy [--line <name>]` renders the composed user and administrator
+  policy for one line as a
+  per-caller, per-roster, and per-task capability report, including blocks,
+  ignored missing tasks, assertion status, and the runtime-specific Claude or
+  Codex enforcement boundary.
+
+### Documentation — living reference implementation index
+
+- Enterprise, security, and A2A designs now start from a discoverable living
+  index of the external systems and specifications AgentCall follows, including
+  the exact invariants to reuse, boundaries not to copy, and local designs or
+  implementations where each precedent has already landed.
+
+### Security verification — malformed Codex requirements fail closed
+
+- The Codex read-floor verifier now requires malformed machine-wide
+  requirements to stop startup with the exact fatal configuration-loader
+  diagnostic; an unrelated crash can no longer count as a successful denial. A
+  targeted `--malformed-only` mode
+  and signal-safe restoration keep the root-only experiment bounded.
+
+### Changed — presence is roster-scoped and auditable
+
+- Handles can read their own presence or that of a peer in a shared roster.
+  `agentcall status` therefore reads as a line: it uses the line registered on
+  the destination's relay (`--as <line>` overrides), and roster sharing is
+  evaluated for that line's handle.
+  Unrelated and nonexistent targets now return a byte-identical generic 404;
+  call delivery remains independent of roster membership.
+- Authenticated allowed and denied status reads are written to a dedicated
+  Analytics Engine dataset with viewer, target, timestamp, source location,
+  and decision, but never the target's online/offline state.
+
+### Added — executable policy assertions
+
+- User and administrator-managed policy files can assert accepted and denied
+  tasks for direct callers and relay-attested roster groups. Assertions run on
+  the composed effective policy, including managed ceilings and blocks.
+- `agentcall lint` exits nonzero on a broken assertion. CLI policy edits reject
+  a breaking change before saving it, and the listener validates at startup
+  and before every call so a hand edit fails closed.
+
+### Changed — roster join credentials are independently manageable
+
+- The single roster-wide join secret is replaced by keyed credentials with a
+  stable public prefix, reveal-once secret, mandatory expiry, one-off or
+  reusable scope, metadata-only listing, and individual revocation.
+- `agentcall roster key issue|list|revoke` replaces roster-wide rotation
+  (`agentcall roster rotate` is gone). Each takes `--line <name>`, since a
+  roster membership belongs to a line. Revocation retains members by default;
+  `--evict` removes only members that joined through the selected key.
+- Roster creation still has a one-paste onboarding path by returning an
+  initial reusable key with a 30-day expiry. The relay retains only the secret
+  half's SHA-256 digest and each member's admission-key provenance.
+
+### Added — administrator-managed policy ceiling
+
+- macOS and Linux now have fixed, `AGENTCALL_HOME`-independent managed-policy
+  paths. Administrators can cap every task grant and impose unoverridable caller
+  blocks without rewriting the user's policy. The ceiling is machine-scoped and
+  applies to every line, so adding a line cannot escape it; each line keeps its
+  own user policy underneath it.
+- Missing managed policy remains unmanaged behavior; unreadable, malformed, or
+  invalid managed policy fails closed instead of falling back to user defaults.
+
+### Changed — verifiable npm releases
+
+- Every third-party GitHub Action is pinned to an immutable commit.
+- Published releases now build and test both packages from the tagged `main`
+  commit, publish through npm OIDC with keyless provenance, and attach the exact
+  tarballs, SHA-256 checksums, and a CycloneDX SBOM to the GitHub release.
+- Clean tarball consumers now exercise `agentcall doctor` on Node 20, 22, and
+  24, enforcing the published CLI's declared runtime floor.
+
+### Changed — roster mutations emit complete audit evidence
+
+- Roster audit events now use stable `roster.*` names and record CRUD action,
+  organization, actor authority, typed target, source IP/country, description,
+  and timestamp. Join-key issuance, revocation, and provenance-scoped eviction
+  have their own `roster.join_key.*` event types alongside roster creation,
+  membership changes, and deletion.
+- A persistent per-roster budget bounds membership audit growth independently
+  of source IP. Exhaustion is recorded once, while administrative recovery and
+  security operations remain available.
+
+### Changed — Durable Object lifecycle is declarative
+
+- Relay deployments now declare `HandleDO` and `RateLimiterDO` as SQLite-backed
+  Durable Object exports instead of maintaining an ordered migration-tag ledger.
+  This preserves the existing namespaces while making future class renames,
+  transfers, and deletions explicit in Wrangler's deployment reconciliation.
 
 ### Added — multi-turn calls: `agentcall call --continue`
 
@@ -151,29 +343,6 @@ rather than a `fix:`.
   `Operation not permitted (os error 1)`. That is the C.2 read floor, which is
   *not* shipped — `agentcall` neither installs nor currently requires it.
   `scripts/verify-codex-deny-read-p2.sh` is the repeatable check.
-
-### Known issue — the Codex guard is registered but never runs (unfixed)
-
-- **Codex spawns produce no `tools.log` telemetry at all.** Codex gates hook
-  execution on *persisted trust* (`HookStateToml` carries a `trusted_hash`), and
-  the guard hook is supplied inline via `-c`, which has never been trusted — so
-  Codex skips it silently, with no warning on stdout or stderr and no change to
-  the exit code. Verified against codex-cli 0.146.0 by controlled A/B on the
-  exact `buildSpawnSpec` output. **The observe-mode guard described below has
-  therefore never recorded anything on the Codex side.**
-- `--dangerously-bypass-hook-trust` makes the guard run, and was tried and then
-  **backed out**. It is a *blanket* bypass: it grants execution to every
-  untrusted hook from every surviving config layer, not just agentcall's own.
-  `--ignore-user-config` does not contain it — Codex replaces the ignored
-  `config.toml` with an *empty user layer* rather than dropping the layer, and
-  loads `hooks.json` per-layer independently, so `$CODEX_HOME/hooks.json` still
-  runs. Confirmed by planting one: it executed. Hook commands run outside the
-  tool sandbox, so this is host-level execution.
-- The narrower fix is to trust only our own hook by supplying
-  `hooks.state.<id>.trusted_hash` inline (SHA-256 over the normalized hook
-  identity). It fails closed on mismatch but couples us to an undocumented
-  hashing scheme. **Not yet decided** — see
-  `docs/superpowers/specs/2026-08-01-codex-read-floor-design.md`.
 
 ### Fixed — the guard's fail-closed paths could fail open (security-relevant)
 

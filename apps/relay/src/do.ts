@@ -2,12 +2,24 @@ import { DurableObject } from "cloudflare:workers";
 import {
   CallerFrame, ListenerToRelayFrame, MAX_MESSAGE_BYTES, MAX_REPLY_BYTES,
   RATE_LIMIT_PER_HOUR, RELAY_CALL_TIMEOUT_MS, safeParseFrame, sanitizeDetail,
-  type ErrorCodeType,
+  type CallStatusType, type ErrorCodeType,
 } from "@benree/agentcall-shared";
 
 type CallerAttachment = { kind: "caller"; from: string; groups: string[]; call_id?: string; timeoutMs?: number };
 type ListenerAttachment = { kind: "listener" };
-type CallRecord = { call_id: string; from: string; deadline: number };
+type CallRecord = {
+  call_id: string;
+  from: string;
+  deadline: number;
+  // Optional only for in-flight records written by a pre-#89 deployment.
+  state?: CallStatusType["state"];
+};
+
+const STATUS_RANK: Record<CallStatusType["state"], number> = {
+  ringing: 0,
+  answered: 1,
+  working: 2,
+};
 
 /**
  * Clamp a caller-requested (test-only) timeout so it can only SHORTEN the
@@ -85,6 +97,19 @@ export class HandleDO extends DurableObject {
     );
   }
 
+  private async advanceCall(
+    record: CallRecord,
+    state: CallStatusType["state"],
+    caller: WebSocket | undefined,
+  ): Promise<void> {
+    const current = record.state ?? "ringing";
+    if (STATUS_RANK[state] <= STATUS_RANK[current]) return;
+    // Persist before fan-out so a DO restart or duplicate/out-of-order frame
+    // cannot move the caller backward after it has observed a later state.
+    await this.ctx.storage.put<CallRecord>(`call:${record.call_id}`, { ...record, state });
+    if (caller) this.send(caller, { type: "call_status", state });
+  }
+
   override async webSocketMessage(ws: WebSocket, raw: string | ArrayBuffer): Promise<void> {
     if (typeof raw !== "string") return;
     const att = ws.deserializeAttachment() as CallerAttachment | ListenerAttachment | null;
@@ -117,7 +142,7 @@ export class HandleDO extends DurableObject {
       const call_id = crypto.randomUUID();
       const deadline = now + clampTimeoutMs(att.timeoutMs);
       ws.serializeAttachment({ ...att, call_id });
-      await this.ctx.storage.put<CallRecord>(`call:${call_id}`, { call_id, from: att.from, deadline });
+      await this.ctx.storage.put<CallRecord>(`call:${call_id}`, { call_id, from: att.from, deadline, state: "ringing" });
       await this.scheduleNextAlarm();
       this.send(ws, { type: "call_status", state: "ringing" });
       this.send(listener, {
@@ -134,8 +159,29 @@ export class HandleDO extends DurableObject {
     if (!record) return; // stale/unknown call
     const caller = this.callerFor(frame.call_id);
 
-    if (frame.type === "call_answer") {
-      if (caller) this.send(caller, { type: "call_status", state: "answered" });
+    if (frame.type === "call_accepted") {
+      await this.advanceCall(record, "answered", caller);
+      return;
+    }
+    if (frame.type === "call_answer" || frame.type === "call_started") {
+      // Legacy call_answer was emitted only once the job started, so preserve
+      // that truth when old listeners overlap a new relay deployment.
+      await this.advanceCall(record, "working", caller);
+      return;
+    }
+    if (frame.type === "call_cancelled") {
+      // Confirmation means a pending job was removed or the running process
+      // was observed exited. Only now is it honest to publish a terminal
+      // cancellation and release the call record.
+      if (caller) this.fail(caller, "canceled");
+      await this.ctx.storage.delete(`call:${frame.call_id}`);
+      return;
+    }
+    if (frame.type === "call_not_cancelled") {
+      // Cancellation is two-phase. A refusal is not terminal: completion may
+      // still win and must be allowed to deliver its result. The producer of
+      // cancel_call arrives with the durable A2A task store in #9; handling the
+      // acknowledgement here keeps the listener/relay link complete first.
       return;
     }
     if (frame.type === "call_result") {

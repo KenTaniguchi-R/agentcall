@@ -107,6 +107,12 @@ export async function runSetup(opts: SetupOpts): Promise<{ ready: boolean }> {
   const ask = opts.io?.ask ?? ttyAsk;
   const log = opts.log ?? console.log;
 
+  // Idempotency (main's #43/#79 concern, re-homed onto lines): a re-run must
+  // not POST /v1/register for a handle this machine already holds — the relay
+  // correctly 409s it, aborting setup even though a valid token already sits
+  // on disk. Under the per-line model the check is "does this machine have any
+  // line at all", handled by the `existing.length > 0` branch below, which
+  // registers nothing and only re-does the idempotent local steps.
   const machine = getMachinePaths();
   const existing = listLines(machine);
   const requestedRelay = opts.relay?.replace(/\/+$/, "");

@@ -38,6 +38,11 @@ export function buildCardReport(cfg: LineConfig, p: LinePaths): CardReport {
       if (!exists(id)) problems.push(`policy.json: grant for ${caller} references "${stripPlus(id)}" but no such task exists`);
     }
   }
+  for (const [group, entry] of Object.entries(policy.groups)) {
+    for (const id of entry.offer) {
+      if (!exists(id)) problems.push(`policy.json: grant for group ${group} references "${stripPlus(id)}" but no such task exists`);
+    }
+  }
 
   const upload = buildCardUpload(cfg, policy, tasks);
   const byId = new Map(tasks.map((t) => [t.id, t]));

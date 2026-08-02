@@ -1,5 +1,5 @@
 import { env, SELF } from "cloudflare:test";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import app from "../src/index.js";
 import { fixedRateLimit, registerHandle, issueInvite, wsAuth, openWs, closed, nextFrame } from "./helpers.js";
 
@@ -87,7 +87,7 @@ describe("listener attach + status", () => {
     const shared = "s".repeat(22);
     const callerOnly = "c".repeat(22);
     const roster = env.DB.prepare(
-      "INSERT INTO rosters (id, org, join_secret_hash, admin_secret_hash, created_at) VALUES (?, 'acme', 'j', 'a', 1)",
+      "INSERT INTO rosters (id, org, admin_secret_hash, created_at) VALUES (?, 'acme', 'a', 1)",
     );
     const member = env.DB.prepare(
       "INSERT INTO roster_members (roster_id, org, handle, joined_at) VALUES (?, 'acme', ?, 1)",
@@ -106,6 +106,32 @@ describe("listener attach + status", () => {
 
     expect(await incoming).toMatchObject({
       type: "incoming_call", from: "group-caller", groups: [shared],
+    });
+  });
+
+  it("keeps same-organization calls reachable when caller and callee share no roster", async () => {
+    const targetToken = await registerHandle("open-target");
+    const callerToken = await registerHandle("open-caller");
+    const listener = await openWs("/v1/ws?role=listen", wsAuth("open-target", targetToken));
+    const callerRoster = "q".repeat(22);
+    const targetRoster = "u".repeat(22);
+    const roster = env.DB.prepare(
+      "INSERT INTO rosters (id, org, admin_secret_hash, created_at) VALUES (?, 'acme', 'a', 1)",
+    );
+    const member = env.DB.prepare(
+      "INSERT INTO roster_members (roster_id, org, handle, joined_at) VALUES (?, 'acme', ?, 1)",
+    );
+    await env.DB.batch([
+      roster.bind(callerRoster), roster.bind(targetRoster),
+      member.bind(callerRoster, "open-caller"), member.bind(targetRoster, "open-target"),
+    ]);
+
+    const incoming = nextFrame(listener);
+    const caller = await openWs("/v1/ws?role=call&to=open-target", wsAuth("open-caller", callerToken));
+    caller.send(JSON.stringify({ type: "call_request", to: "open-target", message: "hello" }));
+
+    expect(await incoming).toMatchObject({
+      type: "incoming_call", from: "open-caller", groups: [],
     });
   });
 
@@ -147,12 +173,112 @@ describe("listener attach + status", () => {
     expect(res.status).toBe(401);
   });
 
-  it("serves a registered caller asking about someone else", async () => {
+  it("makes an unrelated target byte-identical to an unknown handle", async () => {
     await registerHandle("s-target3");
     const viewer = await registerHandle("s-viewer");
-    const res = await SELF.fetch("https://relay.test/v1/status/s-target3", { headers: wsAuth("s-viewer", viewer) });
+    const known = await SELF.fetch("https://relay.test/v1/status/s-target3", {
+      headers: wsAuth("s-viewer", viewer),
+    });
+    const unknown = await SELF.fetch("https://relay.test/v1/status/s-missing3", {
+      headers: wsAuth("s-viewer", viewer),
+    });
+    expect(known.status).toBe(404);
+    expect(known.status).toBe(unknown.status);
+    expect([...known.headers]).toEqual([...unknown.headers]);
+    expect(await known.text()).toBe(await unknown.text());
+  });
+
+  it("serves a peer that shares a roster with the target", async () => {
+    await registerHandle("s-target4");
+    const viewer = await registerHandle("s-viewer4");
+    const roster = "p".repeat(22);
+    await env.DB.batch([
+      env.DB.prepare(
+        "INSERT INTO rosters (id, org, admin_secret_hash, created_at) VALUES (?, 'acme', 'a', 1)",
+      ).bind(roster),
+      env.DB.prepare(
+        "INSERT INTO roster_members (roster_id, org, handle, joined_at) VALUES (?, 'acme', ?, 1)",
+      ).bind(roster, "s-target4"),
+      env.DB.prepare(
+        "INSERT INTO roster_members (roster_id, org, handle, joined_at) VALUES (?, 'acme', ?, 1)",
+      ).bind(roster, "s-viewer4"),
+    ]);
+    const res = await SELF.fetch("https://relay.test/v1/status/s-target4", {
+      headers: wsAuth("s-viewer4", viewer),
+    });
     expect(res.status).toBe(200);
     expect((await res.json<{ online: boolean }>()).online).toBe(false);
+  });
+
+  it("records allowed and denied authenticated status reads without distinguishing missing targets", async () => {
+    await registerHandle("s-log-target");
+    const viewer = await registerHandle("s-log-viewer");
+    const points: { indexes?: string[]; blobs?: string[]; doubles?: number[] }[] = [];
+    const STATUS_READS = {
+      writeDataPoint(point: { indexes?: string[]; blobs?: string[]; doubles?: number[] }) {
+        points.push(point);
+      },
+    } as AnalyticsEngineDataset;
+    const bindings = { ...env, STATUS_READS };
+    const headers = {
+      ...wsAuth("s-log-viewer", viewer),
+      "cf-connecting-ip": "203.0.113.116",
+    };
+
+    await app.request("https://relay.test/v1/status/s-log-target", { headers }, bindings);
+    await app.request("https://relay.test/v1/status/s-log-missing", { headers }, bindings);
+    await app.request("https://relay.test/v1/status/s-log-viewer", { headers }, bindings);
+    await app.request(`https://relay.test/v1/status/${"x".repeat(300)}`, { headers }, bindings);
+
+    expect(points).toEqual([
+      {
+        indexes: ["acme"],
+        blobs: ["s-log-viewer", "s-log-target", "denied", "203.0.113.116", ""],
+        doubles: [expect.any(Number)],
+      },
+      {
+        indexes: ["acme"],
+        blobs: ["s-log-viewer", "s-log-missing", "denied", "203.0.113.116", ""],
+        doubles: [expect.any(Number)],
+      },
+      {
+        indexes: ["acme"],
+        blobs: ["s-log-viewer", "s-log-viewer", "allowed", "203.0.113.116", ""],
+        doubles: [expect.any(Number)],
+      },
+      {
+        indexes: ["acme"],
+        blobs: ["s-log-viewer", "x".repeat(256), "denied", "203.0.113.116", ""],
+        doubles: [expect.any(Number)],
+      },
+    ]);
+  });
+
+  it("keeps allowed and denied status responses available when analytics writing throws", async () => {
+    const viewer = await registerHandle("s-log-failure");
+    const STATUS_READS = {
+      writeDataPoint() {
+        throw new Error("binding exposed sensitive internals");
+      },
+    } as AnalyticsEngineDataset;
+    const log = vi.spyOn(console, "error").mockImplementation(() => {});
+    try {
+      const bindings = { ...env, STATUS_READS };
+      const headers = wsAuth("s-log-failure", viewer);
+      const allowed = await app.request("https://relay.test/v1/status/s-log-failure", { headers }, bindings);
+      const denied = await app.request("https://relay.test/v1/status/s-log-failure-other", { headers }, bindings);
+      expect(allowed.status).toBe(200);
+      expect(denied.status).toBe(404);
+      expect(log).toHaveBeenCalledTimes(2);
+      expect(log).toHaveBeenNthCalledWith(1, "status read analytics failure", {
+        org: "acme", outcome: "allowed", name: "Error",
+      });
+      expect(log).toHaveBeenNthCalledWith(2, "status read analytics failure", {
+        org: "acme", outcome: "denied", name: "Error",
+      });
+    } finally {
+      log.mockRestore();
+    }
   });
 
   // Existence must not leak to an unauthenticated prober: a 404 here would

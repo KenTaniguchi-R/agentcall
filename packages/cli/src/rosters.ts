@@ -1,13 +1,14 @@
-import { chmodSync, existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from "node:fs";
+import { existsSync, readFileSync } from "node:fs";
 import { z } from "zod";
 import { BundleEntry, ROSTER_ID_RE } from "@benree/agentcall-shared";
 import { NAME_RE } from "./contacts.js";
+import { writeJsonAtomic } from "./json-store.js";
 import type { LinePaths } from "./paths.js";
 
 // Two stores with DELIBERATELY OPPOSITE corruption policies, kept in one file
 // so the contrast is visible where someone might get it wrong:
 //
-//   rosters.json      user data  -> THROWS. The join secret is discarded at
+//   rosters.json      user data  -> THROWS. Join keys are discarded at
 //                                   join time, so this is the only surviving
 //                                   route back into a roster you belong to.
 //                                   Resetting it locks the user out for good.
@@ -37,18 +38,6 @@ const CachedBundle = z.object({
 const CacheFile = z.object({ version: z.literal(1), rosters: z.record(z.string(), CachedBundle) });
 export type CachedBundle = z.infer<typeof CachedBundle>;
 
-// Temp-then-rename: a killed process can leave a partial .tmp behind, but the
-// real file is only ever replaced atomically, so a reader never sees a
-// half-written cache.
-function writeAtomic(file: string, dir: string, data: unknown): void {
-  mkdirSync(dir, { recursive: true, mode: 0o700 });
-  chmodSync(dir, 0o700);
-  const tmp = `${file}.tmp`;
-  writeFileSync(tmp, JSON.stringify(data, null, 2) + "\n", { mode: 0o600 });
-  chmodSync(tmp, 0o600);
-  renameSync(tmp, file);
-}
-
 export function loadMemberships(p: LinePaths): Membership[] {
   if (!existsSync(p.rostersFile)) return [];
   try {
@@ -56,7 +45,7 @@ export function loadMemberships(p: LinePaths): Membership[] {
   } catch (e) {
     throw new Error(
       `Corrupt rosters.json at ${p.rostersFile}: ${e instanceof Error ? e.message : String(e)}. ` +
-        `This file holds the roster ids you joined; the join secrets are not recoverable, so it is not reset automatically.`,
+        `This file holds the roster ids you joined; join keys are not recoverable, so it is not reset automatically.`,
     );
   }
 }
@@ -75,7 +64,7 @@ export function saveMembership(p: LinePaths, m: Membership): void {
   // `--as` defaults to the literal "roster" for both `roster create` and
   // `roster join`, so the happy path for joining a SECOND roster without
   // `--as` would otherwise silently destroy the first one's roster_id here —
-  // unrecoverable, because the join secret is discarded at join time. Same
+  // unrecoverable, because join keys are discarded at join time. Same
   // name + same id + same relay stays idempotent (rejoining what you already
   // belong to); any other reuse of the name is the collision this throws on.
   //
@@ -94,7 +83,7 @@ export function saveMembership(p: LinePaths, m: Membership): void {
   }
   const rosters = existing.filter((r) => r.name.toLowerCase() !== m.name.toLowerCase());
   rosters.push(m);
-  writeAtomic(p.rostersFile, p.dir, { rosters });
+  writeJsonAtomic(p.rostersFile, { rosters });
 }
 
 export function forgetMembership(p: LinePaths, name: string): void {
@@ -103,7 +92,7 @@ export function forgetMembership(p: LinePaths, name: string): void {
   if (next.length === rosters.length) {
     throw new Error(`No roster named "${name}" — run \`agentcall roster list\`.`);
   }
-  writeAtomic(p.rostersFile, p.dir, { rosters: next });
+  writeJsonAtomic(p.rostersFile, { rosters: next });
 }
 
 export function loadCache(p: LinePaths): Record<string, CachedBundle> {
@@ -135,7 +124,7 @@ export function readCached(
 }
 
 export function writeCached(p: LinePaths, name: string, bundle: CachedBundle): void {
-  writeAtomic(p.rosterCacheFile, p.dir, { version: 1, rosters: { ...loadCache(p), [name]: bundle } });
+  writeJsonAtomic(p.rosterCacheFile, { version: 1, rosters: { ...loadCache(p), [name]: bundle } });
 }
 
 // Derived data: dropping an entry costs one refetch, never user data. Used
@@ -144,5 +133,5 @@ export function writeCached(p: LinePaths, name: string, bundle: CachedBundle): v
 export function deleteCached(p: LinePaths, name: string): void {
   const rosters = { ...loadCache(p) };
   delete rosters[name];
-  writeAtomic(p.rosterCacheFile, p.dir, { version: 1, rosters });
+  writeJsonAtomic(p.rosterCacheFile, { version: 1, rosters });
 }

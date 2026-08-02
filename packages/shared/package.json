@@ -18,6 +18,11 @@
   "publishConfig": {
     "access": "public"
   },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/KenTaniguchi-R/agentcall.git",
+    "directory": "packages/shared"
+  },
   "scripts": {
     "build": "tsc -p tsconfig.json",
     "test": "vitest run",

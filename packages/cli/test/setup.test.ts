@@ -133,6 +133,30 @@ describe("runSetup", () => {
     expect(res.ready).toBe(true);
   });
 
+  // Re-homed from main's "refuses to overwrite a corrupt credential config as
+  // though it were a fresh install". A corrupt line is still a line: listLines
+  // reports it as an orphan rather than throwing, so setup must take the
+  // already-set-up branch — registering nothing (a burned handle is spent
+  // permanently and globally) and leaving the broken file exactly as found for
+  // the owner to fix or `line remove`.
+  it("treats a corrupt line config as an existing install: no registration, file untouched", async () => {
+    const lp = getLinePaths(m, "claude");
+    mkdirSync(lp.dir, { recursive: true });
+    writeFileSync(lp.configFile, "{\"org\":\"acme\"");
+    savePerson(m, { primary_line: "claude" });
+    const before = readFileSync(lp.configFile, "utf8");
+
+    const res = await run({
+      agent: "claude", yes: true, snippet: false, verify: false,
+      addLineFn: () => { throw new Error("must not register against a corrupt line"); },
+      skipLaunchd: true, log: () => {},
+    });
+
+    expect(res.ready).toBe(true);
+    expect(readFileSync(lp.configFile, "utf8")).toBe(before);
+    expect(listLines(m).map((l) => l.ok)).toEqual([false]);
+  });
+
   it("creates an agentless line under --caller-only", async () => {
     await run({
       handle: "ken", callerOnly: true, relay: R, yes: true, snippet: false, verify: false,

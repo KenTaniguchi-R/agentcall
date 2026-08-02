@@ -20,6 +20,20 @@ describe("getMachinePaths", () => {
     expect(m.dir).toBe("/tmp/test-state/.agentcall");
   });
 
+  // Re-homed from main's tasks.test.ts "paths" block. The managed policy is an
+  // administrator ceiling: it must sit on the MACHINE (a new line must not
+  // escape it) and must not move when an unprivileged user relocates the state
+  // root via AGENTCALL_HOME.
+  it("keeps the managed policy outside user-controlled home relocation", () => {
+    const m = getMachinePaths("/tmp/fakehome", "/tmp/fakehome", "darwin");
+    expect(getLinePaths(m, "line").policyFile).toBe("/tmp/fakehome/.agentcall/lines/line/policy.json");
+    expect(m.managedPolicyFile).toBe("/Library/Application Support/agentcall/policy.json");
+    expect(getMachinePaths("/tmp/other-home", "/tmp/other-home", "darwin").managedPolicyFile)
+      .toBe(m.managedPolicyFile);
+    expect(getMachinePaths("/tmp/fakehome", "/tmp/fakehome", "linux").managedPolicyFile)
+      .toBe("/etc/agentcall/policy.json");
+  });
+
   it("reads AGENTCALL_HOME for the state root only", () => {
     const prev = process.env.AGENTCALL_HOME;
     process.env.AGENTCALL_HOME = "/tmp/env-state";

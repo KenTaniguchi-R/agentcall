@@ -1,5 +1,5 @@
 import { env, SELF } from "cloudflare:test";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { MAX_ROSTER_MEMBERS } from "@benree/agentcall-shared";
 import { registerHandle, wsAuth } from "./helpers.js";
 
@@ -9,14 +9,14 @@ async function newRoster(handle: string) {
     method: "POST",
     headers: { "cf-connecting-ip": `test-${handle}`, ...wsAuth(handle, token) },
   });
-  return { token, ...(await res.json<{ roster_id: string; join_secret: string; admin_secret: string }>()) };
+  return { token, ...(await res.json<{ roster_id: string; join_key: string; admin_secret: string }>()) };
 }
 
-async function join(id: string, handle: string, token: string, secret: string) {
+async function join(id: string, handle: string, token: string, secret: string, ip = `test-${handle}`) {
   return SELF.fetch(`https://relay.test/v1/roster/${id}/join`, {
     method: "POST",
-    headers: { "content-type": "application/json", "cf-connecting-ip": `test-${handle}`, ...wsAuth(handle, token) },
-    body: JSON.stringify({ join_secret: secret }),
+    headers: { "content-type": "application/json", "cf-connecting-ip": ip, ...wsAuth(handle, token) },
+    body: JSON.stringify({ join_key: secret }),
   });
 }
 
@@ -24,13 +24,13 @@ describe("POST /v1/roster/:id/join", () => {
   it("admits a handle with the correct secret", async () => {
     const r = await newRoster("rj1");
     const token = await registerHandle("rj1b");
-    expect((await join(r.roster_id, "rj1b", token, r.join_secret)).status).toBe(200);
+    expect((await join(r.roster_id, "rj1b", token, r.join_key)).status).toBe(200);
   });
 
   it("401s without credentials", async () => {
     const r = await newRoster("rj2");
     const res = await SELF.fetch(`https://relay.test/v1/roster/${r.roster_id}/join`, {
-      method: "POST", body: JSON.stringify({ join_secret: r.join_secret }),
+      method: "POST", body: JSON.stringify({ join_key: r.join_key }),
     });
     expect(res.status).toBe(401);
   });
@@ -71,11 +71,33 @@ describe("POST /v1/roster/:id/join", () => {
     expect(await res.json()).toEqual({ error: "invalid roster id" });
   });
 
+  it("shares the credential-attempt budget across changing source IPs", async () => {
+    const r = await newRoster("rj-rate-limit");
+    const token = await registerHandle("rj-rate-limited");
+    for (let attempt = 0; attempt < 10; attempt++) {
+      expect((await join(
+        r.roster_id, "rj-rate-limited", token, "wrong", `198.51.100.${attempt + 1}`,
+      )).status).toBe(404);
+    }
+    expect((await join(
+      r.roster_id, "rj-rate-limited", token, "wrong", "203.0.113.250",
+    )).status).toBe(429);
+  });
+
   it("is idempotent: rejoining does not duplicate membership", async () => {
     const r = await newRoster("rj5");
     const token = await registerHandle("rj5b");
-    expect((await join(r.roster_id, "rj5b", token, r.join_secret)).status).toBe(200);
-    expect((await join(r.roster_id, "rj5b", token, r.join_secret)).status).toBe(200);
+    const clock = vi.spyOn(Date, "now").mockReturnValue(1_000_000);
+    try {
+      expect((await join(r.roster_id, "rj5b", token, r.join_key)).status).toBe(200);
+      expect((await join(r.roster_id, "rj5b", token, r.join_key)).status).toBe(200);
+    } finally {
+      clock.mockRestore();
+    }
+    const auditCount = await env.DB.prepare(
+      "SELECT COUNT(*) AS n FROM roster_events WHERE roster_id = ? AND event = 'roster.join' AND target_id = ?",
+    ).bind(r.roster_id, "rj5b").first<{ n: number }>();
+    expect(auditCount?.n).toBe(1);
   });
 
   it("409s when the roster is full, since the caller already proved the secret", async () => {
@@ -88,9 +110,9 @@ describe("POST /v1/roster/:id/join", () => {
       (_, i) => stmt.bind(r.roster_id, "acme", `filler${i}`, 1),
     ));
     const token = await registerHandle("rj6b");
-    expect((await join(r.roster_id, "rj6b", token, r.join_secret)).status).toBe(409);
+    expect((await join(r.roster_id, "rj6b", token, r.join_key)).status).toBe(409);
     // Existing members remain idempotent even when there is no free slot.
-    expect((await join(r.roster_id, "rj6", r.token, r.join_secret)).status).toBe(200);
+    expect((await join(r.roster_id, "rj6", r.token, r.join_key)).status).toBe(200);
   });
 
   it("admits exactly one of two concurrent distinct joins at 199 members", async () => {
@@ -102,8 +124,8 @@ describe("POST /v1/roster/:id/join", () => {
     ));
     const [tokenA, tokenB] = await Promise.all([registerHandle("rj7a"), registerHandle("rj7b")]);
     const [a, b] = await Promise.all([
-      join(r.roster_id, "rj7a", tokenA, r.join_secret),
-      join(r.roster_id, "rj7b", tokenB, r.join_secret),
+      join(r.roster_id, "rj7a", tokenA, r.join_key),
+      join(r.roster_id, "rj7b", tokenB, r.join_key),
     ]);
     expect([a.status, b.status].sort()).toEqual([200, 409]);
     const count = await env.DB.prepare("SELECT COUNT(*) AS n FROM roster_members WHERE roster_id = ?")

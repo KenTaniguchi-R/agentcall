@@ -35,6 +35,28 @@ function uid(): number {
 // ~/.local/bin, nvm/fnm shims).
 const BASE_PATH_DIRS = ["/opt/homebrew/bin", "/usr/local/bin", "/usr/bin", "/bin"];
 
+function xmlEscape(value: string): string {
+  for (const character of value) {
+    const codePoint = character.codePointAt(0)!;
+    const isXml10Character =
+      codePoint === 0x09 ||
+      codePoint === 0x0a ||
+      codePoint === 0x0d ||
+      (codePoint >= 0x20 && codePoint <= 0xd7ff) ||
+      (codePoint >= 0xe000 && codePoint <= 0xfffd) ||
+      (codePoint >= 0x10000 && codePoint <= 0x10ffff);
+    if (!isXml10Character) {
+      throw new Error(
+        `Cannot create LaunchAgent plist: XML 1.0 cannot represent U+${codePoint.toString(16).toUpperCase().padStart(4, "0")} in a path`,
+      );
+    }
+  }
+  return value
+    .replaceAll("&", "&amp;")
+    .replaceAll("<", "&lt;")
+    .replaceAll(">", "&gt;");
+}
+
 export function plistContent(
   nodeBin: string, cliScript: string, m: MachinePaths, extraPathDirs: string[] = [],
 ): string {
@@ -46,18 +68,18 @@ export function plistContent(
   <key>Label</key><string>${LAUNCH_LABEL}</string>
   <key>ProgramArguments</key>
   <array>
-    <string>${nodeBin}</string>
-    <string>${cliScript}</string>
+    <string>${xmlEscape(nodeBin)}</string>
+    <string>${xmlEscape(cliScript)}</string>
     <string>listen</string>
   </array>
   <key>RunAtLoad</key><true/>
   <key>KeepAlive</key><true/>
-  <key>StandardOutPath</key><string>${m.listenerLog}</string>
-  <key>StandardErrorPath</key><string>${m.listenerLog}</string>
+  <key>StandardOutPath</key><string>${xmlEscape(m.listenerLog)}</string>
+  <key>StandardErrorPath</key><string>${xmlEscape(m.listenerLog)}</string>
   <key>EnvironmentVariables</key>
   <dict>
-    <key>PATH</key><string>${pathDirs.join(":")}</string>
-    <key>HOME</key><string>${m.userHome}</string>
+    <key>PATH</key><string>${xmlEscape(pathDirs.join(":"))}</string>
+    <key>HOME</key><string>${xmlEscape(m.userHome)}</string>
   </dict>
 </dict>
 </plist>

@@ -114,6 +114,17 @@ describe("startListener workdir", () => {
   });
 });
 
+describe("startListener policy assertions", () => {
+  it("refuses to start before opening a socket when an assertion is broken", () => {
+    const paths = seededPaths();
+    seedPolicy(paths, { default_offer: ["ask"], tests: [{ caller: "mia", deny: ["ask"] }] });
+    expect(() => startListener({
+      relay: "http://127.0.0.1:1", paths, loadConfig: () => cfg,
+      run: async () => ({ text: "unused" }),
+    })).toThrow(/assertion 1.*ask/i);
+  });
+});
+
 describe("startListener", () => {
   it("answers an incoming call: accepted -> started -> result, and audits", async () => {
     let paths!: LinePaths;
@@ -300,6 +311,33 @@ describe("startListener task resolution", () => {
     expect(audit[0]).toMatchObject({ call_id: "c1", from: "spammer", status: "blocked" });
   });
 
+  it("enforces an administrator block even when user policy allows the caller", async () => {
+    let spawned = false;
+    const relayReady = new Promise<WsSocket>((resolveWs) => {
+      void fakeRelay((ws) => resolveWs(ws)).then((url) => {
+        const deps = baseDeps(url);
+        seedPolicy(deps.paths, { default_offer: ["ask"], callers: {} });
+        // The ceiling lives on the MACHINE, not the line — overridden here
+        // because its production path is deliberately unredirectable.
+        const paths = {
+          ...deps.paths,
+          machine: { ...deps.paths.machine, managedPolicyFile: join(deps.paths.dir, "managed-policy.json") },
+        };
+        writeFileSync(paths.machine.managedPolicyFile, JSON.stringify({
+          version: 1,
+          blocked_callers: ["spammer"],
+        }));
+        stopper = startListener({ ...deps, paths, run: async () => { spawned = true; return { text: "x" }; } });
+      });
+    });
+    const ws = await relayReady;
+    const expectFrames = frames(ws, 1);
+    ws.send(JSON.stringify({ type: "incoming_call", call_id: "managed-block", from: "spammer", message: "hi" }));
+    const [failed] = await expectFrames;
+    expect(failed).toMatchObject({ type: "call_failed", call_id: "managed-block", code: "blocked" });
+    expect(spawned).toBe(false);
+  });
+
   it("refuses an ungranted task with the caller's offered menu, without spawning", async () => {
     let spawned = false;
     const relayReady = new Promise<WsSocket>((resolveWs) => {
@@ -408,12 +446,14 @@ describe("startListener task resolution", () => {
       void fakeRelay((ws) => resolveWs(ws)).then((url) => {
         const deps = baseDeps(url);
         paths = deps.paths;
-        mkdirSync(paths.dir, { recursive: true });
-        writeFileSync(paths.policyFile, "{corrupt");
         stopper = startListener({ ...deps, run: async () => { spawned = true; return { text: "x" }; } });
       });
     });
     const ws = await relayReady;
+    // Startup validated the original policy; this simulates a broken hot edit
+    // so the per-call reload must still fail closed.
+    mkdirSync(paths.dir, { recursive: true });
+    writeFileSync(paths.policyFile, "{corrupt");
     const expectFrames = frames(ws, 1);
     ws.send(JSON.stringify({ type: "incoming_call", call_id: "c5", from: "a", message: "hi" }));
     const [failed] = await expectFrames;

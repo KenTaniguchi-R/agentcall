@@ -1,5 +1,5 @@
 import { SELF } from "cloudflare:test";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { registerHandle, wsAuth } from "./helpers.js";
 
 const card = (tasks: unknown[], defaultOffer: string[], grants: Record<string, string[]> = {}) => ({
@@ -12,7 +12,7 @@ async function setup(prefix: string) {
   const ownerToken = await registerHandle(`${prefix}own`);
   const created = await (await SELF.fetch("https://relay.test/v1/roster", {
     method: "POST", headers: { "cf-connecting-ip": `test-${prefix}`, ...wsAuth(`${prefix}own`, ownerToken) },
-  })).json<{ roster_id: string; join_secret: string; admin_secret: string }>();
+  })).json<{ roster_id: string; join_key: string; admin_secret: string }>();
   return { ownerToken, ...created };
 }
 
@@ -21,7 +21,7 @@ async function joinAs(id: string, handle: string, secret: string) {
   await SELF.fetch(`https://relay.test/v1/roster/${id}/join`, {
     method: "POST",
     headers: { "content-type": "application/json", "cf-connecting-ip": `test-${handle}`, ...wsAuth(handle, token) },
-    body: JSON.stringify({ join_secret: secret }),
+    body: JSON.stringify({ join_key: secret }),
   });
   return token;
 }
@@ -42,7 +42,7 @@ const getBundle = (id: string, handle: string, token: string, extra: Record<stri
 describe("GET /v1/roster/:id/bundle", () => {
   it("returns members' publicly offered tasks to a member", async () => {
     const r = await setup("b1");
-    const tanaka = await joinAs(r.roster_id, "b1tanaka", r.join_secret);
+    const tanaka = await joinAs(r.roster_id, "b1tanaka", r.join_key);
     await putCard("b1tanaka", tanaka, card([task("adr", ["auth"])], ["adr"]));
     const body = await (await getBundle(r.roster_id, "b1own", r.ownerToken)).json<any>();
     expect(body.entries.map((e: any) => e.handle)).toEqual(["b1tanaka"]);
@@ -51,8 +51,8 @@ describe("GET /v1/roster/:id/bundle", () => {
 
   it("shows a privately granted task only to its grantee", async () => {
     const r = await setup("b2");
-    const tanaka = await joinAs(r.roster_id, "b2tanaka", r.join_secret);
-    const mia = await joinAs(r.roster_id, "b2mia", r.join_secret);
+    const tanaka = await joinAs(r.roster_id, "b2tanaka", r.join_key);
+    const mia = await joinAs(r.roster_id, "b2mia", r.join_key);
     await putCard("b2tanaka", tanaka, card([task("ask"), task("payroll")], ["ask"], { b2mia: ["payroll"] }));
     const forMia = await (await getBundle(r.roster_id, "b2mia", mia)).json<any>();
     const forOwner = await (await getBundle(r.roster_id, "b2own", r.ownerToken)).json<any>();
@@ -63,8 +63,8 @@ describe("GET /v1/roster/:id/bundle", () => {
 
   it("shows tasks granted through relay-attested shared roster membership", async () => {
     const r = await setup("bg");
-    const target = await joinAs(r.roster_id, "bgtarget", r.join_secret);
-    const viewer = await joinAs(r.roster_id, "bgviewer", r.join_secret);
+    const target = await joinAs(r.roster_id, "bgtarget", r.join_key);
+    const viewer = await joinAs(r.roster_id, "bgviewer", r.join_key);
     await putCard("bgtarget", target, {
       ...card([task("ask"), task("payroll")], ["ask"]),
       group_grants: { [r.roster_id]: ["payroll"] },
@@ -79,7 +79,7 @@ describe("GET /v1/roster/:id/bundle", () => {
   // a member invisible. This endpoint is a search index, not a directory.
   it("omits a member with no visible tasks entirely", async () => {
     const r = await setup("b3");
-    const quiet = await joinAs(r.roster_id, "b3quiet", r.join_secret);
+    const quiet = await joinAs(r.roster_id, "b3quiet", r.join_key);
     await putCard("b3quiet", quiet, card([task("payroll")], [], { someone_else: ["payroll"] }));
     const body = await (await getBundle(r.roster_id, "b3own", r.ownerToken)).json<any>();
     expect(body.entries.map((e: any) => e.handle)).not.toContain("b3quiet");
@@ -87,7 +87,7 @@ describe("GET /v1/roster/:id/bundle", () => {
 
   it("omits a member who has published no card at all", async () => {
     const r = await setup("b4");
-    await joinAs(r.roster_id, "b4nocard", r.join_secret);
+    await joinAs(r.roster_id, "b4nocard", r.join_key);
     const body = await (await getBundle(r.roster_id, "b4own", r.ownerToken)).json<any>();
     expect(body.entries.map((e: any) => e.handle)).not.toContain("b4nocard");
   });
@@ -109,7 +109,7 @@ describe("GET /v1/roster/:id/bundle", () => {
 
   it("caps tasks per member and flags the entry as truncated", async () => {
     const r = await setup("b7");
-    const many = await joinAs(r.roster_id, "b7many", r.join_secret);
+    const many = await joinAs(r.roster_id, "b7many", r.join_key);
     const ids = Array.from({ length: 15 }, (_, i) => `t${i}`);
     await putCard("b7many", many, card(ids.map((id) => task(id)), ids));
     const body = await (await getBundle(r.roster_id, "b7own", r.ownerToken)).json<any>();
@@ -120,22 +120,30 @@ describe("GET /v1/roster/:id/bundle", () => {
 
   it("skips a malformed stored card without 500ing the whole bundle", async () => {
     const r = await setup("b8");
-    const good = await joinAs(r.roster_id, "b8good", r.join_secret);
-    await joinAs(r.roster_id, "b8bad", r.join_secret);
+    const good = await joinAs(r.roster_id, "b8good", r.join_key);
+    await joinAs(r.roster_id, "b8bad", r.join_key);
     await putCard("b8good", good, card([task("adr")], ["adr"]));
     const db = (await import("cloudflare:test")).env.DB;
     await db.prepare("INSERT INTO cards (org, handle, card_json, updated_at) VALUES (?, ?, ?, ?)")
       .bind("acme", "b8bad", "{not json", Date.now()).run();
-    const res = await getBundle(r.roster_id, "b8own", r.ownerToken);
-    expect(res.status).toBe(200);
-    const body = await res.json<any>();
-    expect(body.entries.map((e: any) => e.handle)).toEqual(["b8good"]);
-    expect(body.skipped).toBe(1);
+    const log = vi.spyOn(console, "error").mockImplementation(() => {});
+    try {
+      const res = await getBundle(r.roster_id, "b8own", r.ownerToken);
+      expect(res.status).toBe(200);
+      const body = await res.json<any>();
+      expect(body.entries.map((e: any) => e.handle)).toEqual(["b8good"]);
+      expect(body.skipped).toBe(1);
+      expect(log).toHaveBeenCalledWith("invalid stored card", {
+        org: "acme", handle: "b8bad", error: "SyntaxError",
+      });
+    } finally {
+      log.mockRestore();
+    }
   });
 
   it("304s an unchanged bundle and forbids shared caching", async () => {
     const r = await setup("b9");
-    const t = await joinAs(r.roster_id, "b9t", r.join_secret);
+    const t = await joinAs(r.roster_id, "b9t", r.join_key);
     await putCard("b9t", t, card([task("adr")], ["adr"]));
     const first = await getBundle(r.roster_id, "b9own", r.ownerToken);
     expect(first.headers.get("Cache-Control")).toContain("private");
@@ -147,8 +155,8 @@ describe("GET /v1/roster/:id/bundle", () => {
 
   it("gives two different callers different ETags", async () => {
     const r = await setup("b10");
-    const t = await joinAs(r.roster_id, "b10t", r.join_secret);
-    const mia = await joinAs(r.roster_id, "b10mia", r.join_secret);
+    const t = await joinAs(r.roster_id, "b10t", r.join_key);
+    const mia = await joinAs(r.roster_id, "b10mia", r.join_key);
     await putCard("b10t", t, card([task("ask")], ["ask"]));
     const a = await getBundle(r.roster_id, "b10own", r.ownerToken);
     const b = await getBundle(r.roster_id, "b10mia", mia);

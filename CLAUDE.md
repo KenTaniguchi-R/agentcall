@@ -39,6 +39,11 @@ Two standing constraints that aren't any single issue's property:
   the A2A track is actively changing. Coordinate — and use one worktree per session, per
   [CONTRIBUTING.md](./CONTRIBUTING.md#one-worktree-per-session).
 
+Before designing work in `area:enterprise`, `area:security`, or `area:a2a`, read
+the living [reference implementation index](./docs/research/reference-implementations.md).
+It records the external precedents we follow, the boundaries we do not copy, and
+the AgentCall implementations that have adopted them.
+
 Everything under `docs/superpowers/` is a **historical** design/implementation
 record, dated and never revised — useful for *why* a decision was made, wrong about
 *what the code does now*. Each file carries a banner saying so. Don't derive current
@@ -104,24 +109,6 @@ script runs after the src pass; `apps/relay` already had `test` in its main
 `pnpm typecheck` green while every stale call site in `test/` fails at runtime
 instead — vitest strips types without checking them.
 
-### CI runs node 24 only, not the `engines` floor
-
-`packages/cli` declares `engines: { node: ">=20" }`, but **pnpm 11.5.2 requires node
->=22.13**, so the toolchain cannot install or build this repo on node 20 at all. CI
-pins 24, the version the repo is developed on. So CI does *not* verify the promise
-`engines` makes to people installing the published CLI on older node — that needs a
-job installing the built tarball, not a workspace build.
-
-### `apps/relay/test/register.test.ts` has a known flake
-
-The burst test registers 5 handles from one IP and expects the 6th to 429.
-`REGISTER_RL` is `{ limit: 5, period: 60 }`, so it only holds if all six requests
-land inside the same 60s window. On a slow runner they don't, and the 6th comes back
-200. Seen failing on a GitHub runner while the same commit passed locally. It is
-wall-clock dependent, not node-version dependent — pinning CI to one node version
-lowers the odds but does not fix it. The fix is to make the window explicit rather
-than ambient.
-
 ### `packages/cli/test/runner.test.ts`'s process-group-kill test has a known flake
 
 `"kills the whole process group on timeout, so a grandchild holding stdout doesn't
@@ -133,9 +120,8 @@ under load — several vitest workers doing real process spawns/kills at once, a
 happens repeatedly running the full suite in this repo — either the 5s ceiling or the
 300ms post-SIGTERM grace period can be missed even though the kill logic itself is
 correct. Seen failing standalone and passing when re-run in isolation; not
-node-version dependent, same class of flake as the register.test.ts one above. The
-fix is the same kind: make the deadlines a mockable/injectable clock rather than
-real timers, not chase a bigger margin.
+node-version dependent. The fix is to make the deadlines a mockable/injectable clock
+rather than real timers, not chase a bigger margin.
 
 ## TDD
 

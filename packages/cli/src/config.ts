@@ -22,6 +22,8 @@ export interface LineConfig {
 }
 export type CallableLineConfig = LineConfig & { agent_kind: AgentKind };
 
+// Guards commands that spawn the local agent: a caller-only line has no
+// agent_kind and cannot answer calls.
 export function assertCallableLine(cfg: LineConfig): asserts cfg is CallableLineConfig {
   if (!cfg.agent_kind) {
     throw new Error("This line is caller-only — re-run `agentcall line add` with an agent to make it callable.");

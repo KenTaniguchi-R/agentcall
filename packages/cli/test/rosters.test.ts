@@ -29,7 +29,7 @@ describe("memberships (user data)", () => {
     expect(loadMemberships(paths())).toEqual([]);
   });
 
-  // The join secret is discarded after join, so this file is the ONLY way
+  // The join key is discarded after join, so this file is the ONLY way
   // back to a roster you still belong to. Silently resetting it would lock
   // the user out permanently — same reasoning as loadContacts.
   it("throws on corruption instead of resetting", () => {
@@ -77,7 +77,7 @@ describe("memberships (user data)", () => {
   // prevent, arriving through the front door: since --as defaults to
   // "roster" for both create and join, the happy path for joining a SECOND
   // roster without an explicit --as would otherwise silently destroy the
-  // first roster's id — unrecoverable, since the join secret is discarded at
+  // first roster's id — unrecoverable, since the join key is discarded at
   // join time.
   it("throws rather than silently overwriting a name with a different roster_id", () => {
     const p = paths();

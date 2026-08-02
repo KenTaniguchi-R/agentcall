@@ -33,9 +33,9 @@ describe("resolveAgentBin", () => {
       return target;
     }
 
-    // A durable, non-tmp dir inside the worktree (not os.tmpdir(), which on
-    // macOS resolves under /var/folders and would itself count as
-    // ephemeral) — created for this test and removed afterward.
+    // Both fixtures may inherit an ephemeral checkout root. The test supplies
+    // its own classification roots so "durable" is a property of the fixture,
+    // not an accidental property of the directory containing the checkout.
     const durableDir = join(
       dirname(fileURLToPath(import.meta.url)), "..", ".tmp", `bin-${process.pid}-durable`,
     );
@@ -44,9 +44,10 @@ describe("resolveAgentBin", () => {
     it("skips an ephemeral shim earlier on PATH for a durable install later on PATH", () => {
       try {
         const durableBin = makeFakeBin(durableDir, "claude");
-        makeFakeBin(ephemeralDir, "claude");
+        const ephemeralBin = makeFakeBin(ephemeralDir, "claude");
         const pathEnv = [ephemeralDir, durableDir].join(delimiter);
-        expect(resolveAgentBin("claude", { PATH: pathEnv })).toBe(realpathSync(durableBin));
+        const resolvedEphemeralRoot = dirname(realpathSync(ephemeralBin));
+        expect(resolveAgentBin("claude", { PATH: pathEnv }, [resolvedEphemeralRoot])).toBe(realpathSync(durableBin));
       } finally {
         rmSync(durableDir, { recursive: true, force: true });
         rmSync(ephemeralDir, { recursive: true, force: true });

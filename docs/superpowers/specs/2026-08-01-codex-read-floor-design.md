@@ -361,10 +361,18 @@ cannot relocate the floor, and — the case argv ownership does **not** cover �
 `codex` launched by the model from inside the sandboxed shell is denied just the same, so
 requirements are re-read per process rather than inherited from the parent's sandbox.
 
-**Residual gap, small but real:** the design also asked to "confirm malformed requirements
-stop startup rather than being ignored." That was not tested. A requirements file that
-fails to parse and is silently skipped would be a fail-open path with the same shape as
-everything else found today. Worth one more case in the script.
+**Residual root re-run:** the design also asked to "confirm malformed requirements stop
+startup rather than being ignored." The verifier now installs a syntactically invalid
+file and passes only when Codex exits nonzero with the exact fatal configuration-loader
+diagnostic for `/etc/codex/requirements.toml`; an unrelated crash cannot masquerade as
+a denial. `--malformed-only` runs just that case
+and restores the previous file through an EXIT/signal trap. This case was not executed in
+the implementation session because non-interactive sudo credentials were unavailable, so
+the empirical P1 evidence above is unchanged until the owner runs:
+
+```bash
+sudo -v && bash scripts/verify-codex-deny-read.sh --malformed-only
+```
 
 ### P4 — upgraded to partial, and this is the round's quiet win
 

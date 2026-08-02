@@ -19,7 +19,7 @@ jobs:
   check:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
         with:
           # Need the base branch to diff against.
           fetch-depth: 0
@@ -44,6 +44,9 @@ jobs:
           echo "INVARIANTS_BASE=$base" >> "$GITHUB_ENV"
           echo "Comparing $base...HEAD"
 
+      - name: Third-party actions are immutable
+        run: ruby scripts/verify-action-pins.rb
+
       - name: Protocol frames must live in packages/shared
         run: |
           # A frame is identifiable by its `type:` discriminator, which is
@@ -64,6 +67,21 @@ jobs:
             exit 1
           fi
           echo "OK: no frame shapes declared outside packages/shared"
+
+      - name: Stored cards parse through the guarded boundary
+        run: |
+          hits=$(git ls-files -z 'apps/relay/src/**/*.ts' 'apps/relay/src/*.ts' | sort -z | \
+            xargs -0 perl -0ne 'while (/CardUpload\.(safeParse|parse)\s*\(/g) { print "$ARGV:$1\n" }')
+          expected=$(printf '%s\n' \
+            'apps/relay/src/index.ts:safeParse' \
+            'apps/relay/src/stored-card.ts:parse')
+          if [ "$hits" != "$expected" ]; then
+            echo "$hits" | while IFS=: read -r file _; do
+              [ -z "$file" ] || echo "::error file=$file::CardUpload parsing is limited to upload validation and parseStoredCard; stored reads must use the guarded boundary so legacy rows cannot 500 endpoints."
+            done
+            exit 1
+          fi
+          echo "OK: stored cards parse only through the guarded boundary"
 
       - name: Historical docs are never revised
         run: |
@@ -95,6 +113,44 @@ jobs:
             fi
           done
           echo "OK: checked historical docs"
+
+      - name: Applied D1 migration history is append-only
+        run: |
+          manifest=apps/relay/migrations/.immutable
+          test -f "$manifest" || { echo "::error file=$manifest::Missing immutable migration ledger."; exit 1; }
+
+          # Every SQL migration must be recorded, and every recorded filename
+          # must exist. The manifest can only grow at the end.
+          invalid=$(find apps/relay/migrations -maxdepth 1 -name '*.sql' ! -type f -print -quit)
+          test -z "$invalid" || { echo "::error file=$invalid::Migrations must be regular files, not symlinks."; exit 1; }
+          if [ -n "$(tail -c 1 "$manifest")" ]; then
+            echo "::error file=$manifest::The immutable migration ledger must end with a newline."
+            exit 1
+          fi
+          actual=$(find apps/relay/migrations -maxdepth 1 -name '*.sql' -type f -exec basename {} \; | sort)
+          recorded=$(cat "$manifest")
+          if [ "$actual" != "$recorded" ]; then
+            echo "::error file=$manifest::Migration files and the immutable ledger differ. Add new migrations to both; never rename old ones."
+            diff -u <(echo "$recorded") <(echo "$actual") || true
+            exit 1
+          fi
+
+          if git cat-file -e "${INVARIANTS_BASE}:$manifest" 2>/dev/null; then
+            git show "${INVARIANTS_BASE}:$manifest" > /tmp/base-migrations
+            base_bytes=$(wc -c < /tmp/base-migrations | tr -d ' ')
+            if ! diff -u /tmp/base-migrations <(head -c "$base_bytes" "$manifest"); then
+              echo "::error file=$manifest::The applied migration ledger is append-only."
+              exit 1
+            fi
+            while IFS= read -r file || [ -n "$file" ]; do
+              if ! git cat-file -e "HEAD:apps/relay/migrations/$file" 2>/dev/null ||
+                 ! git diff --quiet "$INVARIANTS_BASE" HEAD -- "apps/relay/migrations/$file"; then
+                echo "::error file=apps/relay/migrations/$file::Applied migrations are immutable; add a new migration instead."
+                exit 1
+              fi
+            done < /tmp/base-migrations
+          fi
+          echo "OK: D1 migration history is append-only"
 
       - name: Open work stays in GitHub Issues
         run: |

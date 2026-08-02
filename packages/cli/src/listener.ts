@@ -37,6 +37,15 @@ export function startListener(deps: ListenerDeps): { stop(): void } {
   const run = deps.run ?? runAgent;
   const newSocket = deps.socketFactory ?? ((url: string, opts: { headers: Record<string, string> }) => new WebSocket(url, opts));
   const persistContexts = deps.saveContexts ?? saveContexts;
+  // Validate before opening the socket. Hot edits are still loaded per call
+  // below, but a listener must never advertise availability when its initial
+  // effective policy (user layer + the machine's managed ceiling) is malformed
+  // or contradicts an assertion. Throwing here is contained to this one line:
+  // startAllListeners catches per-line startup failures so the other lines'
+  // sockets survive (listenAll.ts). The workdir gets the same up-front check,
+  // but per-connect rather than here — see connect() below.
+  loadPolicy(deps.paths);
+
   const queue = new SerialQueue(deps.maxPending ?? 0);
   const backoff = deps.backoffMs ?? ((n) => Math.min(1000 * 2 ** n, 60_000) + Math.random() * 500);
   // One startup read, purely to decide codex threading. Everything else reads

@@ -79,6 +79,21 @@ and Durable Object state are all keyed by organization plus handle. The CLI
 rejects a hosted address for a different organization instead of silently
 routing its bare handle inside the caller's tenant.
 
+That `(organization, handle)` key is current implementation, not the permanent
+identity model, and handle release/reclaim is not implemented. The decided
+zero-user cutover will give each agent lifetime an opaque stable ID, treat the
+handle as a reclaimable routing address, and attach credentials and durable
+state to the stable identity. See the
+[identity/address separation decision](docs/superpowers/specs/2026-08-02-identity-address-separation.md).
+
+The repository does not yet ship an admin web UI, a supported self-hosted
+distribution, or Cloudflare Access integration. The future human admin surface
+will use a separate Access-protected hostname, and customer-owned Access is the
+supported SSO profile planned for self-hosted deployments. Access will not sit
+in front of the current relay API or replace AgentCall authorization; hosted
+multi-tenant SSO remains a separate design. See the
+[Cloudflare Access boundary decision](docs/superpowers/specs/2026-08-02-cloudflare-access-boundary.md).
+
 ## Usage
 
 ```bash
@@ -102,10 +117,13 @@ error message on stderr on failure (`unknown_handle`, `offline`, `busy`,
 `timeout`, `agent_error`, `unauthorized`, `rate_limited`, `message_too_large`,
 `protocol_error`).
 `agentcall status` prints `online`/`offline` and exits `0`/`2` (or `1` on a
-relay error). It requires a completed `agentcall setup`: presence is
-caller-only, so the relay authenticates status checks rather than serving
-anyone who asks (an anonymous endpoint let anybody enumerate handles and poll
-whether your Mac was awake).
+relay error). It requires a completed `agentcall setup`. You can always check
+your own status; checking another handle requires both handles to share at
+least one relay roster. An unrelated existing handle and an unknown handle
+return the same generic 404, so a free registration is not a namespace or
+working-hours oracle. Presence authorization does not affect calls: two
+independent handles can still call each other and receive the normal offline
+or unavailable result without first joining a roster.
 
 Both `call` and `status` place the call from whichever of your lines is registered
 on the destination's relay — normally invisible on a one-line machine. On a
@@ -120,6 +138,12 @@ an anonymous or wrong-tenant probe cannot use 404 responses to enumerate an
 organization's handles or published tasks. The generic relay card at
 `/.well-known/agent-card.json` remains public because it contains no tenant or
 employee data.
+
+Per-handle Agent Cards are not signed today. Their authenticity therefore
+depends on the relay that serves them; clients have no end-to-end proof that a
+card came from the named endpoint agent. The dated
+[agent identity compatibility decision](./docs/superpowers/specs/2026-08-02-agent-identity-compatibility.md)
+constrains the planned signing work without claiming that it is implemented.
 
 ### Following up
 
@@ -186,7 +210,9 @@ Plain calls (no `--task`) run the built-in read-only `ask` task. To offer more:
 
     agentcall task new schedule-meeting   # scaffold ~/AgentCall/<line>/tasks/<id>/SKILL.md
     # edit the SKILL.md (YAML frontmatter: description, tools, timeout_s, ...)
-    agentcall card                        # review your card + catch problems
+    agentcall lint                        # validate tasks, policy tests, and card
+    agentcall policy                      # render who can run each task and what it can do
+    agentcall card                        # same review plus your rendered card
     agentcall offer schedule-meeting      # offer to everyone, or:
     agentcall allow ken schedule-meeting  # grant to one caller
     agentcall block spammer               # refuse a caller entirely
@@ -197,6 +223,14 @@ required) over the instructions your agent follows. Grants and blocks live in
 republish your card automatically. Callers see your menu with
 `agentcall card <address>`. All of these act on the primary line unless you pass
 `--line <name>` (see above).
+
+`agentcall policy` renders the effective policy after any administrator ceiling
+and mandatory blocks are applied. It shows how the base, named-caller, and
+relay-attested roster rules compose; then lists each runnable task's capabilities
+and concrete working directory. The report warns that Claude's `exec` grant can
+read, change, and send data outside that directory, and states the weaker Codex
+boundary instead of presenting `fetch` and `exec` as controls Codex does not
+have.
 
 For a roster-wide grant, add a locally named entry to `groups` in
 `~/.agentcall/policy.json`, using the opaque id shown by `agentcall roster
@@ -219,6 +253,32 @@ Group names are local labels only. A caller cannot claim one or choose which
 policy applies: the relay attests the roster ids currently shared by caller and
 callee on each connection. Unknown or removed memberships grant nothing, and
 an individual `block` always overrides group and default offers.
+
+Put reachability assertions beside the user policy so an accidental edit is
+rejected before it is saved or published:
+
+```json
+{
+  "default_offer": ["ask"],
+  "callers": {
+    "ken": { "offer": ["schedule-meeting"] },
+    "stranger": { "offer": [], "block": true }
+  },
+  "tests": [
+    { "caller": "ken", "accept": ["schedule-meeting"], "deny": ["exec"] },
+    { "caller": "stranger", "deny": ["*"] },
+    { "caller": "mia", "groups": ["eng"], "accept": ["architecture-history"] }
+  ]
+}
+```
+
+`caller` is the bare relay-verified handle. `groups` names local policy groups;
+the evaluator translates them to the roster ids the relay would attest.
+`accept` entries must be offered, `deny` entries must not be offered, and
+`deny: ["*"]` means the caller must receive an empty menu. Run `agentcall lint`
+in CI or after hand edits. A failed assertion makes lint exit nonzero, prevents
+CLI policy verbs from changing the last known-good file, and prevents the
+listener from starting. Hot edits are also rechecked before every call.
 
 > **Codex support is experimental.** The `claude` path is the one that's
 > actually been live-tested end to end; `codex` support is implemented and
@@ -290,15 +350,16 @@ what the tool guard does and does not confine regardless of which line answers.
 don't — that's what rosters and `agentcall search` are for.
 
 A **roster** is an opt-in group whose members can discover each other's
-published tasks. Creation returns separate join and admin secrets. Store the
-admin secret in a password manager and share only the id and join secret:
+published tasks. Creation returns an initial reusable join key and a separate
+admin secret. Store the admin secret in a password manager and share only the
+id and join key:
 
 ```bash
 agentcall roster create --as acme
-# prints an id, join secret, and admin secret; all are shown once
+# prints an id, initial join key, and admin secret; credentials are shown once
 
 # everyone else:
-agentcall roster join <roster-id> --secret <secret> --as acme
+agentcall roster join <roster-id> --key <key> --as acme
 ```
 
 Then search by what you need, not by who you know:
@@ -345,8 +406,11 @@ Membership has an explicit lifecycle:
 ```bash
 agentcall roster leave acme                    # relay leave + local cleanup
 agentcall roster expel acme <handle>           # requires the admin secret
-agentcall roster rotate acme                   # closes the door; members stay
-agentcall roster rotate acme --evict --yes     # incident response: clear all members
+agentcall roster key issue acme --description contractor
+agentcall roster key issue acme --reusable     # shared key; one-off is the default
+agentcall roster key list acme                  # metadata only; secrets never reappear
+agentcall roster key revoke acme <prefix>       # members stay
+agentcall roster key revoke acme <prefix> --evict --yes # remove only members admitted by it
 agentcall roster delete acme --yes              # teardown; audit events survive
 ```
 
@@ -354,9 +418,11 @@ Administrative commands resolve the secret from `--admin-secret`, then
 `AGENTCALL_ADMIN_SECRET`, then an interactive prompt. The flag is convenient
 for scripts but can appear in shell history and process listings. The admin
 secret is never stored by AgentCall and cannot be recovered; if every copy is
-lost, abandon and recreate the roster. Expulsion revokes future fetches, not
-data already cached or copied. An expelled member can rejoin while the old join
-secret remains valid, so rotate it after expulsion if they may still know it.
+lost, abandon and recreate the roster. Join keys expire after 30 days by
+default (maximum 90 days); newly issued keys are one-off unless `--reusable`
+is passed. Revocation retains existing members by default. `--evict` removes
+only members whose admission provenance matches that key. Expulsion and
+eviction cannot retract data already cached or copied.
 `agentcall roster forget` remains the explicit local-only escape hatch when the
 relay is unreachable; use `leave` for actual membership removal.
 
@@ -465,10 +531,65 @@ to the resolved task directory. This is a real boundary for `Read`, `Write`,
 It is not a boundary for `exec`, and Codex has no equivalent read boundary;
 see the residual risks below.
 
+### Managed policy
+
+An administrator can place a machine policy at
+`/Library/Application Support/agentcall/policy.json` on macOS or
+`/etc/agentcall/policy.json` on Linux. This path is absolute and is never moved
+by `HOME` or `AGENTCALL_HOME`; deploy the directory and file as root-owned and
+not writable by ordinary users.
+
+```json
+{
+  "version": 1,
+  "allowed_tasks": ["ask", "schedule-meeting"],
+  "blocked_callers": ["contractor-bot"],
+  "tests": [{ "caller": "contractor-bot", "deny": ["*"] }]
+}
+```
+
+`allowed_tasks` is a ceiling over every user default, per-caller grant, and
+roster-group grant. Omit it to leave task grants unconstrained; set it to `[]`
+to deny every task. `blocked_callers` is added to the user's own blocks and
+cannot be undone in `~/.agentcall/policy.json`. CLI policy commands continue to
+edit only that user file, while listener enforcement and card publication use
+the effective, administrator-filtered policy.
+
+User and managed `tests` both evaluate after the two layers are composed. This
+lets a user notice when an administrator ceiling removes an expected grant and
+lets IT prove that a mandatory block survived user configuration. Managed tests
+cannot be removed from the user file.
+
+The combined user and managed block set is limited to 200 distinct callers,
+matching the relay card protocol. Exceeding it fails policy loading so local
+enforcement cannot drift from an older card that the relay still serves.
+
+A missing managed file means the machine is unmanaged. If the file exists but
+cannot be read, parsed, or validated, policy loading fails closed and no agent
+is spawned. Deploy replacements atomically so a reader never observes a
+partially written file.
+
+This layer is the policy model for managed deployment, not by itself a complete
+tamper boundary. Fleet enforcement must also install AgentCall and this file in
+administrator-owned locations and verify a signed release; a user-owned npm
+installation can be modified by that user. In-product self-update remains
+disabled/deferred so it cannot bypass an IT-pinned version.
+
 ## Security model (v1, explicit)
 
-- Address = capability to call. Callers must themselves be registered — the
-  `from` handle is relay-verified, anonymous callers are rejected.
+- The organization is the call-reachability boundary. Any authenticated handle
+  may call any registered handle in its own organization; anonymous callers and
+  cross-organization routing are rejected. An address is therefore a routing
+  identifier, not a secret capability. Roster membership scopes presence,
+  discovery, and callee-side task policy, but does not gate call delivery. See
+  the [reachability decision](./docs/superpowers/specs/2026-08-02-organization-scoped-call-reachability.md).
+- Address is not a capability to monitor presence. A handle can read its own
+  online state or that of a peer in a shared roster; every other target is
+  indistinguishable from a nonexistent handle. The relay records each
+  authenticated allowed or denied status read in Analytics Engine with the
+  organization, viewer, target, timestamp, source IP/country, and decision. It
+  does not record the online/offline result, so the event is an access trail,
+  not an accumulated presence timeline.
 - **There is no OS-level sandbox.** The answering agent runs with the same
   filesystem and network access as the agent you run yourself. Enforcement is
   capability scoping (`--allowedTools` / codex's `--sandbox` level) plus
@@ -483,6 +604,13 @@ see the residual risks below.
 - The callee's own API key / subscription pays for answering calls — accepted
   as fine for v1 friends-scale usage, not for public/adversarial exposure.
 - Known residual risks (accepted, not eliminated):
+  - Any authenticated organization member can mint a one-use, seven-day invite.
+    One compromised member can therefore enroll multiple caller handles, and
+    the per-caller hourly limit then gives each handle a separate budget against
+    a callee. The five-per-minute registration limit is keyed by source IP and
+    slows this amplification; it does not prevent it. Centralized enrollment
+    authority and abuse response are future controls, not properties of the
+    current reachability boundary.
   - Prompt injection in a caller's message can burn the callee's tokens, and —
     within the granted capabilities — read or write anywhere the owner's own
     agent could via `exec` (shell commands are recorded, not blocked — see
@@ -504,8 +632,8 @@ see the residual risks below.
     `~/.agentcall/lines/<line>/config.json`. The tool
     guard below refuses these paths for a Claude answering agent's
     file-reading tools, but not for `exec`, and not at all for a Codex
-    answering agent. **Only share your address with people you would trust to
-    run a read-only command in your home directory.**
+    answering agent. **Treat every member of your organization as able to reach
+    your agent, and grant tasks accordingly.**
   - Executable configuration surfaces (`~/.claude/CLAUDE.md`, `hooks`,
     `plugins`, `commands`, `agents`) are writable by an agent granted `write`,
     so a hostile prompt can persist beyond the call. On Claude, the tool guard
@@ -528,34 +656,47 @@ they run. File reads, writes, searches, and listings that reach credential paths
 (`~/.ssh`, `~/.aws`, `.env`, Keychains, `~/.agentcall`, `~/.claude`, `~/.codex`), the guard's own
 installed code, `~/AgentCall/<line>/tasks` for every line, `~/Library/LaunchAgents`,
 and shell startup files are refused. For Claude, file-shaped tools outside the
-resolved task workdir are also refused, and every tool call reaching the guard is
-recorded to that line's `~/.agentcall/lines/<line>/tools.log`. `agentcall doctor`
-verifies the guard is in force — once per distinct agent kind rather than once per
-line, since the guard protects the binary, not any particular address, and claude
-lines sharing one machine share one guard: it asks a
+resolved task workdir are also refused. Every tool call reaching the guard is
+recorded to that line's `~/.agentcall/lines/<line>/tools.log`; on verified
+codex-cli 0.146.0, Codex runs the same hook in observe-only mode so long as
+`allow_managed_hooks_only` is not enabled, so it records attempts but does not
+refuse them.
+
+`agentcall doctor` verifies the Claude guard is in force — once per distinct agent
+kind rather than once per line, since the guard protects the binary, not any
+particular address, and claude lines sharing one machine share one guard: it asks a
 real `claude` spawn to read a canary `.env` and requires the denial to appear in the
 log. When the model refuses that read on its own the guard is never consulted and the
 run proves nothing, so doctor falls back to invoking the guard directly and reports
-`!` — unverified, not broken.
+`!` — unverified, not broken. For Codex, doctor makes no additional model call: it
+queries `hooks/list` with AgentCall's exact production overrides, per line (hook
+trust is per-directory, and each line has its own workdir), and fails unless the
+session hook is present, enabled, and trusted.
 
 Two limits, stated plainly:
 
-- **A task that grants `exec` has no read floor.** Shell commands are recorded, not
-  blocked — pattern-matching a command string is too weak to be a boundary and too
-  eager to be harmless. The control on `exec` is which tasks you choose to write.
-- **A Codex answering agent is neither guarded nor, today, observed.** The same hook is
-  registered on the Codex spawn in *observe* mode — record, never block — but Codex
-  gates hooks on persisted trust and agentcall supplies its hook inline via `-c`, which
-  has never been trusted, so **Codex skips it silently and the Codex spawn produces no
-  `tools.log` telemetry at all** ([issue #4](https://github.com/KenTaniguchi-R/agentcall/issues/4)).
-  The mechanism itself is sound: forced to run, the guard does see the whole surface,
-  including bundled MCP calls such as `mcp__codex_apps__sites__list_sites`. It is the
-  trust gate, not the guard, that is missing. Codex has no `Read`/`Grep`/`Glob` tools, and most of
-  what it does reach the filesystem with is `Bash` (`sed -n '1,200p' file`) — exactly
+- **A task that grants `exec` has no read floor.** On Claude — and on the
+  verified Codex release when session hooks are enabled — shell commands are
+  recorded, not blocked. Pattern-matching a command string is too weak to be a
+  boundary and too eager to be harmless. The control on `exec` is which tasks
+  you choose to write.
+- **A Codex answering agent is observed, not guarded.** AgentCall trusts only its exact
+  inline session hook by supplying Codex's normalized hook-identity hash; it does not
+  use the blanket `--dangerously-bypass-hook-trust` flag, so user, project,
+  plugin, and managed hooks do not inherit trust from AgentCall's grant. Hooks
+  independently trusted by the owner or administrator can still run. The guard runs in *observe* mode — record,
+  never block — and writes tool attempts that emit `PreToolUse` to `tools.log`. This is
+  pinned and behaviorally verified against codex-cli 0.146.0. AgentCall does not
+  claim observation on other releases: a changed normalization makes the hash
+  mismatch and the hook skip silently rather than widening trust. An administrator
+  setting `allow_managed_hooks_only = true` also disables this session hook;
+  `agentcall doctor` detects and fails on that condition. Installing AgentCall's
+  guard as an administrator-managed hook remains future work. Codex has no
+  `Read`/`Grep`/`Glob` tools, and much of what it does reach the filesystem with is
+  `Bash` (`sed -n '1,200p' file`) — exactly
   the surface the point above says cannot be bounded by matching command strings. Its
   `--sandbox` level confines writes but not reads: `codex exec --sandbox read-only`
-  still reads `~/.ssh`. **A Codex answering agent therefore has no read floor — and
-  until #4 is fixed, no record of what it did either.**
+  still reads `~/.ssh`. **A Codex answering agent therefore has no read floor.**
 - **Codex does not reach the filesystem only through `Bash`, and the non-shell routes
   are not recorded at all.** `view_image` reads any absolute path and returns the raw
   bytes — it does not check that the file is an image, so it is a general file-read
@@ -594,6 +735,31 @@ pnpm -r build
 cd apps/relay && pnpm dev   # local Worker + DO + D1 via wrangler
 ```
 
+### Relay deployment
+
+Build the workspace before validating or deploying the relay so Wrangler can
+resolve the shared package. Then run:
+
+```bash
+cd apps/relay
+pnpm exec wrangler deploy --dry-run  # local config and bundle checks only
+pnpm deploy                          # real deployment
+```
+
+The dry run does not compare Durable Object state with Cloudflare. Durable
+Object lifecycle changes are atomic and cannot be rolled back, and Wrangler's
+reconciliation report arrives only after a successful deployment. Before
+deploying, compare the `exports` map with the intended live classes and prepare
+the documented staged rollout for any create, delete, rename, or transfer. Read
+the post-deploy report as confirmation; treat any unexpected action as an
+incident and make no further production changes until it is understood.
+
+The hosted relay currently makes no regional residency claim. Read the living
+[cloud data map and residency decision](./docs/security/data-residency.md)
+before changing D1 placement, Durable Object ID derivation, Regional Services,
+logging, or analytics. Adding `.jurisdiction()` changes named DO IDs and is a
+state migration, not a configuration-only deploy.
+
 Monorepo layout:
 
 ```
@@ -609,6 +775,40 @@ Issues, and **the assignee is the claim** — read
 don't pick up the same issue. It covers claiming, the automatic release of
 stale claims, and the one-worktree-per-session rule.
 
+Designing enterprise, security, or A2A behavior? Start with the living
+[reference implementation index](./docs/research/reference-implementations.md),
+which names the primary sources, reusable invariants, and precedents already
+adopted in AgentCall. Dated files under `docs/superpowers/` remain historical
+records rather than current guidance.
+
+### npm releases
+
+Releases use `.github/workflows/release.yml`; no npm token is stored in GitHub.
+Both `@benree/agentcall-shared` and `@benree/agentcall` must configure an npm
+trusted publisher with owner `KenTaniguchi-R`, repository `agentcall`, workflow
+`release.yml`, and environment `npm`. Protect that GitHub environment with the
+maintainers allowed to approve a package publication.
+
+To release, update both package versions and the CLI version together, move the
+Unreleased changelog entries under that version, merge the change to `main`, and
+publish a GitHub release whose tag is exactly `v<version>`. The workflow refuses
+tags that do not point at a commit in `main`'s history. It rebuilds and tests from
+that tag, publishes shared before CLI through npm's OIDC trusted publisher with
+provenance, and attaches the exact tarballs, SHA-256 checksums, and CycloneDX
+SBOM to the GitHub release. A partial retry skips an existing package only when
+the registry integrity exactly matches the rebuilt tarball. Stable releases use
+the npm `latest` dist-tag; GitHub prereleases use `next` and cannot displace it.
+
+The published tarball is installed and exercised without pnpm on Node 20, 22,
+and 24 in CI, including `agentcall doctor`; this is what enforces the CLI's
+declared `node >=20` runtime promise.
+
+Platform installers are deliberately deferred. AgentCall will keep its current
+Commander CLI until the non-macOS service/container work (#14) defines the
+artifacts each platform needs and managed policy (#104) defines who controls
+versions and updates. A future self-update mechanism must be disabled whenever
+managed policy is present so IT can pin the deployed version.
+
 ## Limitations
 
 - **macOS only.** The LaunchAgent listener is Mac-specific; there's no
@@ -616,6 +816,10 @@ stale claims, and the one-worktree-per-session rule.
 - **The relay operator sees message plaintext.** Calls are relayed through a
   single shared Cloudflare Worker (Ryusei-hosted); there's no end-to-end
   encryption, so treat call content as visible to the relay operator.
+- **The relay operator sees presence-access metadata.** Status-read events
+  contain viewer, target, time, source IP/country, and allow/deny outcome for
+  abuse detection and security review evidence. They deliberately omit the
+  target's online/offline state.
 - **Handles can't be released.** `agentcall rotate` replaces a token, but
   there's no way to give a handle back: the Durable Object is addressed by
   handle name, so a re-registered handle would inherit the previous owner's

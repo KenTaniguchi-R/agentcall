@@ -1,10 +1,11 @@
 import { env, SELF } from "cloudflare:test";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
+import { sha256Hex } from "../src/auth.js";
 import app from "../src/index.js";
-import { fixedRateLimit, issueInvite, registerHandle, wsAuth } from "./helpers.js";
+import { issueInvite, registerHandle, wsAuth } from "./helpers.js";
 
 // Each test uses its own synthetic source IP so the per-IP register rate
-// limit (5/60s, see wrangler.jsonc's REGISTER_RL) doesn't make unrelated
+// limit (5/60s, see REGISTER in src/ratelimit) doesn't make unrelated
 // tests in this file collide with each other's budget.
 async function register(body: unknown, ip = "203.0.113.1") {
   const input = body as { org?: string; invite?: string; handle?: string; agent_kind?: string };
@@ -18,11 +19,16 @@ async function register(body: unknown, ip = "203.0.113.1") {
 
 describe("POST /v1/register", () => {
   it("registers a handle and returns token + address", async () => {
-    const res = await register({ org: "acme", handle: "ken", agent_kind: "claude" }, "203.0.113.10");
+    const invite = await issueInvite("acme", "successful-registration");
+    const res = await register({ invite, handle: "ken", agent_kind: "claude" }, "203.0.113.10");
     expect(res.status).toBe(200);
     const json = await res.json<{ token: string; address: string }>();
     expect(json.token.length).toBeGreaterThanOrEqual(40);
     expect(json.address).toBe("ken@relay.test");
+    const inviteRow = await env.DB.prepare("SELECT used_at, used_by FROM invites WHERE org = ? AND used_by = ?")
+      .bind("acme", "ken").first<{ used_at: number | null; used_by: string | null }>();
+    expect(inviteRow?.used_at).toEqual(expect.any(Number));
+    expect(inviteRow?.used_by).toBe("ken");
   });
   it("requires a valid, unused invite and derives the tenant from it", async () => {
     const missing = await SELF.fetch("https://relay.test/v1/register", {
@@ -44,6 +50,58 @@ describe("POST /v1/register", () => {
     const invite = await issueInvite("acme", "retryable");
     expect((await register({ invite, handle: "occupied" }, "203.0.113.164")).status).toBe(409);
     expect((await register({ invite, handle: "available" }, "203.0.113.165")).status).toBe(200);
+  });
+
+  it("logs non-conflict database failures as retryable without consuming the invite", async () => {
+    const invite = await issueInvite("acme", "database-failure");
+    const inviteHash = await sha256Hex(invite);
+    const failure = new Error("D1_ERROR: no such table: handles; bound=invite-super-secret");
+    const db = {
+      prepare: env.DB.prepare.bind(env.DB),
+      batch: async () => { throw failure; },
+    } as unknown as D1Database;
+    const log = vi.spyOn(console, "error").mockImplementation(() => undefined);
+    try {
+      const res = await app.request("https://relay.test/v1/register", {
+        method: "POST",
+        headers: { "content-type": "application/json", "cf-connecting-ip": "203.0.113.174" },
+        body: JSON.stringify({ invite, handle: "retry-after-d1" }),
+      }, { ...env, DB: db });
+      expect(res.status).toBe(503);
+      expect(res.headers.get("retry-after")).toBe("5");
+      expect(await res.json()).toEqual({ error: "registration temporarily unavailable" });
+      expect(log).toHaveBeenCalledWith("registration database failure", {
+        name: "Error", kind: "schema",
+      });
+      expect(JSON.stringify(log.mock.calls)).not.toContain("invite-super-secret");
+      const row = await env.DB.prepare("SELECT used_at FROM invites WHERE token_hash = ?")
+        .bind(inviteHash).first<{ used_at: number | null }>();
+      expect(row?.used_at).toBeNull();
+    } finally {
+      log.mockRestore();
+    }
+  });
+
+  it("handles invite-lookup outages as logged, retryable failures", async () => {
+    const failure = new Error("D1_ERROR: connection unavailable");
+    const db = {
+      prepare: () => ({ bind: () => ({ first: async () => { throw failure; } }) }),
+    } as unknown as D1Database;
+    const log = vi.spyOn(console, "error").mockImplementation(() => undefined);
+    try {
+      const res = await app.request("https://relay.test/v1/register", {
+        method: "POST",
+        headers: { "content-type": "application/json", "cf-connecting-ip": "203.0.113.175" },
+        body: JSON.stringify({ invite: "x".repeat(40), handle: "retry-lookup" }),
+      }, { ...env, DB: db });
+      expect(res.status).toBe(503);
+      expect(res.headers.get("retry-after")).toBe("5");
+      expect(log).toHaveBeenCalledWith("registration database failure", {
+        name: "Error", kind: "unavailable",
+      });
+    } finally {
+      log.mockRestore();
+    }
   });
 
   it("allows exactly one concurrent registration per invite", async () => {
@@ -93,21 +151,20 @@ describe("POST /v1/register", () => {
 
   it("rate limits registration attempts from the same source past the configured burst limit", async () => {
     const ip = "203.0.113.99";
-    const limiter = fixedRateLimit(5);
     for (let i = 0; i < 5; i++) {
       const invite = await issueInvite("acme", `rl-reg-${i}`);
-      const res = await app.request("https://relay.test/v1/register", {
+      const res = await SELF.fetch("https://relay.test/v1/register", {
         method: "POST",
         headers: { "content-type": "application/json", "cf-connecting-ip": ip },
         body: JSON.stringify({ invite, handle: `rl-reg-${i}`, agent_kind: "claude" }),
-      }, { ...env, REGISTER_RL: limiter });
+      });
       expect(res.status).toBe(200);
     }
-    const sixth = await app.request("https://relay.test/v1/register", {
+    const sixth = await SELF.fetch("https://relay.test/v1/register", {
       method: "POST",
       headers: { "content-type": "application/json", "cf-connecting-ip": ip },
       body: JSON.stringify({ invite: await issueInvite("acme", "rl-reg-6th"), handle: "rl-reg-6th", agent_kind: "claude" }),
-    }, { ...env, REGISTER_RL: limiter });
+    });
     expect(sixth.status).toBe(429);
   });
 

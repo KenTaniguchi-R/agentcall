@@ -1,6 +1,6 @@
 import { execFileSync } from "node:child_process";
 import { createServer, type Server } from "node:http";
-import { mkdtempSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
@@ -134,6 +134,8 @@ function seedConfig(testHome: string, relay: string): LinePaths {
 
 const A = "a".repeat(22);
 const B = "b".repeat(22);
+const KEY_PREFIX = "c".repeat(12);
+const JOIN_KEY = `agjk_${KEY_PREFIX}_${"s".repeat(32)}`;
 const bundle = (rosterId: string, handle = "sota") => ({
   roster_id: rosterId,
   entries: [{
@@ -162,7 +164,98 @@ describe.sequential("CLI command actions", () => {
   it("captures Commander validation failures without exiting the process", async () => {
     const out = await runCommand(home(), ["roster", "join", A]);
     expect(out.code).toBe(1);
-    expect(out.stderr).toMatch(/required option.*--secret/i);
+    expect(out.stderr).toMatch(/required option.*--key/i);
+  });
+
+  it("exposes policy assertion failures through agentcall lint", async () => {
+    const testHome = home();
+    const paths = getLinePaths(getMachinePaths(testHome), "claude");
+    saveLineConfig(paths, { org: "acme", handle: "ken", token: "tok", relay: "https://relay.test", agent_kind: "claude" });
+    mkdirSync(join(testHome, ".agentcall"), { recursive: true });
+    writeFileSync(paths.policyFile, JSON.stringify({
+      default_offer: ["ask"], tests: [{ caller: "mia", deny: ["ask"] }],
+    }));
+
+    const out = await runCommand(testHome, ["lint"]);
+
+    expect(out.code).toBe(1);
+    expect(out.stdout).toMatch(/assertion 1.*ask/i);
+  });
+
+  it("renders the effective policy as a per-caller and per-task capability report", async () => {
+    const testHome = home();
+    const paths = getLinePaths(getMachinePaths(testHome), "claude");
+    saveLineConfig(paths, {
+      org: "acme", handle: "ken", token: "tok", relay: "https://relay.test", agent_kind: "claude",
+    });
+    mkdirSync(join(paths.tasksDir, "deploy"), { recursive: true });
+    writeFileSync(join(paths.tasksDir, "deploy", "SKILL.md"), [
+      "---",
+      "name: Deploy production",
+      "description: Build and deploy the service.",
+      "tools: [read, write, exec]",
+      "---",
+      "Deploy carefully.",
+    ].join("\n"));
+    writeFileSync(paths.policyFile, JSON.stringify({
+      default_offer: ["ask"],
+      callers: {
+        alice: { offer: ["deploy"] },
+        "blocked-bot": { block: true },
+      },
+    }));
+
+    const out = await runCommand(testHome, ["policy"]);
+
+    expect(out.code).toBe(0);
+    expect(out.stderr).toBe("");
+    expect(out.stdout).toContain("Effective capability policy");
+    expect(out.stdout).toMatch(new RegExp(`Everyone registered[\\s\\S]*ask — Ask a question[\\s\\S]*Working directory: ${paths.shareDir}`));
+    expect(out.stdout).toMatch(/Named caller rule: alice \(before roster grants\)[\s\S]*deploy — Deploy production[\s\S]*exec — run shell commands/);
+    expect(out.stdout).toContain("WARNING: exec can read, change, and send data outside this working directory");
+    expect(out.stdout).toMatch(/Named caller rule: blocked-bot \(before roster grants\)[\s\S]*BLOCKED — no task can run/);
+  });
+
+  it("rejects a CLI policy edit that would break an assertion and preserves the file", async () => {
+    const testHome = home();
+    const paths = getLinePaths(getMachinePaths(testHome), "claude");
+    saveLineConfig(paths, { org: "acme", handle: "ken", token: "tok", relay: "https://relay.test", agent_kind: "claude" });
+    mkdirSync(join(testHome, ".agentcall"), { recursive: true });
+    const original = {
+      default_offer: ["ask"], tests: [{ caller: "mia", accept: ["ask"] }],
+    };
+    writeFileSync(paths.policyFile, JSON.stringify(original));
+
+    const out = await runCommand(testHome, ["unoffer", "ask"]);
+
+    expect(out.code).toBe(1);
+    expect(out.stderr).toMatch(/assertion 1.*ask/i);
+    expect(JSON.parse(readFileSync(paths.policyFile, "utf8"))).toEqual(original);
+  });
+
+  it("prints one-time roster credentials before a colliding local save can fail", async () => {
+    let creates = 0;
+    const relay = await startRelay(() => {
+      creates += 1;
+      return {
+        status: 200,
+        body: { roster_id: B, join_key: JOIN_KEY, admin_secret: "admin-once" },
+      };
+    });
+    const testHome = home();
+    seedConfig(testHome, relay);
+    saveMembership(getLinePaths(getMachinePaths(testHome), "claude"), { name: "roster", relay, roster_id: A });
+
+    const out = await runCommand(testHome, ["roster", "create"]);
+
+    expect(creates).toBe(1);
+    expect(out.code).toBe(1);
+    expect(out.stdout).toContain(B);
+    expect(out.stdout).toContain(JOIN_KEY);
+    expect(out.stdout).toContain("admin-once");
+    expect(out.stderr).toMatch(/roster was created.*not saved locally/is);
+    expect(out.stderr).toContain(`agentcall roster join ${B}`);
+    expect(loadMemberships(getLinePaths(getMachinePaths(testHome), "claude"))).toEqual([{ name: "roster", relay, roster_id: A }]);
   });
 
   it("persists a roster only after the relay accepts the join", async () => {
@@ -174,10 +267,10 @@ describe.sequential("CLI command actions", () => {
     const testHome = home();
     const paths = seedConfig(testHome, relay);
 
-    const out = await runCommand(testHome, ["roster", "join", A, "--secret", "join-me", "--as", "acme"]);
+    const out = await runCommand(testHome, ["roster", "join", A, "--key", JOIN_KEY, "--as", "acme"]);
 
     expect(out.code).toBe(0);
-    expect(seen).toEqual({ url: `/v1/roster/${A}/join`, method: "POST", body: JSON.stringify({ join_secret: "join-me" }) });
+    expect(seen).toEqual({ url: `/v1/roster/${A}/join`, method: "POST", body: JSON.stringify({ join_key: JOIN_KEY }) });
     expect(loadMemberships(paths)).toEqual([{ name: "acme", relay, roster_id: A }]);
   });
 
@@ -191,11 +284,12 @@ describe.sequential("CLI command actions", () => {
     const paths = seedConfig(testHome, relay);
     saveMembership(paths, { name: "acme", relay, roster_id: A });
 
-    const out = await runCommand(testHome, ["roster", "join", B, "--secret", "spent", "--as", "acme"]);
+    const out = await runCommand(testHome, ["roster", "join", B, "--key", JOIN_KEY, "--as", "acme"]);
 
     expect(joins).toBe(1); // Relay membership happened; there is no rollback operation.
     expect(out.code).toBe(1);
-    expect(out.stderr).toMatch(/roster forget/);
+    expect(out.stderr).toMatch(/joined.*not saved locally/is);
+    expect(out.stderr).toContain(`agentcall roster join ${B}`);
     expect(loadMemberships(paths)).toEqual([{ name: "acme", relay, roster_id: A }]);
   });
 
@@ -216,26 +310,66 @@ describe.sequential("CLI command actions", () => {
     expect(loadMemberships(paths)).toEqual([]);
   });
 
-  it("passes explicit eviction confirmation and prints the replacement join secret", async () => {
+  it("passes explicit confirmation for join-key-scoped eviction", async () => {
     let seen: { url?: string; body?: string } = {};
     const relay = await startRelay((url, _method, body) => {
       seen = { url, body };
-      return { status: 200, body: { join_secret: "replacement-secret" } };
+      return { status: 200, body: { prefix: KEY_PREFIX, revoked_at: 3, evicted: 2 } };
     });
     const testHome = home();
     const paths = seedConfig(testHome, relay);
     saveMembership(paths, { name: "acme", relay, roster_id: A });
 
     const out = await runCommand(testHome, [
-      "roster", "rotate", "acme", "--evict", "--yes", "--admin-secret", "admin-secret",
+      "roster", "key", "revoke", "acme", KEY_PREFIX, "--evict", "--yes", "--admin-secret", "admin-secret",
     ]);
 
     expect(out.code).toBe(0);
     expect(seen).toEqual({
-      url: `/v1/roster/${A}/rotate`,
+      url: `/v1/roster/${A}/keys/${KEY_PREFIX}/revoke`,
       body: JSON.stringify({ admin_secret: "admin-secret", evict: true }),
     });
-    expect(out.stdout).toContain("replacement-secret");
+    expect(out.stdout).toContain("Evicted 2 member(s)");
+  });
+
+  it("issues a key once and lists metadata without a secret", async () => {
+    const metadata = {
+      prefix: KEY_PREFIX, description: "contractor", created_by: "ken", created_at: 1, expires_at: 2_000_000_000_000,
+      reusable: true, used: false, revoked_at: null,
+    };
+    const requests: { url: string; body?: string }[] = [];
+    const relay = await startRelay((url, _method, body) => {
+      requests.push({ url, body });
+      return url.endsWith("/keys/list")
+        ? { status: 200, body: { keys: [metadata] } }
+        : { status: 200, body: { join_key: JOIN_KEY, key: metadata } };
+    });
+    const testHome = home();
+    seedConfig(testHome, relay);
+    saveMembership(getLinePaths(getMachinePaths(testHome), "claude"), { name: "acme", relay, roster_id: A });
+
+    const issued = await runCommand(testHome, [
+      "roster", "key", "issue", "acme", "--description", "contractor", "--expires-in", "14",
+      "--reusable", "--admin-secret", "admin-secret",
+    ]);
+    const listed = await runCommand(testHome, [
+      "roster", "key", "list", "acme", "--admin-secret", "admin-secret",
+    ]);
+
+    expect(issued.code).toBe(0);
+    expect(issued.stdout).toContain(JOIN_KEY);
+    expect(listed.code).toBe(0);
+    expect(listed.stdout).toContain(`${KEY_PREFIX}\tactive\treusable`);
+    expect(listed.stdout).not.toContain(JOIN_KEY);
+    expect(requests).toEqual([
+      {
+        url: `/v1/roster/${A}/keys`,
+        body: JSON.stringify({
+          admin_secret: "admin-secret", description: "contractor", expires_in_days: 14, reusable: true,
+        }),
+      },
+      { url: `/v1/roster/${A}/keys/list`, body: JSON.stringify({ admin_secret: "admin-secret" }) },
+    ]);
   });
 
   it("keeps JSON stdout parseable when one roster refresh fails", async () => {

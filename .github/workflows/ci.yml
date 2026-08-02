@@ -14,22 +14,17 @@ jobs:
   verify:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
 
       # No version pin: reads packageManager from the root package.json, so the
       # lockfile and CI can never drift onto different pnpm majors.
-      - uses: pnpm/action-setup@v6
+      - uses: pnpm/action-setup@0ebf47130e4866e96fce0953f49152a61190b271 # v6
 
-      # 24 only. Not the `engines: >=20` floor -- pnpm 11.5.2 requires node
-      # >=22.13, so the toolchain cannot install this repo on 20 at all, and
-      # that floor is a promise to *consumers* of the published CLI which a
-      # workspace build does not exercise anyway. See CLAUDE.md.
-      #
       # `cache: pnpm` stays explicit. setup-node v5 added automatic caching
       # driven by the root `packageManager` field, and v6 narrowed that
       # automatic path to npm only -- so on v6+ dropping this line would
       # silently stop caching the pnpm store rather than keep working.
-      - uses: actions/setup-node@v7
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7
         with:
           node-version: 24
           cache: pnpm
@@ -44,3 +39,52 @@ jobs:
       - run: pnpm -r typecheck
 
       - run: pnpm -r test
+      - name: Pack publishable workspaces
+        run: |
+          mkdir -p "$RUNNER_TEMP/agentcall-packages"
+          pnpm --filter @benree/agentcall-shared pack --pack-destination "$RUNNER_TEMP/agentcall-packages"
+          pnpm --filter @benree/agentcall pack --pack-destination "$RUNNER_TEMP/agentcall-packages"
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        with:
+          name: packed-cli
+          path: ${{ runner.temp }}/agentcall-packages/*.tgz
+          if-no-files-found: error
+          retention-days: 1
+
+  packed-cli-consumer:
+    needs: verify
+    runs-on: macos-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        node: [20, 22, 24]
+    steps:
+      # No checkout or pnpm: this job exercises only what npm users receive.
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7
+        with:
+          node-version: ${{ matrix.node }}
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8
+        with:
+          name: packed-cli
+          path: ${{ runner.temp }}/agentcall-packages
+      - name: Install and run the packed CLI
+        env:
+          AGENTCALL_HOME: ${{ runner.temp }}/agentcall-home
+          NPM_CONFIG_ENGINE_STRICT: "true"
+        run: |
+          npm install --global --prefix "$RUNNER_TEMP/agentcall-global" \
+            "$RUNNER_TEMP"/agentcall-packages/benree-agentcall-shared-*.tgz \
+            "$RUNNER_TEMP"/agentcall-packages/benree-agentcall-[0-9]*.tgz
+          agentcall_bin="$RUNNER_TEMP/agentcall-global/bin/agentcall"
+          "$agentcall_bin" --version
+          "$agentcall_bin" --help
+          if "$agentcall_bin" doctor >"$RUNNER_TEMP/doctor-output" 2>&1; then
+            echo "doctor unexpectedly reported a clean, unconfigured install as healthy"
+            exit 1
+          fi
+          grep -F "No agentcall config found" "$RUNNER_TEMP/doctor-output"
+          if "$agentcall_bin" status nobody@example.invalid >"$RUNNER_TEMP/status-output" 2>&1; then
+            echo "status unexpectedly succeeded without a configured identity"
+            exit 1
+          fi
+          grep -F "No agentcall config found" "$RUNNER_TEMP/status-output"

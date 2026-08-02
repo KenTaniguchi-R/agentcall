@@ -1,4 +1,5 @@
 import { execFileSync, spawn } from "node:child_process";
+import { createHash } from "node:crypto";
 import { fileURLToPath } from "node:url";
 import { AGENT_TIMEOUT_MS, MAX_REPLY_BYTES, type AgentKind } from "@benree/agentcall-shared";
 import { resolveAgentBin } from "./bin.js";
@@ -11,6 +12,10 @@ export type { AgentKind };
 // the security boundary and must be re-probed before resumed sessions are
 // trusted again.
 export const CODEX_THREADING_VERIFIED_VERSION = "0.146.0";
+
+// Kept separate from the threading pin: updating resume-sandbox evidence must
+// not silently bless an unreviewed hook-normalization implementation.
+export const CODEX_HOOK_TRUST_VERIFIED_VERSION = "0.146.0";
 
 export function codexThreadingEnabled(
   resolveBin: (kind: AgentKind) => string = resolveAgentBin,
@@ -90,8 +95,52 @@ const tomlQuote = (s: string) => `"${s.replaceAll("\\", "\\\\").replaceAll(`"`, 
 //
 // This registers the SAME entry point as claude, but the spawn runs it in
 // observe mode: it records attempts, it does not block. See GuardMode.
+export function codexHookConfigArg(command: string): string {
+  return `hooks.PreToolUse=[{hooks=[{type="command",command=${tomlQuote(command)},timeout=${GUARD_TIMEOUT_S}}]}]`;
+}
+
 export function guardCodexConfigArg(): string {
-  return `hooks.PreToolUse=[{hooks=[{type="command",command=${tomlQuote(guardCommand())},timeout=${GUARD_TIMEOUT_S}}]}]`;
+  return codexHookConfigArg(guardCommand());
+}
+
+// Codex executes a hook only when its normalized identity matches a trusted
+// hash. Trusting every hook would also execute hooks from the owner's config,
+// project, plugins, and managed layers outside the tool sandbox. Instead,
+// reproduce codex-cli 0.146.0's canonical identity for this one session hook
+// and supply trust for its exact synthetic key. A CLI-side normalization
+// change makes the hash mismatch and fails closed (the hook is skipped).
+export const CODEX_SESSION_GUARD_KEY = "/<session-flags>/config.toml:pre_tool_use:0:0";
+
+function canonicalize(value: unknown): unknown {
+  if (Array.isArray(value)) return value.map(canonicalize);
+  if (value !== null && typeof value === "object") {
+    return Object.fromEntries(
+      Object.entries(value as Record<string, unknown>)
+        .sort(([a], [b]) => a < b ? -1 : a > b ? 1 : 0)
+        .map(([key, child]) => [key, canonicalize(child)]),
+    );
+  }
+  return value;
+}
+
+export function codexHookTrustedHash(command: string): string {
+  const identity = canonicalize({
+    event_name: "pre_tool_use",
+    hooks: [{ type: "command", command, timeout: GUARD_TIMEOUT_S, async: false }],
+  });
+  return `sha256:${createHash("sha256").update(JSON.stringify(identity)).digest("hex")}`;
+}
+
+export function codexHookTrustArg(command: string): string {
+  const hash = codexHookTrustedHash(command);
+  // Set the whole map. A dotted `hooks.state.<key>` override is not equivalent:
+  // the CLI path parser splits the literal dot in `config.toml`, leaving this
+  // hook untrusted while appearing superficially correct in argv tests.
+  return `hooks.state={${tomlQuote(CODEX_SESSION_GUARD_KEY)}={trusted_hash=${tomlQuote(hash)}}}`;
+}
+
+export function guardCodexTrustArg(): string {
+  return codexHookTrustArg(guardCommand());
 }
 
 // Cap -> Claude Code tool names, used with --allowedTools + --permission-mode
@@ -164,7 +213,8 @@ export function buildSpawnSpec(
     return {
       cmd: resolveBin(kind),
       args: ["exec", "resume", resume, "--ignore-user-config", "--skip-git-repo-check",
-        "--json", "-c", guardCodexConfigArg(), "-c", `sandbox_mode="${sandbox}"`, prompt],
+        "--json", "-c", guardCodexConfigArg(), "-c", guardCodexTrustArg(),
+        "-c", `sandbox_mode="${sandbox}"`, prompt],
       cwd: workdir,
       // AGENTCALL_LINE is as required here as on the non-resume branch: the
       // guard resolves the line's tasksDir from it and fails closed without
@@ -184,7 +234,8 @@ export function buildSpawnSpec(
     // so not loading them is the only lever. The prompt stays last: codex
     // takes the final positional as the prompt.
     args: ["exec", "--ignore-user-config", "--sandbox", sandbox, "--cd", workdir,
-      "--skip-git-repo-check", "--json", "-c", guardCodexConfigArg(), prompt],
+      "--skip-git-repo-check", "--json", "-c", guardCodexConfigArg(),
+      "-c", guardCodexTrustArg(), prompt],
     cwd: workdir,
     env: { ...process.env, AGENTCALL_CALL_ID: callId, AGENTCALL_GUARD_MODE: "observe", AGENTCALL_LINE: lineName },
   };

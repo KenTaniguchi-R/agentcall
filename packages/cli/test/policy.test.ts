@@ -1,13 +1,27 @@
-import { mkdirSync, mkdtempSync, writeFileSync } from "node:fs";
+import { chmodSync, mkdirSync, mkdtempSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { describe, expect, it } from "vitest";
-import { DEFAULT_POLICY, loadPolicy, offeredFor, resolveTask, savePolicy, type Policy } from "../src/policy.js";
+import { DEFAULT_POLICY, loadPolicy, loadUserPolicy, offeredFor, resolveTask, savePolicy, type Policy } from "../src/policy.js";
 import { ASK_TASK, type Task } from "../src/tasks.js";
 import { getLinePaths, getMachinePaths } from "../src/paths.js";
 
 function linePaths(home: string) {
   return getLinePaths(getMachinePaths(home, home), "line");
+}
+
+// The managed ceiling is MACHINE-scoped and its real path is deliberately
+// unredirectable (paths.ts), so a test cannot point AGENTCALL_HOME at it —
+// it overrides the field on MachinePaths instead. The line's own policyFile
+// stays per-line.
+function managedLinePaths(home: string) {
+  const m = getMachinePaths(home, home);
+  return getLinePaths({ ...m, managedPolicyFile: join(home, "managed-policy.json") }, "line");
+}
+
+function missingManagedLinePaths(home: string) {
+  const m = getMachinePaths(home, home);
+  return getLinePaths({ ...m, managedPolicyFile: join(home, "missing-managed-policy.json") }, "line");
 }
 
 const intro: Task = {
@@ -61,6 +75,19 @@ describe("loadPolicy", () => {
     writeFileSync(p.policyFile, "{not json");
     expect(() => loadPolicy(p)).toThrow();
   });
+  it("rejects unknown root and nested fields instead of silently stripping typos", () => {
+    const cases = [
+      { default_offer: ["ask"], test: [{ caller: "mia", deny: ["ask"] }] },
+      { default_offer: ["ask"], callers: { mia: { offer: [], blok: true } } },
+      { default_offer: ["ask"], groups: { eng: { roster_id: ENG, offer: [], offfer: ["ask"] } } },
+    ];
+    for (const value of cases) {
+      const p = linePaths(mkdtempSync(join(tmpdir(), "agentcall-pol-")));
+      mkdirSync(dirname(p.policyFile), { recursive: true });
+      writeFileSync(p.policyFile, JSON.stringify(value));
+      expect(() => loadPolicy(p)).toThrow(/user policy is invalid/);
+    }
+  });
   it("accepts +-prefixed offer entries (spec syntax) by stripping the prefix", () => {
     const p = linePaths(mkdtempSync(join(tmpdir(), "agentcall-pol-")));
     mkdirSync(dirname(p.policyFile), { recursive: true });
@@ -68,6 +95,158 @@ describe("loadPolicy", () => {
       default_offer: ["ask"], callers: { ken: { offer: ["+schedule-meeting"] } },
     }));
     expect(offeredFor(loadPolicy(p), "ken")).toEqual(["ask", "schedule-meeting"]);
+  });
+
+  it("applies a managed task ceiling to defaults, callers, and attested groups", () => {
+    const home = mkdtempSync(join(tmpdir(), "agentcall-pol-"));
+    const p = managedLinePaths(home);
+    mkdirSync(dirname(p.policyFile), { recursive: true });
+    writeFileSync(p.policyFile, JSON.stringify(policy));
+    writeFileSync(p.machine.managedPolicyFile, JSON.stringify({
+      version: 1,
+      allowed_tasks: ["ask", "schedule-meeting"],
+    }));
+
+    const effective = loadPolicy(p);
+    expect(effective.default_offer).toEqual(["ask"]);
+    expect(effective.callers.ken.offer).toEqual(["schedule-meeting"]);
+    expect(effective.groups.eng.offer).toEqual(["schedule-meeting"]);
+    expect(offeredFor(effective, "ken")).toEqual(["ask", "schedule-meeting"]);
+  });
+
+  it("makes managed caller blocks unoverridable without rewriting user policy", () => {
+    const home = mkdtempSync(join(tmpdir(), "agentcall-pol-"));
+    const p = managedLinePaths(home);
+    mkdirSync(dirname(p.policyFile), { recursive: true });
+    writeFileSync(p.policyFile, JSON.stringify(policy));
+    writeFileSync(p.machine.managedPolicyFile, JSON.stringify({
+      version: 1,
+      blocked_callers: ["ken", "constructor"],
+    }));
+
+    const effective = loadPolicy(p);
+    expect(offeredFor(effective, "ken")).toBe("blocked");
+    expect(offeredFor(effective, "constructor")).toBe("blocked");
+    expect(Object.hasOwn(effective.callers, "constructor")).toBe(true);
+    expect(offeredFor(loadUserPolicy(p), "ken")).toEqual([
+      "ask", "owner-introduction", "schedule-meeting",
+    ]);
+  });
+
+  it("fails closed when a managed policy exists but is invalid", () => {
+    const home = mkdtempSync(join(tmpdir(), "agentcall-pol-"));
+    const p = managedLinePaths(home);
+    writeFileSync(p.machine.managedPolicyFile, JSON.stringify({ version: 1, allowed_tasks: "ask" }));
+    expect(() => loadPolicy(p)).toThrow(/managed policy/i);
+  });
+
+  it("fails closed when a managed policy exists but cannot be read", () => {
+    const home = mkdtempSync(join(tmpdir(), "agentcall-pol-"));
+    const p = managedLinePaths(home);
+    writeFileSync(p.machine.managedPolicyFile, JSON.stringify({ version: 1 }));
+    chmodSync(p.machine.managedPolicyFile, 0o000);
+    try {
+      expect(() => loadPolicy(p)).toThrow(/managed policy.*unreadable/i);
+    } finally {
+      chmodSync(p.machine.managedPolicyFile, 0o600);
+    }
+  });
+
+  it("treats a missing managed policy as no administrator restriction", () => {
+    const home = mkdtempSync(join(tmpdir(), "agentcall-pol-"));
+    const p = missingManagedLinePaths(home);
+    mkdirSync(dirname(p.policyFile), { recursive: true });
+    writeFileSync(p.policyFile, JSON.stringify(policy));
+    expect(loadPolicy(p)).toEqual(policy);
+  });
+
+  it("rejects an effective block union too large for the relay card", () => {
+    const home = mkdtempSync(join(tmpdir(), "agentcall-pol-"));
+    const p = managedLinePaths(home);
+    mkdirSync(dirname(p.policyFile), { recursive: true });
+    const callers = Object.fromEntries(Array.from({ length: 200 }, (_, i) => [
+      `user-${i}`,
+      { offer: [], block: true },
+    ]));
+    writeFileSync(p.policyFile, JSON.stringify({ default_offer: ["ask"], callers }));
+
+    writeFileSync(p.machine.managedPolicyFile, JSON.stringify({ version: 1, blocked_callers: ["user-0"] }));
+    expect(() => loadPolicy(p)).not.toThrow();
+
+    writeFileSync(p.machine.managedPolicyFile, JSON.stringify({ version: 1, blocked_callers: ["extra-user"] }));
+    expect(() => loadPolicy(p)).toThrow(/at most 200.*enforced and published/i);
+  });
+
+  it("accepts assertions over direct, blocked, and relay-attested group offers", () => {
+    const p = linePaths(mkdtempSync(join(tmpdir(), "agentcall-pol-")));
+    mkdirSync(dirname(p.policyFile), { recursive: true });
+    writeFileSync(p.policyFile, JSON.stringify({
+      ...policy,
+      tests: [
+        { caller: "ken", accept: ["schedule-meeting"], deny: ["not-offered"] },
+        { caller: "spammer", deny: ["*"] },
+        { caller: "stranger", groups: ["eng"], accept: ["schedule-meeting"] },
+      ],
+    }));
+    expect(() => loadPolicy(p)).not.toThrow();
+  });
+
+  it("rejects empty, contradictory, and unknown-group assertions", () => {
+    const p = linePaths(mkdtempSync(join(tmpdir(), "agentcall-pol-")));
+    mkdirSync(dirname(p.policyFile), { recursive: true });
+    writeFileSync(p.policyFile, JSON.stringify({ tests: [{ caller: "ken" }] }));
+    expect(() => loadPolicy(p)).toThrow(/at least one accept or deny/i);
+    writeFileSync(p.policyFile, JSON.stringify({
+      tests: [{ caller: "ken", accept: ["ask"], deny: ["*"] }],
+    }));
+    expect(() => loadPolicy(p)).toThrow(/deny '\*'.*accepted/i);
+    writeFileSync(p.policyFile, JSON.stringify({
+      tests: [{ caller: "ken", groups: ["missing"], accept: ["ask"] }],
+    }));
+    expect(() => loadPolicy(p)).toThrow(/unknown groups.*missing/i);
+  });
+
+  it("fails closed when a user assertion does not match effective offers", () => {
+    const p = linePaths(mkdtempSync(join(tmpdir(), "agentcall-pol-")));
+    mkdirSync(dirname(p.policyFile), { recursive: true });
+    writeFileSync(p.policyFile, JSON.stringify({
+      default_offer: ["ask"],
+      tests: [{ caller: "ken", accept: ["schedule-meeting"], deny: ["ask"] }],
+    }));
+    expect(() => loadPolicy(p)).toThrow(/user policy assertion 1.*schedule-meeting.*ask/i);
+    // Raw loading remains available so CLI editing commands can repair a
+    // failing assertion instead of being locked out by it.
+    expect(loadUserPolicy(p).tests).toHaveLength(1);
+  });
+
+  it("evaluates user assertions after the managed task ceiling", () => {
+    const home = mkdtempSync(join(tmpdir(), "agentcall-pol-"));
+    const p = managedLinePaths(home);
+    mkdirSync(dirname(p.policyFile), { recursive: true });
+    writeFileSync(p.policyFile, JSON.stringify({
+      default_offer: ["ask", "schedule-meeting"],
+      tests: [{ caller: "ken", accept: ["schedule-meeting"] }],
+    }));
+    writeFileSync(p.machine.managedPolicyFile, JSON.stringify({ version: 1, allowed_tasks: ["ask"] }));
+    expect(() => loadPolicy(p)).toThrow(/user policy assertion 1.*schedule-meeting/i);
+  });
+
+  it("lets managed assertions prove an administrator block survived user policy", () => {
+    const home = mkdtempSync(join(tmpdir(), "agentcall-pol-"));
+    const p = managedLinePaths(home);
+    mkdirSync(dirname(p.policyFile), { recursive: true });
+    writeFileSync(p.policyFile, JSON.stringify({
+      default_offer: ["ask"], callers: { ken: { offer: ["schedule-meeting"] } },
+    }));
+    writeFileSync(p.machine.managedPolicyFile, JSON.stringify({
+      version: 1, blocked_callers: ["ken"], tests: [{ caller: "ken", deny: ["*"] }],
+    }));
+    expect(() => loadPolicy(p)).not.toThrow();
+
+    writeFileSync(p.machine.managedPolicyFile, JSON.stringify({
+      version: 1, tests: [{ caller: "ken", deny: ["*"] }],
+    }));
+    expect(() => loadPolicy(p)).toThrow(/managed policy assertion 1/i);
   });
 });
 
