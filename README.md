@@ -76,6 +76,14 @@ and Durable Object state are all keyed by organization plus handle. The CLI
 rejects a hosted address for a different organization instead of silently
 routing its bare handle inside the caller's tenant.
 
+The repository does not yet ship an admin web UI, a supported self-hosted
+distribution, or Cloudflare Access integration. The future human admin surface
+will use a separate Access-protected hostname, and customer-owned Access is the
+supported SSO profile planned for self-hosted deployments. Access will not sit
+in front of the current relay API or replace AgentCall authorization; hosted
+multi-tenant SSO remains a separate design. See the
+[Cloudflare Access boundary decision](docs/superpowers/specs/2026-08-02-cloudflare-access-boundary.md).
+
 ## Usage
 
 ```bash

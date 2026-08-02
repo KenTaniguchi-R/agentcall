@@ -154,7 +154,7 @@ identity semantics.
 |---|---|---|
 | [Fleet](https://github.com/fleetdm/fleet) | Enrollment secret exchanged for per-host keys; OS credential stores and TPM-backed certificates; TUF updates; end-user transparency | #97, #104, #105, #106, #108, #110 |
 | [cloudflared](https://github.com/cloudflare/cloudflared) | Rotation blocks new connections while force-disconnect remains a separate remediation action | #48, #97 |
-| [Cloudflare Access](https://developers.cloudflare.com/cloudflare-one/access-controls/applications/http-apps/authorization-cookie/validating-json/) | Validate `Cf-Access-Jwt-Assertion` against Access JWKS; retain a separate service-token path for headless clients | #15, #109 |
+| [Cloudflare Access](https://developers.cloudflare.com/cloudflare-one/access-controls/applications/http-apps/authorization-cookie/validating-json/) | Put the future human admin UI on a distinct hostname; validate `Cf-Access-Jwt-Assertion` inside the Worker; use separate service credentials for headless admin clients | #15, #109 |
 | [oclif](https://github.com/oclif/oclif) | Signed platform installers, release channels, updater behavior, and bundled runtimes | #106 |
 | [SLSA provenance template](https://github.com/redoubt-cysec/provenance-template) | Keyless signing, provenance, SBOMs, reproducibility, and immutable Actions | #105 |
 
@@ -163,9 +163,21 @@ material gets a device admitted, then per-host identity authenticates normal
 operation and renewal. Managed policy, update policy, repair/status tools, and
 uninstall behavior are one deployment contract, not independent CLI features.
 
+Cloudflare Access was rechecked against its official documentation on
+2026-08-02. It is edge admission, not AgentCall RBAC: the Worker still validates
+the assertion's signature, `kid`, issuer, audience, and expiry, then maps only
+verified claims to a typed human or service actor. A headless admin client uses
+Access's service-token headers or `cf-access-token`; its single-header
+`Authorization` mode conflicts with AgentCall's existing handle Bearer token
+and is not part of the design. Access supports multiple IdPs, but an
+AgentCall-owned Zero Trust organization would leave the operator owning every
+customer IdP connection and policy. Customer-owned Access is therefore a
+self-hosted SSO profile, while hosted multi-tenant SSO/SCIM remains #15.
+
 Applied in AgentCall:
 
 - [Administrator-managed policy design](../superpowers/specs/2026-08-02-managed-policy-design.md)
+- [Cloudflare Access boundary](../superpowers/specs/2026-08-02-cloudflare-access-boundary.md)
 - [Release workflow](../../.github/workflows/release.yml)
 
 ## Governance, same-stack implementations, and observability

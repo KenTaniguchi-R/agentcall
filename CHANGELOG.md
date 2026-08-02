@@ -6,6 +6,19 @@ which are released together.
 
 ## Unreleased
 
+### Documentation — Cloudflare Access boundary
+
+- Cloudflare Access is selected for the future human admin hostname and as a
+  customer-owned SSO profile for self-hosted relays, with mandatory Worker-side
+  JWT validation and separate human and service actor types.
+- Access will not protect the current relay API, replace AgentCall application
+  authorization, reuse the existing `Authorization` header for service tokens,
+  or serve as the hosted multi-tenant customer IdP control plane.
+- The deployment acceptance contract covers alternate-origin bypasses,
+  issuer/audience/key validation, application RBAC, redaction, negative tests,
+  service-token rotation, and break-glass operations. No runtime integration is
+  claimed before an admin UI or supported self-hosted distribution exists.
+
 ### Documentation — trust-domain-scoped agent identity
 
 - The future Agent Card signing design now preserves `handle@host` as a
