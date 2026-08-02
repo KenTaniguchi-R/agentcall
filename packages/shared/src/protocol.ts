@@ -14,13 +14,10 @@ export const MAX_TASK_ID_LENGTH = 64;
 export const MAX_OFFERED_TASKS = 50;
 export const MAX_MESSAGE_BYTES = 64_000;
 export const MAX_REPLY_BYTES = 256_000;
-// `detail` is the one free-form string a callee can put in front of a
-// caller's eyes, and the CLI prints it straight to the terminal (see
-// callClient.ts / index.ts). It needs the same treatment `offered` above
-// got, and for the same two reasons: unbounded it's attacker-controlled
-// relay bandwidth, and unfiltered it's terminal-escape injection — ESC/CSI
-// sequences can clear the caller's screen, retitle their window, or paint
-// fake output over a real error.
+// `detail` and reply `text` are peer-controlled free-form strings the CLI can
+// put in front of a caller. Reply text is byte-bounded above; this separate,
+// tighter detail cap also bounds relay bandwidth. Both display paths must
+// neutralize terminal controls at the caller even if the relay already did so.
 export const MAX_DETAIL_LENGTH = 500;
 // The context id is minted by the callee (packages/cli/src/contexts.ts), never
 // by a caller, so its exact shape is known: "ctx_" + 22 base64url characters =
@@ -165,13 +162,6 @@ export const RegisterRequest = z.object({
 });
 export const RegisterResponse = z.object({ org: z.string().regex(ORG_RE), token: z.string(), address: z.string() });
 
-export const CreateInviteResponse = z.object({
-  invite: z.string().min(40).max(200),
-  expires_at: z.number().int().positive(),
-});
-
-export const BootstrapInviteRequest = z.object({ org: z.string().regex(ORG_RE) });
-
 export type ErrorCodeType = z.infer<typeof ErrorCode>;
 export type CallRequestType = z.infer<typeof CallRequest>;
 export type CallStatusType = z.infer<typeof CallStatus>;
@@ -203,14 +193,41 @@ export function parseAddress(addr: string): { handle: string; host: string } | n
   return { handle, host };
 }
 
-// Makes an untrusted `detail` safe to print and bounded in size. Control
-// characters become a space rather than being dropped, so a stripped newline
-// doesn't run two words together; a CSI/OSC sequence loses its introducer and
-// degrades to inert literal text. The length cut counts UTF-16 code units to
-// match zod's .max() on CallError.detail, trimming a trailing lone high
-// surrogate rather than emitting half a code point.
+// Peer-controlled free-form text has two display paths. Human-readable output
+// must neutralize terminal controls and Unicode bidi formatting; structured
+// JSON output preserves the payload because JSON.stringify escapes controls.
+// Replacing dangerous characters with spaces keeps adjacent words separate,
+// and removing ESC/C1 introducers makes the rest of CSI/OSC sequences inert.
+const TERMINAL_CONTROLS_AND_BIDI =
+  /[\u0000-\u0008\u000b-\u001f\u007f-\u009f\u061c\u200e\u200f\u202a-\u202e\u2066-\u2069]/gu;
+const ALL_CONTROLS_AND_BIDI =
+  /[\u0000-\u001f\u007f-\u009f\u061c\u200e\u200f\u202a-\u202e\u2066-\u2069]/gu;
+const JSON_UNESCAPED_TERMINAL_CHARS =
+  /[\u007f-\u009f\u061c\u200e\u200f\u202a-\u202e\u2066-\u2069]/gu;
+
+// Reply bodies retain tabs and line feeds so ordinary multi-line agent output
+// stays readable. Every other C0/C1 control is unsafe, including carriage
+// return because it can overwrite already-rendered terminal content.
+export function sanitizeTerminalOutput(text: string): string {
+  return text.replace(TERMINAL_CONTROLS_AND_BIDI, " ");
+}
+
+// JSON.stringify already escapes C0 controls such as ESC, but JSON permits
+// C1 controls and bidi formatting as literal characters. Escape those code
+// points in the serialized representation without changing the value a JSON
+// consumer parses.
+export function stringifyTerminalSafeJson(value: object): string {
+  return JSON.stringify(value).replace(
+    JSON_UNESCAPED_TERMINAL_CHARS,
+    (char) => `\\u${char.charCodeAt(0).toString(16).padStart(4, "0")}`,
+  );
+}
+
+// Error details are single-line and bounded. The length cut counts UTF-16 code
+// units to match zod's .max(), trimming a trailing lone high surrogate rather
+// than emitting half a code point.
 export function sanitizeDetail(detail: string, max: number = MAX_DETAIL_LENGTH): string {
-  const cleaned = detail.replace(/[\u0000-\u001f\u007f-\u009f]/g, " ");
+  const cleaned = detail.replace(ALL_CONTROLS_AND_BIDI, " ");
   if (cleaned.length <= max) return cleaned;
   const cut = cleaned.slice(0, max);
   return /[\ud800-\udbff]$/.test(cut) ? cut.slice(0, -1) : cut;

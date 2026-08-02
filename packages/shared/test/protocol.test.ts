@@ -2,7 +2,8 @@ import { describe, expect, it } from "vitest";
 import {
   CallRequest, CallerFrame, RelayToCallerFrame, ListenerToRelayFrame,
   HANDLE_RE, MAX_MESSAGE_BYTES, parseAddress, safeParseFrame,
-  RegisterRequest, CallReply, CallError, MAX_DETAIL_LENGTH, sanitizeDetail,
+  RegisterRequest, CallReply, CallError, MAX_DETAIL_LENGTH, sanitizeDetail, sanitizeTerminalOutput,
+  stringifyTerminalSafeJson,
   CallAccepted, CallStarted, CancelCall, CallCancelled, CallNotCancelled, RelayToListenerFrame,
   AGENT_KINDS, AgentKindSchema,
   TASK_ID_RE, MAX_TASK_ID_LENGTH,
@@ -98,6 +99,10 @@ describe("detail bounds and sanitization", () => {
     expect(sanitizeDetail("agent failed — 日本語 ok")).toBe("agent failed — 日本語 ok");
   });
 
+  it("sanitizeDetail neutralizes Unicode bidi formatting", () => {
+    expect(sanitizeDetail("real \u202espoof")).toBe("real  spoof");
+  });
+
   it("sanitizeDetail truncates to MAX_DETAIL_LENGTH without splitting a surrogate pair", () => {
     expect(sanitizeDetail("x".repeat(MAX_DETAIL_LENGTH + 50)).length).toBe(MAX_DETAIL_LENGTH);
     // An astral char straddling the cut must be dropped whole, never halved.
@@ -111,6 +116,42 @@ describe("detail bounds and sanitization", () => {
     const hostile = ("\u001b[2J" + "y".repeat(50)).repeat(100);
     const detail = sanitizeDetail(hostile);
     expect(CallError.safeParse({ type: "call_error", code: "agent_error", detail }).success).toBe(true);
+  });
+});
+
+describe("terminal reply sanitization", () => {
+  it("preserves line feeds and tabs while neutralizing all other C0/C1 controls", () => {
+    const out = sanitizeTerminalOutput("one\n\ttwo\u001b[2J\rFAKE\u009b31m");
+    expect(out).toContain("one\n\ttwo");
+    expect(out).not.toMatch(/[\u0000-\u0008\u000b-\u001f\u007f-\u009f]/u);
+  });
+
+  it("neutralizes bidi overrides and isolates without changing ordinary Unicode", () => {
+    expect(sanitizeTerminalOutput("日本語 \u202espoof \u2066isolate")).toBe("日本語  spoof  isolate");
+  });
+
+  it("neutralizes every prohibited C0/C1, DEL, and Unicode Bidi_Control code point", () => {
+    const codePoints = [
+      ...Array.from({ length: 0x09 }, (_, i) => i),
+      ...Array.from({ length: 0x1f - 0x0b + 1 }, (_, i) => 0x0b + i),
+      ...Array.from({ length: 0x9f - 0x7f + 1 }, (_, i) => 0x7f + i),
+      0x061c, 0x200e, 0x200f,
+      ...Array.from({ length: 0x202e - 0x202a + 1 }, (_, i) => 0x202a + i),
+      ...Array.from({ length: 0x2069 - 0x2066 + 1 }, (_, i) => 0x2066 + i),
+    ];
+    const prohibited = codePoints.map((codePoint) => String.fromCodePoint(codePoint));
+    const out = sanitizeTerminalOutput(`safe\t\n${prohibited.join("")}done`);
+
+    expect(out).toContain("safe\t\n");
+    expect(out).toContain("done");
+    for (const char of prohibited) expect(out).not.toContain(char);
+  });
+
+  it("Unicode-escapes JSON characters that JSON.stringify leaves terminal-active", () => {
+    const value = { text: "esc\u001b c1\u009b bidi\u202e" };
+    const json = stringifyTerminalSafeJson(value);
+    expect(json).not.toMatch(/[\u0000-\u001f\u007f-\u009f\u061c\u200e\u200f\u202a-\u202e\u2066-\u2069]/u);
+    expect(JSON.parse(json)).toEqual(value);
   });
 });
 

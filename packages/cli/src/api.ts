@@ -1,7 +1,10 @@
 import {
-  HANDLE_RE, AgentCard, CreateInviteResponse, CreateRosterResponse, IssueRosterJoinKeyResponse,
-  ListRosterJoinKeysResponse, RegisterResponse, RevokeRosterJoinKeyResponse, RosterBundle,
-  type AgentCardType, type AgentKind, type CardUploadType, type RosterBundleType,
+  HANDLE_RE, AgentCard, CreateOrgInviteResponse, CreateRosterResponse, IssueRosterJoinKeyResponse,
+  ListOrgInvitesResponse, ListRosterJoinKeysResponse, RegisterResponse, RevokeOrgInviteResponse,
+  RevokeRosterJoinKeyResponse, RosterBundle,
+  // AgentKind is ours: registerHandle takes it, and it is the shared type that
+  // replaced the inline "claude" | "codex" unions.
+  type AgentCardType, type AgentKind, type CardUploadType, type OrgInviteMetadataType, type RosterBundleType,
   type RosterJoinKeyMetadataType,
 } from "@benree/agentcall-shared";
 
@@ -76,18 +79,50 @@ export async function registerHandle(
 }
 
 export async function createInvite(
-  relay: string, auth: Auth, opts: { timeoutMs?: number } = {},
-): Promise<{ invite: string; expires_at: number }> {
+  relay: string, auth: Auth,
+  input: { description?: string; expires_in_days?: number } = {}, opts: { timeoutMs?: number } = {},
+): Promise<{ invite: string; metadata: OrgInviteMetadataType }> {
   const res = await relayFetch(
     relay,
-    "/v1/invite",
-    { method: "POST", headers: authHeaders(auth) },
+    "/v1/invites",
+    {
+      method: "POST", headers: { ...authHeaders(auth), "content-type": "application/json" },
+      body: JSON.stringify(input),
+    },
     opts.timeoutMs ?? RELAY_TIMEOUT_MS,
   );
   if (res.status === 401) throw new ApiError("Your credentials were rejected. Re-run `agentcall setup`.", "invalid");
   if (res.status === 429) throw new ApiError("Too many invites created — try again in a minute.", "network");
   if (!res.ok) throw new ApiError(`Invite creation failed (${res.status}).`, "network");
-  return CreateInviteResponse.parse(await res.json());
+  return CreateOrgInviteResponse.parse(await res.json());
+}
+
+export async function listInvites(
+  relay: string, auth: Auth, opts: { timeoutMs?: number } = {},
+): Promise<OrgInviteMetadataType[]> {
+  const res = await relayFetch(
+    relay, "/v1/invites/list", { method: "POST", headers: authHeaders(auth) },
+    opts.timeoutMs ?? RELAY_TIMEOUT_MS,
+  );
+  if (res.status === 401) throw new ApiError("Your credentials were rejected. Re-run `agentcall setup`.", "invalid");
+  if (res.status === 429) throw new ApiError("Too many invite operations — try again in a minute.", "network");
+  if (!res.ok) throw new ApiError(`Invite listing failed (${res.status}).`, "network");
+  return ListOrgInvitesResponse.parse(await res.json()).invites;
+}
+
+export async function revokeInvite(
+  relay: string, auth: Auth, id: string, opts: { timeoutMs?: number } = {},
+): Promise<{ id: string; revoked_at: number }> {
+  const res = await relayFetch(
+    relay, `/v1/invites/${encodeURIComponent(id)}/revoke`, { method: "POST", headers: authHeaders(auth) },
+    opts.timeoutMs ?? RELAY_TIMEOUT_MS,
+  );
+  if (res.status === 401) throw new ApiError("Your credentials were rejected. Re-run `agentcall setup`.", "invalid");
+  if (res.status === 400) throw new ApiError("Invite ID must be the 64-character ID shown by `agentcall invite list`.", "invalid");
+  if (res.status === 404) throw new ApiError("Invite not found or already used.", "invalid");
+  if (res.status === 429) throw new ApiError("Too many invite operations — try again in a minute.", "network");
+  if (!res.ok) throw new ApiError(`Invite revocation failed (${res.status}).`, "network");
+  return RevokeOrgInviteResponse.parse(await res.json());
 }
 
 // Presence is self-or-shared-roster on the relay, so this always authenticates.

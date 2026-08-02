@@ -58,3 +58,25 @@ Audit events are `roster.join_key.issue`, `roster.join_key.revoke`, and
 `roster.join_key.evict`. Key rows remain after expiry or revocation for metadata
 and provenance; deleting the roster removes live key and membership rows while
 retaining append-only audit events.
+
+## Audit-budget exhaustion and recovery
+
+Issue #153 amends the original freeze behavior now that roster membership also
+authorizes presence visibility. A roster may append at most 10,000 charged
+membership audit events between administrator resets. Creation and successful
+joins consume that persistent budget. Rejoining an already-present member is an
+idempotent success and consumes nothing. At the maximum, new joins freeze with
+HTTP 409 and a recovery instruction; administrative key, expulsion, and roster
+deletion operations remain available.
+
+A member's successful leave is a privacy and safety valve: it remains available
+at exhaustion, appends `roster.leave`, and does not consume the charged budget.
+This means audit growth from departures is not covered by the 10,000-event cap,
+but an attacker cannot repeatedly cycle membership without charged joins.
+
+`POST /v1/roster/:id/audit-budget/reset` requires both the caller's handle
+credential and the roster admin secret. When the budget is exhausted, it
+atomically resets the counter to zero, clears `audit_budget_exhausted_at`, and
+appends `roster.audit_budget_reset`. A reset below the maximum is an idempotent
+no-op and writes no event. Migration `0010_roster_audit_budget_recovery.sql`
+adds the distinct reset event while preserving all existing audit rows and ids.

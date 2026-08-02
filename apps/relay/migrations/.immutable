@@ -6,3 +6,5 @@
 0006_tenancy_and_roster_lifecycle.sql
 0007_roster_audit_events.sql
 0008_roster_join_keys.sql
+0009_org_invite_lifecycle.sql
+0010_roster_audit_budget_recovery.sql

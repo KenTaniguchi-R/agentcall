@@ -4,7 +4,9 @@ import type { AgentKind } from "@benree/agentcall-shared";
 import { getMachinePaths, type LinePaths } from "./paths.js";
 import { addressHost, assertCallableLine, relayUrl, resolveLineWorkdir, type LineConfig } from "./config.js";
 import { callAgent, callStatusMessage, CallError } from "./callClient.js";
-import { getStatus, fetchCard, createInvite, createRoster, joinRoster, leaveRoster,
+// No rotateToken here: `rotate` goes through commands/rotate.ts's rotateLine,
+// which owns the per-line config write and calls the api helper itself.
+import { getStatus, fetchCard, createInvite, listInvites, revokeInvite, createRoster, joinRoster, leaveRoster,
   expelRosterMember, issueRosterJoinKey, listRosterJoinKeys, revokeRosterJoinKey, deleteRoster, ApiError } from "./api.js";
 import { startAllListeners } from "./listenAll.js";
 import { startListener } from "./listener.js";
@@ -30,6 +32,8 @@ import { allRostersFailed, DEFAULT_SEARCH_LIMIT, rank, renderResults, sanitize, 
 import { refreshRoster } from "./searchRefresh.js";
 import { ask } from "./tty.js";
 import { renderPolicyReport } from "./policy-report.js";
+import { loadLocalHistory, renderLocalHistory } from "./history.js";
+import { sanitizeTerminalOutput, stringifyTerminalSafeJson } from "@benree/agentcall-shared";
 
 export function createProgram(): Command {
 const program = new Command();
@@ -71,26 +75,67 @@ program
     },
   );
 
-program
-  .command("invite")
-  .description("create a one-time invite for your organization")
-  // An invite enrolls someone into ONE tenant, and the tenant is a property of
-  // the line (see config.ts). A machine with lines in two orgs must be told
-  // which org it is inviting into.
+// An invite enrolls someone into ONE tenant, and the tenant is a property of
+// the line (see config.ts) — so every subcommand here takes `--line`. A machine
+// with lines in two orgs must be told which org it is acting in; defaulting to
+// the primary silently would invite people into the wrong tenant.
+const invite = program.command("invite").description("manage one-time organization invites");
+
+invite
+  .command("create")
+  .description("create a one-time invite")
+  .option("--description <text>", "purpose shown in the organization invite inventory", "")
+  .option("--expires-in-days <days>", "expiry from 1 to 90 days", "7")
   .option("--line <name>", "line whose organization to invite into (defaults to the primary line)")
-  .action(async (o: { line?: string }) => {
-    let cfg: LineConfig;
+  .action(async (o: { description: string; expiresInDays: string; line?: string }) => {
+    const ctx = lineFor(o.line);
+    if (!ctx) return;
+    const cfg = ctx.config;
     try {
-      cfg = resolveLine(getMachinePaths(), { line: o.line }).config;
-    } catch (e) {
-      console.error(String(e instanceof Error ? e.message : e));
-      process.exitCode = 1;
-      return;
-    }
-    try {
-      const created = await createInvite(relayUrl(cfg), { org: cfg.org, handle: cfg.handle, token: cfg.token });
+      const created = await createInvite(
+        relayUrl(cfg), { org: cfg.org, handle: cfg.handle, token: cfg.token },
+        { description: o.description, expires_in_days: Number(o.expiresInDays) },
+      );
       console.log(created.invite);
-      console.error(`Expires ${new Date(created.expires_at).toISOString()}`);
+      console.error(`ID ${created.metadata.id}`);
+      console.error(`Expires ${new Date(created.metadata.expires_at).toISOString()}`);
+    } catch (e) {
+      console.error(e instanceof ApiError ? e.message : String(e));
+      process.exitCode = 1;
+    }
+  });
+
+invite
+  .command("list")
+  .description("list organization invite lifecycle metadata")
+  .option("--line <name>", "line whose organization to list (defaults to the primary line)")
+  .action(async (o: { line?: string }) => {
+    const ctx = lineFor(o.line);
+    if (!ctx) return;
+    const cfg = ctx.config;
+    try {
+      const invites = await listInvites(relayUrl(cfg), { org: cfg.org, handle: cfg.handle, token: cfg.token });
+      console.log(JSON.stringify(invites, null, 2));
+    } catch (e) {
+      console.error(e instanceof ApiError ? e.message : String(e));
+      process.exitCode = 1;
+    }
+  });
+
+invite
+  .command("revoke")
+  .description("revoke an unused organization invite")
+  .argument("<id>", "64-character invite ID from `agentcall invite list`")
+  .option("--line <name>", "line whose organization the invite belongs to (defaults to the primary line)")
+  .action(async (id: string, o: { line?: string }) => {
+    const ctx = lineFor(o.line);
+    if (!ctx) return;
+    const cfg = ctx.config;
+    try {
+      const revoked = await revokeInvite(
+        relayUrl(cfg), { org: cfg.org, handle: cfg.handle, token: cfg.token }, id,
+      );
+      console.log(`Revoked ${revoked.id} at ${new Date(revoked.revoked_at).toISOString()}`);
     } catch (e) {
       console.error(e instanceof ApiError ? e.message : String(e));
       process.exitCode = 1;
@@ -195,7 +240,7 @@ program
         // the existing "ringing..." / "answered" convention.
         console.error("conversation open — add --continue to follow up");
       }
-      console.log(o.json ? JSON.stringify(reply) : reply.text);
+      console.log(o.json ? stringifyTerminalSafeJson(reply) : sanitizeTerminalOutput(reply.text));
     } catch (e) {
       console.error(e instanceof CallError ? `Call failed (${e.code}): ${e.message}` : String(e));
       process.exitCode = 1;
@@ -255,6 +300,38 @@ program
   .description("verify this install can answer calls: binary, auth, agent spawn, tool telemetry, listener, relay self-call")
   .action(async () => {
     process.exitCode = await runDoctor({ machine: getMachinePaths() });
+  });
+
+program
+  .command("history")
+  .description("show call activity stored locally on this machine")
+  .option("--limit <count>", "maximum newest calls to show (1-100)", "20")
+  .option("--json", "print machine-readable local history")
+  // calls.log/tools.log are per line, so history is too.
+  .option("--line <name>", "line whose history to show (defaults to the primary line)")
+  .action((o: { limit: string; json?: boolean; line?: string }) => {
+    const limit = Number(o.limit);
+    if (!Number.isInteger(limit) || limit < 1 || limit > 100) {
+      console.error("History limit must be an integer from 1 to 100.");
+      process.exitCode = 1;
+      return;
+    }
+    const ctx = lineFor(o.line);
+    if (!ctx) return;
+    const history = loadLocalHistory(ctx.paths, limit);
+    if (history.malformed > 0) {
+      console.error(`Skipped ${history.malformed} malformed local history record${history.malformed === 1 ? "" : "s"}.`);
+    }
+    if (history.truncatedFiles.length > 0) {
+      console.error(
+        `History scan was limited to the newest 4 MiB of: ${history.truncatedFiles.join(", ")}. ` +
+          "Tool counts may be partial.",
+      );
+    }
+    const entries = history.entries;
+    console.log(o.json
+      ? stringifyTerminalSafeJson(entries)
+      : sanitizeTerminalOutput(renderLocalHistory(entries)));
   });
 
 // Shared by `lint` and a bare `card`. Per-line, like everything else that
@@ -370,10 +447,11 @@ program
         parsed.handle,
         { org: cfg.org, handle: cfg.handle, token: cfg.token },
       );
-      console.log(`${card.handle} (${card.agent_kind})${card.description ? ` — ${card.description}` : ""}`);
+      const description = sanitizeTerminalOutput(card.description);
+      console.log(`${card.handle} (${card.agent_kind})${description ? ` — ${description}` : ""}`);
       for (const t of card.tasks) {
-        console.log(`  ${t.id} — ${t.description}`);
-        for (const ex of t.examples) console.log(`      e.g. ${ex}`);
+        console.log(`  ${t.id} — ${sanitizeTerminalOutput(t.description)}`);
+        for (const ex of t.examples) console.log(`      e.g. ${sanitizeTerminalOutput(ex)}`);
       }
       console.log(`\nCall with: agentcall call ${target} --task <id> "<message>"`);
     } catch (e) {
@@ -444,7 +522,7 @@ const roster = program.command("roster").description("join and manage discovery 
 
 // Resolves the line a roster/search command acts as, or reports and exits.
 // Returns undefined on failure, having already set process.exitCode.
-function rosterLine(line: string | undefined): LineContext | undefined {
+function lineFor(line: string | undefined): LineContext | undefined {
   try {
     return resolveLine(getMachinePaths(), { line });
   } catch (e) {
@@ -460,7 +538,7 @@ roster
   .option("--as <name>", "local name to record it under", "roster")
   .option("--line <name>", "line to create it as (defaults to the primary line)")
   .action(async (o: { as: string; line?: string }) => {
-    const ctx = rosterLine(o.line);
+    const ctx = lineFor(o.line);
     if (!ctx) return;
     const cfg = ctx.config;
     try {
@@ -497,7 +575,7 @@ roster
   .option("--as <name>", "local name for this roster", "roster")
   .option("--line <name>", "line to join as (defaults to the primary line)")
   .action(async (rosterId: string, o: { key: string; as: string; line?: string }) => {
-    const ctx = rosterLine(o.line);
+    const ctx = lineFor(o.line);
     if (!ctx) return;
     const cfg = ctx.config;
     try {
@@ -527,7 +605,7 @@ roster
   .description("list rosters this line has joined")
   .option("--line <name>", "line to list for (defaults to the primary line)")
   .action((o: { line?: string }) => {
-    const ctx = rosterLine(o.line);
+    const ctx = lineFor(o.line);
     if (!ctx) return;
     const rosters = loadMemberships(ctx.paths);
     if (rosters.length === 0) {
@@ -543,7 +621,7 @@ roster
   .argument("<name>", "local roster name")
   .option("--line <name>", "line to leave it for (defaults to the primary line)")
   .action(async (name: string, o: { line?: string }) => {
-    const ctx = rosterLine(o.line);
+    const ctx = lineFor(o.line);
     if (!ctx) return;
     const cfg = ctx.config;
     try {
@@ -586,7 +664,7 @@ roster
   .option("--admin-secret <secret>", "admin secret (prefer AGENTCALL_ADMIN_SECRET to avoid shell history)")
   .option("--line <name>", "line to act as (defaults to the primary line)")
   .action(async (name: string, handle: string, o: { adminSecret?: string; line?: string }) => {
-    const ctx = rosterLine(o.line);
+    const ctx = lineFor(o.line);
     if (!ctx) return;
     const cfg = ctx.config;
     try {
@@ -608,7 +686,7 @@ rosterKey
   .option("--reusable", "allow more than one member to use this key")
   .option("--line <name>", "line to act as (defaults to the primary line)")
   .action(async (name: string, o: { adminSecret?: string; description: string; expiresIn: number; reusable?: boolean; line?: string }) => {
-    const ctx = rosterLine(o.line);
+    const ctx = lineFor(o.line);
     if (!ctx) return;
     const cfg = ctx.config;
     try {
@@ -634,7 +712,7 @@ rosterKey
   .option("--admin-secret <secret>", "admin secret (prefer AGENTCALL_ADMIN_SECRET to avoid shell history)")
   .option("--line <name>", "line to act as (defaults to the primary line)")
   .action(async (name: string, o: { adminSecret?: string; line?: string }) => {
-    const ctx = rosterLine(o.line);
+    const ctx = lineFor(o.line);
     if (!ctx) return;
     const cfg = ctx.config;
     try {
@@ -662,7 +740,7 @@ rosterKey
   .option("--yes", "confirm targeted eviction")
   .option("--line <name>", "line to act as (defaults to the primary line)")
   .action(async (name: string, prefix: string, o: { adminSecret?: string; evict?: boolean; yes?: boolean; line?: string }) => {
-    const ctx = rosterLine(o.line);
+    const ctx = lineFor(o.line);
     if (!ctx) return;
     const cfg = ctx.config;
     try {
@@ -685,7 +763,7 @@ roster
   .option("--yes", "confirm deletion")
   .option("--line <name>", "line to act as (defaults to the primary line)")
   .action(async (name: string, o: { adminSecret?: string; yes?: boolean; line?: string }) => {
-    const ctx = rosterLine(o.line);
+    const ctx = lineFor(o.line);
     if (!ctx) return;
     const cfg = ctx.config;
     try {
@@ -704,7 +782,7 @@ roster
   .argument("<name>", "local roster name")
   .option("--line <name>", "line to forget it for (defaults to the primary line)")
   .action((name: string, o: { line?: string }) => {
-    const ctx = rosterLine(o.line);
+    const ctx = lineFor(o.line);
     if (!ctx) return;
     try {
       forgetMembership(ctx.paths, name);
@@ -725,7 +803,7 @@ program
   .option("--offline", "never refresh; use whatever is cached")
   .option("--line <name>", "line to search as (defaults to the primary line)")
   .action(async (questionParts: string[], o: { roster?: string; limit: number; json?: boolean; offline?: boolean; line?: string }) => {
-    const ctx = rosterLine(o.line);
+    const ctx = lineFor(o.line);
     if (!ctx) return;
     const cfg = ctx.config;
     const relay = relayUrl(cfg);

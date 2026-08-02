@@ -1,7 +1,7 @@
 # Cloud data map and residency decision
 
 Last verified: 2026-08-02 against production metadata, repository migration
-`0008_roster_join_keys.sql`, and Cloudflare documentation current on that date.
+`0009_org_invite_lifecycle.sql`, and Cloudflare documentation current on that date.
 
 This is the living inventory for data persisted or processed by AgentCall's
 hosted relay. Update it whenever a migration, Durable Object storage key,
@@ -41,18 +41,26 @@ there is no time-based cleanup job.
 | Table | Contents and sensitivity | Application retention |
 |---|---|---|
 | `handles` | Organization, handle, token hash, agent kind, creation time. Direct identity plus an authentication verifier; personal data. | Indefinite. Token rotation replaces the hash. Handle release/deletion is not implemented. |
-| `invites` | Invite hash, organization, issuer handle, creation/expiry/use times, and enrolled handle. Authentication and relationship data; personal data when issuer or user handles identify people. | Indefinite. Expiry and one-use checks stop authentication but do not delete the row. |
+| `invites` | Invite hash/public ID, organization, purpose, issuer handle, creation/expiry/use/revocation times, and enrolled handle. Authentication and relationship data; personal data when issuer or user handles identify people. | Active rows remain until used, revoked, or expired. A tenant invite write deletes terminal rows after 30 days; D1 Time Travel and exported backups retain separate copies. |
+| `org_events` | Organization-invite issue/redeem/revoke action, organization, actor and target identities/types, source IP/country, description, and time. Security audit evidence and personal data. | The newest 10,000 events per organization are retained; each audited mutation atomically trims older rows. Invite-row cleanup does not otherwise delete audit evidence. Time-based/legal retention and export remain separate policy work. |
 | `cards` | Handle, agent description/type, task catalogue/examples/keywords, default offers, per-caller grants/blocks, roster-group grants, update time. User-authored content plus relationship policy; potentially confidential and personal. | Indefinite, with an upsert replacing the prior card. No delete path exists. |
 | `rosters` | Roster ID, organization, admin-secret hash, creation time, audit-budget counters. Organization and authentication data. | Until an administrator deletes the roster. |
 | `roster_join_keys` | Public key prefix, roster/organization, secret hash, description, issuer handle, lifecycle times, reuse/use state. Authentication, provenance, and personal data. | Expired/revoked keys remain for provenance; all rows are deleted with the roster. |
 | `roster_members` | Roster/organization/handle membership, join time, and admitting key prefix. Personal relationship and provenance data. | Until leave, expulsion, key-based eviction, or roster deletion. |
 | `roster_events` | Append-only mutation event/action, roster/organization, actor and target identities/types, source IP/country, human-readable description, time. Security audit evidence and personal data. | Indefinite, including after roster deletion. The per-roster 10,000-event counter gates member-driven join/leave churn; administrator and system events remain appendable for recovery and are not bounded by that counter. The counter is not a row-count ceiling. |
 
+The current operational and future deletion rules for both event ledgers are
+defined in the [audit retention policy](./audit-retention.md). In particular,
+the repository has no automated expiry or supported erasure path today;
+count-bounding `org_events` is a capacity control, not a retention period.
+
 Cloudflare also maintains `d1_migrations`, which records applied migration
 filenames and is operational metadata rather than end-user data. D1 Time Travel,
-Cloudflare backups, account audit logs, and exported SQL backups create copies
-with their own vendor/operator retention; this repository does not configure a
-deletion schedule for those copies.
+Cloudflare backups, and exported SQL backups may create copies of table rows
+with their own vendor/operator retention. Cloudflare account audit logs are
+separate operational records that may independently contain personal metadata.
+This repository does not configure a deletion schedule for any of those
+surfaces.
 
 ## Durable Object inventory
 
@@ -67,7 +75,7 @@ object is restricted.
 |---|---|---|
 | WebSocket state and serialized attachments | Live listener/caller sockets; caller handle, relay-attested roster IDs, call ID, and test timeout. Personal/relationship metadata. Messages and replies pass over these sockets in plaintext but are not written to application storage. | Socket lifetime; attachments support hibernation and disappear with the socket. |
 | `call:*` | Call ID, caller handle, deadline, and call state. Personal activity metadata; no prompt or reply body. | Deleted on result, failure, confirmed cancellation, or caller close. Otherwise an alarm is scheduled for the configured six-minute deadline; alarm delivery may be delayed or retried, so six minutes is the logical timeout rather than a strict physical-retention maximum. |
-| `rl:*` | Per-caller timestamps inside the callee's object. Personal activity metadata. | Timestamps older than one hour are logically ignored, but the physical array is only rewritten when that caller next incurs a charged call. It can therefore remain indefinitely for an inactive caller. |
+| `rl:*` | Per-caller timestamps inside the callee's object. Personal activity metadata. | One-hour logical window. A charged call starts an expired-key sweep at most once per minute; each event processes at most four 128-key pages. A short-lived cursor (temporarily repeating one `rl:<handle>` key) and alarm continue larger backlogs in bounded events until complete, then delete the cursor. An idle object with no pending sweep can retain stale keys until its next charged call, but cannot accumulate while idle. A non-identifying timestamp throttles new sweeps. |
 
 ### `RateLimiterDO`
 

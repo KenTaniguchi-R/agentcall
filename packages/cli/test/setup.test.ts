@@ -324,6 +324,7 @@ describe("setup progress output", () => {
         addLineFn: fakeAddLine,
       });
       expect(logs.some((l) => l.includes("Registering ken9"))).toBe(true);
+      expect(logs.some((l) => /offered tasks run automatically without per-call approval/i.test(l))).toBe(true);
     } finally {
       spy.mockRestore();
     }
@@ -397,9 +398,9 @@ describe("caller-only setup", () => {
       installLaunchAgentFn: () => { launchdCalled = true; },
     });
     expect(asked.some((q) => q.includes("callable"))).toBe(true);
+    expect(asked.some((q) => /run automatically without per-call approval/i.test(q))).toBe(true);
     expect(listLines(m)[0]!.config!.agent_kind).toBeUndefined();
-    expect(launchdCalled).toBe(false);
-  });
+    expect(launchdCalled).toBe(false);  });
 
   it("an empty answer defaults to callable", async () => {
     await run({

@@ -149,6 +149,90 @@ const bundle = (rosterId: string, handle = "sota") => ({
 });
 
 describe.sequential("CLI command actions", () => {
+  it("renders the employee's local call and tool history", async () => {
+    const testHome = home();
+    const paths = seedConfig(testHome, "https://relay.example");
+    mkdirSync(paths.dir, { recursive: true });
+    writeFileSync(paths.callsLog, [
+      JSON.stringify({
+        ts: "2026-08-02T20:00:00.000Z", call_id: "call-1", from: "alice",
+        message: "review the patch", reply: "two findings", task: "review-pr",
+        status: "ok", duration_ms: 42,
+      }),
+      JSON.stringify({
+        ts: "2026-08-02T20:00:00.010Z", type: "tool_denied", call_id: "call-1",
+        tool: "Bash", rule: "credential-read", detail: "blocked",
+      }),
+    ].join("\n") + "\n");
+    writeFileSync(paths.toolsLog, [
+      JSON.stringify({ ts: "2026-08-02T20:00:00.005Z", type: "tool_call", call_id: "call-1", tool: "Read", allowed: true }),
+      JSON.stringify({ ts: "2026-08-02T20:00:00.010Z", type: "tool_call", call_id: "call-1", tool: "Bash", allowed: false }),
+    ].join("\n") + "\n");
+
+    const out = await runCommand(testHome, ["history"]);
+
+    expect(out.code).toBe(0);
+    expect(out.stderr).toBe("");
+    expect(out.stdout).toContain("2026-08-02T20:00:00.000Z  alice  review-pr  ok  42ms");
+    expect(out.stdout).toContain("Asked: review the patch");
+    expect(out.stdout).toContain("Replied: two findings");
+    expect(out.stdout).toContain("Tools: 2 attempts, 1 denied");
+  });
+
+  it("returns newest local history as JSON and discloses malformed log records", async () => {
+    const testHome = home();
+    const paths = seedConfig(testHome, "https://relay.example");
+    mkdirSync(paths.dir, { recursive: true });
+    writeFileSync(paths.callsLog, [
+      JSON.stringify({
+        ts: "2026-08-02T19:00:00.000Z", call_id: "old", from: "alice",
+        message: "old question", task: "ask", status: "ok", duration_ms: 1,
+      }),
+      "not-json",
+      JSON.stringify({
+        ts: "2026-08-02T19:30:00.000Z", call_id: "broken", from: 42,
+        message: "wrong type", status: "ok",
+      }),
+      JSON.stringify({
+        ts: "2026-08-02T20:00:00.000Z", call_id: "new", from: "bob",
+        message: "new question", reply: "new answer", task: "ask", status: "ok", duration_ms: 2,
+      }),
+    ].join("\n") + "\n");
+    writeFileSync(paths.toolsLog, JSON.stringify({
+      ts: "2026-08-02T20:00:00.001Z", type: "tool_call", call_id: "new",
+    }) + "\n");
+
+    const out = await runCommand(testHome, ["history", "--limit", "1", "--json"]);
+
+    expect(out.code).toBe(0);
+    expect(out.stderr).toContain("Skipped 3 malformed local history records");
+    expect(JSON.parse(out.stdout)).toEqual([{
+      ts: "2026-08-02T20:00:00.000Z", call_id: "new", from: "bob",
+      message: "new question", reply: "new answer", task: "ask", status: "ok",
+      duration_ms: 2, tool_attempts: 0, tools_denied: 0,
+    }]);
+  });
+
+  it("bounds local history scanning and discloses partial logs", async () => {
+    const testHome = home();
+    const paths = seedConfig(testHome, "https://relay.example");
+    mkdirSync(paths.dir, { recursive: true });
+    writeFileSync(paths.callsLog,
+      JSON.stringify({
+        ts: "2026-08-02T19:00:00.000Z", call_id: "old", from: "alice",
+        message: "old question", task: "ask", status: "ok",
+      }) + "\n" + "x".repeat(4 * 1024 * 1024) + "\n" + JSON.stringify({
+        ts: "2026-08-02T20:00:00.000Z", call_id: "new", from: "bob",
+        message: "new question", task: "ask", status: "ok",
+      }) + "\n");
+
+    const out = await runCommand(testHome, ["history", "--limit", "1", "--json"]);
+
+    expect(out.code).toBe(0);
+    expect(out.stderr).toMatch(/scan.*limited.*calls\.log/i);
+    expect(JSON.parse(out.stdout)).toMatchObject([{ call_id: "new" }]);
+  });
+
   it("preserves the top-level no-config failure path", async () => {
     const out = await runCommand(home(), ["search", "typescript"]);
     expect(out.code).toBe(1);
@@ -159,6 +243,42 @@ describe.sequential("CLI command actions", () => {
     const out = await runCommand(home(), ["card", "ken@acme.agentcall.benree.tech"]);
     expect(out.code).toBe(1);
     expect(out.stderr).toMatch(/agentcall setup/);
+  });
+
+  it("creates, inventories, and revokes organization invites without reprinting secrets", async () => {
+    const id = "d".repeat(64);
+    const secret = "i".repeat(43);
+    const metadata = {
+      id, description: "contractor", created_by: "ken", created_at: 1,
+      expires_at: 2_000_000_000_000, used_at: null, used_by: null, revoked_at: null,
+    };
+    const requests: Array<{ url: string; body: string }> = [];
+    const relay = await startRelay((url, _method, body) => {
+      requests.push({ url, body });
+      if (url.endsWith("/list")) return { status: 200, body: { invites: [metadata] } };
+      if (url.endsWith("/revoke")) return { status: 200, body: { id, revoked_at: 3 } };
+      return { status: 200, body: { invite: secret, metadata } };
+    });
+    const testHome = home();
+    seedConfig(testHome, relay);
+
+    const created = await runCommand(testHome, [
+      "invite", "create", "--description", "contractor", "--expires-in-days", "30",
+    ]);
+    const listed = await runCommand(testHome, ["invite", "list"]);
+    const revoked = await runCommand(testHome, ["invite", "revoke", id]);
+
+    expect(created).toMatchObject({ code: 0, stdout: secret });
+    expect(created.stderr).toContain(`ID ${id}`);
+    expect(listed.code).toBe(0);
+    expect(JSON.parse(listed.stdout)).toEqual([metadata]);
+    expect(listed.stdout).not.toContain(secret);
+    expect(revoked).toMatchObject({ code: 0, stdout: expect.stringContaining(`Revoked ${id}`) });
+    expect(requests).toEqual([
+      { url: "/v1/invites", body: JSON.stringify({ description: "contractor", expires_in_days: 30 }) },
+      { url: "/v1/invites/list", body: "" },
+      { url: `/v1/invites/${id}/revoke`, body: "" },
+    ]);
   });
 
   it("captures Commander validation failures without exiting the process", async () => {
@@ -499,6 +619,63 @@ describe.sequential("CLI command actions", () => {
     expect(frames[1]).toMatchObject({
       type: "call_request", to: "sota", message: "follow up", task: "resolved-task", context_id: contextId,
     });
+  });
+
+  it("neutralizes terminal controls and bidi overrides in displayed reply text", async () => {
+    const hostile = "line one\n\tline two\u001b[2J\rFAKE\u009b31m\u202espoof";
+    const callRelay = await startCallRelay((_frame, ws) => {
+      ws.send(JSON.stringify({ type: "call_reply", call_id: "call-1", text: hostile }));
+    });
+    routing.host = new URL(callRelay.relay).host;
+    const testHome = home();
+    seedConfig(testHome, callRelay.relay);
+
+    const out = await runCommand(testHome, ["call", "local-sota", "hello"]);
+
+    expect(out.code).toBe(0);
+    expect(out.stdout).toContain("line one\n\tline two");
+    expect(out.stdout).toContain("FAKE");
+    expect(out.stdout).not.toMatch(/[\u0000-\u0008\u000b-\u001f\u007f-\u009f\u061c\u200e\u200f\u202a-\u202e\u2066-\u2069]/u);
+  });
+
+  it("preserves the exact reply payload under --json", async () => {
+    const hostile = "line one\n\u001b[2J\rFAKE\u009b31m\u202espoof";
+    const callRelay = await startCallRelay((_frame, ws) => {
+      ws.send(JSON.stringify({ type: "call_reply", call_id: "call-1", text: hostile }));
+    });
+    routing.host = new URL(callRelay.relay).host;
+    const testHome = home();
+    seedConfig(testHome, callRelay.relay);
+
+    const out = await runCommand(testHome, ["call", "local-sota", "hello", "--json"]);
+
+    expect(out.code).toBe(0);
+    expect(JSON.parse(out.stdout).text).toBe(hostile);
+    expect(out.stdout).not.toMatch(/[\u0000-\u001f\u007f-\u009f\u061c\u200e\u200f\u202a-\u202e\u2066-\u2069]/u);
+  });
+
+  it("neutralizes terminal controls in peer-authored card text", async () => {
+    const relay = await startRelay((url, method) => ({
+      status: url === "/v1/card/sota" && method === "GET" ? 200 : 404,
+      body: {
+        handle: "sota", agent_kind: "claude", description: "safe\u001b[2J\u202espoof",
+        tasks: [{
+          id: "ask", name: "Ask", description: "answer\rFAKE",
+          examples: ["normal\u009b31mexample"], keywords: [],
+        }],
+        updated_at: 1,
+      },
+    }));
+    const testHome = home();
+    seedConfig(testHome, relay);
+
+    const out = await runCommand(testHome, ["card", "local-sota"]);
+
+    expect(out.code).toBe(0);
+    expect(out.stdout).toContain("spoof");
+    expect(out.stdout).toContain("FAKE");
+    expect(out.stdout).toContain("example");
+    expect(out.stdout).not.toMatch(/[\u0000-\u0008\u000b-\u001f\u007f-\u009f\u061c\u200e\u200f\u202a-\u202e\u2066-\u2069]/u);
   });
 });
 

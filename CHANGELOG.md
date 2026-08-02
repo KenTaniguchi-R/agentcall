@@ -49,6 +49,82 @@ conversation bindings follow it — each is scoped to one line and takes
 two organizations without either seeing the other's memberships, invites, or
 open conversations.
 
+### Recoverable roster audit-budget exhaustion
+
+- Members can always leave a roster after its 10,000-event membership audit
+  budget is exhausted, so the presence authorization boundary cannot trap a
+  member in a frozen roster.
+- Exhausted joins now identify the administrator recovery action. An
+  authenticated administrator can reset the budget without deleting the
+  roster; each effective reset writes a distinct append-only audit event.
+
+### Employee transparency and local history
+
+- Added `agentcall history` so the person whose machine answers calls can see
+  local caller, task, outcome, prompt/reply previews, and correlated guarded
+  tool-attempt counts. JSON output is available for local inspection scripts,
+  malformed log records and bounded-scan gaps are disclosed instead of
+  silently hidden, and audit directories/files are repaired to 0700/0600 on
+  write.
+- Callable setup now states that offered tasks run automatically without
+  per-call approval, and the employee transparency page documents what the
+  caller, machine owner, organization, and relay operator can actually see.
+
+### Audit retention policy
+
+- Documented that roster audit events are retained indefinitely and
+  organization audit events are count-bounded but have no time-based expiry.
+  Automated deletion remains blocked on verifiable export, bounded cleanup,
+  backup handling, and legal-hold policy in the admin/audit-export track.
+
+### Bounded call rate-limit retention
+
+- Handle Durable Objects now sweep expired per-caller rate-limit keys on the
+  next charged call, with at most four 128-key pages of work per event. Larger
+  backlogs continue by alarm until drained; dormant objects with no pending
+  sweep do no work and cannot keep accumulating historical callers.
+
+### Consistent roster group grants
+
+- Roster bundle discovery now applies the same deterministic first-50 shared
+  roster cap as direct card projection and call admission, preventing search
+  from advertising a group-granted task that the call path would reject.
+- Bundle ETags now cover the actual caller-specific projection, so membership
+  changes cannot preserve stale group-granted tasks through a `304` response.
+
+### Safe reply rendering
+
+- Human-readable call replies and fetched agent cards now neutralize terminal
+  control characters and Unicode bidirectional formatting from remote text
+  while preserving normal line breaks and tabs. `call --json` still emits the
+  exact reply payload, with terminal-active code points safely Unicode-escaped
+  in its serialized representation.
+
+### Release OIDC enforcement
+
+- The npm publish process now pins `NODE_AUTH_TOKEN` empty and verifies both
+  GitHub OIDC request variables before touching the registry. The guard runs in
+  the same step as `npm publish`, so token auth cannot bypass a check performed
+  in a different process.
+- A workflow-structure regression test proves a deliberate token reintroduction
+  fails the invariant and keeps the OIDC checks before the first publish call.
+
+### Organization invite lifecycle
+
+- Replaced the create-only organization invite command with `invite create`,
+  `invite list`, and idempotent `invite revoke` operations. Inventory exposes a
+  SHA-256 public ID and lifecycle/provenance metadata, never the invite secret.
+- Invite creation now accepts a bounded purpose and 1–90 day expiry, enforces a
+  100-active-invite tenant cap, and deletes terminal credential rows after a
+  30-day application retention window.
+- Issue, redemption, and revocation mutations append evidence atomically to a
+  10,000-event rolling organization ledger. Any authenticated member retains
+  the existing authority to manage invites; role restrictions remain assigned
+  to the RBAC/SSO track.
+- Revoked credentials fail registration, lifecycle operations remain
+  tenant-isolated, and hosted registration addresses are derived from the
+  invite's organization even when the request uses a conflicting tenant host.
+
 ### Documentation — bounded credential lifecycle
 
 - The future identity cutover now includes 90-day client credentials that

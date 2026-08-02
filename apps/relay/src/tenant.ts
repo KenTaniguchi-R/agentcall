@@ -30,5 +30,7 @@ export function identityKey(org: string, handle: string): string {
 
 export function registrationAddressHost(org: string, requestUrl: string): string {
   const host = new URL(requestUrl).hostname;
-  return host === HOSTED_RELAY_HOST ? `${org}.${host}` : host;
+  return host === HOSTED_RELAY_HOST || host.endsWith(`.${HOSTED_RELAY_HOST}`)
+    ? `${org}.${HOSTED_RELAY_HOST}`
+    : host;
 }

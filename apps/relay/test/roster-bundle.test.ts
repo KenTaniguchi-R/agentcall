@@ -1,4 +1,5 @@
 import { SELF } from "cloudflare:test";
+import { MAX_CALLER_GROUPS } from "@benree/agentcall-shared";
 import { describe, expect, it, vi } from "vitest";
 import { registerHandle, wsAuth } from "./helpers.js";
 
@@ -72,6 +73,38 @@ describe("GET /v1/roster/:id/bundle", () => {
     const body = await (await getBundle(r.roster_id, "bgviewer", viewer)).json<any>();
     const entry = body.entries.find((candidate: any) => candidate.handle === "bgtarget");
     expect(entry.tasks.map((candidate: any) => candidate.id).sort()).toEqual(["ask", "payroll"]);
+  });
+
+  it("uses the same deterministic shared-roster cap as direct card and call admission", async () => {
+    const r = await setup("bgcap");
+    const target = await joinAs(r.roster_id, "bgcaptarget", r.join_key);
+    const viewer = await joinAs(r.roster_id, "bgcapviewer", r.join_key);
+    const extraRosterIds = Array.from(
+      { length: MAX_CALLER_GROUPS + 1 },
+      (_, i) => `group-${String(i).padStart(10, "0")}`,
+    );
+    const db = (await import("cloudflare:test")).env.DB;
+    await db.batch(extraRosterIds.map((rosterId) => db.prepare(
+      "INSERT INTO roster_members (roster_id, org, handle, joined_at) VALUES " +
+        "(?, 'acme', 'bgcaptarget', 1), (?, 'acme', 'bgcapviewer', 1)",
+    ).bind(rosterId, rosterId)));
+
+    const orderedShared = [...extraRosterIds, r.roster_id].sort();
+    const lastAdmitted = orderedShared[MAX_CALLER_GROUPS - 1]!;
+    const firstExcluded = orderedShared[MAX_CALLER_GROUPS]!;
+    await putCard("bgcaptarget", target, {
+      ...card([task("inside"), task("outside")], []),
+      group_grants: { [lastAdmitted]: ["inside"], [firstExcluded]: ["outside"] },
+    });
+
+    const direct = await (await SELF.fetch("https://relay.test/v1/card/bgcaptarget", {
+      headers: wsAuth("bgcapviewer", viewer),
+    })).json<any>();
+    const bundle = await (await getBundle(r.roster_id, "bgcapviewer", viewer)).json<any>();
+    const bundled = bundle.entries.find((entry: any) => entry.handle === "bgcaptarget");
+
+    expect(direct.tasks.map((candidate: any) => candidate.id)).toEqual(["inside"]);
+    expect(bundled.tasks.map((candidate: any) => candidate.id)).toEqual(["inside"]);
   });
 
   // The claim the first design draft got wrong: an entry carrying a handle
@@ -151,6 +184,39 @@ describe("GET /v1/roster/:id/bundle", () => {
     expect(etag).toBeTruthy();
     const second = await getBundle(r.roster_id, "b9own", r.ownerToken, { "If-None-Match": etag });
     expect(second.status).toBe(304);
+  });
+
+  it("changes its ETag when membership changes visible group-granted tasks", async () => {
+    const r = await setup("betag");
+    const target = await joinAs(r.roster_id, "betagtarget", r.join_key);
+    const viewer = await joinAs(r.roster_id, "betagviewer", r.join_key);
+    const sharedId = "group-etag-000001";
+    const db = (await import("cloudflare:test")).env.DB;
+    await db.prepare(
+      "INSERT INTO roster_members (roster_id, org, handle, joined_at) VALUES " +
+        "(?, 'acme', 'betagtarget', 1), (?, 'acme', 'betagviewer', 1)",
+    ).bind(sharedId, sharedId).run();
+    await putCard("betagtarget", target, {
+      ...card([task("ask"), task("payroll")], ["ask"]),
+      group_grants: { [sharedId]: ["payroll"] },
+    });
+
+    const first = await getBundle(r.roster_id, "betagviewer", viewer);
+    const firstEtag = first.headers.get("ETag")!;
+    const firstBody = await first.json<any>();
+    expect(firstBody.entries.find((entry: any) => entry.handle === "betagtarget")
+      .tasks.map((candidate: any) => candidate.id)).toEqual(["ask", "payroll"]);
+
+    await db.prepare(
+      "DELETE FROM roster_members WHERE roster_id = ? AND org = 'acme' AND handle = 'betagviewer'",
+    ).bind(sharedId).run();
+    const changed = await getBundle(r.roster_id, "betagviewer", viewer, { "If-None-Match": firstEtag });
+    const changedBody = await changed.json<any>();
+
+    expect(changed.status).toBe(200);
+    expect(changed.headers.get("ETag")).not.toBe(firstEtag);
+    expect(changedBody.entries.find((entry: any) => entry.handle === "betagtarget")
+      .tasks.map((candidate: any) => candidate.id)).toEqual(["ask"]);
   });
 
   it("gives two different callers different ETags", async () => {

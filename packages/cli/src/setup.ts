@@ -97,7 +97,9 @@ async function decideCallable(
     return false;
   }
   if (opts.yes) return true;
-  const answer = (await ask("Make your agent callable by others? [Y/n]: ")).trim().toLowerCase();
+  const answer = (await ask(
+    "Make your agent callable by others? Offered tasks run automatically without per-call approval. [Y/n]: ",
+  )).trim().toLowerCase();
   return answer === "" || answer === "y" || answer === "yes";
 }
 
@@ -159,6 +161,15 @@ export async function runSetup(opts: SetupOpts): Promise<{ ready: boolean }> {
   }
 
   const callable = await decideCallable(opts, hasBinFn, ask, undefined);
+  if (callable) {
+    log(
+      "Callable mode: offered tasks run automatically without per-call approval. " +
+        "Review activity later with `agentcall history`.",
+    );
+  }
+  // No `reusedCfg` branch any more: setup is first-run only, so there is never
+  // a saved agent_kind to prefer over detection. A second run stops earlier
+  // and points at `line add`.
   const agentKind = callable ? await detectAgentKind(opts, hasBinFn, ask) : undefined;
   if (agentKind) {
     warnIfOutsideLaunchdPath(agentKind, resolveBinFn);

@@ -44,9 +44,12 @@ npm install -g @benree/agentcall
 agentcall setup --invite <one-time-token>
 ```
 
-Ask an existing member of your organization to run `agentcall invite`. The
-returned token expires after seven days and can enroll exactly one identity.
-The relay no longer serves a public shell installer.
+Ask an existing member of your organization to run `agentcall invite create`.
+The returned token can enroll exactly one identity and expires after seven days
+by default. Members can inventory and revoke outstanding credentials with
+`agentcall invite list` and `agentcall invite revoke <id>`; creation accepts
+`--description` and `--expires-in-days` (1–90). The relay no longer serves a
+public shell installer.
 
 For the first member of the first organization, the relay operator configures
 `BOOTSTRAP_TOKEN` with `wrangler secret put BOOTSTRAP_TOKEN`, then creates the
@@ -108,7 +111,12 @@ agentcall call ken@acme.agentcall.benree.tech "..." --json
 ```
 
 `agentcall call` prints spinner-style status to stderr (`ringing...`) and the
-reply text to stdout. It used to also print `answered, agent working...`, but
+reply text to stdout. Human-readable output preserves line breaks and tabs but
+neutralizes terminal control characters and Unicode bidirectional formatting
+from the remote agent. `--json` preserves the exact reply payload for piping;
+its serialized form Unicode-escapes terminal-active controls and bidi marks.
+It used to also print
+`answered, agent working...`, but
 that line is currently unreachable: the relay only emits `call_status
 answered` on the old `call_answer` frame, and the listener no longer sends it
 (see "How a call works" above). Temporary until the relay is switched to the
@@ -212,6 +220,19 @@ agentcall doctor
 listener, relay self-call) — run it whenever calls to you start failing. `✓` is a
 pass and `✗` is a failure with a fix; a `!` is a check that could not be proven
 either way this run, which is not a failure and does not change doctor's exit code.
+
+```bash
+# Review the newest activity recorded on this machine
+agentcall history
+agentcall history --limit 100 --json
+```
+
+History is local to the callee's machine. It shows the newest 20 calls by
+default, including caller, task, outcome, the first 500 characters of the
+question and successful reply, and counts from guarded tool attempts. It does
+not fetch an employer or relay audit trail. Read the
+[employee transparency statement](./docs/security/employee-transparency.md)
+for what is and is not visible through these logs.
 
 Plain calls (no `--task`) run the built-in read-only `ask` task. To offer more:
 
@@ -584,6 +605,10 @@ disabled/deferred so it cannot bypass an IT-pinned version.
 
 ## Security model (v1, explicit)
 
+For the plain-language employee view—what a caller, the machine owner, an
+organization administrator, and the relay operator can see—read the
+[employee transparency statement](./docs/security/employee-transparency.md).
+
 - The organization is the call-reachability boundary. Any authenticated handle
   may call any registered handle in its own organization; anonymous callers and
   cross-organization routing are rejected. An address is therefore a routing
@@ -805,6 +830,10 @@ provenance, and attaches the exact tarballs, SHA-256 checksums, and CycloneDX
 SBOM to the GitHub release. A partial retry skips an existing package only when
 the registry integrity exactly matches the rebuilt tarball. Stable releases use
 the npm `latest` dist-tag; GitHub prereleases use `next` and cannot displace it.
+The publish process pins `NODE_AUTH_TOKEN` empty and refuses to run unless the
+GitHub OIDC request environment is present, so a missing `id-token: write` grant
+or accidental return to a long-lived npm token fails before either package is
+published.
 
 The published tarball is installed and exercised without pnpm on Node 20, 22,
 and 24 in CI, including `agentcall doctor`; this is what enforces the CLI's
@@ -827,6 +856,14 @@ managed policy is present so IT can pin the deployed version.
   contain viewer, target, time, source IP/country, and allow/deny outcome for
   abuse detection and security review evidence. They deliberately omit the
   target's online/offline state.
+- **Hosted audit events have no supported expiry or erasure workflow.** Roster
+  audit rows are retained indefinitely; organization audit rows keep the newest
+  10,000 events per organization but have no time-based window. There is no
+  customer deletion/export endpoint or scheduled cleanup, roster deletion
+  deliberately preserves its evidence, and the service cannot guarantee
+  end-to-end erasure across D1 and backup copies. See the
+  [audit retention policy](./docs/security/audit-retention.md) for the current
+  operator posture and the export-before-expiry requirements.
 - **Handles can't be released.** `agentcall rotate` replaces a token, but
   there's no way to give a handle back: the Durable Object is addressed by
   handle name, so a re-registered handle would inherit the previous owner's
