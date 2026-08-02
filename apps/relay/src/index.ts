@@ -91,8 +91,17 @@ app.post("/v1/token/rotate", async (c) => {
   const next = generateToken();
   // UPDATE, never INSERT: an unregistered handle can't reach here (it fails
   // the auth check above), so this must not be able to conjure a row.
-  await c.env.DB.prepare("UPDATE handles SET token_hash = ? WHERE handle = ?")
-    .bind(await sha256Hex(next), handle).run();
+  //
+  // Compare-and-swap, not read-then-write: the verify above and this UPDATE
+  // are separate round trips, so two concurrent rotations could both pass
+  // the check and both write, leaving the first caller holding a token that
+  // is already dead. Conditioning on the hash we authenticated against means
+  // exactly one wins; the loser gets the same 401 as a bad token.
+  const prevHash = await sha256Hex(token);
+  const res = await c.env.DB.prepare(
+    "UPDATE handles SET token_hash = ? WHERE handle = ? AND token_hash = ? RETURNING handle",
+  ).bind(await sha256Hex(next), handle, prevHash).first();
+  if (!res) return c.json({ error: "unauthorized" }, 401);
   return c.json({ token: next });
 });
 
