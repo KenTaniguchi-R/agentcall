@@ -5,11 +5,12 @@ import type { Context, Hono } from "hono";
 import type { Env } from "./index.js";
 import { constantTimeEqual, generateToken, sha256Hex } from "./auth.js";
 import {
-  AdminSecretRequest, CardUpload, ExpelRosterRequest, JoinRosterRequest, MAX_BUNDLE_TASKS_PER_CARD,
+  AdminSecretRequest, ExpelRosterRequest, JoinRosterRequest, MAX_BUNDLE_TASKS_PER_CARD,
   MAX_ROSTER_MEMBERS, ROSTER_ID_RE, RotateRosterRequest, visibleTasks,
 } from "@benree/agentcall-shared";
 import { authenticateRequest } from "./tenant.js";
 import { checkLimit, NATIVE_ROSTER_READ, REGISTER, ROSTER_WRITE } from "./ratelimit/index.js";
+import { parseStoredCard } from "./stored-card.js";
 
 // 16 random bytes, base64url — 22 chars, inside ROSTER_ID_RE's 16..64 window.
 // Unguessable but not secret: it travels in URL paths and will be logged.
@@ -251,10 +252,8 @@ export function mountRoster(app: Hono<{ Bindings: Env }>): void {
     let skipped = 0;
     let newest = 0;
     for (const row of results ?? []) {
-      let upload;
-      try {
-        upload = CardUpload.parse(JSON.parse(row.card_json));
-      } catch {
+      const upload = parseStoredCard(row.card_json, org, row.handle);
+      if (!upload) {
         // One bad legacy card must not 500 the bundle for everyone else.
         skipped++;
         continue;

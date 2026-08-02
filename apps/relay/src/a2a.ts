@@ -3,12 +3,13 @@ import type { Hono } from "hono";
 // never exists at runtime. Do not turn this into a value import.
 import type { Env } from "./index.js";
 import {
-  A2A_VERSION_HEADER, CardUpload, a2aError, isSupportedA2AVersion,
+  A2A_VERSION_HEADER, a2aError, isSupportedA2AVersion,
   standardError, toAgentCard, toDirectoryCard, visibleTasks,
 } from "@benree/agentcall-shared";
 import { authenticateRequest } from "./tenant.js";
 import { sharedRosterIds } from "./groups.js";
 import { checkLimit, NATIVE_READ } from "./ratelimit/index.js";
+import { parseStoredCard } from "./stored-card.js";
 
 // The card endpoint is public and cheap; a short TTL keeps the TCK's
 // Cache-Control/ETag checks satisfied without making policy edits slow to
@@ -79,16 +80,14 @@ export function mountA2A(app: Hono<{ Bindings: Env }>): void {
     // SHOULD NOT distinguish "does not exist" from "not authorized", so an
     // unknown handle and a blocked caller must be indistinguishable here. Keep
     // the message generic for that reason.
-    if (!row) {
+    const notFound = () => {
       const { status, body } = standardError(404, "no such agent");
       return c.json(body, status as 404, A2A_HEADERS);
-    }
+    };
+    if (!row) return notFound();
 
-    const upload = CardUpload.parse(JSON.parse(row.card_json));
-    if (upload.blocked.includes(viewer)) {
-      const { status, body } = standardError(404, "no such agent");
-      return c.json(body, status as 404, A2A_HEADERS);
-    }
+    const upload = parseStoredCard(row.card_json, org, handle);
+    if (!upload || upload.blocked.includes(viewer)) return notFound();
     const origin = new URL(c.req.url).origin;
     const card = toAgentCard({
       handle,

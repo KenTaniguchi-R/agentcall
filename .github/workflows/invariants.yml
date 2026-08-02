@@ -65,6 +65,21 @@ jobs:
           fi
           echo "OK: no frame shapes declared outside packages/shared"
 
+      - name: Stored cards parse through the guarded boundary
+        run: |
+          hits=$(git ls-files -z 'apps/relay/src/**/*.ts' 'apps/relay/src/*.ts' | sort -z | \
+            xargs -0 perl -0ne 'while (/CardUpload\.(safeParse|parse)\s*\(/g) { print "$ARGV:$1\n" }')
+          expected=$(printf '%s\n' \
+            'apps/relay/src/index.ts:safeParse' \
+            'apps/relay/src/stored-card.ts:parse')
+          if [ "$hits" != "$expected" ]; then
+            echo "$hits" | while IFS=: read -r file _; do
+              [ -z "$file" ] || echo "::error file=$file::CardUpload parsing is limited to upload validation and parseStoredCard; stored reads must use the guarded boundary so legacy rows cannot 500 endpoints."
+            done
+            exit 1
+          fi
+          echo "OK: stored cards parse only through the guarded boundary"
+
       - name: Historical docs are never revised
         run: |
           # Adding a new dated plan/spec is normal, and so is editing one while

@@ -1,5 +1,5 @@
 import { env, SELF } from "cloudflare:test";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import app from "../src/index.js";
 import { fixedRateLimit, registerHandle, wsAuth } from "./helpers.js";
 
@@ -65,6 +65,29 @@ describe("GET /v1/card/:handle", () => {
     await registerHandle("nocard");
     const viewer = await registerHandle("nocard-viewer");
     expect((await SELF.fetch("https://relay.test/v1/card/nocard", { headers: wsAuth("nocard-viewer", viewer) })).status).toBe(404);
+  });
+  it("treats malformed stored JSON as a missing card and logs safe metadata", async () => {
+    await registerHandle("corrupt-card");
+    const viewer = await registerHandle("corrupt-card-viewer");
+    await env.DB.prepare("INSERT INTO cards (org, handle, card_json, updated_at) VALUES (?, ?, ?, ?)")
+      .bind("acme", "corrupt-card", "{not json", 1).run();
+    const log = vi.spyOn(console, "error").mockImplementation(() => {});
+    try {
+      const invalid = await SELF.fetch("https://relay.test/v1/card/corrupt-card", {
+        headers: wsAuth("corrupt-card-viewer", viewer),
+      });
+      const missing = await SELF.fetch("https://relay.test/v1/card/no-card-here", {
+        headers: wsAuth("corrupt-card-viewer", viewer),
+      });
+      expect(invalid.status).toBe(missing.status);
+      expect(invalid.headers.get("content-type")).toBe(missing.headers.get("content-type"));
+      expect(await invalid.text()).toBe(await missing.text());
+      expect(log).toHaveBeenCalledWith("invalid stored card", {
+        org: "acme", handle: "corrupt-card", error: "SyntaxError",
+      });
+    } finally {
+      log.mockRestore();
+    }
   });
   it("401s an anonymous card read", async () => {
     const token = await registerHandle("private-card");
