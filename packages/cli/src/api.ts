@@ -2,9 +2,13 @@ import {
   HANDLE_RE, AgentCard, CreateOrgInviteResponse, CreateRosterResponse, IssueRosterJoinKeyResponse,
   ListOrgInvitesResponse, ListRosterJoinKeysResponse, RegisterResponse, RevokeOrgInviteResponse,
   RevokeRosterJoinKeyResponse, RosterBundle,
+  EncryptionKeyRecord, IdentityRecord, HPKE_SUITE, MAX_ENCRYPTION_KEY_VALIDITY_MS,
+  encryptionKeyTranscript, fromBase64Url, keyIdFor, signTranscript,
   type AgentCardType, type CardUploadType, type OrgInviteMetadataType, type RosterBundleType,
   type RosterJoinKeyMetadataType,
+  type EncryptionKeyRecordType, type IdentityRecordType,
 } from "@benree/agentcall-shared";
+import type { StoredKeys } from "./keys.js";
 
 export class ApiError extends Error {
   constructor(
@@ -312,4 +316,80 @@ export async function fetchCard(
   if (res.status === 404) throw new ApiError(`No card published for "${handle}".`, "unknown_handle");
   if (!res.ok) throw new ApiError(`Card fetch failed (${res.status}).`, "network");
   return AgentCard.parse(await res.json());
+}
+
+// Uses fromBase64Url from @benree/agentcall-shared (Task 3) rather than
+// re-implementing the decode: one base64url implementation in the codebase.
+async function importIdentityPrivateKey(pkcs8B64url: string): Promise<CryptoKey> {
+  return crypto.subtle.importKey(
+    "pkcs8", fromBase64Url(pkcs8B64url) as BufferSource,
+    { name: "ECDSA", namedCurve: "P-256" }, false, ["sign"],
+  );
+}
+
+export async function publishIdentityKey(
+  relay: string, auth: Auth, keys: StoredKeys, host: string,
+): Promise<void> {
+  const record: IdentityRecordType = IdentityRecord.parse({
+    v: 1, address: `${auth.handle}@${host}`, identity_pub: keys.identity_pub,
+  });
+  const res = await relayFetch(
+    relay, "/v1/keys/identity",
+    { method: "PUT", headers: { "content-type": "application/json", ...authHeaders(auth) }, body: JSON.stringify({ record }) },
+    RELAY_TIMEOUT_MS,
+  );
+  if (res.status === 409) {
+    throw new ApiError(
+      "A different identity key is already published for this handle. It cannot be replaced.",
+      "invalid",
+    );
+  }
+  if (!res.ok) throw new ApiError(`Could not publish the identity key (HTTP ${res.status}).`, "network");
+}
+
+export async function publishEncryptionKey(
+  relay: string, auth: Auth, keys: StoredKeys, host: string, now: number = Date.now(),
+): Promise<void> {
+  const pub = keys.encryption_pub;
+  const record: EncryptionKeyRecordType = EncryptionKeyRecord.parse({
+    v: 1,
+    address: `${auth.handle}@${host}`,
+    key_id: await keyIdFor(pub),
+    suite: HPKE_SUITE,
+    pub,
+    epoch: keys.epoch,
+    not_before: now,
+    not_after: now + MAX_ENCRYPTION_KEY_VALIDITY_MS,
+    prev: null,
+  });
+  const signature = await signTranscript(
+    await importIdentityPrivateKey(keys.identity_pkcs8),
+    encryptionKeyTranscript(record),
+  );
+  const res = await relayFetch(
+    relay, "/v1/keys/encryption",
+    { method: "PUT", headers: { "content-type": "application/json", ...authHeaders(auth) }, body: JSON.stringify({ record, signature }) },
+    RELAY_TIMEOUT_MS,
+  );
+  if (!res.ok) throw new ApiError(`Could not publish the encryption key (HTTP ${res.status}).`, "network");
+}
+
+export async function fetchKeys(
+  relay: string, auth: Auth, handle: string,
+): Promise<{ identity: IdentityRecordType; encryption: { record: EncryptionKeyRecordType; signature: string } }> {
+  assertValidHandle(handle);
+  const res = await relayFetch(
+    relay, `/v1/keys/${handle}`, { headers: authHeaders(auth) }, RELAY_TIMEOUT_MS,
+  );
+  if (res.status === 404) {
+    throw new ApiError(`${handle} has no published key. They need a newer agentcall.`, "unknown_handle");
+  }
+  if (!res.ok) throw new ApiError(`Could not fetch keys for ${handle} (HTTP ${res.status}).`, "network");
+  const body = await res.json() as { identity?: unknown; encryption?: { record?: unknown; signature?: unknown } };
+  const identity = IdentityRecord.safeParse(body.identity);
+  const record = EncryptionKeyRecord.safeParse(body.encryption?.record);
+  if (!identity.success || !record.success || typeof body.encryption?.signature !== "string") {
+    throw new ApiError(`The relay returned a malformed key record for ${handle}.`, "invalid");
+  }
+  return { identity: identity.data, encryption: { record: record.data, signature: body.encryption.signature } };
 }

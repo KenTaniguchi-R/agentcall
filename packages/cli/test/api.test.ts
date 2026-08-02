@@ -1,8 +1,14 @@
 import { createServer, type Server, type IncomingMessage, type ServerResponse } from "node:http";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { registerHandle, getStatus, fetchCard, pushCard, rotateToken, createInvite, listInvites, revokeInvite,
   createRoster, joinRoster,
   fetchRosterBundle, issueRosterJoinKey, listRosterJoinKeys, revokeRosterJoinKey } from "../src/api.js";
+import { generateAndSaveKeys } from "../src/keys.js";
+import { fetchKeys, publishEncryptionKey, publishIdentityKey } from "../src/api.js";
+import { getPaths } from "../src/paths.js";
+import { mkdtempSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 
 const JOIN_KEY = `agjk_${"a".repeat(12)}_${"s".repeat(32)}`;
 
@@ -345,5 +351,67 @@ describe("roster api", () => {
     });
     const out = await fetchRosterBundle(relay, { org: "acme", handle: "ken", token: "t" }, "a".repeat(22), '"etag-1"');
     expect(out).toBe("not-modified");
+  });
+});
+
+describe("key publication", () => {
+  const auth = { org: "acme", handle: "ken", token: "t0ken" };
+
+  it("PUTs an identity record whose address carries the relay host", async () => {
+    const home = mkdtempSync(join(tmpdir(), "agentcall-api-"));
+    try {
+      const keys = await generateAndSaveKeys(getPaths(home));
+      let seen: { url: string; body: string } | undefined;
+      const fetchMock = vi.fn(async (url: string, init: RequestInit) => {
+        seen = { url, body: String(init.body) };
+        return new Response(JSON.stringify({ ok: true }), { status: 200 });
+      });
+      vi.stubGlobal("fetch", fetchMock);
+
+      await publishIdentityKey("https://relay.test", auth, keys, "relay.test");
+
+      expect(seen?.url).toBe("https://relay.test/v1/keys/identity");
+      const body = JSON.parse(seen!.body) as { record: { address: string; identity_pub: string } };
+      expect(body.record.address).toBe("ken@relay.test");
+      expect(body.record.identity_pub).toBe(keys.identity_pub);
+    } finally {
+      vi.unstubAllGlobals();
+      rmSync(home, { recursive: true, force: true });
+    }
+  });
+
+  it("PUTs an encryption record with a signature the relay can verify", async () => {
+    const home = mkdtempSync(join(tmpdir(), "agentcall-api-"));
+    try {
+      const keys = await generateAndSaveKeys(getPaths(home));
+      let seen: string | undefined;
+      vi.stubGlobal("fetch", vi.fn(async (_url: string, init: RequestInit) => {
+        seen = String(init.body);
+        return new Response(JSON.stringify({ ok: true }), { status: 200 });
+      }));
+
+      await publishEncryptionKey("https://relay.test", auth, keys, "relay.test", 1_754_000_000_000);
+
+      const body = JSON.parse(seen!) as {
+        record: { epoch: number; not_after: number; not_before: number; suite: string };
+        signature: string;
+      };
+      expect(body.record.epoch).toBe(keys.epoch);
+      expect(body.record.not_before).toBe(1_754_000_000_000);
+      expect(body.record.not_after - body.record.not_before).toBeLessThanOrEqual(2_592_000_000);
+      expect(body.signature).toMatch(/^[A-Za-z0-9_-]+$/);
+    } finally {
+      vi.unstubAllGlobals();
+      rmSync(home, { recursive: true, force: true });
+    }
+  });
+
+  it("throws a clear error when a handle has no published keys", async () => {
+    vi.stubGlobal("fetch", vi.fn(async () => new Response("{}", { status: 404 })));
+    try {
+      await expect(fetchKeys("https://relay.test", auth, "nobody")).rejects.toThrow(/no published key/i);
+    } finally {
+      vi.unstubAllGlobals();
+    }
   });
 });
