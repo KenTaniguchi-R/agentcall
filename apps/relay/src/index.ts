@@ -3,6 +3,7 @@ import { CardUpload, RegisterRequest, visibleTasks } from "@benree/agentcall-sha
 import { mountA2A } from "./a2a.js";
 import { orgAuditStatement, orgAuditTrimStatement } from "./events.js";
 import { expiredInviteCleanupStatement, mountInvites } from "./invites.js";
+import { mountKeys } from "./keys.js";
 import { mountPresence } from "./presence.js";
 import { mountRoster } from "./roster.js";
 import { generateToken, sha256Hex } from "./auth.js";
@@ -23,6 +24,7 @@ export type Env = RateLimitEnv & {
 const app = new Hono<{ Bindings: Env }>();
 mountA2A(app);
 mountInvites(app);
+mountKeys(app);
 mountPresence(app);
 mountRoster(app);
 
