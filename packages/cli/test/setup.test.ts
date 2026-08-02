@@ -23,6 +23,28 @@ function fakeRelay(): Promise<string> {
         const parsed = JSON.parse(body);
         registerBodies.push(parsed);
         res.writeHead(200, { "content-type": "application/json" });
+        res.end(JSON.stringify({
+          token: "tok-123",
+          address: `${parsed.handle}@agentcall.benree.tech`,
+          recovery_code: "agcr_TEST-TEST-TEST-TEST-TEST-TEST",
+        }));
+      });
+    });
+    server.listen(0, "127.0.0.1", () => resolve(`http://127.0.0.1:${(server.address() as { port: number }).port}`));
+  });
+}
+
+// Simulates a relay that predates the recovery-credential migration: it
+// returns only the pre-migration body ({ token, address }), no recovery_code.
+function fakeRelayWithoutRecovery(): Promise<string> {
+  return new Promise((resolve) => {
+    server = createServer((req, res) => {
+      let body = "";
+      req.on("data", (d) => (body += d));
+      req.on("end", () => {
+        const parsed = JSON.parse(body);
+        registerBodies.push(parsed);
+        res.writeHead(200, { "content-type": "application/json" });
         res.end(JSON.stringify({ token: "tok-123", address: `${parsed.handle}@agentcall.benree.tech` }));
       });
     });
@@ -254,6 +276,53 @@ describe("runSetup", () => {
       writeFileSync(p.policyFile, JSON.stringify(custom));
       await runSetup({ verify: false, handle: "ken", agent: "claude", relay, snippet: false, skipLaunchd: true });
       expect(JSON.parse(readFileSync(p.policyFile, "utf8"))).toEqual(custom);
+    } finally {
+      delete process.env.AGENTCALL_HOME;
+    }
+  });
+
+  it("prints the recovery code returned by register", async () => {
+    const home = mkdtempSync(join(tmpdir(), "agentcall-setup-"));
+    process.env.AGENTCALL_HOME = home;
+    try {
+      const relay = await fakeRelay();
+      const printed: string[] = [];
+      await runSetup({
+        verify: false, handle: "ken", agent: "claude", relay, snippet: false, skipLaunchd: true,
+        writeRecovery: (s: string) => printed.push(s),
+      });
+      expect(printed.join("\n")).toContain("agcr_TEST-TEST-TEST-TEST-TEST-TEST");
+    } finally {
+      delete process.env.AGENTCALL_HOME;
+    }
+  });
+
+  it("never writes the recovery code into config.json", async () => {
+    const home = mkdtempSync(join(tmpdir(), "agentcall-setup-"));
+    process.env.AGENTCALL_HOME = home;
+    try {
+      const relay = await fakeRelay();
+      await runSetup({
+        verify: false, handle: "ken", agent: "claude", relay, snippet: false, skipLaunchd: true,
+        writeRecovery: () => {},
+      });
+      expect(readFileSync(getPaths(home).configFile, "utf8")).not.toContain("agcr_");
+    } finally {
+      delete process.env.AGENTCALL_HOME;
+    }
+  });
+
+  it("prints nothing when the relay is too old to return a code", async () => {
+    const home = mkdtempSync(join(tmpdir(), "agentcall-setup-"));
+    process.env.AGENTCALL_HOME = home;
+    try {
+      const relay = await fakeRelayWithoutRecovery();
+      const printed: string[] = [];
+      await runSetup({
+        verify: false, handle: "ken", agent: "claude", relay, snippet: false, skipLaunchd: true,
+        writeRecovery: (s: string) => printed.push(s),
+      });
+      expect(printed.join("\n")).not.toContain("undefined");
     } finally {
       delete process.env.AGENTCALL_HOME;
     }

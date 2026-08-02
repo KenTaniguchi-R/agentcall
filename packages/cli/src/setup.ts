@@ -11,6 +11,7 @@ import { DEFAULT_POLICY } from "./policy.js";
 import { isEphemeralDir, preferDurableBin } from "./bin.js";
 import { appendSnippet } from "./snippet.js";
 import { installLaunchAgent } from "./launchd.js";
+import { printRecoveryCode } from "./recoveryPrint.js";
 import { formatCheck, verifyAgent, type VerifyCheck, type VerifyFns } from "./verify.js";
 
 // Directories launchd's fixed PATH (see launchd.ts's plistContent) actually
@@ -35,6 +36,7 @@ export interface SetupOpts {
   resolveBin?: (name: string) => string | null;
   installLaunchAgentFn?: typeof installLaunchAgent;
   verifyFns?: VerifyFns;
+  writeRecovery?: (s: string) => void;
 }
 
 // Dirnames of the resolved bins, deduped and skipping any that failed to
@@ -199,10 +201,18 @@ export async function runSetup(opts: SetupOpts): Promise<{ ready: boolean }> {
     const relay = (opts.relay ?? relayUrl()).replace(/\/+$/, "");
 
     console.log(`Registering ${handle} with ${relay} ...`);
-    const { token, address: registeredAddress } = await registerHandle(relay, handle, agentKind);
-    cfg = agentKind ? { handle, token, agent_kind: agentKind, relay } : { handle, token, relay };
-    address = registeredAddress;
+    const registered = await registerHandle(relay, handle, agentKind);
+    cfg = agentKind ? { handle, token: registered.token, agent_kind: agentKind, relay } : { handle, token: registered.token, relay };
+    address = registered.address;
     saveConfig(paths, cfg);
+
+    // A relay predating the recovery migration returns no code. Casting
+    // rather than parsing in api.ts means that arrives as `undefined`, so
+    // guard it — printing "Recovery code: undefined" would be worse than
+    // printing nothing.
+    if (registered.recovery_code) {
+      printRecoveryCode(registered.recovery_code, opts.writeRecovery);
+    }
   }
 
   // Everything below the config is listener-side (callee) machinery: a

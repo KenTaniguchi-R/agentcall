@@ -211,4 +211,47 @@ describe("runDoctor", () => {
     expect(code).toBe(0);
     expect(lines.join("\n")).not.toContain("tool guard");
   });
+
+  it("warns when no recovery code has ever been issued", async () => {
+    const p = freshPaths();
+    saveConfig(p, { handle: "ken", token: "t", agent_kind: "claude", relay: "https://relay.example" });
+    const lines: string[] = [];
+    await runDoctor({
+      ...baseDeps,
+      paths: p,
+      log: (l) => lines.push(l),
+      getRecoveryStateFn: async () => ({ issued: false, redeemed_at: null }),
+    });
+    const out = lines.join("\n");
+    expect(out).toMatch(/recovery/i);
+    expect(out).toMatch(/agentcall recovery issue/);
+  });
+
+  it("reports a redemption date when the code has been used", async () => {
+    const p = freshPaths();
+    saveConfig(p, { handle: "ken", token: "t", agent_kind: "claude", relay: "https://relay.example" });
+    const lines: string[] = [];
+    await runDoctor({
+      ...baseDeps,
+      paths: p,
+      log: (l) => lines.push(l),
+      getRecoveryStateFn: async () => ({ issued: true, redeemed_at: Date.UTC(2026, 6, 4) }),
+    });
+    const out = lines.join("\n");
+    expect(out).toContain("2026-07-04");
+    expect(out).toMatch(/wasn't you|was not you/i);
+  });
+
+  it("stays quiet when a code is issued and unredeemed", async () => {
+    const p = freshPaths();
+    saveConfig(p, { handle: "ken", token: "t", agent_kind: "claude", relay: "https://relay.example" });
+    const lines: string[] = [];
+    await runDoctor({
+      ...baseDeps,
+      paths: p,
+      log: (l) => lines.push(l),
+      getRecoveryStateFn: async () => ({ issued: true, redeemed_at: null }),
+    });
+    expect(lines.join("\n")).not.toMatch(/agentcall recovery issue/);
+  });
 });

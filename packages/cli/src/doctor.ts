@@ -1,6 +1,6 @@
 import { execFileSync } from "node:child_process";
 import { existsSync } from "node:fs";
-import { getStatus } from "./api.js";
+import { getRecoveryState, getStatus } from "./api.js";
 import { callAgent } from "./callClient.js";
 import { loadConfig, relayUrl, resolveWorkdir, type Config, type Workdir } from "./config.js";
 import { LAUNCH_LABEL } from "./launchd.js";
@@ -12,6 +12,7 @@ export interface DoctorDeps {
   // Test seams — production callers should leave these as the defaults.
   verifyFns?: VerifyFns;
   getStatusFn?: typeof getStatus;
+  getRecoveryStateFn?: typeof getRecoveryState;
   callFn?: typeof callAgent;
   launchctlList?: () => string;
   isDarwin?: boolean;
@@ -91,6 +92,34 @@ export async function runDoctor(deps: DoctorDeps): Promise<number> {
     });
   } catch (e) {
     report({ name: "relay status", ok: false, detail: short(e) });
+  }
+
+  // Reports only what is observable. Whether the owner actually KEPT their
+  // code is not, which is why there is no "have you saved it?" nag here.
+  try {
+    const state = await (deps.getRecoveryStateFn ?? getRecoveryState)(
+      relayUrl(cfg), { handle: cfg.handle, token: cfg.token },
+    );
+    if (!state.issued) {
+      report({
+        name: "recovery code",
+        ok: true,
+        warn: true,
+        detail: "never issued",
+        hint: "run `agentcall recovery issue` — without one, losing config.json loses the handle",
+      });
+    } else if (state.redeemed_at !== null) {
+      const when = new Date(state.redeemed_at).toISOString().slice(0, 10);
+      report({
+        name: "recovery code",
+        ok: true,
+        warn: true,
+        detail: `redeemed on ${when}`,
+        hint: "if that wasn't you, run `agentcall recovery issue` now",
+      });
+    }
+  } catch {
+    /* an unreachable relay is already reported by the status check above */
   }
 
   // Falls back to publicDir when workdir didn't resolve: per the ladder
