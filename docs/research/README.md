@@ -45,13 +45,14 @@ Five notes on the sequence:
   Every other doc assumes the caller already knows the address. In a 500-person company
   they do not, and that is the asker's half of the #2 pain in #1. Discovery is a
   separate problem from calling, and only calling is built.
-- **#8 is the only doc that reads the code.** #1–#7 study the market; #8 asks which
-  parts of #7's gap are commodity, and cites `file:line` against the tree at
-  2026-08-02 rather than reasoning from the README. Two of its findings are properties
-  of our own repo that no market research would surface: we publish the CLI with no
-  provenance and no release workflow, and D1's always-on 30-day Time Travel makes an
-  erasure request structurally unanswerable. Read it last; it depends on #7 for the
-  gap and on #5 for what enforcement is left after the sandbox was dropped.
+- **#8 is the only doc that reads the code, and it is scoped by
+  [reference-implementations](./reference-implementations.md).** #1–#7 study the
+  market; #8 asks which parts of #7's gap are commodity, and deliberately covers only
+  what the reference index does not already assign to a precedent. Read the index
+  first, then #8 — otherwise its recommendations look broader than they are. Its
+  first version was researched against a stale branch and asserted four gaps `main`
+  had already closed; the correction and the rule that followed are recorded in its
+  §5 rather than edited away. Code claims cite `origin/main` @ `af78a87`.
 - **#7 amends #3 and is the first doc with a backlog.** #3 scored Cotal as
   inside-your-own-perimeter and therefore disjoint from us. The enterprise pivot makes
   that deployment shape ours too, so #7 re-runs the comparison and turns the differences
