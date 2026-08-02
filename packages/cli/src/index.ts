@@ -1,12 +1,4 @@
-import { rmSync } from "node:fs";
 import { Command, CommanderError } from "commander";
-import { getPaths } from "./paths.js";
-import { loadConfig, saveConfig, relayUrl, assertCallableConfig } from "./config.js";
-import { rotateToken, ApiError } from "./api.js";
-import { startListener } from "./listener.js";
-import { runSetup } from "./setup.js";
-import { installLaunchAgent, isLaunchAgentInstalled, uninstallLaunchAgent } from "./launchd.js";
-import { runDoctor } from "./doctor.js";
 import { DEFAULT_SEARCH_LIMIT } from "./search.js";
 import { ExitOnly, realDeps } from "./commands/deps.js";
 import { rosterCreate, rosterForget, rosterJoin, rosterList } from "./commands/roster.js";
@@ -15,6 +7,7 @@ import { contactsAdd, contactsList, contactsRemove } from "./commands/contacts.j
 import { call, status } from "./commands/call.js";
 import { card, taskNew } from "./commands/card.js";
 import { policyVerb } from "./commands/policy.js";
+import { doctor, listen, rotate, setup, uninstall } from "./commands/account.js";
 
 export function createProgram(): Command {
 const program = new Command();
@@ -47,28 +40,15 @@ program
   .option("--skip-launchd", "skip installing the launchd background listener")
   .option("--caller-only", "register a handle to call others without making your own agent callable")
   .option("--no-verify", "skip verifying the agent can answer a test call")
-  .action(
-    async (o: {
-      handle?: string;
-      agent?: string;
-      relay?: string;
-      snippet?: boolean;
-      skipLaunchd?: boolean;
-      callerOnly?: boolean;
-      verify?: boolean;
-    }) => {
-      const result = await runSetup({
-        handle: o.handle,
-        agent: o.agent as "claude" | "codex" | undefined,
-        relay: o.relay,
-        snippet: o.snippet,
-        skipLaunchd: o.skipLaunchd,
-        callerOnly: o.callerOnly,
-        verify: o.verify,
-      });
-      if (!result.ready) process.exitCode = 1;
-    },
-  );
+  .action(run((o: {
+    handle?: string;
+    agent?: string;
+    relay?: string;
+    snippet?: boolean;
+    skipLaunchd?: boolean;
+    callerOnly?: boolean;
+    verify?: boolean;
+  }) => setup(realDeps(), o)));
 
 program
   .command("call")
@@ -89,9 +69,7 @@ program
 program
   .command("doctor")
   .description("verify this install can answer calls: binary, auth, agent spawn, listener, relay self-call")
-  .action(async () => {
-    process.exitCode = await runDoctor({ paths: getPaths() });
-  });
+  .action(run(() => doctor(realDeps())));
 
 program
   .command("card")
@@ -181,60 +159,18 @@ program.command("unoffer").description("stop offering a task publicly")
 program
   .command("listen")
   .description("run the foreground listener (launchd runs this in the background after setup)")
-  .action(() => {
-    const paths = getPaths();
-    const cfg = loadConfig(paths);
-    assertCallableConfig(cfg);
-    console.log(`agentcall listener starting for ${cfg.handle} -> ${relayUrl(cfg)}`);
-    const l = startListener({ relay: relayUrl(cfg), config: cfg, paths });
-    process.on("SIGTERM", () => {
-      l.stop();
-      process.exit(0);
-    });
-    process.on("SIGINT", () => {
-      l.stop();
-      process.exit(0);
-    });
-    // Keep the process alive without a busy loop; setInterval's max delay.
-    setInterval(() => {}, 1 << 30);
-  });
+  .action(run(() => listen(realDeps())));
 
 program
   .command("rotate")
   .description("replace this install's relay token (use if it may have leaked)")
-  .action(async () => {
-    const paths = getPaths();
-    const cfg = loadConfig(paths);
-    try {
-      const { token } = await rotateToken(relayUrl(cfg), { handle: cfg.handle, token: cfg.token });
-      saveConfig(paths, { ...cfg, token });
-      console.log(`Token rotated for ${cfg.handle}. The old token no longer works.`);
-      // The background listener read the old token at startup and holds it in
-      // memory, so without a restart it reconnects with a dead credential and
-      // 401s forever. Only restart a listener that's actually installed —
-      // installLaunchAgent would otherwise create one the owner opted out of.
-      if (isLaunchAgentInstalled(paths)) {
-        installLaunchAgent(paths);
-        console.log("Background listener restarted with the new token.");
-      } else if (cfg.agent_kind) {
-        console.log("Restart `agentcall listen` so it picks up the new token.");
-      }
-    } catch (e) {
-      console.error(e instanceof ApiError ? e.message : String(e));
-      process.exitCode = 1;
-    }
-  });
+  .action(run(() => rotate(realDeps())));
 
 program
   .command("uninstall")
   .description("remove the background listener")
   .option("--purge", "also delete ~/.agentcall (config, token, logs)")
-  .action((o: { purge?: boolean }) => {
-    const paths = getPaths();
-    uninstallLaunchAgent(paths);
-    if (o.purge) rmSync(paths.dir, { recursive: true, force: true });
-    console.log("agentcall listener removed." + (o.purge ? " Config purged." : ""));
-  });
+  .action(run((o: { purge?: boolean }) => uninstall(realDeps(), o)));
 
 return program;
 }
