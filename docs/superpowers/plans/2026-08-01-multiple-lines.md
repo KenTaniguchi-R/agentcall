@@ -1729,6 +1729,14 @@ export interface RemoveLineOpts {
   confirm?: boolean;
   purge?: boolean;
   uninstallFn?: typeof uninstallLaunchAgent;
+  // BOTH launchd calls need a seam, not just uninstall. A half-applied seam is
+  // worse than none: it reads as injected at a glance while the paired call
+  // still shells out to the real `launchctl bootstrap gui/<uid>`. The first
+  // draft of this plan omitted this field, and running the tests below booted
+  // out a developer's live listener and re-registered it against a vitest
+  // temp directory that no longer existed. The plist path is sandboxed by
+  // MachinePaths; the launchd session and label are not.
+  installFn?: typeof installLaunchAgent;
 }
 
 export function removeLine(m: MachinePaths, name: string, opts: RemoveLineOpts = {}): void {
@@ -1773,7 +1781,7 @@ export function removeLine(m: MachinePaths, name: string, opts: RemoveLineOpts =
   // happens; skip it when nothing callable is left.
   if (readyLines(m).some((l) => l.config.agent_kind)) {
     (opts.uninstallFn ?? uninstallLaunchAgent)(m);
-    installLaunchAgent(m);
+    (opts.installFn ?? installLaunchAgent)(m);
   } else {
     (opts.uninstallFn ?? uninstallLaunchAgent)(m);
   }
