@@ -1,6 +1,9 @@
 import { createServer, type Server, type IncomingMessage, type ServerResponse } from "node:http";
 import { afterEach, describe, expect, it } from "vitest";
-import { registerHandle, getStatus, fetchCard, pushCard, rotateToken, createInvite, createRoster, joinRoster, fetchRosterBundle } from "../src/api.js";
+import { registerHandle, getStatus, fetchCard, pushCard, rotateToken, createInvite, createRoster, joinRoster,
+  fetchRosterBundle, issueRosterJoinKey, listRosterJoinKeys, revokeRosterJoinKey } from "../src/api.js";
+
+const JOIN_KEY = `agjk_${"a".repeat(12)}_${"s".repeat(32)}`;
 
 let server: Server;
 afterEach(() => {
@@ -253,10 +256,10 @@ describe("pushCard / fetchCard", () => {
 });
 
 describe("roster api", () => {
-  it("creates a roster and returns the secret once", async () => {
-    const relay = await serve(200, { roster_id: "a".repeat(22), join_secret: "join-value-long", admin_secret: "admin-value-long" });
+  it("creates a roster and returns the initial key once", async () => {
+    const relay = await serve(200, { roster_id: "a".repeat(22), join_key: JOIN_KEY, admin_secret: "admin-value-long" });
     const r = await createRoster(relay, { org: "acme", handle: "ken", token: "t" });
-    expect(r).toEqual({ roster_id: "a".repeat(22), join_secret: "join-value-long", admin_secret: "admin-value-long" });
+    expect(r).toEqual({ roster_id: "a".repeat(22), join_key: JOIN_KEY, admin_secret: "admin-value-long" });
   });
 
   // The relay deliberately returns byte-identical 404s for "no such roster"
@@ -266,13 +269,32 @@ describe("roster api", () => {
   it("maps a 404 join to a message that does not distinguish the two causes", async () => {
     const relay = await serve(404, { error: "not found" });
     await expect(joinRoster(relay, { org: "acme", handle: "ken", token: "t" }, "a".repeat(22), "wrong"))
-      .rejects.toThrow(/no such roster, or the secret is wrong/i);
+      .rejects.toThrow(/no such roster, or the join key is invalid/i);
   });
 
   it("maps a 409 join to a roster-full message", async () => {
     const relay = await serve(409, { error: "roster full" });
     await expect(joinRoster(relay, { org: "acme", handle: "ken", token: "t" }, "a".repeat(22), "s"))
       .rejects.toThrow(/full/i);
+  });
+
+  it("parses issue, list, and targeted revoke responses", async () => {
+    const metadata = {
+      prefix: "a".repeat(12), description: "contractor", created_by: "ken", created_at: 1, expires_at: 2,
+      reusable: false, used: false, revoked_at: null,
+    };
+    let response: unknown = { join_key: JOIN_KEY, key: metadata };
+    const relay = await startServer((_req, res) => {
+      res.writeHead(200, { "content-type": "application/json" });
+      res.end(JSON.stringify(response));
+    });
+    const auth = { org: "acme", handle: "ken", token: "t" };
+    expect(await issueRosterJoinKey(relay, auth, "a".repeat(22), "admin")).toEqual({ join_key: JOIN_KEY, key: metadata });
+    response = { keys: [metadata] };
+    expect(await listRosterJoinKeys(relay, auth, "a".repeat(22), "admin")).toEqual([metadata]);
+    response = { prefix: "a".repeat(12), revoked_at: 3, evicted: 1 };
+    expect(await revokeRosterJoinKey(relay, auth, "a".repeat(22), "a".repeat(12), "admin", true))
+      .toEqual({ prefix: "a".repeat(12), revoked_at: 3, evicted: 1 });
   });
 
   it("returns the parsed bundle and its ETag", async () => {

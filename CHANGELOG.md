@@ -6,6 +6,18 @@ which are released together.
 
 ## Unreleased
 
+### Changed — roster join credentials are independently manageable
+
+- The single roster-wide join secret is replaced by keyed credentials with a
+  stable public prefix, reveal-once secret, mandatory expiry, one-off or
+  reusable scope, metadata-only listing, and individual revocation.
+- `agentcall roster key issue|list|revoke` replaces roster-wide rotation.
+  Revocation retains members by default; `--evict` removes only members that
+  joined through the selected key.
+- Roster creation still has a one-paste onboarding path by returning an
+  initial reusable key with a 30-day expiry. The relay retains only the secret
+  half's SHA-256 digest and each member's admission-key provenance.
+
 ### Added — administrator-managed policy ceiling
 
 - macOS and Linux now have fixed, `AGENTCALL_HOME`-independent managed-policy
@@ -27,9 +39,9 @@ which are released together.
 
 - Roster audit events now use stable `roster.*` names and record CRUD action,
   organization, actor authority, typed target, source IP/country, description,
-  and timestamp. All seven roster mutation event types become available with
-  this release: `roster.create`, `roster.join`, `roster.leave`, `roster.expel`,
-  `roster.rotate`, `roster.evict_all`, and `roster.delete`.
+  and timestamp. Join-key issuance, revocation, and provenance-scoped eviction
+  have their own `roster.join_key.*` event types alongside roster creation,
+  membership changes, and deletion.
 - A persistent per-roster budget bounds membership audit growth independently
   of source IP. Exhaustion is recorded once, while administrative recovery and
   security operations remain available.

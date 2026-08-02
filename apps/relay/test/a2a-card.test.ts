@@ -106,10 +106,10 @@ describe("GET /v1/a2a/:handle/agent-card.json", () => {
     const targetToken = await registerHandle("a2a-group");
     const created = await (await SELF.fetch("https://relay.test/v1/roster", {
       method: "POST", headers: wsAuth("a2a-group", targetToken),
-    })).json<{ roster_id: string; join_secret: string }>();
+    })).json<{ roster_id: string; join_key: string }>();
     await SELF.fetch(`https://relay.test/v1/roster/${created.roster_id}/join`, {
       method: "POST", headers: { "content-type": "application/json", ...viewerHeaders() },
-      body: JSON.stringify({ join_secret: created.join_secret }),
+      body: JSON.stringify({ join_key: created.join_key }),
     });
     await env.DB.prepare("INSERT OR REPLACE INTO cards (org, handle, card_json, updated_at) VALUES (?, ?, ?, ?)")
       .bind("acme", "a2a-group", JSON.stringify({

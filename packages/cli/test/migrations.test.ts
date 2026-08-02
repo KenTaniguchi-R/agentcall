@@ -13,6 +13,7 @@ const historical = [
 ];
 const repair = readFileSync(join(migrationsDir, "0006_tenancy_and_roster_lifecycle.sql"), "utf8");
 const auditEvents = readFileSync(join(migrationsDir, "0007_roster_audit_events.sql"), "utf8");
+const joinKeys = readFileSync(join(migrationsDir, "0008_roster_join_keys.sql"), "utf8");
 
 function legacyDatabase(): DatabaseSync {
   const db = new DatabaseSync(":memory:");
@@ -111,5 +112,40 @@ describe("D1 migration reconciliation", () => {
       roster_id: "existing", org: "acme", kind: "join", actor: "ken", subject: "caller", at: 1,
     });
     expect(columns(db, "rosters")).not.toContain("audit_budget_used");
+  });
+
+  it("replaces the zero-user shared join secret with keyed credentials and provenance", () => {
+    const db = tenantDatabase();
+    db.exec(auditEvents);
+    expect(() => db.exec(joinKeys)).not.toThrow();
+
+    expect(columns(db, "rosters")).toEqual([
+      "id", "org", "admin_secret_hash", "created_at", "audit_budget_used", "audit_budget_exhausted_at",
+    ]);
+    expect(columns(db, "roster_join_keys")).toEqual([
+      "prefix", "roster_id", "org", "secret_hash", "description", "created_by",
+      "created_at", "expires_at", "reusable", "used", "revoked_at",
+    ]);
+    expect(columns(db, "roster_members")).toEqual([
+      "roster_id", "org", "handle", "joined_at", "joined_via_prefix",
+    ]);
+  });
+
+  it("refuses the join-key rebuild if any roster evidence exists", () => {
+    const evidence = [
+      "INSERT INTO rosters (id, org, join_secret_hash, admin_secret_hash, created_at) " +
+        "VALUES ('existing', 'acme', 'join', 'admin', 1)",
+      "INSERT INTO roster_members (roster_id, org, handle, joined_at) VALUES ('existing', 'acme', 'ken', 1)",
+      "INSERT INTO roster_events " +
+        "(event, action_type, roster_id, org, actor, actor_type, target_type, target_id, description, at) " +
+        "VALUES ('roster.create', 'C', 'existing', 'acme', 'ken', 'handle', 'roster', NULL, 'created', 1)",
+    ];
+    for (const insert of evidence) {
+      const db = tenantDatabase();
+      db.exec(auditEvents);
+      db.exec(insert);
+      expect(() => db.exec(joinKeys)).toThrow(/check constraint/i);
+      expect(columns(db, "rosters")).toContain("join_secret_hash");
+    }
   });
 });

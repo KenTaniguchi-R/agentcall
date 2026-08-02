@@ -1,6 +1,7 @@
 import {
-  HANDLE_RE, AgentCard, CreateInviteResponse, CreateRosterResponse, RegisterResponse, RosterBundle, RotateRosterResponse,
-  type AgentCardType, type CardUploadType, type RosterBundleType,
+  HANDLE_RE, AgentCard, CreateInviteResponse, CreateRosterResponse, IssueRosterJoinKeyResponse,
+  ListRosterJoinKeysResponse, RegisterResponse, RevokeRosterJoinKeyResponse, RosterBundle,
+  type AgentCardType, type CardUploadType, type RosterBundleType, type RosterJoinKeyMetadataType,
 } from "@benree/agentcall-shared";
 
 export class ApiError extends Error {
@@ -145,7 +146,7 @@ export async function pushCard(
 
 export async function createRoster(
   relay: string, auth: Auth, opts: { timeoutMs?: number } = {},
-): Promise<{ roster_id: string; join_secret: string; admin_secret: string }> {
+): Promise<{ roster_id: string; join_key: string; admin_secret: string }> {
   const res = await relayFetch(
     relay, "/v1/roster",
     { method: "POST", headers: authHeaders(auth) },
@@ -158,7 +159,7 @@ export async function createRoster(
 }
 
 export async function joinRoster(
-  relay: string, auth: Auth, rosterId: string, joinSecret: string,
+  relay: string, auth: Auth, rosterId: string, joinKey: string,
   opts: { timeoutMs?: number } = {},
 ): Promise<void> {
   const res = await relayFetch(
@@ -166,7 +167,7 @@ export async function joinRoster(
     {
       method: "POST",
       headers: { "content-type": "application/json", ...authHeaders(auth) },
-      body: JSON.stringify({ join_secret: joinSecret }),
+      body: JSON.stringify({ join_key: joinKey }),
     },
     opts.timeoutMs ?? RELAY_TIMEOUT_MS,
   );
@@ -175,7 +176,7 @@ export async function joinRoster(
   // The relay deliberately cannot tell these apart, and neither can this
   // message: distinguishing them would make roster ids enumerable.
   if (res.status === 404) {
-    throw new ApiError("No such roster, or the secret is wrong.", "unknown_handle");
+    throw new ApiError("No such roster, or the join key is invalid, expired, used, or revoked.", "unknown_handle");
   }
   if (res.status === 409) throw new ApiError("That roster is full.", "invalid");
   if (!res.ok) throw new ApiError(`Joining the roster failed (${res.status}).`, "network");
@@ -207,11 +208,33 @@ export async function expelRosterMember(
   await rosterMutation(relay, auth, rosterId, "expel", { handle, admin_secret: adminSecret });
 }
 
-export async function rotateRoster(
-  relay: string, auth: Auth, rosterId: string, adminSecret: string, evict: boolean,
-): Promise<{ join_secret: string }> {
-  const res = await rosterMutation(relay, auth, rosterId, "rotate", { admin_secret: adminSecret, evict });
-  return RotateRosterResponse.parse(await res.json());
+export async function issueRosterJoinKey(
+  relay: string, auth: Auth, rosterId: string, adminSecret: string,
+  options: { description?: string; expiresInDays?: number; reusable?: boolean } = {},
+): Promise<{ join_key: string; key: RosterJoinKeyMetadataType }> {
+  const res = await rosterMutation(relay, auth, rosterId, "keys", {
+    admin_secret: adminSecret,
+    description: options.description,
+    expires_in_days: options.expiresInDays,
+    reusable: options.reusable,
+  });
+  return IssueRosterJoinKeyResponse.parse(await res.json());
+}
+
+export async function listRosterJoinKeys(
+  relay: string, auth: Auth, rosterId: string, adminSecret: string,
+): Promise<RosterJoinKeyMetadataType[]> {
+  const res = await rosterMutation(relay, auth, rosterId, "keys/list", { admin_secret: adminSecret });
+  return ListRosterJoinKeysResponse.parse(await res.json()).keys;
+}
+
+export async function revokeRosterJoinKey(
+  relay: string, auth: Auth, rosterId: string, prefix: string, adminSecret: string, evict = false,
+): Promise<{ prefix: string; revoked_at: number; evicted: number }> {
+  const res = await rosterMutation(relay, auth, rosterId, `keys/${prefix}/revoke`, {
+    admin_secret: adminSecret, evict,
+  });
+  return RevokeRosterJoinKeyResponse.parse(await res.json());
 }
 
 export async function deleteRoster(
