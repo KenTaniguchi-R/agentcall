@@ -136,6 +136,90 @@ const bundle = (rosterId: string, handle = "sota") => ({
 });
 
 describe.sequential("CLI command actions", () => {
+  it("renders the employee's local call and tool history", async () => {
+    const testHome = home();
+    const paths = getPaths(testHome);
+    mkdirSync(paths.dir, { recursive: true });
+    writeFileSync(paths.callsLog, [
+      JSON.stringify({
+        ts: "2026-08-02T20:00:00.000Z", call_id: "call-1", from: "alice",
+        message: "review the patch", reply: "two findings", task: "review-pr",
+        status: "ok", duration_ms: 42,
+      }),
+      JSON.stringify({
+        ts: "2026-08-02T20:00:00.010Z", type: "tool_denied", call_id: "call-1",
+        tool: "Bash", rule: "credential-read", detail: "blocked",
+      }),
+    ].join("\n") + "\n");
+    writeFileSync(paths.toolsLog, [
+      JSON.stringify({ ts: "2026-08-02T20:00:00.005Z", type: "tool_call", call_id: "call-1", tool: "Read", allowed: true }),
+      JSON.stringify({ ts: "2026-08-02T20:00:00.010Z", type: "tool_call", call_id: "call-1", tool: "Bash", allowed: false }),
+    ].join("\n") + "\n");
+
+    const out = await runCommand(testHome, ["history"]);
+
+    expect(out.code).toBe(0);
+    expect(out.stderr).toBe("");
+    expect(out.stdout).toContain("2026-08-02T20:00:00.000Z  alice  review-pr  ok  42ms");
+    expect(out.stdout).toContain("Asked: review the patch");
+    expect(out.stdout).toContain("Replied: two findings");
+    expect(out.stdout).toContain("Tools: 2 attempts, 1 denied");
+  });
+
+  it("returns newest local history as JSON and discloses malformed log records", async () => {
+    const testHome = home();
+    const paths = getPaths(testHome);
+    mkdirSync(paths.dir, { recursive: true });
+    writeFileSync(paths.callsLog, [
+      JSON.stringify({
+        ts: "2026-08-02T19:00:00.000Z", call_id: "old", from: "alice",
+        message: "old question", task: "ask", status: "ok", duration_ms: 1,
+      }),
+      "not-json",
+      JSON.stringify({
+        ts: "2026-08-02T19:30:00.000Z", call_id: "broken", from: 42,
+        message: "wrong type", status: "ok",
+      }),
+      JSON.stringify({
+        ts: "2026-08-02T20:00:00.000Z", call_id: "new", from: "bob",
+        message: "new question", reply: "new answer", task: "ask", status: "ok", duration_ms: 2,
+      }),
+    ].join("\n") + "\n");
+    writeFileSync(paths.toolsLog, JSON.stringify({
+      ts: "2026-08-02T20:00:00.001Z", type: "tool_call", call_id: "new",
+    }) + "\n");
+
+    const out = await runCommand(testHome, ["history", "--limit", "1", "--json"]);
+
+    expect(out.code).toBe(0);
+    expect(out.stderr).toContain("Skipped 3 malformed local history records");
+    expect(JSON.parse(out.stdout)).toEqual([{
+      ts: "2026-08-02T20:00:00.000Z", call_id: "new", from: "bob",
+      message: "new question", reply: "new answer", task: "ask", status: "ok",
+      duration_ms: 2, tool_attempts: 0, tools_denied: 0,
+    }]);
+  });
+
+  it("bounds local history scanning and discloses partial logs", async () => {
+    const testHome = home();
+    const paths = getPaths(testHome);
+    mkdirSync(paths.dir, { recursive: true });
+    writeFileSync(paths.callsLog,
+      JSON.stringify({
+        ts: "2026-08-02T19:00:00.000Z", call_id: "old", from: "alice",
+        message: "old question", task: "ask", status: "ok",
+      }) + "\n" + "x".repeat(4 * 1024 * 1024) + "\n" + JSON.stringify({
+        ts: "2026-08-02T20:00:00.000Z", call_id: "new", from: "bob",
+        message: "new question", task: "ask", status: "ok",
+      }) + "\n");
+
+    const out = await runCommand(testHome, ["history", "--limit", "1", "--json"]);
+
+    expect(out.code).toBe(0);
+    expect(out.stderr).toMatch(/scan.*limited.*calls\.log/i);
+    expect(JSON.parse(out.stdout)).toMatchObject([{ call_id: "new" }]);
+  });
+
   it("preserves the top-level no-config failure path", async () => {
     const out = await runCommand(home(), ["search", "typescript"]);
     expect(out.code).toBe(1);

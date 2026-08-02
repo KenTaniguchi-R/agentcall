@@ -130,7 +130,9 @@ async function decideCallable(
     return false;
   }
   if (opts.yes) return true;
-  const answer = (await ask("Make your agent callable by others? [Y/n]: ")).trim().toLowerCase();
+  const answer = (await ask(
+    "Make your agent callable by others? Offered tasks run automatically without per-call approval. [Y/n]: ",
+  )).trim().toLowerCase();
   return answer === "" || answer === "y" || answer === "yes";
 }
 
@@ -178,6 +180,13 @@ export async function runSetup(opts: SetupOpts): Promise<{ ready: boolean }> {
         "`agentcall uninstall` (config is kept; re-run `agentcall setup` to come back).",
     );
     return { ready: false };
+  }
+
+  if (callable) {
+    console.log(
+      "Callable mode: offered tasks run automatically without per-call approval. " +
+        "Review activity later with `agentcall history`.",
+    );
   }
 
   // On reuse the saved agent_kind is what actually gets spawned (see

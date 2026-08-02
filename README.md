@@ -191,6 +191,19 @@ listener, relay self-call) — run it whenever calls to you start failing. `✓`
 pass and `✗` is a failure with a fix; a `!` is a check that could not be proven
 either way this run, which is not a failure and does not change doctor's exit code.
 
+```bash
+# Review the newest activity recorded on this machine
+agentcall history
+agentcall history --limit 100 --json
+```
+
+History is local to the callee's machine. It shows the newest 20 calls by
+default, including caller, task, outcome, the first 500 characters of the
+question and successful reply, and counts from guarded tool attempts. It does
+not fetch an employer or relay audit trail. Read the
+[employee transparency statement](./docs/security/employee-transparency.md)
+for what is and is not visible through these logs.
+
 Plain calls (no `--task`) run the built-in read-only `ask` task. To offer more:
 
     agentcall task new schedule-meeting   # scaffold ~/AgentCall/tasks/<id>/SKILL.md
@@ -491,6 +504,10 @@ installation can be modified by that user. In-product self-update remains
 disabled/deferred so it cannot bypass an IT-pinned version.
 
 ## Security model (v1, explicit)
+
+For the plain-language employee view—what a caller, the machine owner, an
+organization administrator, and the relay operator can see—read the
+[employee transparency statement](./docs/security/employee-transparency.md).
 
 - The organization is the call-reachability boundary. Any authenticated handle
   may call any registered handle in its own organization; anonymous callers and

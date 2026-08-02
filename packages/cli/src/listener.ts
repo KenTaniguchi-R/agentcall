@@ -1,5 +1,3 @@
-import { appendFileSync, mkdirSync } from "node:fs";
-import { dirname } from "node:path";
 import WebSocket from "ws";
 import {
   AGENT_TIMEOUT_MS, RelayToListenerFrame, safeParseFrame,
@@ -15,6 +13,7 @@ import {
 import { SerialQueue } from "./queue.js";
 import { loadPolicy, resolveTask } from "./policy.js";
 import { loadTasks } from "./tasks.js";
+import { appendPrivateLogLine } from "./audit-log.js";
 
 export interface ListenerDeps {
   relay: string;
@@ -56,8 +55,10 @@ export function startListener(deps: ListenerDeps): { stop(): void } {
 
   const audit = (entry: Record<string, unknown>) => {
     try {
-      mkdirSync(dirname(deps.paths.callsLog), { recursive: true });
-      appendFileSync(deps.paths.callsLog, JSON.stringify({ ts: new Date().toISOString(), ...entry }) + "\n");
+      appendPrivateLogLine(
+        deps.paths.callsLog,
+        JSON.stringify({ ts: new Date().toISOString(), ...entry }),
+      );
     } catch (e) {
       // Audit persistence is observability, not call delivery. A full or
       // read-only disk must not turn a refusal, failure, or completed answer
@@ -240,7 +241,8 @@ export function startListener(deps: ListenerDeps): { stop(): void } {
           // the owner's file, but it is also what gets pasted into a bug report.
           send({ type: "call_result", call_id, text: out.text, context_id: contextId, task: task.id });
           audit({
-            call_id, from, message: message.slice(0, 500), task: task.id, status: "ok",
+            call_id, from, message: message.slice(0, 500), reply: out.text.slice(0, 500),
+            task: task.id, status: "ok",
             duration_ms: Date.now() - started,
             context_id: contextId, turn: (binding?.turns ?? 0) + 1,
             context_persist_error: contextPersistError,

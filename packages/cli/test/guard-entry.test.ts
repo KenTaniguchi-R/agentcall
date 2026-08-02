@@ -1,5 +1,5 @@
 import { execFile, execFileSync } from "node:child_process";
-import { mkdtempSync, readFileSync } from "node:fs";
+import { mkdtempSync, readFileSync, statSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
@@ -50,6 +50,8 @@ describe("guard-entry as a real process", () => {
     expect(r.stdout).toBe("");
     const tools = readFileSync(join(home, ".agentcall", "tools.log"), "utf8").trim();
     expect(JSON.parse(tools)).toMatchObject({ type: "tool_call", call_id: "call-abc", allowed: true });
+    expect(statSync(join(home, ".agentcall")).mode & 0o777).toBe(0o700);
+    expect(statSync(join(home, ".agentcall", "tools.log")).mode & 0o777).toBe(0o600);
   });
 
   it("denies a credential read and emits the structured decision", () => {
