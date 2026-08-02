@@ -4,8 +4,8 @@ import { pushCard } from "./api.js";
 import { relayUrl } from "./config.js";
 import { loadPolicy } from "./policy.js";
 import { loadTasks } from "./tasks.js";
-import type { Config } from "./config.js";
-import type { Paths } from "./paths.js";
+import type { Config, LineConfig } from "./config.js";
+import type { LinePaths, Paths } from "./paths.js";
 import type { Policy } from "./policy.js";
 import type { Task } from "./tasks.js";
 
@@ -53,6 +53,25 @@ export function buildCardUpload(cfg: Config, policy: Policy, tasks: Task[]): Car
 // The snapshot is written only after a successful push — a failed push
 // must keep the old snapshot so staleness detection stays truthful.
 export async function publishCard(cfg: Config, p: Paths, push: typeof pushCard = pushCard): Promise<CardUploadType> {
+  const upload = buildCardUpload(cfg, loadPolicy(p), loadTasks(p));
+  await push(relayUrl(cfg), { handle: cfg.handle, token: cfg.token }, upload);
+  writeFileSync(p.cardSnapshotFile, JSON.stringify(upload, null, 2) + "\n");
+  return upload;
+}
+
+// Line-scoped counterpart of publishCard, above, for multi-line installs
+// (LineConfig/LinePaths in place of the legacy Config/Paths). Kept as a
+// separate function rather than widening publishCard's signature: `Paths`
+// and `LinePaths` are not structurally compatible (LinePaths has no `home`,
+// `publicDir`, or `contactsFile`), and the legacy Config/Paths exports stay
+// untouched until Task 12 migrates their remaining callers. buildCardUpload,
+// loadPolicy, and loadTasks are already line-shape-agnostic (Config/
+// LineConfig are structurally identical; loadPolicy/loadTasks take the
+// structural HasPolicyFile/HasTasksDir), so only the snapshot write and the
+// exported signature need a line-scoped variant.
+export async function publishCardForLine(
+  cfg: LineConfig, p: LinePaths, push: typeof pushCard = pushCard,
+): Promise<CardUploadType> {
   const upload = buildCardUpload(cfg, loadPolicy(p), loadTasks(p));
   await push(relayUrl(cfg), { handle: cfg.handle, token: cfg.token }, upload);
   writeFileSync(p.cardSnapshotFile, JSON.stringify(upload, null, 2) + "\n");

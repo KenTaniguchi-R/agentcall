@@ -25,6 +25,16 @@ describe("assertValidLineName", () => {
       expect(() => assertValidLineName(name)).toThrow(/line name/i);
     },
   );
+
+  // "tasks" and "public" are otherwise well-formed names, but a line's
+  // authored content lives at ~/AgentCall/<line>/{tasks,public} and the
+  // guard denies the legacy ~/AgentCall/tasks path wholesale — a line named
+  // "tasks" would nest its own tasks dir inside a denied root and fail
+  // every call silently. See the comment on RESERVED_LINE_NAMES in
+  // lineName.ts.
+  it.each(["tasks", "public"])("rejects the reserved name %j", (name) => {
+    expect(() => assertValidLineName(name)).toThrow(/reserved/i);
+  });
 });
 
 describe("saveLineConfig / loadLineConfig", () => {

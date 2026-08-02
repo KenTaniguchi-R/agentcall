@@ -2,8 +2,8 @@ import { mkdirSync, mkdtempSync, readFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
-import { buildCardUpload, publishCard } from "../src/card.js";
-import { getPaths } from "../src/paths.js";
+import { buildCardUpload, publishCard, publishCardForLine } from "../src/card.js";
+import { getLinePaths, getMachinePaths, getPaths } from "../src/paths.js";
 import { ASK_TASK, type Task } from "../src/tasks.js";
 import type { Policy } from "../src/policy.js";
 import type { Config } from "../src/config.js";
@@ -75,6 +75,32 @@ describe("publishCard", () => {
   it("does not write the snapshot when the push fails", async () => {
     const p = tempPaths();
     await expect(publishCard(cfg, p, async () => { throw new Error("relay down"); })).rejects.toThrow("relay down");
+    expect(() => readFileSync(p.cardSnapshotFile, "utf8")).toThrow();
+  });
+});
+
+describe("publishCardForLine", () => {
+  function tempLinePaths() {
+    const root = mkdtempSync(join(tmpdir(), "agentcall-pub-line-"));
+    const m = getMachinePaths(root, root);
+    const p = getLinePaths(m, "claude");
+    mkdirSync(p.dir, { recursive: true });
+    return p;
+  }
+
+  it("pushes the built upload and writes the snapshot, same as publishCard", async () => {
+    const p = tempLinePaths();
+    let pushed: unknown;
+    const upload = await publishCardForLine(cfg, p, async (_relay, _auth, u) => { pushed = u; });
+    expect(pushed).toEqual(upload);
+    expect(upload.default_offer).toEqual(["ask"]); // DEFAULT_POLICY, no tasks dir
+    const snap = JSON.parse(readFileSync(p.cardSnapshotFile, "utf8"));
+    expect(snap).toEqual(upload);
+  });
+
+  it("does not write the snapshot when the push fails", async () => {
+    const p = tempLinePaths();
+    await expect(publishCardForLine(cfg, p, async () => { throw new Error("relay down"); })).rejects.toThrow("relay down");
     expect(() => readFileSync(p.cardSnapshotFile, "utf8")).toThrow();
   });
 });
