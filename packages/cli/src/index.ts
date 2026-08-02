@@ -21,6 +21,7 @@ import { allRostersFailed, DEFAULT_SEARCH_LIMIT, rank, renderResults, sanitize, 
 import { refreshRoster } from "./searchRefresh.js";
 import { ask } from "./tty.js";
 import { renderPolicyReport } from "./policy-report.js";
+import { loadLocalHistory, renderLocalHistory } from "./history.js";
 import { sanitizeTerminalOutput, stringifyTerminalSafeJson } from "@benree/agentcall-shared";
 
 export function createProgram(): Command {
@@ -228,6 +229,34 @@ program
   .description("verify this install can answer calls: binary, auth, agent spawn, tool telemetry, listener, relay self-call")
   .action(async () => {
     process.exitCode = await runDoctor({ paths: getPaths() });
+  });
+
+program
+  .command("history")
+  .description("show call activity stored locally on this machine")
+  .option("--limit <count>", "maximum newest calls to show (1-100)", "20")
+  .option("--json", "print machine-readable local history")
+  .action((o: { limit: string; json?: boolean }) => {
+    const limit = Number(o.limit);
+    if (!Number.isInteger(limit) || limit < 1 || limit > 100) {
+      console.error("History limit must be an integer from 1 to 100.");
+      process.exitCode = 1;
+      return;
+    }
+    const history = loadLocalHistory(getPaths(), limit);
+    if (history.malformed > 0) {
+      console.error(`Skipped ${history.malformed} malformed local history record${history.malformed === 1 ? "" : "s"}.`);
+    }
+    if (history.truncatedFiles.length > 0) {
+      console.error(
+        `History scan was limited to the newest 4 MiB of: ${history.truncatedFiles.join(", ")}. ` +
+          "Tool counts may be partial.",
+      );
+    }
+    const entries = history.entries;
+    console.log(o.json
+      ? stringifyTerminalSafeJson(entries)
+      : sanitizeTerminalOutput(renderLocalHistory(entries)));
   });
 
 const reviewOwnCard = () => {

@@ -1,5 +1,5 @@
 import { createServer, type Server } from "node:http";
-import { mkdirSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readFileSync, statSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { WebSocketServer, type WebSocket as WsSocket } from "ws";
@@ -146,7 +146,11 @@ describe("startListener", () => {
     expect(result.context_id).toMatch(/^ctx_[A-Za-z0-9_-]{22}$/);
     expect(JSON.stringify(result)).not.toContain("agent-session");
     const audit = readFileSync(paths.callsLog, "utf8").trim().split("\n").map((l) => JSON.parse(l));
-    expect(audit[0]).toMatchObject({ call_id: "c1", from: "shusaku", status: "ok" });
+    expect(audit[0]).toMatchObject({
+      call_id: "c1", from: "shusaku", message: "q?", reply: "the answer", status: "ok",
+    });
+    expect(statSync(paths.dir).mode & 0o777).toBe(0o700);
+    expect(statSync(paths.callsLog).mode & 0o777).toBe(0o600);
   });
 
   it("reports busy when the queue is full", async () => {

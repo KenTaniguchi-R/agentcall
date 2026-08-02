@@ -6,6 +6,18 @@ which are released together.
 
 ## Unreleased
 
+### Employee transparency and local history
+
+- Added `agentcall history` so the person whose machine answers calls can see
+  local caller, task, outcome, prompt/reply previews, and correlated guarded
+  tool-attempt counts. JSON output is available for local inspection scripts,
+  malformed log records and bounded-scan gaps are disclosed instead of
+  silently hidden, and audit directories/files are repaired to 0700/0600 on
+  write.
+- Callable setup now states that offered tasks run automatically without
+  per-call approval, and the employee transparency page documents what the
+  caller, machine owner, organization, and relay operator can actually see.
+
 ### Audit retention policy
 
 - Documented that roster audit events are retained indefinitely and

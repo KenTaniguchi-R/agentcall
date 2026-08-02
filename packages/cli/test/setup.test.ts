@@ -322,6 +322,7 @@ describe("setup progress output", () => {
       const relay = await fakeRelay();
       await runSetup({ invite: "test-invite", verify: false, handle: "ken9", agent: "claude", relay, snippet: false, skipLaunchd: true });
       expect(logs.some((l) => l.includes("Registering ken9"))).toBe(true);
+      expect(logs.some((l) => /offered tasks run automatically without per-call approval/i.test(l))).toBe(true);
     } finally {
       spy.mockRestore();
       delete process.env.AGENTCALL_HOME;
@@ -469,6 +470,7 @@ describe("caller-only setup", () => {
         installLaunchAgentFn: () => { launchdCalled = true; },
       });
       expect(asked.some((q) => q.includes("callable"))).toBe(true);
+      expect(asked.some((q) => /run automatically without per-call approval/i.test(q))).toBe(true);
       const p = getPaths(home);
       const cfg = JSON.parse(readFileSync(p.configFile, "utf8"));
       expect(cfg.agent_kind).toBeUndefined();

@@ -2,10 +2,10 @@
 // subcommand on index.ts: routing through commander and the full import graph
 // measured 78ms against 33ms here, and this runs once per tool call.
 // Import only what it needs.
-import { appendFileSync, mkdirSync, realpathSync } from "node:fs";
-import { dirname } from "node:path";
+import { realpathSync } from "node:fs";
 import { FAIL_CLOSED_REASON, runGuard } from "./guard.js";
 import { getPaths } from "./paths.js";
+import { appendPrivateLogLine } from "./audit-log.js";
 
 // Only the exact string opts out of enforcement. Anything else — a typo, a
 // stale value, an empty string — enforces, so a mangled env var cannot
@@ -25,10 +25,7 @@ try {
     // ancestor. Swallowing the throw here and returning the text unchanged is
     // what let a Write through /tmp/link (-> ~/.ssh) land inside ~/.ssh.
     realpath: realpathSync,
-    appendLine: (file, line) => {
-      mkdirSync(dirname(file), { recursive: true });
-      appendFileSync(file, line + "\n");
-    },
+    appendLine: appendPrivateLogLine,
     allowedRoot: process.env.AGENTCALL_ALLOWED_ROOT,
   }, mode);
 
