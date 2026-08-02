@@ -1,4 +1,4 @@
-import { mkdtempSync, readFileSync, writeFileSync, statSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readFileSync, writeFileSync, statSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
@@ -153,7 +153,10 @@ describe("load/save", () => {
     expect(loadContexts(p)).toEqual([]);
   });
 
-  it("drops entries that do not match the schema", () => {
+  // z.array(...) validates the whole array as a unit, so one bad entry drops
+  // every entry, not just the bad one. That's deliberate and still safe: it
+  // only ever denies more resumes, never grants one it shouldn't.
+  it("discards the whole store when any entry fails the schema", () => {
     const p = paths();
     saveContexts(p, [binding()]);
     writeFileSync(p.contextsFile, JSON.stringify([{ context_id: "nope" }]));
@@ -166,5 +169,16 @@ describe("load/save", () => {
     const p = paths();
     saveContexts(p, [binding()]);
     expect(statSync(p.contextsFile).mode & 0o077).toBe(0);
+  });
+
+  // mkdirSync's `mode` is silently ignored when the directory already exists
+  // (e.g. savePolicy creates it first, with no mode at all), so this must
+  // exercise the existing-directory path, not just a fresh mkdir, or it would
+  // pass whether or not saveContexts actually re-chmods.
+  it("tightens an existing world-readable dir to owner-only", () => {
+    const p = paths();
+    mkdirSync(p.dir, { recursive: true, mode: 0o755 });
+    saveContexts(p, [binding()]);
+    expect(statSync(p.dir).mode & 0o077).toBe(0);
   });
 });

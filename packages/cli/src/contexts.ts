@@ -83,7 +83,11 @@ export function loadContexts(p: Paths): ContextBinding[] {
 // 0600, same posture as config.json: this file holds real agent session ids and
 // the handle of everyone who has held a conversation with this agent.
 export function saveContexts(p: Paths, list: ContextBinding[]): void {
+  // mkdirSync's mode is silently ignored when the directory already exists
+  // (e.g. savePolicy creates it first, with no mode at all) — the chmodSync
+  // is the actual guard, same as saveConfig.
   mkdirSync(p.dir, { recursive: true, mode: 0o700 });
+  chmodSync(p.dir, 0o700);
   writeFileSync(p.contextsFile, JSON.stringify(list, null, 2) + "\n", { mode: 0o600 });
   chmodSync(p.contextsFile, 0o600);
 }
