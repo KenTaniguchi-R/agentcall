@@ -15,11 +15,11 @@ describe("POST /v1/roster", () => {
     const token = await registerHandle("rc1");
     const res = await createRoster("rc1", token);
     expect(res.status).toBe(200);
-    const body = await res.json<{ roster_id: string; join_secret: string; admin_secret: string }>();
+    const body = await res.json<{ roster_id: string; join_key: string; admin_secret: string }>();
     expect(ROSTER_ID_RE.test(body.roster_id)).toBe(true);
-    expect(body.join_secret.length).toBeGreaterThan(20);
+    expect(body.join_key.length).toBeGreaterThan(20);
     expect(body.admin_secret.length).toBeGreaterThan(20);
-    expect(body.admin_secret).not.toBe(body.join_secret);
+    expect(body.admin_secret).not.toBe(body.join_key);
   });
 
   it("401s without credentials", async () => {

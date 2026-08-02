@@ -5,3 +5,4 @@
 0005_handle_recovery.sql
 0006_tenancy_and_roster_lifecycle.sql
 0007_roster_audit_events.sql
+0008_roster_join_keys.sql

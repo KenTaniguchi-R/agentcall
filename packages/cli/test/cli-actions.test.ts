@@ -121,6 +121,8 @@ function seedConfig(testHome: string, relay: string): void {
 
 const A = "a".repeat(22);
 const B = "b".repeat(22);
+const KEY_PREFIX = "c".repeat(12);
+const JOIN_KEY = `agjk_${KEY_PREFIX}_${"s".repeat(32)}`;
 const bundle = (rosterId: string, handle = "sota") => ({
   roster_id: rosterId,
   entries: [{
@@ -149,7 +151,7 @@ describe.sequential("CLI command actions", () => {
   it("captures Commander validation failures without exiting the process", async () => {
     const out = await runCommand(home(), ["roster", "join", A]);
     expect(out.code).toBe(1);
-    expect(out.stderr).toMatch(/required option.*--secret/i);
+    expect(out.stderr).toMatch(/required option.*--key/i);
   });
 
   it("prints one-time roster credentials before a colliding local save can fail", async () => {
@@ -158,7 +160,7 @@ describe.sequential("CLI command actions", () => {
       creates += 1;
       return {
         status: 200,
-        body: { roster_id: B, join_secret: "join-once", admin_secret: "admin-once" },
+        body: { roster_id: B, join_key: JOIN_KEY, admin_secret: "admin-once" },
       };
     });
     const testHome = home();
@@ -170,7 +172,7 @@ describe.sequential("CLI command actions", () => {
     expect(creates).toBe(1);
     expect(out.code).toBe(1);
     expect(out.stdout).toContain(B);
-    expect(out.stdout).toContain("join-once");
+    expect(out.stdout).toContain(JOIN_KEY);
     expect(out.stdout).toContain("admin-once");
     expect(out.stderr).toMatch(/roster was created.*not saved locally/is);
     expect(out.stderr).toContain(`agentcall roster join ${B}`);
@@ -186,10 +188,10 @@ describe.sequential("CLI command actions", () => {
     const testHome = home();
     seedConfig(testHome, relay);
 
-    const out = await runCommand(testHome, ["roster", "join", A, "--secret", "join-me", "--as", "acme"]);
+    const out = await runCommand(testHome, ["roster", "join", A, "--key", JOIN_KEY, "--as", "acme"]);
 
     expect(out.code).toBe(0);
-    expect(seen).toEqual({ url: `/v1/roster/${A}/join`, method: "POST", body: JSON.stringify({ join_secret: "join-me" }) });
+    expect(seen).toEqual({ url: `/v1/roster/${A}/join`, method: "POST", body: JSON.stringify({ join_key: JOIN_KEY }) });
     expect(loadMemberships(getPaths(testHome))).toEqual([{ name: "acme", relay, roster_id: A }]);
   });
 
@@ -203,7 +205,7 @@ describe.sequential("CLI command actions", () => {
     seedConfig(testHome, relay);
     saveMembership(getPaths(testHome), { name: "acme", relay, roster_id: A });
 
-    const out = await runCommand(testHome, ["roster", "join", B, "--secret", "spent", "--as", "acme"]);
+    const out = await runCommand(testHome, ["roster", "join", B, "--key", JOIN_KEY, "--as", "acme"]);
 
     expect(joins).toBe(1); // Relay membership happened; there is no rollback operation.
     expect(out.code).toBe(1);
@@ -229,26 +231,66 @@ describe.sequential("CLI command actions", () => {
     expect(loadMemberships(getPaths(testHome))).toEqual([]);
   });
 
-  it("passes explicit eviction confirmation and prints the replacement join secret", async () => {
+  it("passes explicit confirmation for join-key-scoped eviction", async () => {
     let seen: { url?: string; body?: string } = {};
     const relay = await startRelay((url, _method, body) => {
       seen = { url, body };
-      return { status: 200, body: { join_secret: "replacement-secret" } };
+      return { status: 200, body: { prefix: KEY_PREFIX, revoked_at: 3, evicted: 2 } };
     });
     const testHome = home();
     seedConfig(testHome, relay);
     saveMembership(getPaths(testHome), { name: "acme", relay, roster_id: A });
 
     const out = await runCommand(testHome, [
-      "roster", "rotate", "acme", "--evict", "--yes", "--admin-secret", "admin-secret",
+      "roster", "key", "revoke", "acme", KEY_PREFIX, "--evict", "--yes", "--admin-secret", "admin-secret",
     ]);
 
     expect(out.code).toBe(0);
     expect(seen).toEqual({
-      url: `/v1/roster/${A}/rotate`,
+      url: `/v1/roster/${A}/keys/${KEY_PREFIX}/revoke`,
       body: JSON.stringify({ admin_secret: "admin-secret", evict: true }),
     });
-    expect(out.stdout).toContain("replacement-secret");
+    expect(out.stdout).toContain("Evicted 2 member(s)");
+  });
+
+  it("issues a key once and lists metadata without a secret", async () => {
+    const metadata = {
+      prefix: KEY_PREFIX, description: "contractor", created_by: "ken", created_at: 1, expires_at: 2_000_000_000_000,
+      reusable: true, used: false, revoked_at: null,
+    };
+    const requests: { url: string; body?: string }[] = [];
+    const relay = await startRelay((url, _method, body) => {
+      requests.push({ url, body });
+      return url.endsWith("/keys/list")
+        ? { status: 200, body: { keys: [metadata] } }
+        : { status: 200, body: { join_key: JOIN_KEY, key: metadata } };
+    });
+    const testHome = home();
+    seedConfig(testHome, relay);
+    saveMembership(getPaths(testHome), { name: "acme", relay, roster_id: A });
+
+    const issued = await runCommand(testHome, [
+      "roster", "key", "issue", "acme", "--description", "contractor", "--expires-in", "14",
+      "--reusable", "--admin-secret", "admin-secret",
+    ]);
+    const listed = await runCommand(testHome, [
+      "roster", "key", "list", "acme", "--admin-secret", "admin-secret",
+    ]);
+
+    expect(issued.code).toBe(0);
+    expect(issued.stdout).toContain(JOIN_KEY);
+    expect(listed.code).toBe(0);
+    expect(listed.stdout).toContain(`${KEY_PREFIX}\tactive\treusable`);
+    expect(listed.stdout).not.toContain(JOIN_KEY);
+    expect(requests).toEqual([
+      {
+        url: `/v1/roster/${A}/keys`,
+        body: JSON.stringify({
+          admin_secret: "admin-secret", description: "contractor", expires_in_days: 14, reusable: true,
+        }),
+      },
+      { url: `/v1/roster/${A}/keys/list`, body: JSON.stringify({ admin_secret: "admin-secret" }) },
+    ]);
   });
 
   it("keeps JSON stdout parseable when one roster refresh fails", async () => {

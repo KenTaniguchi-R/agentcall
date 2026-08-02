@@ -198,15 +198,16 @@ an individual `block` always overrides group and default offers.
 don't — that's what rosters and `agentcall search` are for.
 
 A **roster** is an opt-in group whose members can discover each other's
-published tasks. Creation returns separate join and admin secrets. Store the
-admin secret in a password manager and share only the id and join secret:
+published tasks. Creation returns an initial reusable join key and a separate
+admin secret. Store the admin secret in a password manager and share only the
+id and join key:
 
 ```bash
 agentcall roster create --as acme
-# prints an id, join secret, and admin secret; all are shown once
+# prints an id, initial join key, and admin secret; credentials are shown once
 
 # everyone else:
-agentcall roster join <roster-id> --secret <secret> --as acme
+agentcall roster join <roster-id> --key <key> --as acme
 ```
 
 Then search by what you need, not by who you know:
@@ -253,8 +254,11 @@ Membership has an explicit lifecycle:
 ```bash
 agentcall roster leave acme                    # relay leave + local cleanup
 agentcall roster expel acme <handle>           # requires the admin secret
-agentcall roster rotate acme                   # closes the door; members stay
-agentcall roster rotate acme --evict --yes     # incident response: clear all members
+agentcall roster key issue acme --description contractor
+agentcall roster key issue acme --reusable     # shared key; one-off is the default
+agentcall roster key list acme                  # metadata only; secrets never reappear
+agentcall roster key revoke acme <prefix>       # members stay
+agentcall roster key revoke acme <prefix> --evict --yes # remove only members admitted by it
 agentcall roster delete acme --yes              # teardown; audit events survive
 ```
 
@@ -262,9 +266,11 @@ Administrative commands resolve the secret from `--admin-secret`, then
 `AGENTCALL_ADMIN_SECRET`, then an interactive prompt. The flag is convenient
 for scripts but can appear in shell history and process listings. The admin
 secret is never stored by AgentCall and cannot be recovered; if every copy is
-lost, abandon and recreate the roster. Expulsion revokes future fetches, not
-data already cached or copied. An expelled member can rejoin while the old join
-secret remains valid, so rotate it after expulsion if they may still know it.
+lost, abandon and recreate the roster. Join keys expire after 30 days by
+default (maximum 90 days); newly issued keys are one-off unless `--reusable`
+is passed. Revocation retains existing members by default. `--evict` removes
+only members whose admission provenance matches that key. Expulsion and
+eviction cannot retract data already cached or copied.
 `agentcall roster forget` remains the explicit local-only escape hatch when the
 relay is unreachable; use `leave` for actual membership removal.
 

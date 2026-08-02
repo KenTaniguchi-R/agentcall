@@ -3,7 +3,7 @@ import type { Env } from "./index.js";
 
 export type RosterAuditEvent =
   | "roster.create" | "roster.join" | "roster.leave" | "roster.expel"
-  | "roster.rotate" | "roster.evict_all" | "roster.delete"
+  | "roster.join_key.issue" | "roster.join_key.revoke" | "roster.join_key.evict" | "roster.delete"
   | "roster.audit_budget_exhausted";
 export type AuditAction = "C" | "R" | "U" | "D";
 export type AuditActor = "handle" | "admin_secret" | "system";

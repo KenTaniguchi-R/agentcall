@@ -124,11 +124,11 @@ describe("GET /v1/card/:handle", () => {
     const target = await registerHandle("group-card");
     const created = await (await SELF.fetch("https://relay.test/v1/roster", {
       method: "POST", headers: wsAuth("group-card", target),
-    })).json<{ roster_id: string; join_secret: string }>();
+    })).json<{ roster_id: string; join_key: string }>();
     const viewer = await registerHandle("group-viewer");
     await SELF.fetch(`https://relay.test/v1/roster/${created.roster_id}/join`, {
       method: "POST", headers: { "content-type": "application/json", ...wsAuth("group-viewer", viewer) },
-      body: JSON.stringify({ join_secret: created.join_secret }),
+      body: JSON.stringify({ join_key: created.join_key }),
     });
     const grouped = {
       ...UPLOAD, grants: {}, group_grants: { [created.roster_id]: ["schedule-meeting"] }, blocked: [],

@@ -87,7 +87,7 @@ describe("listener attach + status", () => {
     const shared = "s".repeat(22);
     const callerOnly = "c".repeat(22);
     const roster = env.DB.prepare(
-      "INSERT INTO rosters (id, org, join_secret_hash, admin_secret_hash, created_at) VALUES (?, 'acme', 'j', 'a', 1)",
+      "INSERT INTO rosters (id, org, admin_secret_hash, created_at) VALUES (?, 'acme', 'a', 1)",
     );
     const member = env.DB.prepare(
       "INSERT INTO roster_members (roster_id, org, handle, joined_at) VALUES (?, 'acme', ?, 1)",

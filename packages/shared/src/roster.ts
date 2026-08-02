@@ -8,11 +8,18 @@ import { MAX_TASK_KEYWORDS, MAX_KEYWORD_LENGTH } from "./card.js";
 // nothing verified. Display names are local-only, in the CLI's rosters.json.
 //
 // The id is unguessable but is NOT a secret — it travels in URL paths and
-// will land in relay logs. The join secret is a separate value, which is why
+// will land in relay logs. The join key is a separate value, which is why
 // sharing an id does not grant the ability to join.
 export const ROSTER_ID_RE = /^[A-Za-z0-9_-]{16,64}$/;
+export const ROSTER_JOIN_KEY_PREFIX_RE = /^[a-f0-9]{12}$/;
+export const ROSTER_JOIN_KEY_RE = /^agjk_[a-f0-9]{12}_[A-Za-z0-9_-]{32,128}$/;
 
 export const MAX_ROSTER_MEMBERS = 200;
+export const MAX_ACTIVE_ROSTER_JOIN_KEYS = 100;
+export const MAX_LISTED_ROSTER_JOIN_KEYS = 200;
+export const MAX_ROSTER_JOIN_KEY_DESCRIPTION = 100;
+export const DEFAULT_ROSTER_JOIN_KEY_EXPIRY_DAYS = 30;
+export const MAX_ROSTER_JOIN_KEY_EXPIRY_DAYS = 90;
 export const MAX_BUNDLE_TASKS_PER_CARD = 10;
 // Design ceiling asserted by test (see test/roster.test.ts), NOT a runtime
 // truncation. The caps that bind at runtime are MAX_ROSTER_MEMBERS (at join)
@@ -21,12 +28,12 @@ export const MAX_BUNDLE_BYTES = 4_500_000;
 
 export const CreateRosterResponse = z.object({
   roster_id: z.string().regex(ROSTER_ID_RE),
-  join_secret: z.string().min(1),
+  join_key: z.string().regex(ROSTER_JOIN_KEY_RE),
   admin_secret: z.string().min(1),
 });
 
 export const JoinRosterRequest = z.object({
-  join_secret: z.string().min(1).max(200),
+  join_key: z.string().regex(ROSTER_JOIN_KEY_RE),
 });
 
 export const AdminSecretRequest = z.object({
@@ -37,12 +44,42 @@ export const ExpelRosterRequest = AdminSecretRequest.extend({
   handle: z.string().regex(HANDLE_RE),
 });
 
-export const RotateRosterRequest = AdminSecretRequest.extend({
+export const IssueRosterJoinKeyRequest = AdminSecretRequest.extend({
+  description: z.string().max(MAX_ROSTER_JOIN_KEY_DESCRIPTION).optional().default(""),
+  expires_in_days: z.number().int().min(1).max(MAX_ROSTER_JOIN_KEY_EXPIRY_DAYS)
+    .optional().default(DEFAULT_ROSTER_JOIN_KEY_EXPIRY_DAYS),
+  reusable: z.boolean().optional().default(false),
+});
+
+export const RosterJoinKeyMetadata = z.object({
+  prefix: z.string().regex(ROSTER_JOIN_KEY_PREFIX_RE),
+  description: z.string().max(MAX_ROSTER_JOIN_KEY_DESCRIPTION),
+  created_by: z.string().regex(HANDLE_RE),
+  created_at: z.number().int().nonnegative(),
+  expires_at: z.number().int().nonnegative(),
+  reusable: z.boolean(),
+  used: z.boolean(),
+  revoked_at: z.number().int().nonnegative().nullable(),
+});
+
+export const IssueRosterJoinKeyResponse = z.object({
+  join_key: z.string().regex(ROSTER_JOIN_KEY_RE),
+  key: RosterJoinKeyMetadata,
+});
+
+export const ListRosterJoinKeysResponse = z.object({
+  keys: z.array(RosterJoinKeyMetadata).max(MAX_LISTED_ROSTER_JOIN_KEYS),
+});
+
+export const RevokeRosterJoinKeyRequest = AdminSecretRequest.extend({
+  prefix: z.string().regex(ROSTER_JOIN_KEY_PREFIX_RE),
   evict: z.boolean().optional().default(false),
 });
 
-export const RotateRosterResponse = z.object({
-  join_secret: z.string().min(1),
+export const RevokeRosterJoinKeyResponse = z.object({
+  prefix: z.string().regex(ROSTER_JOIN_KEY_PREFIX_RE),
+  revoked_at: z.number().int().nonnegative(),
+  evicted: z.number().int().nonnegative(),
 });
 
 // The search projection of a card task. `examples` are deliberately absent:
@@ -78,3 +115,4 @@ export const RosterBundle = z.object({
 export type BundleTaskType = z.infer<typeof BundleTask>;
 export type BundleEntryType = z.infer<typeof BundleEntry>;
 export type RosterBundleType = z.infer<typeof RosterBundle>;
+export type RosterJoinKeyMetadataType = z.infer<typeof RosterJoinKeyMetadata>;

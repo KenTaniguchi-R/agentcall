@@ -8,7 +8,7 @@ import type { Paths } from "./paths.js";
 // Two stores with DELIBERATELY OPPOSITE corruption policies, kept in one file
 // so the contrast is visible where someone might get it wrong:
 //
-//   rosters.json      user data  -> THROWS. The join secret is discarded at
+//   rosters.json      user data  -> THROWS. Join keys are discarded at
 //                                   join time, so this is the only surviving
 //                                   route back into a roster you belong to.
 //                                   Resetting it locks the user out for good.
@@ -45,7 +45,7 @@ export function loadMemberships(p: Paths): Membership[] {
   } catch (e) {
     throw new Error(
       `Corrupt rosters.json at ${p.rostersFile}: ${e instanceof Error ? e.message : String(e)}. ` +
-        `This file holds the roster ids you joined; the join secrets are not recoverable, so it is not reset automatically.`,
+        `This file holds the roster ids you joined; join keys are not recoverable, so it is not reset automatically.`,
     );
   }
 }
@@ -64,7 +64,7 @@ export function saveMembership(p: Paths, m: Membership): void {
   // `--as` defaults to the literal "roster" for both `roster create` and
   // `roster join`, so the happy path for joining a SECOND roster without
   // `--as` would otherwise silently destroy the first one's roster_id here —
-  // unrecoverable, because the join secret is discarded at join time. Same
+  // unrecoverable, because join keys are discarded at join time. Same
   // name + same id + same relay stays idempotent (rejoining what you already
   // belong to); any other reuse of the name is the collision this throws on.
   //
