@@ -6,6 +6,15 @@ which are released together.
 
 ## Unreleased
 
+### Documentation — positioning after MCP Tunnels and EMA
+
+- Reframed AgentCall around governed, person-scoped delegation rather than
+  private-network reachability, which MCP Tunnels now supplies for MCP servers.
+- Recorded Enterprise Managed Authorization as a useful identity and token-exchange
+  reference for #15/#27, but not a compatibility claim for the non-MCP relay.
+- Deferred an MCP facade until a named customer need and the principal-mapping,
+  endpoint-security, identity, audit, and conformance prerequisites all exist.
+
 ### Added — Multiple lines: several agentcall addresses on one machine
 
 A single Mac can now hold more than one agentcall address ("line"), each with its
