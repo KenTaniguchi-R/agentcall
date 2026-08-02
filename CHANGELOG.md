@@ -6,6 +6,13 @@ which are released together.
 
 ## Unreleased
 
+### Added — readable effective capability policy
+
+- `agentcall policy` renders the composed user and administrator policy as a
+  per-caller, per-roster, and per-task capability report, including blocks,
+  ignored missing tasks, assertion status, and the runtime-specific Claude or
+  Codex enforcement boundary.
+
 ### Documentation — living reference implementation index
 
 - Enterprise, security, and A2A designs now start from a discoverable living

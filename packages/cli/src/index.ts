@@ -1,7 +1,7 @@
-import { rmSync } from "node:fs";
+import { existsSync, rmSync } from "node:fs";
 import { Command, CommanderError } from "commander";
 import { getPaths } from "./paths.js";
-import { addressHost, loadConfig, saveConfig, relayUrl, assertCallableConfig } from "./config.js";
+import { addressHost, loadConfig, saveConfig, relayUrl, assertCallableConfig, resolveWorkdir } from "./config.js";
 import { callAgent, callStatusMessage, CallError } from "./callClient.js";
 import { getStatus, fetchCard, rotateToken, createInvite, createRoster, joinRoster, leaveRoster,
   expelRosterMember, issueRosterJoinKey, listRosterJoinKeys, revokeRosterJoinKey, deleteRoster, ApiError } from "./api.js";
@@ -20,6 +20,7 @@ import { deleteCached, forgetMembership, loadMemberships, saveMembership } from 
 import { allRostersFailed, DEFAULT_SEARCH_LIMIT, rank, renderResults, sanitize, toEntries, type RosterStatus, type SearchEntry } from "./search.js";
 import { refreshRoster } from "./searchRefresh.js";
 import { ask } from "./tty.js";
+import { renderPolicyReport } from "./policy-report.js";
 
 export function createProgram(): Command {
 const program = new Command();
@@ -214,6 +215,30 @@ program
   .command("lint")
   .description("validate tasks, effective policy assertions, and the published card")
   .action(reviewOwnCard);
+
+program
+  .command("policy")
+  .description("show the effective per-caller and per-task capability policy")
+  .action(() => {
+    const paths = getPaths();
+    const cfg = loadConfig(paths);
+    if (!cfg.agent_kind) {
+      console.error("This handle is caller-only (no agent configured) — there is no answering policy to report.");
+      process.exitCode = 1;
+      return;
+    }
+    try {
+      const report = renderPolicyReport(loadPolicy(paths), loadTasks(paths), {
+        agentKind: cfg.agent_kind,
+        managed: existsSync(paths.managedPolicyFile),
+        defaultWorkdir: resolveWorkdir(cfg, paths).dir,
+      });
+      console.log(report.trimEnd());
+    } catch (e) {
+      console.error(String(e instanceof Error ? e.message : e));
+      process.exitCode = 1;
+    }
+  });
 
 program
   .command("card")

@@ -160,6 +160,7 @@ Plain calls (no `--task`) run the built-in read-only `ask` task. To offer more:
     agentcall task new schedule-meeting   # scaffold ~/AgentCall/tasks/<id>/SKILL.md
     # edit the SKILL.md (YAML frontmatter: description, tools, timeout_s, ...)
     agentcall lint                        # validate tasks, policy tests, and card
+    agentcall policy                      # render who can run each task and what it can do
     agentcall card                        # same review plus your rendered card
     agentcall offer schedule-meeting      # offer to everyone, or:
     agentcall allow ken schedule-meeting  # grant to one caller
@@ -169,6 +170,14 @@ Tasks are one markdown file each — YAML frontmatter (only `description` is
 required) over the instructions your agent follows. Grants and blocks live in
 `~/.agentcall/policy.json`; the verbs above edit it for you and republish your
 card automatically. Callers see your menu with `agentcall card <address>`.
+
+`agentcall policy` renders the effective policy after any administrator ceiling
+and mandatory blocks are applied. It shows how the base, named-caller, and
+relay-attested roster rules compose; then lists each runnable task's capabilities
+and concrete working directory. The report warns that Claude's `exec` grant can
+read, change, and send data outside that directory, and states the weaker Codex
+boundary instead of presenting `fetch` and `exec` as controls Codex does not
+have.
 
 For a roster-wide grant, add a locally named entry to `groups` in
 `~/.agentcall/policy.json`, using the opaque id shown by `agentcall roster
