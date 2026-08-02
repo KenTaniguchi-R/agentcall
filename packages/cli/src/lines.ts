@@ -3,21 +3,18 @@ import { z } from "zod";
 import { AgentKindSchema } from "@benree/agentcall-shared";
 import { getLinePaths, type LinePaths, type MachinePaths } from "./paths.js";
 import type { LineConfig } from "./config.js";
-
 // A line name becomes a directory component and part of an authored-content
 // path, so this regex is the traversal defence and runs before anything
 // touches disk. Deliberately narrower than HANDLE_RE: the handle is global
 // and may need length, the local label does not.
-export const LINE_NAME_RE = /^[a-z0-9][a-z0-9-]{0,31}$/;
-
-export function assertValidLineName(name: string): void {
-  if (!LINE_NAME_RE.test(name)) {
-    throw new Error(
-      `"${name}" isn't a valid line name: lowercase letters, digits and hyphens, ` +
-        `1-32 characters, starting with a letter or digit.`,
-    );
-  }
-}
+//
+// Defined in lineName.ts, not here, and re-exported below: this module
+// imports zod (for LineConfigSchema), and guard-entry.ts needs LINE_NAME_RE
+// without pulling zod into its once-per-tool-call import graph. The
+// re-export keeps every existing `from "./lines.js"` caller working
+// unchanged.
+import { assertValidLineName, LINE_NAME_RE } from "./lineName.js";
+export { assertValidLineName, LINE_NAME_RE };
 
 export const LineConfigSchema = z.object({
   handle: z.string(),

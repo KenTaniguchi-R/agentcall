@@ -1,3 +1,5 @@
+import { mkdirSync, mkdtempSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 import { decide, DENY_REASON, runGuard, type GuardDeps, type GuardInput } from "../src/guard.js";
@@ -571,6 +573,55 @@ describe("runGuard — observe mode", () => {
       ...h.deps,
       appendLine: () => { throw new Error("ENOSPC: no space left on device"); },
     }, "observe");
+    expect(out.exitCode).toBe(0);
+  });
+});
+
+// End-to-end through the real filesystem, unlike harness()'s synthetic HOME:
+// runGuard's own extraDeniedRoots computation (lineTaskDirs) reads
+// deps.line.machine.linesDir off disk, so these are the only tests that
+// exercise that enumeration rather than a hand-passed array.
+describe("runGuard — enumerates every line's tasksDir from disk", () => {
+  function realMachine() {
+    const root = mkdtempSync(join(tmpdir(), "agentcall-guard-lines-"));
+    return getMachinePaths(root, root);
+  }
+
+  it("denies another line's tasks directory, including a line with no config.json", () => {
+    const machine = realMachine();
+    const healthy = getLinePaths(machine, "healthy");
+    mkdirSync(healthy.dir, { recursive: true });
+    writeFileSync(healthy.configFile, JSON.stringify({ handle: "h", token: "t", relay: "https://r.example" }));
+    // Never finished setup — no config.json — and per lineTaskDirs' contract
+    // that must not exempt its tasksDir from being denied.
+    const unfinished = getLinePaths(machine, "unfinished");
+    mkdirSync(unfinished.dir, { recursive: true });
+
+    const acting = getLinePaths(machine, "acting");
+    const deps: GuardDeps = {
+      line: acting, callId: "call-1", now: () => "2026-08-01T00:00:00.000Z",
+      realpath: (p) => p, appendLine: () => {},
+    };
+
+    for (const other of [healthy, unfinished]) {
+      const out = runGuard(
+        payload("Write", { file_path: join(other.tasksDir, "ask", "SKILL.md") }),
+        deps,
+      );
+      const decision = JSON.parse(out.stdout);
+      expect(decision.hookSpecificOutput.permissionDecision).toBe("deny");
+    }
+  });
+
+  it("still allows writing to the acting line's own share directory", () => {
+    const machine = realMachine();
+    const acting = getLinePaths(machine, "acting");
+    const deps: GuardDeps = {
+      line: acting, callId: "call-1", now: () => "2026-08-01T00:00:00.000Z",
+      realpath: (p) => p, appendLine: () => {},
+    };
+    const out = runGuard(payload("Write", { file_path: join(acting.shareDir, "notes.md") }), deps);
+    expect(out.stdout).toBe("");
     expect(out.exitCode).toBe(0);
   });
 });

@@ -1,6 +1,6 @@
 import { basename, dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
 import { fileURLToPath } from "node:url";
-import { listLines } from "./lines.js";
+import { lineTaskDirs } from "./lineTaskDirs.js";
 import type { LinePaths } from "./paths.js";
 
 export type GuardInput = {
@@ -308,8 +308,11 @@ export function runGuard(raw: string, deps: GuardDeps, mode: GuardMode = "enforc
     // sensitive as policy.json. Under the per-line layout these live at
     // ~/AgentCall/<line>/tasks, which no fixed home-relative rule can match —
     // enumerate them instead. Every line's, not just this one's: one line's
-    // agent must not rewrite another line's tasks either.
-    const taskRoots = listLines(deps.line.machine).map((l) => l.paths.tasksDir);
+    // agent must not rewrite another line's tasks either. lineTaskDirs, not
+    // listLines: this runs on every tool call, and listLines readFileSync's
+    // and zod-parses every line's config.json just to build a LineSummary
+    // this call only ever wants the tasksDir out of.
+    const taskRoots = lineTaskDirs(deps.line.machine);
     const verdict = decide(input, deps.line.machine.userHome, deps.realpath, undefined, taskRoots);
     const ts = deps.now();
     const write = (file: string, obj: Record<string, unknown>) =>

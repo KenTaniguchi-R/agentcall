@@ -5,7 +5,12 @@
 import { appendFileSync, mkdirSync, realpathSync } from "node:fs";
 import { dirname } from "node:path";
 import { FAIL_CLOSED_REASON, runGuard } from "./guard.js";
-import { LINE_NAME_RE } from "./lines.js";
+// From lineName.js, not lines.js: lines.js imports zod at module scope (for
+// LineConfigSchema), and this file is a standalone process entry that runs
+// once per tool call — see the header comment above for why it stays a
+// minimal import graph. Pulling zod in here to validate one env var would be
+// exactly the cost that comment exists to avoid.
+import { LINE_NAME_RE } from "./lineName.js";
 import { getLinePaths, getMachinePaths } from "./paths.js";
 
 // Only the exact string opts out of enforcement. Anything else — a typo, a
