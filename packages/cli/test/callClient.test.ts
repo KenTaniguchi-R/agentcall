@@ -1,20 +1,26 @@
 import { createServer, type Server } from "node:http";
 import { WebSocketServer } from "ws";
 import { afterEach, describe, expect, it } from "vitest";
-import { callAgent, CallError } from "../src/callClient.js";
+import { callAgent, callStatusMessage, CallError } from "../src/callClient.js";
 
-let httpServer: Server;
-afterEach(() => new Promise<void>((r) => httpServer?.close(() => r())));
+let httpServer: Server | undefined;
+afterEach(() => new Promise<void>((resolve) => {
+  const server = httpServer;
+  httpServer = undefined;
+  if (!server) return resolve();
+  server.close(() => resolve());
+}));
 
 type Script = (ws: import("ws").WebSocket, req: import("node:http").IncomingMessage) => void;
 
 function fakeRelay(script: Script): Promise<string> {
   return new Promise((resolve) => {
-    httpServer = createServer((_q, s) => { s.writeHead(404); s.end(); });
-    const wss = new WebSocketServer({ server: httpServer, path: "/v1/ws" });
+    const server = createServer((_q, s) => { s.writeHead(404); s.end(); });
+    httpServer = server;
+    const wss = new WebSocketServer({ server, path: "/v1/ws" });
     wss.on("connection", script);
-    httpServer.listen(0, "127.0.0.1", () => {
-      const { port } = httpServer.address() as { port: number };
+    server.listen(0, "127.0.0.1", () => {
+      const { port } = server.address() as { port: number };
       resolve(`http://127.0.0.1:${port}`);
     });
   });
@@ -36,6 +42,12 @@ function fakeRelayCapture(handler: (ws: import("ws").WebSocket, frame: any) => v
 const base = { org: "acme", from: "me", token: "tok", to: "ken", message: "hi" };
 
 describe("callAgent", () => {
+  it("gives each relay status a distinct progress message", () => {
+    expect(callStatusMessage("ringing")).toBe("ringing...");
+    expect(callStatusMessage("answered")).toBe("answered...");
+    expect(callStatusMessage("working")).toBe("agent working...");
+  });
+
   it("resolves with the reply and reports statuses", async () => {
     const relay = await fakeRelay((ws, req) => {
       expect(req.headers.authorization).toBe("Bearer tok");
@@ -46,6 +58,7 @@ describe("callAgent", () => {
         expect(f).toMatchObject({ type: "call_request", to: "ken", message: "hi" });
         ws.send(JSON.stringify({ type: "call_status", state: "ringing" }));
         ws.send(JSON.stringify({ type: "call_status", state: "answered" }));
+        ws.send(JSON.stringify({ type: "call_status", state: "working" }));
         ws.send(JSON.stringify({ type: "call_reply", call_id: "c1", text: "yo", context_id: "ctx_AAAAAAAAAAAAAAAAAAAAAA" }));
         ws.close(1000);
       });
@@ -54,7 +67,7 @@ describe("callAgent", () => {
     const reply = await callAgent({ relay, ...base, onStatus: (s) => states.push(s) });
     expect(reply.text).toBe("yo");
     expect(reply.context_id).toBe("ctx_AAAAAAAAAAAAAAAAAAAAAA");
-    expect(states).toEqual(["ringing", "answered"]);
+    expect(states).toEqual(["ringing", "answered", "working"]);
   });
 
   it("rejects with the relay's error code", async () => {
@@ -62,6 +75,16 @@ describe("callAgent", () => {
       ws.on("message", () => ws.send(JSON.stringify({ type: "call_error", code: "offline" })));
     });
     await expect(callAgent({ relay, ...base })).rejects.toMatchObject({ code: "offline" });
+  });
+
+  it("reports a confirmed remote cancellation without treating it as a connection failure", async () => {
+    const relay = await fakeRelay((ws) => {
+      ws.on("message", () => ws.send(JSON.stringify({ type: "call_error", code: "canceled" })));
+    });
+    await expect(callAgent({ relay, ...base })).rejects.toMatchObject({
+      code: "canceled",
+      message: "The call was canceled.",
+    });
   });
 
   it("rejects when the socket closes before a reply", async () => {

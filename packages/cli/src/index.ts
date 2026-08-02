@@ -2,7 +2,7 @@ import { rmSync } from "node:fs";
 import { Command, CommanderError } from "commander";
 import { getPaths } from "./paths.js";
 import { addressHost, loadConfig, saveConfig, relayUrl, assertCallableConfig } from "./config.js";
-import { callAgent, CallError } from "./callClient.js";
+import { callAgent, callStatusMessage, CallError } from "./callClient.js";
 import { getStatus, fetchCard, rotateToken, createInvite, createRoster, joinRoster, leaveRoster, expelRosterMember, rotateRoster, deleteRoster, ApiError } from "./api.js";
 import { startListener } from "./listener.js";
 import { runSetup } from "./setup.js";
@@ -136,7 +136,7 @@ program
         message,
         task,
         contextId,
-        onStatus: (s) => console.error(s === "ringing" ? "ringing..." : "answered, agent working..."),
+        onStatus: (s) => console.error(callStatusMessage(s)),
       });
       if (reply.context_id && reply.task) {
         rememberOutbound(paths, {
