@@ -46,7 +46,7 @@ const baseDeps = {
 describe("runDoctor", () => {
   it("exits 0 and runs every check including the relay self-call when all pass", async () => {
     const p = freshPaths();
-    saveConfig(p, { handle: "ken", token: "t", agent_kind: "claude", relay: "https://relay.example" });
+    saveConfig(p, { org: "acme", handle: "ken", token: "t", agent_kind: "claude", relay: "https://relay.example" });
     const lines: string[] = [];
     const code = await runDoctor({ ...baseDeps, paths: p, log: (l) => lines.push(l) });
     expect(code).toBe(0);
@@ -62,7 +62,7 @@ describe("runDoctor", () => {
   it("reports a broken workdir but still runs the agent checks", async () => {
     const p = freshPaths();
     saveConfig(p, {
-      handle: "ken", token: "t", agent_kind: "claude", relay: "https://relay.example",
+      org: "acme", handle: "ken", token: "t", agent_kind: "claude", relay: "https://relay.example",
       workdir: "/no/such/project",
     });
     const lines: string[] = [];
@@ -77,7 +77,7 @@ describe("runDoctor", () => {
   it("reports a configured workdir by path when it is valid", async () => {
     const p = freshPaths();
     saveConfig(p, {
-      handle: "ken", token: "t", agent_kind: "claude", relay: "https://relay.example",
+      org: "acme", handle: "ken", token: "t", agent_kind: "claude", relay: "https://relay.example",
       workdir: p.home,
     });
     const lines: string[] = [];
@@ -95,7 +95,7 @@ describe("runDoctor", () => {
 
   it("exits 0 and says caller-only when the config has no agent_kind", async () => {
     const p = freshPaths();
-    saveConfig(p, { handle: "solo", token: "t", relay: "https://relay.example" });
+    saveConfig(p, { org: "acme", handle: "solo", token: "t", relay: "https://relay.example" });
     const lines: string[] = [];
     const code = await runDoctor({ ...baseDeps, paths: p, log: (l) => lines.push(l) });
     expect(code).toBe(0);
@@ -104,7 +104,7 @@ describe("runDoctor", () => {
 
   it("skips the relay self-call (but still runs agent checks) when the handle is offline", async () => {
     const p = freshPaths();
-    saveConfig(p, { handle: "ken", token: "t", agent_kind: "claude", relay: "https://relay.example" });
+    saveConfig(p, { org: "acme", handle: "ken", token: "t", agent_kind: "claude", relay: "https://relay.example" });
     const lines: string[] = [];
     let selfCalled = false;
     const code = await runDoctor({
@@ -126,7 +126,7 @@ describe("runDoctor", () => {
 
   it("skips spawn and self-call after a failed codex auth check", async () => {
     const p = freshPaths();
-    saveConfig(p, { handle: "ken", token: "t", agent_kind: "codex", relay: "https://relay.example" });
+    saveConfig(p, { org: "acme", handle: "ken", token: "t", agent_kind: "codex", relay: "https://relay.example" });
     let spawned = false;
     const lines: string[] = [];
     const code = await runDoctor({
@@ -151,7 +151,7 @@ describe("runDoctor", () => {
 
   it("reports the launchd listener as not loaded without blocking agent checks", async () => {
     const p = freshPaths();
-    saveConfig(p, { handle: "ken", token: "t", agent_kind: "claude", relay: "https://relay.example" });
+    saveConfig(p, { org: "acme", handle: "ken", token: "t", agent_kind: "claude", relay: "https://relay.example" });
     const lines: string[] = [];
     const code = await runDoctor({ ...baseDeps, paths: p, launchctlList: () => "nothing here\n", log: (l) => lines.push(l) });
     expect(code).toBe(1);
@@ -166,7 +166,7 @@ describe("runDoctor", () => {
   // which is exactly the kind of silent failure this check exists to catch.
   it("runs the tool guard check for a claude install and reports it passing", async () => {
     const p = freshPaths();
-    saveConfig(p, { handle: "ken", token: "t", agent_kind: "claude", relay: "https://relay.example" });
+    saveConfig(p, { org: "acme", handle: "ken", token: "t", agent_kind: "claude", relay: "https://relay.example" });
     const lines: string[] = [];
     const code = await runDoctor({ ...baseDeps, paths: p, log: (l) => lines.push(l) });
     expect(code).toBe(0);
@@ -178,7 +178,7 @@ describe("runDoctor", () => {
   // owner has nothing to fix.
   it("keeps exit 0 when the guard check can only warn", async () => {
     const p = freshPaths();
-    saveConfig(p, { handle: "ken", token: "t", agent_kind: "claude", relay: "https://relay.example" });
+    saveConfig(p, { org: "acme", handle: "ken", token: "t", agent_kind: "claude", relay: "https://relay.example" });
     const lines: string[] = [];
     const code = await runDoctor({
       ...baseDeps,
@@ -193,7 +193,7 @@ describe("runDoctor", () => {
 
   it("does not run the tool guard check for a codex install", async () => {
     const p = freshPaths();
-    saveConfig(p, { handle: "ken", token: "t", agent_kind: "codex", relay: "https://relay.example" });
+    saveConfig(p, { org: "acme", handle: "ken", token: "t", agent_kind: "codex", relay: "https://relay.example" });
     const lines: string[] = [];
     const code = await runDoctor({
       ...baseDeps,

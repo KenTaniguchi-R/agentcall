@@ -54,42 +54,42 @@ function serveCapturing(status: number, body: unknown, captured: unknown[]): Pro
 
 describe("api client", () => {
   it("registers", async () => {
-    const relay = await serve(200, { token: "tok", address: "ken@agentcall.benree.tech" });
-    expect(await registerHandle(relay, "ken", "claude")).toEqual({ token: "tok", address: "ken@agentcall.benree.tech" });
+    const relay = await serve(200, { token: "tok", address: "ken@acme.agentcall.benree.tech" });
+    expect(await registerHandle(relay, "acme", "ken", "claude")).toEqual({ token: "tok", address: "ken@acme.agentcall.benree.tech" });
   });
   it("rejects a malformed handle locally, without hitting the relay", async () => {
     // Point at a port nothing is listening on: if validation didn't run
     // before fetch, this would reject with code "network" instead.
-    await expect(registerHandle("http://127.0.0.1:1", "Not Valid!", "claude"))
+    await expect(registerHandle("http://127.0.0.1:1", "acme", "Not Valid!", "claude"))
       .rejects.toMatchObject({ code: "invalid" });
   });
   it("rejects a reserved handle locally, without hitting the relay", async () => {
-    await expect(registerHandle("http://127.0.0.1:1", "admin", "claude"))
+    await expect(registerHandle("http://127.0.0.1:1", "acme", "admin", "claude"))
       .rejects.toMatchObject({ code: "invalid" });
   });
   it("maps 409 to handle_taken", async () => {
     const relay = await serve(409, { error: "handle taken" });
-    await expect(registerHandle(relay, "ken", "claude")).rejects.toMatchObject({ code: "handle_taken" });
+    await expect(registerHandle(relay, "acme", "ken", "claude")).rejects.toMatchObject({ code: "handle_taken" });
   });
   it("register times out with a clear error when the relay never responds", async () => {
     const relay = await serveNever();
-    await expect(registerHandle(relay, "ken", "claude", { timeoutMs: 100 })).rejects.toMatchObject({
+    await expect(registerHandle(relay, "acme", "ken", "claude", { timeoutMs: 100 })).rejects.toMatchObject({
       code: "network",
       message: expect.stringMatching(/did not respond/),
     });
   });
   it("status times out with a clear error when the relay never responds", async () => {
     const relay = await serveNever();
-    await expect(getStatus(relay, "ken", { handle: "me", token: "tok" }, { timeoutMs: 100 })).rejects.toMatchObject({
+    await expect(getStatus(relay, "ken", { org: "acme", handle: "me", token: "tok" }, { timeoutMs: 100 })).rejects.toMatchObject({
       code: "network",
       message: expect.stringMatching(/did not respond/),
     });
   });
   it("gets status and maps 404", async () => {
     const relay = await serve(200, { online: true });
-    expect(await getStatus(relay, "ken", { handle: "me", token: "tok" })).toEqual({ online: true });
+    expect(await getStatus(relay, "ken", { org: "acme", handle: "me", token: "tok" })).toEqual({ online: true });
     const relay2 = await serve(404, { error: "unknown handle" });
-    await expect(getStatus(relay2, "ghost", { handle: "me", token: "tok" })).rejects.toMatchObject({ code: "unknown_handle" });
+    await expect(getStatus(relay2, "ghost", { org: "acme", handle: "me", token: "tok" })).rejects.toMatchObject({ code: "unknown_handle" });
   });
   // The relay stopped serving presence anonymously (it was an enumeration and
   // "is this person at their desk" oracle), so every status check must carry
@@ -104,21 +104,21 @@ describe("api client", () => {
       });
       server.listen(0, "127.0.0.1", () => resolve(`http://127.0.0.1:${(server.address() as { port: number }).port}`));
     });
-    await getStatus(relay, "ken", { handle: "me", token: "tok" });
+    await getStatus(relay, "ken", { org: "acme", handle: "me", token: "tok" });
     expect(headers?.authorization).toBe("Bearer tok");
     expect(headers?.["x-agentcall-handle"]).toBe("me");
   });
 
   it("maps a rejected status check to a re-run-setup message", async () => {
     const relay = await serve(401, { error: "unauthorized" });
-    await expect(getStatus(relay, "ken", { handle: "me", token: "bad" })).rejects.toMatchObject({
+    await expect(getStatus(relay, "ken", { org: "acme", handle: "me", token: "bad" })).rejects.toMatchObject({
       message: expect.stringMatching(/agentcall setup/),
     });
   });
 
   it("maps a throttled status check to its own message rather than a generic failure", async () => {
     const relay = await serve(429, { error: "rate limited" });
-    await expect(getStatus(relay, "ken", { handle: "me", token: "tok" })).rejects.toMatchObject({
+    await expect(getStatus(relay, "ken", { org: "acme", handle: "me", token: "tok" })).rejects.toMatchObject({
       message: expect.stringMatching(/too many/i),
     });
   });
@@ -135,7 +135,7 @@ describe("api client", () => {
       });
       server.listen(0, "127.0.0.1", () => resolve(`http://127.0.0.1:${(server.address() as { port: number }).port}`));
     });
-    expect(await rotateToken(relay, { handle: "me", token: "old" })).toEqual({ token: "fresh-token" });
+    expect(await rotateToken(relay, { org: "acme", handle: "me", token: "old" })).toEqual({ token: "fresh-token" });
     expect(method).toBe("POST");
     expect(headers?.authorization).toBe("Bearer old");
     expect(headers?.["x-agentcall-handle"]).toBe("me");
@@ -143,23 +143,23 @@ describe("api client", () => {
 
   it("maps a rejected rotation to a re-run-setup message", async () => {
     const relay = await serve(401, { error: "unauthorized" });
-    await expect(rotateToken(relay, { handle: "me", token: "bad" })).rejects.toMatchObject({
+    await expect(rotateToken(relay, { org: "acme", handle: "me", token: "bad" })).rejects.toMatchObject({
       message: expect.stringMatching(/agentcall setup/),
     });
   });
 
   it("maps a throttled rotation to its own message", async () => {
     const relay = await serve(429, { error: "rate limited" });
-    await expect(rotateToken(relay, { handle: "me", token: "tok" })).rejects.toMatchObject({
+    await expect(rotateToken(relay, { org: "acme", handle: "me", token: "tok" })).rejects.toMatchObject({
       message: expect.stringMatching(/too many/i),
     });
   });
 
   it("registers caller-only: omits agent_kind from the request body entirely", async () => {
     const captured: unknown[] = [];
-    const relay = await serveCapturing(200, { token: "tok", address: "solo@agentcall.benree.tech" }, captured);
-    expect(await registerHandle(relay, "solo")).toEqual({ token: "tok", address: "solo@agentcall.benree.tech" });
-    expect(captured).toEqual([{ handle: "solo" }]);
+    const relay = await serveCapturing(200, { token: "tok", address: "solo@acme.agentcall.benree.tech" }, captured);
+    expect(await registerHandle(relay, "acme", "solo")).toEqual({ token: "tok", address: "solo@acme.agentcall.benree.tech" });
+    expect(captured).toEqual([{ org: "acme", handle: "solo" }]);
   });
 });
 
@@ -190,7 +190,7 @@ describe("pushCard / fetchCard", () => {
       res.writeHead(200, { "content-type": "application/json" });
       res.end(JSON.stringify({ ok: true }));
     });
-    await pushCard(relay, { handle: "ken", token: "tok" }, {
+    await pushCard(relay, { org: "acme", handle: "ken", token: "tok" }, {
       description: "", agent_kind: "claude",
       tasks: [{ id: "ask", name: "Ask", description: "d", examples: [], keywords: [] }],
       default_offer: ["ask"], grants: {},
@@ -207,6 +207,9 @@ describe("pushCard / fetchCard", () => {
       tasks: [{ id: "ask", name: "Ask", description: "d", examples: [], keywords: [] }], updated_at: 1,
     };
     const relay = await startServer((req, res) => {
+      expect(req.headers.authorization).toBe("Bearer tok");
+      expect(req.headers["x-agentcall-org"]).toBe("acme");
+      expect(req.headers["x-agentcall-handle"]).toBe("viewer");
       if (req.url === "/v1/card/ken") {
         res.writeHead(200, { "content-type": "application/json" });
         res.end(JSON.stringify(card));
@@ -215,15 +218,22 @@ describe("pushCard / fetchCard", () => {
         res.end(JSON.stringify({ error: "no card" }));
       }
     });
-    expect(await fetchCard(relay, "ken")).toMatchObject({ handle: "ken" });
-    await expect(fetchCard(relay, "ghost")).rejects.toMatchObject({ code: "unknown_handle" });
+    const auth = { org: "acme", handle: "viewer", token: "tok" };
+    expect(await fetchCard(relay, "ken", auth)).toMatchObject({ handle: "ken" });
+    await expect(fetchCard(relay, "ghost", auth)).rejects.toMatchObject({ code: "unknown_handle" });
+  });
+
+  it("maps rejected card credentials to the setup recovery message", async () => {
+    const relay = await serve(401, { error: "unauthorized" });
+    await expect(fetchCard(relay, "ken", { org: "acme", handle: "viewer", token: "bad" }))
+      .rejects.toMatchObject({ message: expect.stringMatching(/agentcall setup/) });
   });
 });
 
 describe("roster api", () => {
   it("creates a roster and returns the secret once", async () => {
     const relay = await serve(200, { roster_id: "a".repeat(22), secret: "s3cret-value-long" });
-    const r = await createRoster(relay, { handle: "ken", token: "t" });
+    const r = await createRoster(relay, { org: "acme", handle: "ken", token: "t" });
     expect(r).toEqual({ roster_id: "a".repeat(22), secret: "s3cret-value-long" });
   });
 
@@ -233,13 +243,13 @@ describe("roster api", () => {
   // enumerable, defeating the relay-side protection.
   it("maps a 404 join to a message that does not distinguish the two causes", async () => {
     const relay = await serve(404, { error: "not found" });
-    await expect(joinRoster(relay, { handle: "ken", token: "t" }, "a".repeat(22), "wrong"))
+    await expect(joinRoster(relay, { org: "acme", handle: "ken", token: "t" }, "a".repeat(22), "wrong"))
       .rejects.toThrow(/no such roster, or the secret is wrong/i);
   });
 
   it("maps a 409 join to a roster-full message", async () => {
     const relay = await serve(409, { error: "roster full" });
-    await expect(joinRoster(relay, { handle: "ken", token: "t" }, "a".repeat(22), "s"))
+    await expect(joinRoster(relay, { org: "acme", handle: "ken", token: "t" }, "a".repeat(22), "s"))
       .rejects.toThrow(/full/i);
   });
 
@@ -248,7 +258,7 @@ describe("roster api", () => {
       res.writeHead(200, { "content-type": "application/json", ETag: '"etag-1"' });
       res.end(JSON.stringify({ roster_id: "a".repeat(22), entries: [], skipped: 0 }));
     });
-    const out = await fetchRosterBundle(relay, { handle: "ken", token: "t" }, "a".repeat(22));
+    const out = await fetchRosterBundle(relay, { org: "acme", handle: "ken", token: "t" }, "a".repeat(22));
     expect(out).not.toBe("not-modified");
     expect((out as { etag?: string }).etag).toBe('"etag-1"');
   });
@@ -260,7 +270,7 @@ describe("roster api", () => {
       res.writeHead(304);
       res.end();
     });
-    const out = await fetchRosterBundle(relay, { handle: "ken", token: "t" }, "a".repeat(22), '"etag-1"');
+    const out = await fetchRosterBundle(relay, { org: "acme", handle: "ken", token: "t" }, "a".repeat(22), '"etag-1"');
     expect(out).toBe("not-modified");
   });
 });

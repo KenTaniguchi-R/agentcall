@@ -1,7 +1,7 @@
 import { rmSync } from "node:fs";
-import { Command } from "commander";
+import { Command, CommanderError } from "commander";
 import { getPaths } from "./paths.js";
-import { loadConfig, saveConfig, relayUrl, assertCallableConfig } from "./config.js";
+import { addressHost, loadConfig, saveConfig, relayUrl, assertCallableConfig } from "./config.js";
 import { callAgent, CallError } from "./callClient.js";
 import { getStatus, fetchCard, rotateToken, createRoster, joinRoster, ApiError } from "./api.js";
 import { startListener } from "./listener.js";
@@ -19,12 +19,14 @@ import { forgetMembership, loadMemberships, saveMembership } from "./rosters.js"
 import { allRostersFailed, DEFAULT_SEARCH_LIMIT, rank, renderResults, sanitize, toEntries, type RosterStatus, type SearchEntry } from "./search.js";
 import { refreshRoster } from "./searchRefresh.js";
 
+export function createProgram(): Command {
 const program = new Command();
 program.name("agentcall").description("Call other people's coding agents").version("0.4.0");
 
 program
   .command("setup")
   .description("register a handle, configure your agent, and install the background listener")
+  .option("--org <org>", "organization slug (prompted if omitted)")
   .option("--handle <handle>", "handle to register (prompted if omitted)")
   .option("--agent <agent>", "agent kind: claude or codex (auto-detected if omitted)")
   .option("--relay <url>", "relay URL to register against")
@@ -35,6 +37,7 @@ program
   .action(
     async (o: {
       handle?: string;
+      org?: string;
       agent?: string;
       relay?: string;
       snippet?: boolean;
@@ -43,6 +46,7 @@ program
       verify?: boolean;
     }) => {
       const result = await runSetup({
+        org: o.org,
         handle: o.handle,
         agent: o.agent as "claude" | "codex" | undefined,
         relay: o.relay,
@@ -69,13 +73,12 @@ program
     // Config is loaded before resolution so the address can be checked against
     // the relay this call will actually dial (see resolveAddress).
     const cfg = loadConfig(paths);
-    const parsed = resolveAddress(paths, address, relayUrl(cfg));
+    const parsed = resolveAddress(paths, address, relayUrl(cfg), cfg.org);
     if (!parsed.ok) {
       console.error(parsed.error);
       process.exitCode = 1;
       return;
     }
-    if (parsed.warning) console.error(parsed.warning);
     const message = messageParts.join(" ");
 
     // --continue resolves against what the callee told us last time. The task
@@ -110,6 +113,7 @@ program
     try {
       const reply = await callAgent({
         relay: relayUrl(cfg),
+        org: cfg.org,
         from: cfg.handle,
         token: cfg.token,
         to: parsed.handle,
@@ -145,15 +149,14 @@ program
     // this used to fall back to the default relay with no config at all.
     const cfg = loadConfig(paths);
     const cfgRelay = relayUrl(cfg);
-    const parsed = resolveAddress(paths, address, cfgRelay);
+    const parsed = resolveAddress(paths, address, cfgRelay, cfg.org);
     if (!parsed.ok) {
       console.error(parsed.error);
       process.exitCode = 1;
       return;
     }
-    if (parsed.warning) console.error(parsed.warning);
     try {
-      const { online } = await getStatus(cfgRelay, parsed.handle, { handle: cfg.handle, token: cfg.token });
+      const { online } = await getStatus(cfgRelay, parsed.handle, { org: cfg.org, handle: cfg.handle, token: cfg.token });
       console.log(online ? "online" : "offline");
       process.exitCode = online ? 0 : 2;
     } catch (e) {
@@ -206,20 +209,18 @@ program
       console.log("Card published.");
       return;
     }
-    let cfg;
-    try { cfg = loadConfig(paths); } catch { cfg = undefined; }
-    const parsed = resolveAddress(paths, target, relayUrl(cfg));
+    const cfg = loadConfig(paths);
+    const parsed = resolveAddress(paths, target, relayUrl(cfg), cfg.org);
     if (!parsed.ok) {
       console.error(`${parsed.error} (or 'push')`);
       process.exitCode = 1;
       return;
     }
-    if (parsed.warning) console.error(parsed.warning);
     try {
       const card = await fetchCard(
-        cfg ? relayUrl(cfg) : relayUrl(undefined),
+        relayUrl(cfg),
         parsed.handle,
-        cfg ? { handle: cfg.handle, token: cfg.token } : undefined,
+        { org: cfg.org, handle: cfg.handle, token: cfg.token },
       );
       console.log(`${card.handle} (${card.agent_kind})${card.description ? ` — ${card.description}` : ""}`);
       for (const t of card.tasks) {
@@ -294,7 +295,7 @@ roster
     const paths = getPaths();
     const cfg = loadConfig(paths);
     try {
-      const { roster_id, secret } = await createRoster(relayUrl(cfg), { handle: cfg.handle, token: cfg.token });
+      const { roster_id, secret } = await createRoster(relayUrl(cfg), { org: cfg.org, handle: cfg.handle, token: cfg.token });
       saveMembership(paths, { name: o.as, relay: relayUrl(cfg), roster_id });
       console.log(`Roster created and saved locally as "${o.as}".\n`);
       console.log(`  id:     ${roster_id}`);
@@ -318,7 +319,7 @@ roster
     const paths = getPaths();
     const cfg = loadConfig(paths);
     try {
-      await joinRoster(relayUrl(cfg), { handle: cfg.handle, token: cfg.token }, rosterId, o.secret);
+      await joinRoster(relayUrl(cfg), { org: cfg.org, handle: cfg.handle, token: cfg.token }, rosterId, o.secret);
       // The secret is spent here and never written to disk: from now on the
       // handle token plus the relay-side membership row is what authorizes.
       saveMembership(paths, { name: o.as, relay: relayUrl(cfg), roster_id: rosterId });
@@ -383,14 +384,14 @@ program
       return;
     }
 
-    const host = new URL(relay).host;
+    const host = addressHost(cfg);
     const entries: SearchEntry[] = [];
     const statuses: RosterStatus[] = [];
     for (const m of memberships) {
       try {
         // Each roster degrades on its own: one unreachable roster must not
         // take down a search across the others.
-        const out = await refreshRoster(paths, m.name, m.roster_id, identity, { handle: cfg.handle, token: cfg.token }, { offline: o.offline });
+        const out = await refreshRoster(paths, m.name, m.roster_id, identity, { org: cfg.org, handle: cfg.handle, token: cfg.token }, { offline: o.offline });
         entries.push(...toEntries(m.name, host, out.entries));
         statuses.push({ name: m.name, ageSeconds: out.ageSeconds, stale: out.stale });
       } catch (e) {
@@ -507,7 +508,7 @@ program
     const paths = getPaths();
     const cfg = loadConfig(paths);
     try {
-      const { token } = await rotateToken(relayUrl(cfg), { handle: cfg.handle, token: cfg.token });
+      const { token } = await rotateToken(relayUrl(cfg), { org: cfg.org, handle: cfg.handle, token: cfg.token });
       saveConfig(paths, { ...cfg, token });
       console.log(`Token rotated for ${cfg.handle}. The old token no longer works.`);
       // The background listener read the old token at startup and holds it in
@@ -537,7 +538,33 @@ program
     console.log("agentcall listener removed." + (o.purge ? " Config purged." : ""));
   });
 
-program.parseAsync().catch((e) => {
-  console.error(String(e));
-  process.exitCode = 1;
-});
+return program;
+}
+
+// Commander actions predate this test seam and communicate failure through
+// process.exitCode. Isolate that process-global state here so two in-process
+// invocations cannot leak a failure into one another (or into Vitest itself).
+export interface CliOutput {
+  writeOut?: (text: string) => void;
+  writeErr?: (text: string) => void;
+}
+
+export async function runCli(argv: string[], output: CliOutput = {}): Promise<number> {
+  const previousExitCode = process.exitCode;
+  process.exitCode = undefined;
+  try {
+    const program = createProgram();
+    program.configureOutput(output);
+    program.exitOverride();
+    try {
+      await program.parseAsync(argv, { from: "user" });
+      return process.exitCode ?? 0;
+    } catch (e) {
+      if (e instanceof CommanderError) return e.exitCode;
+      console.error(String(e));
+      return 1;
+    }
+  } finally {
+    process.exitCode = previousExitCode;
+  }
+}

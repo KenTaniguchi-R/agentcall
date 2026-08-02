@@ -33,13 +33,14 @@ function fakeRelayCapture(handler: (ws: import("ws").WebSocket, frame: any) => v
   });
 }
 
-const base = { from: "me", token: "tok", to: "ken", message: "hi" };
+const base = { org: "acme", from: "me", token: "tok", to: "ken", message: "hi" };
 
 describe("callAgent", () => {
   it("resolves with the reply and reports statuses", async () => {
     const relay = await fakeRelay((ws, req) => {
       expect(req.headers.authorization).toBe("Bearer tok");
       expect(req.headers["x-agentcall-handle"]).toBe("me");
+      expect(req.headers["x-agentcall-org"]).toBe("acme");
       ws.on("message", (raw) => {
         const f = JSON.parse(String(raw));
         expect(f).toMatchObject({ type: "call_request", to: "ken", message: "hi" });
@@ -98,7 +99,7 @@ describe("callAgent", () => {
       captured = frame;
       ws.send(JSON.stringify({ type: "call_reply", call_id: "c1", text: "ok", task: frame.task }));
     });
-    const reply = await callAgent({ relay: url, from: "bob", token: "t", to: "ken", message: "tue?", task: "schedule-meeting" });
+    const reply = await callAgent({ relay: url, org: "acme", from: "bob", token: "t", to: "ken", message: "tue?", task: "schedule-meeting" });
     expect(captured).toMatchObject({ type: "call_request", task: "schedule-meeting" });
     expect(reply.task).toBe("schedule-meeting");
   });
@@ -113,7 +114,7 @@ describe("callAgent", () => {
         detail: "\u001b[2Jcleared your screen\u001b]0;retitled\u0007",
       }));
     });
-    const err = await callAgent({ relay: url, from: "bob", token: "t", to: "ken", message: "x" })
+    const err = await callAgent({ relay: url, org: "acme", from: "bob", token: "t", to: "ken", message: "x" })
       .then(() => null, (e) => e);
     expect(err.code).toBe("agent_error");
     expect(err.message).not.toContain("\u001b");
@@ -125,7 +126,7 @@ describe("callAgent", () => {
     const url = await fakeRelayCapture((ws) => {
       ws.send(JSON.stringify({ type: "call_error", code: "task_not_offered", offered: ["ask", "owner-introduction"] }));
     });
-    const err = await callAgent({ relay: url, from: "bob", token: "t", to: "ken", message: "x", task: "deploy" })
+    const err = await callAgent({ relay: url, org: "acme", from: "bob", token: "t", to: "ken", message: "x", task: "deploy" })
       .then(() => null, (e) => e);
     expect(err.code).toBe("task_not_offered");
     expect(err.offered).toEqual(["ask", "owner-introduction"]);

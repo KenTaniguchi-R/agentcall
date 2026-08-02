@@ -1,5 +1,5 @@
 import type { BundleEntryType } from "@benree/agentcall-shared";
-import { ApiError, fetchRosterBundle } from "./api.js";
+import { ApiError, fetchRosterBundle, type Auth } from "./api.js";
 import { CACHE_TTL_MS, deleteCached, readCached, writeCached } from "./rosters.js";
 import type { Paths } from "./paths.js";
 
@@ -28,7 +28,7 @@ export async function refreshRoster(
   name: string,
   rosterId: string,
   identity: { relay: string; caller: string },
-  auth: { handle: string; token: string },
+  auth: Auth,
   opts: RefreshOptions = {},
 ): Promise<RefreshResult> {
   const now = opts.now ?? Date.now();

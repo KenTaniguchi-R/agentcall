@@ -4,7 +4,7 @@ import { homedir } from "node:os";
 import { dirname, join } from "node:path";
 import { getPaths, type Paths } from "./paths.js";
 import { ask as ttyAsk } from "./tty.js";
-import { loadConfig, saveConfig, relayUrl, resolveWorkdir, type Config } from "./config.js";
+import { addressHost, loadConfig, saveConfig, relayUrl, resolveWorkdir, type Config } from "./config.js";
 import { registerHandle } from "./api.js";
 import { publishCard } from "./card.js";
 import { DEFAULT_POLICY } from "./policy.js";
@@ -20,6 +20,7 @@ import { formatCheck, verifyAgent, type VerifyCheck, type VerifyFns } from "./ve
 const LAUNCHD_PATH_DIRS = ["/opt/homebrew/bin", "/usr/local/bin"];
 
 export interface SetupOpts {
+  org?: string;
   handle?: string;
   agent?: "claude" | "codex";
   yes?: boolean;
@@ -102,7 +103,7 @@ export function warnIfOutsideLaunchdPath(name: string, resolveBin: (n: string) =
 // config's handle + relay is enough to reconstruct it locally.
 function addressFromConfig(cfg: Config): string {
   try {
-    return `${cfg.handle}@${new URL(cfg.relay).host}`;
+    return `${cfg.handle}@${addressHost(cfg)}`;
   } catch {
     return `${cfg.handle}@${cfg.relay}`;
   }
@@ -152,7 +153,11 @@ export async function runSetup(opts: SetupOpts): Promise<{ ready: boolean }> {
     existingCfg = undefined;
   }
   const reusedCfg =
-    existingCfg !== undefined && (!opts.handle || opts.handle === existingCfg.handle) ? existingCfg : undefined;
+    existingCfg !== undefined &&
+    (!opts.handle || opts.handle === existingCfg.handle) &&
+    (!opts.org || opts.org === existingCfg.org)
+      ? existingCfg
+      : undefined;
 
   const callable = await decideCallable(opts, hasBinFn, ask, reusedCfg);
 
@@ -193,14 +198,16 @@ export async function runSetup(opts: SetupOpts): Promise<{ ready: boolean }> {
     address = addressFromConfig(cfg);
     console.log(`Reusing existing registration for ${cfg.handle}`);
   } else {
+    const org = opts.org ?? (await ask("Organization slug (e.g. acme): ")).trim();
+    if (!org) throw new Error("An organization is required.");
     const handle = opts.handle ?? (await ask("Choose a handle (e.g. ken): ")).trim();
     if (!handle) throw new Error("A handle is required.");
 
     const relay = (opts.relay ?? relayUrl()).replace(/\/+$/, "");
 
     console.log(`Registering ${handle} with ${relay} ...`);
-    const { token, address: registeredAddress } = await registerHandle(relay, handle, agentKind);
-    cfg = agentKind ? { handle, token, agent_kind: agentKind, relay } : { handle, token, relay };
+    const { token, address: registeredAddress } = await registerHandle(relay, org, handle, agentKind);
+    cfg = agentKind ? { org, handle, token, agent_kind: agentKind, relay } : { org, handle, token, relay };
     address = registeredAddress;
     saveConfig(paths, cfg);
   }
@@ -274,7 +281,7 @@ export async function runSetup(opts: SetupOpts): Promise<{ ready: boolean }> {
         `  Relay:   ${cfg.relay}\n` +
         `  Address: ${address}\n\n` +
         `You can call other agents:\n` +
-        `  agentcall call ken@agentcall.benree.tech "hello"\n\n` +
+        `  agentcall call ken@${addressHost(cfg)} "hello"\n\n` +
         `To make your own agent callable later, install claude or codex and re-run \`agentcall setup\`.\n`,
     );
   }

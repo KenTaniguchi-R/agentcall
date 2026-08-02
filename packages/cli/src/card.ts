@@ -54,7 +54,7 @@ export function buildCardUpload(cfg: Config, policy: Policy, tasks: Task[]): Car
 // must keep the old snapshot so staleness detection stays truthful.
 export async function publishCard(cfg: Config, p: Paths, push: typeof pushCard = pushCard): Promise<CardUploadType> {
   const upload = buildCardUpload(cfg, loadPolicy(p), loadTasks(p));
-  await push(relayUrl(cfg), { handle: cfg.handle, token: cfg.token }, upload);
+  await push(relayUrl(cfg), { org: cfg.org, handle: cfg.handle, token: cfg.token }, upload);
   writeFileSync(p.cardSnapshotFile, JSON.stringify(upload, null, 2) + "\n");
   return upload;
 }

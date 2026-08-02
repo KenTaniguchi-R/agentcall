@@ -119,9 +119,14 @@ describe("detail bounds and sanitization", () => {
 
 describe("RegisterRequest", () => {
   it("parses with and without agent_kind (absent = caller-only)", () => {
-    expect(RegisterRequest.parse({ handle: "ken", agent_kind: "claude" }))
-      .toEqual({ handle: "ken", agent_kind: "claude" });
-    expect(RegisterRequest.parse({ handle: "solo" })).toEqual({ handle: "solo" });
+    expect(RegisterRequest.parse({ org: "acme", handle: "ken", agent_kind: "claude" }))
+      .toEqual({ org: "acme", handle: "ken", agent_kind: "claude" });
+    expect(RegisterRequest.parse({ org: "acme", handle: "solo" })).toEqual({ org: "acme", handle: "solo" });
+  });
+
+  it("requires a valid organization slug", () => {
+    expect(RegisterRequest.safeParse({ handle: "ken" }).success).toBe(false);
+    expect(RegisterRequest.safeParse({ org: "Acme Corp", handle: "ken" }).success).toBe(false);
   });
   it("still rejects invalid agent kinds", () => {
     expect(RegisterRequest.safeParse({ handle: "ken", agent_kind: "vim" }).success).toBe(false);

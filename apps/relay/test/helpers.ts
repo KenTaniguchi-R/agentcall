@@ -1,21 +1,23 @@
 import { SELF } from "cloudflare:test";
 import { expect } from "vitest";
 
-export async function registerHandle(handle: string, kind: "claude" | "codex" = "claude"): Promise<string> {
+export async function registerHandle(
+  handle: string, kind: "claude" | "codex" = "claude", org = "acme",
+): Promise<string> {
   const res = await SELF.fetch("https://relay.test/v1/register", {
     method: "POST",
     // Synthetic per-handle source IP: without it every call in a test file
     // shares the same "unknown" fallback key and would collide with the
     // register-endpoint rate limit (REGISTER_RL) across unrelated tests.
     headers: { "content-type": "application/json", "cf-connecting-ip": `test-${handle}` },
-    body: JSON.stringify({ handle, agent_kind: kind }),
+    body: JSON.stringify({ org, handle, agent_kind: kind }),
   });
   expect(res.status).toBe(200);
   return (await res.json<{ token: string }>()).token;
 }
 
-export function wsAuth(handle: string, token: string): Record<string, string> {
-  return { Authorization: `Bearer ${token}`, "X-AgentCall-Handle": handle };
+export function wsAuth(handle: string, token: string, org = "acme"): Record<string, string> {
+  return { Authorization: `Bearer ${token}`, "X-AgentCall-Org": org, "X-AgentCall-Handle": handle };
 }
 
 export async function openWs(path: string, headers: Record<string, string>): Promise<WebSocket> {

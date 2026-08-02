@@ -82,8 +82,8 @@ describe("POST /v1/roster/:id/join", () => {
     // register rate limit, so insert membership rows directly.
     const r = await newRoster("rj6");
     const db = (await import("cloudflare:test")).env.DB;
-    const stmt = db.prepare("INSERT OR IGNORE INTO roster_members (roster_id, handle, joined_at) VALUES (?, ?, ?)");
-    await db.batch(Array.from({ length: 200 }, (_, i) => stmt.bind(r.roster_id, `filler${i}`, 1)));
+    const stmt = db.prepare("INSERT OR IGNORE INTO roster_members (roster_id, org, handle, joined_at) VALUES (?, ?, ?, ?)");
+    await db.batch(Array.from({ length: 200 }, (_, i) => stmt.bind(r.roster_id, "acme", `filler${i}`, 1)));
     const token = await registerHandle("rj6b");
     expect((await join(r.roster_id, "rj6b", token, r.secret)).status).toBe(409);
   });

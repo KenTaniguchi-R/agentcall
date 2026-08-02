@@ -48,6 +48,16 @@ A claim nobody releases would freeze an issue forever, so a scheduled workflow
 for **3 days** and comments saying so. Re-claim it the normal way if you are
 still working on it.
 
+**It sweeps once a day, at 09:00 UTC** — it is not continuous. A claim that goes
+stale at 10:00 UTC survives until the next morning's run. Nothing is broken when
+that happens; the reaper simply hasn't run yet.
+
+**It comments first, then unassigns** — that order is deliberate. If the comment
+fails, the claim survives with a stray note, which is recoverable. Unassigning
+first and then failing would strip a claim with no explanation of where it went.
+Don't "tidy" the order. It also means the release comment on your issue is
+expected behavior, not somebody else editing your issue by hand.
+
 Renewal is a side effect of working: comments, edits, and label changes all bump
 the issue's activity timestamp. Staying claimed on a long task means leaving
 progress notes on it, which is worth doing anyway.
