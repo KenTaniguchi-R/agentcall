@@ -1,6 +1,7 @@
 import { mkdtempSync, existsSync, readFileSync, writeFileSync, mkdirSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { XMLValidator } from "fast-xml-parser";
 import { describe, expect, it } from "vitest";
 import { plistContent, installLaunchAgent, isLaunchAgentInstalled, launchAgentFile, LAUNCH_LABEL, uninstallLaunchAgent } from "../src/launchd.js";
 import { getPaths } from "../src/paths.js";
@@ -17,6 +18,29 @@ describe("plistContent", () => {
     expect(xml).toContain("<key>KeepAlive</key>");
     expect(xml).toContain(p.listenerLog);
     expect(xml).toContain("<key>HOME</key>");
+  });
+
+  it("escapes filesystem paths as XML element content", () => {
+    const p = getPaths("/Users/Ken & Lee <admin>");
+    const xml = plistContent(
+      "/opt/Node & Co/bin/node",
+      "/Applications/Agent <Call>/dist/index.js",
+      p,
+      ["/custom/bin > system"],
+    );
+
+    expect(XMLValidator.validate(xml)).toBe(true);
+    expect(xml).toContain("<string>/opt/Node &amp; Co/bin/node</string>");
+    expect(xml).toContain("<string>/Applications/Agent &lt;Call&gt;/dist/index.js</string>");
+    expect(xml).toContain("<key>HOME</key><string>/Users/Ken &amp; Lee &lt;admin&gt;</string>");
+    expect(xml).toContain("/custom/bin &gt; system:");
+  });
+
+  it("rejects path characters that XML 1.0 cannot represent", () => {
+    const p = getPaths("/Users/ken");
+
+    expect(() => plistContent("/opt/node\u0001bin/node", "/agentcall/dist/index.js", p))
+      .toThrow(/XML 1\.0 cannot represent/);
   });
 });
 
