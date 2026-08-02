@@ -3,7 +3,7 @@ import { mkdirSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { WebSocketServer, type WebSocket as WsSocket } from "ws";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { CONTEXT_TTL_MS, MAX_CONTEXT_TURNS } from "@benree/agentcall-shared";
 import { startListener } from "../src/listener.js";
 import { getPaths } from "../src/paths.js";
@@ -395,6 +395,7 @@ async function oneCall(
   opts: {
     seed?: (paths: ReturnType<typeof getPaths>) => void;
     run?: (...a: any[]) => Promise<{ text: string; session_id?: string }>;
+    saveContexts?: () => void;
     frameCount?: number;
   } = {},
 ): Promise<{ frames: any[]; paths: ReturnType<typeof getPaths> }> {
@@ -410,6 +411,7 @@ async function oneCall(
       stopper = startListener({
         ...deps,
         run: opts.run ?? (async () => ({ text: "ok", session_id: "real-agent-session" })),
+        saveContexts: opts.saveContexts,
       });
     });
   });
@@ -450,6 +452,26 @@ describe("listener contexts", () => {
     expect(stored[0]!.agent_session_id).toBe("real-agent-session");
     expect(stored[0]!.caller).toBe("sota");
     expect(stored[0]!.context_id).toBe(result.context_id);
+  });
+
+  it("delivers a completed answer without a context when context persistence fails", async () => {
+    const errors: string[] = [];
+    const spy = vi.spyOn(console, "error").mockImplementation((...args: unknown[]) => errors.push(args.map(String).join(" ")));
+    try {
+      const { frames: f, paths } = await oneCall(
+        { message: "hi" },
+        { saveContexts: () => { throw new Error("ENOSPC: disk full"); } },
+      );
+      expect(f.map((x) => x.type)).toEqual(["call_accepted", "call_started", "call_result"]);
+      expect(f[2]).toMatchObject({ call_id: "c1", text: "ok", task: "ask" });
+      expect(f[2].context_id).toBeUndefined();
+      expect(loadContexts(paths)).toEqual([]);
+      expect(errors.some((line) => line.includes("could not save the call context") && line.includes("ENOSPC"))).toBe(true);
+      const audit = JSON.parse(readFileSync(paths.callsLog, "utf8").trim());
+      expect(audit).toMatchObject({ status: "ok", context_persist_error: expect.stringContaining("ENOSPC") });
+    } finally {
+      spy.mockRestore();
+    }
   });
 
   // The binding is the security boundary: the real session id must never be

@@ -21,12 +21,14 @@ export interface ListenerDeps {
   config: CallableConfig;
   paths: Paths;
   run?: typeof runAgent;
+  saveContexts?: typeof saveContexts;
   maxPending?: number;
   backoffMs?: (attempt: number) => number;
 }
 
 export function startListener(deps: ListenerDeps): { stop(): void } {
   const run = deps.run ?? runAgent;
+  const persistContexts = deps.saveContexts ?? saveContexts;
   // Resolved once, up front: a bad `workdir` in config.json should stop
   // `agentcall listen` with a clear message, not fail every inbound call
   // individually. Changing it therefore needs a listener restart.
@@ -39,8 +41,15 @@ export function startListener(deps: ListenerDeps): { stop(): void } {
   let pingTimer: ReturnType<typeof setInterval> | undefined;
 
   const audit = (entry: Record<string, unknown>) => {
-    mkdirSync(dirname(deps.paths.callsLog), { recursive: true });
-    appendFileSync(deps.paths.callsLog, JSON.stringify({ ts: new Date().toISOString(), ...entry }) + "\n");
+    try {
+      mkdirSync(dirname(deps.paths.callsLog), { recursive: true });
+      appendFileSync(deps.paths.callsLog, JSON.stringify({ ts: new Date().toISOString(), ...entry }) + "\n");
+    } catch (e) {
+      // Audit persistence is observability, not call delivery. A full or
+      // read-only disk must not turn a refusal, failure, or completed answer
+      // into a second failure while trying to record the first outcome.
+      console.error(`Warning: could not write the call audit log: ${String(e)}`);
+    }
   };
 
   const connect = () => {
@@ -182,6 +191,7 @@ export function startListener(deps: ListenerDeps): { stop(): void } {
           // the binding schema requires a non-empty one.
           const sessionId = out.session_id || binding?.agent_session_id;
           let contextId: string | undefined;
+          let contextPersistError: string | undefined;
           if (threadingAvailable && sessionId !== undefined) {
             const next = {
               context_id: binding?.context_id ?? mintContextId(),
@@ -194,8 +204,15 @@ export function startListener(deps: ListenerDeps): { stop(): void } {
               created_at: binding?.created_at ?? now,
               last_used_at: now,
             };
-            saveContexts(deps.paths, pruneContexts(upsertContext(contexts, next), now));
-            contextId = next.context_id;
+            try {
+              persistContexts(deps.paths, pruneContexts(upsertContext(contexts, next), now));
+              contextId = next.context_id;
+            } catch (e) {
+              // The agent has already completed. Losing the optional resume
+              // binding must cost only the follow-up, never the answer.
+              contextPersistError = String(e).slice(0, 2000);
+              console.error(`Warning: could not save the call context: ${contextPersistError}`);
+            }
           }
 
           // context_id, never out.session_id: the minted handle is the only
@@ -206,6 +223,7 @@ export function startListener(deps: ListenerDeps): { stop(): void } {
             call_id, from, message: message.slice(0, 500), task: task.id, status: "ok",
             duration_ms: Date.now() - started,
             context_id: contextId, turn: (binding?.turns ?? 0) + 1,
+            context_persist_error: contextPersistError,
           });
         } catch (e) {
           const code = e instanceof AgentRunError ? e.code : "agent_error";
