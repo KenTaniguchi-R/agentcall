@@ -1,7 +1,7 @@
 import { Hono } from "hono";
 import { CardUpload, RegisterRequest, RESERVED_HANDLES, visibleTasks } from "@benree/agentcall-shared";
 import { mountA2A } from "./a2a.js";
-import { mountRoster } from "./roster.js";
+import { mountRoster } from "./roster/index.js";
 import { generateToken, sha256Hex, verifyHandleToken } from "./auth.js";
 import { INSTALL_SH } from "./install-sh.js";
 
