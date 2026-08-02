@@ -312,14 +312,24 @@ roster
     const cfg = loadConfig(paths);
     try {
       const { roster_id, join_secret, admin_secret } = await createRoster(relayUrl(cfg), { org: cfg.org, handle: cfg.handle, token: cfg.token });
-      saveMembership(paths, { name: o.as, relay: relayUrl(cfg), roster_id });
-      console.log(`Roster created and saved locally as "${o.as}".\n`);
+      console.log("Roster created.\n");
       console.log(`  id:     ${roster_id}`);
       console.log(`  join secret:  ${join_secret}`);
       console.log(`  admin secret: ${admin_secret}\n`);
       console.log("Both secrets are shown once and are not recoverable. Store the admin secret in a password manager.");
       console.log("Share only the id and join secret with colleagues:");
       console.log(`  agentcall roster join ${roster_id} --secret ${join_secret} --as ${o.as}`);
+      try {
+        saveMembership(paths, { name: o.as, relay: relayUrl(cfg), roster_id });
+        console.log(`\nSaved locally as "${o.as}".`);
+      } catch (e) {
+        const message = e instanceof Error ? e.message : String(e);
+        console.error(
+          `${message}\nRoster was created but not saved locally. Save it with a different name:\n` +
+          `  agentcall roster join ${roster_id} --secret ${join_secret} --as <name>`,
+        );
+        process.exitCode = 1;
+      }
     } catch (e) {
       console.error(e instanceof Error ? e.message : String(e));
       process.exitCode = 1;
@@ -339,9 +349,18 @@ roster
       await joinRoster(relayUrl(cfg), { org: cfg.org, handle: cfg.handle, token: cfg.token }, rosterId, o.secret);
       // The secret is spent here and never written to disk: from now on the
       // handle token plus the relay-side membership row is what authorizes.
-      saveMembership(paths, { name: o.as, relay: relayUrl(cfg), roster_id: rosterId });
-      console.log(`Joined. Saved locally as "${o.as}".`);
-      console.log(`Try: agentcall search "<what you need to know>"`);
+      try {
+        saveMembership(paths, { name: o.as, relay: relayUrl(cfg), roster_id: rosterId });
+        console.log(`Joined. Saved locally as "${o.as}".`);
+        console.log(`Try: agentcall search "<what you need to know>"`);
+      } catch (e) {
+        const message = e instanceof Error ? e.message : String(e);
+        console.error(
+          `${message}\nYou joined roster ${rosterId}, but it was not saved locally. Re-run with a different name:\n` +
+          `  agentcall roster join ${rosterId} --secret <same-secret> --as <name>`,
+        );
+        process.exitCode = 1;
+      }
     } catch (e) {
       console.error(e instanceof Error ? e.message : String(e));
       process.exitCode = 1;
