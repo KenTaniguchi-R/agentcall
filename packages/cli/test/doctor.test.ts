@@ -1,7 +1,7 @@
 import { mkdirSync, mkdtempSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { runDoctor } from "../src/doctor.js";
 import { saveConfig } from "../src/config.js";
 import { getPaths } from "../src/paths.js";
@@ -32,6 +32,12 @@ const baseDeps = {
   isDarwin: true,
   launchctlList: () => `12345\t0\t${LAUNCH_LABEL}\n`,
   getStatusFn: async () => ({ online: true }),
+  // Boring default: issued and unredeemed is the case where doctor stays
+  // silent, so it doesn't perturb any test that doesn't override this seam.
+  // Without this, every test below hits the real getRecoveryState, which
+  // does a live `fetch` to relay.example — see the "never touches the
+  // network" regression test below, which fails loudly if this regresses.
+  getRecoveryStateFn: async () => ({ issued: true, redeemed_at: null }),
   verifyFns: okVerifyFns,
   callFn: async () => ({ type: "call_reply", call_id: "c1", text: "hi", task: "ask" }) as never,
   // Never spawn a real `claude` in tests: checkGuard's default probe does
@@ -253,5 +259,28 @@ describe("runDoctor", () => {
       getRecoveryStateFn: async () => ({ issued: true, redeemed_at: null }),
     });
     expect(lines.join("\n")).not.toMatch(/agentcall recovery issue/);
+  });
+
+  // Regression guard: every relay-talking dep in baseDeps (getStatusFn,
+  // getRecoveryStateFn, callFn, guardFn, guardBinaryFn) must be stubbed, so a
+  // full run through baseDeps should never touch the real network. Spying on
+  // fetch and asserting it was never called — rather than making it throw —
+  // is what actually proves that: a thrown fetch would just be swallowed by
+  // doctor.ts's own try/catch around the recovery-state call and the test
+  // would pass anyway, proving nothing.
+  it("never touches the network — every relay call in baseDeps is stubbed", async () => {
+    const p = freshPaths();
+    saveConfig(p, { handle: "ken", token: "t", agent_kind: "claude", relay: "https://relay.example" });
+    const fetchSpy = vi.spyOn(globalThis, "fetch").mockImplementation(() => {
+      throw new Error("no network in unit tests");
+    });
+    try {
+      const lines: string[] = [];
+      const code = await runDoctor({ ...baseDeps, paths: p, log: (l) => lines.push(l) });
+      expect(code).toBe(0);
+      expect(fetchSpy).not.toHaveBeenCalled();
+    } finally {
+      fetchSpy.mockRestore();
+    }
   });
 });
