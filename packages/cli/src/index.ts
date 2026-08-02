@@ -7,6 +7,7 @@ import { callAgent, CallError } from "./callClient.js";
 import { getStatus, fetchCard, rotateToken, ApiError } from "./api.js";
 import { startAllListeners } from "./listenAll.js";
 import { runSetup } from "./setup.js";
+import { launchPathDirs } from "./launchPath.js";
 import { installLaunchAgent, isLaunchAgentInstalled, uninstallLaunchAgent } from "./launchd.js";
 import { publishCard } from "./card.js";
 import { loadPolicy, savePolicy } from "./policy.js";
@@ -333,7 +334,11 @@ program
       // installLaunchAgent would otherwise create one the owner opted out of.
       const machine = getMachinePaths();
       if (isLaunchAgentInstalled(machine)) {
-        installLaunchAgent(machine);
+        // Same PATH-derivation every other installLaunchAgent call site
+        // uses now — omitting it here would rewrite the plist with an empty
+        // extraPathDirs and silently drop any nvm/fnm-resolved agent/npx
+        // dirs the previous install had.
+        installLaunchAgent(machine, undefined, launchPathDirs(machine));
         console.log("Background listener restarted with the new token.");
       } else if (cfg.agent_kind) {
         console.log("Restart `agentcall listen` so it picks up the new token.");

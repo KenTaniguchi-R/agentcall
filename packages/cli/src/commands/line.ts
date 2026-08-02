@@ -5,6 +5,7 @@ import { registerHandle } from "../api.js";
 import { publishCard } from "../card.js";
 import type { LineConfig } from "../config.js";
 import { assertValidLineName, listLines, readyLines, saveLineConfig } from "../lines.js";
+import { launchPathDirs } from "../launchPath.js";
 import { host } from "../outbound.js";
 import { getLinePaths, type LinePaths, type MachinePaths } from "../paths.js";
 import { loadPerson, resolvePrimary, savePerson } from "../person.js";
@@ -27,11 +28,16 @@ export interface AddLineOpts {
   register?: typeof registerHandle;
   publishCardFn?: (cfg: LineConfig, p: LinePaths) => Promise<unknown>;
   installLaunchAgentFn?: typeof installLaunchAgent;
-  // Dirs (an agent/npx binary resolved outside launchd's fixed base PATH)
-  // to prepend to the LaunchAgent's plist PATH — see setup.ts's
-  // resolveExtraPathDirs. Threaded straight through to installLaunchAgent;
-  // addLine doesn't compute these itself, callers do.
+  // Dirs (an agent/npx binary resolved outside launchd's fixed base PATH) to
+  // prepend to the LaunchAgent's plist PATH. Defaults to launchPathDirs(m,
+  // resolveBin) — derived from every ready line on the machine, including
+  // the one this call just wrote to disk — rather than requiring the caller
+  // to compute and pass it. Explicit values here are a test seam only; a
+  // real caller has no reason to override the derived answer.
   extraPathDirs?: string[];
+  // Only consulted when extraPathDirs is absent, and only as an input to
+  // launchPathDirs's own derivation — see there for the default.
+  resolveBin?: (name: string) => string | null;
 }
 
 // A handle that is `<existing>-<something>` is guessable from an address the
@@ -85,7 +91,10 @@ export async function addLine(m: MachinePaths, opts: AddLineOpts): Promise<{ add
         `Warning: could not publish the card (${String(e)}). Run \`agentcall card push --line ${opts.name}\` later.`,
       );
     }
-    (opts.installLaunchAgentFn ?? installLaunchAgent)(m, undefined, opts.extraPathDirs);
+    // saveLineConfig above already put this line's config on disk, so
+    // launchPathDirs (which reads readyLines(m)) sees it — the derived PATH
+    // covers this line's agent kind alongside every other ready line's.
+    (opts.installLaunchAgentFn ?? installLaunchAgent)(m, undefined, opts.extraPathDirs ?? launchPathDirs(m, opts.resolveBin));
   }
 
   // person.json is written LAST, and only for the first line, so a failed
@@ -104,6 +113,9 @@ export interface RemoveLineOpts {
   // that shells out to the actual `launchctl bootstrap` on the real user's
   // launchd session regardless of how sandboxed MachinePaths.userHome is.
   installFn?: typeof installLaunchAgent;
+  // Same seam as AddLineOpts.resolveBin — feeds the reinstall branch's
+  // launchPathDirs derivation.
+  resolveBin?: (name: string) => string | null;
 }
 
 export function removeLine(m: MachinePaths, name: string, opts: RemoveLineOpts = {}): void {
@@ -153,10 +165,13 @@ export function removeLine(m: MachinePaths, name: string, opts: RemoveLineOpts =
 
   // One process serves every line, so removing one means restarting it, not
   // unloading a per-line service. Reinstalling the single agent is how that
-  // happens; skip it when nothing callable is left.
+  // happens; skip it when nothing callable is left. The target's directory
+  // is already gone/archived above, so readyLines(m) here reflects the
+  // surviving lines only — launchPathDirs derives their PATH dirs, not the
+  // removed line's, and not an empty list that would clobber them.
   if (readyLines(m).some((l) => l.config.agent_kind)) {
     (opts.uninstallFn ?? uninstallLaunchAgent)(m);
-    (opts.installFn ?? installLaunchAgent)(m);
+    (opts.installFn ?? installLaunchAgent)(m, undefined, launchPathDirs(m, opts.resolveBin));
   } else {
     (opts.uninstallFn ?? uninstallLaunchAgent)(m);
   }

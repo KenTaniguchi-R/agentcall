@@ -2,7 +2,7 @@ import { existsSync, mkdtempSync, readFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { resolveExtraPathDirs, runSetup, warnIfOutsideLaunchdPath } from "../src/setup.js";
+import { runSetup, warnIfOutsideLaunchdPath } from "../src/setup.js";
 import { getLinePaths, getMachinePaths, type MachinePaths } from "../src/paths.js";
 import { listLines, saveLineConfig } from "../src/lines.js";
 import { loadPerson, savePerson } from "../src/person.js";
@@ -134,13 +134,14 @@ describe("runSetup", () => {
     }
   });
 
-  // Regression coverage for the extraPathDirs fix made alongside this
-  // rewrite: addLine doesn't compute these itself (see line-cmd.test.ts's
-  // "forwards extraPathDirs" test for that half) — setup must still resolve
-  // them from the detected agent/npx bins and thread them through, or an
-  // nvm/fnm-managed toolchain leaves the LaunchAgent unable to find its own
-  // agent binary at spawn time.
-  it("passes resolved agent/npx bin dirs as extraPathDirs to installLaunchAgent", async () => {
+  // The extraPathDirs derivation itself lives in launchPath.ts's
+  // launchPathDirs, exercised directly in launchPath.test.ts and via
+  // addLine in line-cmd.test.ts. This just proves setup threads its
+  // resolveBin seam all the way down to that derivation rather than letting
+  // addLine fall back to the real `which` — the fake resolveBin below would
+  // never match a real machine's paths, so a non-empty, exact-match result
+  // is only possible if the seam actually reached addLine.
+  it("threads its resolveBin seam through to installLaunchAgent's extraPathDirs", async () => {
     let captured: string[] | undefined;
     await runSetup({
       handle: "ken4", agent: "claude", relay: R, snippet: false, verify: false, addLineFn: fakeAddLine,
@@ -211,29 +212,6 @@ describe("warnIfOutsideLaunchdPath", () => {
     } finally {
       spy.mockRestore();
     }
-  });
-});
-
-describe("resolveExtraPathDirs", () => {
-  it("returns unique dirnames of resolved bins, skipping unresolved ones", () => {
-    const resolveBin = (name: string) =>
-      name === "claude" ? "/Users/x/.local/bin/claude" : name === "npx" ? "/Users/x/.local/bin/npx" : null;
-    expect(resolveExtraPathDirs(["claude", "npx"], resolveBin)).toEqual(["/Users/x/.local/bin"]);
-  });
-  it("falls back to [] when nothing resolves", () => {
-    expect(resolveExtraPathDirs(["claude", "npx"], () => null)).toEqual([]);
-  });
-  it("excludes ephemeral temp dirs so session-scoped shims never get baked into the plist PATH", () => {
-    // Regression: setup run inside a cmux session resolved `claude` to a shim
-    // under $TMPDIR/cmux-cli-shims/<uuid>/; that dir got written into the
-    // LaunchAgent's PATH and shadowed the real binary after the session died.
-    const resolveBin = (name: string) =>
-      name === "claude"
-        ? "/var/folders/89/xx/T/cmux-cli-shims/AA8B8E91/claude"
-        : name === "npx"
-          ? "/Users/x/.local/bin/npx"
-          : null;
-    expect(resolveExtraPathDirs(["claude", "npx"], resolveBin)).toEqual(["/Users/x/.local/bin"]);
   });
 });
 

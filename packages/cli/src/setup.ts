@@ -1,4 +1,3 @@
-import { execFileSync } from "node:child_process";
 import { homedir } from "node:os";
 import { dirname, join } from "node:path";
 import type { AgentKind } from "@benree/agentcall-shared";
@@ -8,7 +7,7 @@ import { resolveLine } from "./lineContext.js";
 import { getMachinePaths } from "./paths.js";
 import { ask as ttyAsk } from "./tty.js";
 import { relayUrl, resolveLineWorkdir, type Config } from "./config.js";
-import { isEphemeralDir, preferDurableBin } from "./bin.js";
+import { defaultResolveBin } from "./launchPath.js";
 import { appendSnippet } from "./snippet.js";
 import { installLaunchAgent } from "./launchd.js";
 import { formatCheck, verifyAgent, type VerifyCheck, type VerifyFns } from "./verify.js";
@@ -39,28 +38,12 @@ export interface SetupOpts {
   log?: (s: string) => void;
 }
 
-// Dirnames of the resolved bins, deduped and skipping any that failed to
-// resolve. Used to widen the LaunchAgent's PATH (see launchd.ts) so the
-// listener can find an agent/npx install that lives outside its base dirs.
-// Ephemeral dirs (see EPHEMERAL_ROOTS) are dropped even if that's where the
-// bin resolved — a PATH entry into temp is wrong in a persistent LaunchAgent.
-export function resolveExtraPathDirs(names: string[], resolveBin: (name: string) => string | null): string[] {
-  const dirs = names
-    .map((name) => resolveBin(name))
-    .filter((path): path is string => path !== null)
-    .map((path) => dirname(path))
-    .filter((dir) => !isEphemeralDir(dir));
-  return [...new Set(dirs)];
-}
-
-function defaultResolveBin(name: string): string | null {
-  try {
-    const out = execFileSync("which", ["-a", name], { encoding: "utf8", stdio: ["ignore", "pipe", "ignore"] });
-    return preferDurableBin(out.split("\n").map((l) => l.trim()).filter(Boolean));
-  } catch {
-    return null;
-  }
-}
+// Moved to launchPath.ts, which also needs it (for launchPathDirs) and
+// can't import it back from here without a cycle (launchPath.ts is now the
+// thing setup.ts, commands/line.ts, and index.ts all depend on for
+// installLaunchAgent's PATH). Re-exported so existing `from "./setup.js"`
+// callers/tests keep working unchanged.
+export { resolveExtraPathDirs } from "./launchPath.js";
 
 async function detectAgentKind(
   opts: SetupOpts, hasBin: (name: string) => boolean, ask: (q: string) => Promise<string>,
@@ -163,12 +146,14 @@ export async function runSetup(opts: SetupOpts): Promise<{ ready: boolean }> {
   const name = agentKind ?? "caller";
 
   log(`Registering ${handle} with ${relay} ...`);
-  // Same fix setup used to apply directly: widen the LaunchAgent's PATH past
-  // its fixed base dirs when the agent/npx binary resolved outside them (e.g.
-  // an nvm/fnm-managed install) — otherwise the supervised listener can't
-  // find its own agent at spawn time. addLine doesn't compute this itself;
-  // the caller does and threads it through.
-  const extraPathDirs = agentKind ? resolveExtraPathDirs([agentKind, "npx"], resolveBinFn) : [];
+  // extraPathDirs (widening the LaunchAgent's PATH past its fixed base dirs
+  // for an agent/npx binary resolved outside them, e.g. an nvm/fnm-managed
+  // install) is NOT computed here: addLine derives it itself from every
+  // ready line on the machine (launchPathDirs), not just the one being
+  // created — one process serves every line, so a single-line computation
+  // would drop coverage the moment a second line runs a different agent.
+  // resolveBin is threaded through so a test override still reaches that
+  // derivation.
   const { address } = await (opts.addLineFn ?? addLine)(machine, {
     name,
     handle,
@@ -176,7 +161,7 @@ export async function runSetup(opts: SetupOpts): Promise<{ ready: boolean }> {
     agent: agentKind,
     callerOnly: !callable,
     installLaunchAgentFn: opts.skipLaunchd ? () => {} : opts.installLaunchAgentFn,
-    extraPathDirs,
+    resolveBin: resolveBinFn,
   });
 
   const ctx = resolveLine(machine, { line: name });

@@ -111,6 +111,26 @@ describe("addLine", () => {
       installLaunchAgentFn: (_m, _execCmd, extraPathDirs) => { captured = extraPathDirs; } });
     expect(captured).toEqual(["/Users/x/.nvm/versions/node/v24/bin"]);
   });
+
+  // The motivating case for this whole feature: claude on one line, codex on
+  // another. When extraPathDirs isn't explicitly given, addLine must derive
+  // it from EVERY ready line on the machine (via launchPathDirs), not just
+  // the one it's currently adding — otherwise the shared plist only ever
+  // learns about whichever agent's line was created/reinstalled most
+  // recently.
+  it("derives extraPathDirs from every ready line's agent kind, not just the one being added", async () => {
+    saveLineConfig(getLinePaths(m, "claude"), { ...base, agent_kind: "claude" });
+    let captured: string[] | undefined;
+    await addLine(m, { name: "codex", handle: "ken-cdx", agent: "codex", relay: "https://r.example",
+      register: ok, publishCardFn: async () => undefined, verify: false,
+      resolveBin: (name) =>
+        name === "claude" ? "/opt/claude-dir/claude"
+        : name === "codex" ? "/opt/codex-dir/codex"
+        : name === "npx" ? "/opt/npx-dir/npx"
+        : null,
+      installLaunchAgentFn: (_m, _execCmd, extraPathDirs) => { captured = extraPathDirs; } });
+    expect(captured?.slice().sort()).toEqual(["/opt/claude-dir", "/opt/codex-dir", "/opt/npx-dir"].sort());
+  });
 });
 
 describe("removeLine", () => {
@@ -173,6 +193,27 @@ describe("removeLine", () => {
     // usable — removing it would still leave zero lines that can answer or
     // call, so the guard must trip on usable count, not directory count.
     expect(() => removeLine(m, "claude", { confirm: true, uninstallFn: () => {} })).toThrow(/uninstall --purge/);
+  });
+
+  // Regression: the reinstall branch used to call installLaunchAgent(m) with
+  // no extraPathDirs at all, which rewrites the plist with an EMPTY PATH —
+  // clobbering the surviving line's agent dir, not just failing to add the
+  // removed one's. By the time this branch runs, the removed line's
+  // directory is already gone, so launchPathDirs(m) here must reflect only
+  // what's left.
+  it("reinstall derives extraPathDirs from the surviving line, not an empty list", () => {
+    saveLineConfig(getLinePaths(m, "claude"), { ...base, agent_kind: "claude" });
+    saveLineConfig(getLinePaths(m, "codex"), { ...base, handle: "ken-cdx", agent_kind: "codex" });
+    savePerson(m, { primary_line: "claude" });
+    let captured: string[] | undefined;
+    removeLine(m, "codex", {
+      confirm: true,
+      uninstallFn: () => {},
+      installFn: (_m, _execCmd, extraPathDirs) => { captured = extraPathDirs; },
+      resolveBin: (name) =>
+        name === "claude" ? "/opt/claude-dir/claude" : name === "npx" ? "/opt/npx-dir/npx" : null,
+    });
+    expect(captured).toEqual(["/opt/claude-dir", "/opt/npx-dir"]);
   });
 });
 
