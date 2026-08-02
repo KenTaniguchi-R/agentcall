@@ -1,11 +1,12 @@
 import { rmSync } from "node:fs";
 import { Command } from "commander";
 import { getPaths } from "./paths.js";
-import { loadConfig, saveConfig, relayUrl, assertCallableConfig } from "./config.js";
+import { loadConfig, saveConfig, relayUrl, normalizeRelay, assertCallableConfig } from "./config.js";
 import { callAgent, CallError } from "./callClient.js";
-import { getStatus, fetchCard, rotateToken, createRoster, joinRoster, ApiError } from "./api.js";
+import { getStatus, fetchCard, rotateToken, createRoster, joinRoster, issueRecoveryCode, redeemRecoveryCode, ApiError } from "./api.js";
 import { startListener } from "./listener.js";
 import { runSetup } from "./setup.js";
+import { printRecoveryCode } from "./recoveryPrint.js";
 import { installLaunchAgent, isLaunchAgentInstalled, uninstallLaunchAgent } from "./launchd.js";
 import { publishCard } from "./card.js";
 import { loadPolicy, savePolicy } from "./policy.js";
@@ -477,6 +478,50 @@ program
       } else if (cfg.agent_kind) {
         console.log("Restart `agentcall listen` so it picks up the new token.");
       }
+    } catch (e) {
+      console.error(e instanceof ApiError ? e.message : String(e));
+      process.exitCode = 1;
+    }
+  });
+
+const recovery = program
+  .command("recovery")
+  .description("manage the recovery code that can rebuild a lost handle credential");
+
+recovery
+  .command("issue")
+  .description("mint a fresh recovery code, invalidating any previous one")
+  .action(async () => {
+    const paths = getPaths();
+    const cfg = loadConfig(paths);
+    try {
+      const { recovery_code } = await issueRecoveryCode(relayUrl(cfg), {
+        handle: cfg.handle, token: cfg.token,
+      });
+      printRecoveryCode(recovery_code);
+    } catch (e) {
+      console.error(e instanceof ApiError ? e.message : String(e));
+      process.exitCode = 1;
+    }
+  });
+
+recovery
+  .command("redeem")
+  .description("rebuild your local credential from a recovery code, when the token is gone")
+  .argument("<code>", "the agcr_... code you saved")
+  .requiredOption("--handle <handle>", "the handle to recover")
+  .option("--relay <url>", "relay the handle is registered on")
+  .action(async (code: string, opts: { handle: string; relay?: string }) => {
+    const paths = getPaths();
+    // Deliberately does NOT loadConfig: the whole point is that there may be
+    // no config to load. An existing one is overwritten only on success.
+    const relay = normalizeRelay(opts.relay ?? relayUrl());
+    try {
+      const out = await redeemRecoveryCode(relay, opts.handle, code);
+      saveConfig(paths, { handle: opts.handle, token: out.token, relay });
+      console.log(`Recovered ${out.address}. Wrote ${paths.configFile}.`);
+      console.log("Your previous token is now dead. Re-run `agentcall setup` to make this install callable again.");
+      printRecoveryCode(out.recovery_code);
     } catch (e) {
       console.error(e instanceof ApiError ? e.message : String(e));
       process.exitCode = 1;
