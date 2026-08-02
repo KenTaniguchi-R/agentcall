@@ -112,12 +112,18 @@ export function rank(query: string, entries: SearchEntry[], limit = DEFAULT_SEAR
 // Callee-authored text lands on a caller's terminal, which is
 // escape-injection surface — ESC/CSI sequences can clear the screen, retitle
 // the window, or paint fake output over a real error. Same reasoning as
-// MAX_DETAIL_LENGTH in packages/shared/src/protocol.ts.
+// MAX_DETAIL_LENGTH/sanitizeDetail in packages/shared/src/protocol.ts, and
+// the same fix: control characters become a space rather than being
+// dropped, so a stripped newline — a legitimate character in
+// BundleTask.description — doesn't run two sentences together (e.g.
+// "auth.\nAlso covers payroll." must not collapse into "auth.Also..."). A
+// run of consecutive control characters (e.g. "\r\n") collapses to one
+// space rather than two.
 //
 // Applied at RENDER time, not at parse time, so the cache stays faithful to
 // what the relay actually served and matching runs on the real text.
 export function sanitize(text: string, max = 200): string {
-  const stripped = text.replace(/[\p{Cc}\p{Cf}]/gu, "");
+  const stripped = text.replace(/[\p{Cc}\p{Cf}]/gu, " ").replace(/ {2,}/g, " ");
   return stripped.length > max ? stripped.slice(0, max) : stripped;
 }
 
@@ -155,8 +161,15 @@ export function renderResults(results: SearchResult[], rosters: RosterStatus[]):
     lines.push(`no match in ${rosters.map((r) => `"${r.name}"`).join(", ") || "any roster"}`);
     return lines.join("\n");
   }
+  // Disambiguate by roster only when more than one is in scope. With no
+  // --roster, every joined roster merges into ONE ranking (scores are
+  // absolute and comparable across rosters), and every address is
+  // handle@<same relay> — this is the only way to tell which roster a
+  // suggested colleague came from. The common single-roster case would
+  // otherwise carry a redundant "[acme]" on every line.
+  const showRoster = rosters.length > 1;
   for (const r of results) {
-    lines.push(`${r.address}  ${sanitize(r.task, 64)}`);
+    lines.push(`${showRoster ? `[${r.roster}] ` : ""}${r.address}  ${sanitize(r.task, 64)}`);
     lines.push(`  ${sanitize(r.description, 200)}`);
     lines.push(
       `  matched: ${r.matched.map((m) => `${sanitize(m.term, 40)} (${m.fields.join(", ")})`).join(" · ")}`,
@@ -170,4 +183,15 @@ export function renderResults(results: SearchResult[], rosters: RosterStatus[]):
     lines.push("");
   }
   return lines.join("\n").trimEnd();
+}
+
+// True when the search ran against at least one joined roster but every
+// single one failed to refresh (cold cache + unreachable relay, etc.) — the
+// "no match" that follows is not a genuine no-results run, and a caller
+// gating on exit code needs to be able to tell the difference. Partial
+// failure (some rosters refreshed, some didn't) is deliberately NOT this
+// case: real results reached the user, and the per-roster stale warnings in
+// renderResults already say what happened — that stays exit 0.
+export function allRostersFailed(membershipCount: number, succeededCount: number): boolean {
+  return membershipCount > 0 && succeededCount === 0;
 }

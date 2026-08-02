@@ -15,7 +15,7 @@ import { buildCardReport } from "./lint.js";
 import { runDoctor } from "./doctor.js";
 import { loadContacts, addContact, removeContact, resolveAddress } from "./contacts.js";
 import { forgetMembership, loadMemberships, saveMembership } from "./rosters.js";
-import { DEFAULT_SEARCH_LIMIT, rank, renderResults, sanitize, toEntries, type RosterStatus, type SearchEntry } from "./search.js";
+import { allRostersFailed, DEFAULT_SEARCH_LIMIT, rank, renderResults, sanitize, toEntries, type RosterStatus, type SearchEntry } from "./search.js";
 import { refreshRoster } from "./searchRefresh.js";
 
 const program = new Command();
@@ -353,6 +353,13 @@ program
       } catch (e) {
         console.error(`${m.name}: ${e instanceof Error ? e.message : String(e)}`);
       }
+    }
+
+    // Every roster attempted, every one failed: not a genuine no-results
+    // run, so a script or calling agent gating on exit code must be able to
+    // tell the difference. Partial failure stays exit 0 — see allRostersFailed.
+    if (allRostersFailed(memberships.length, statuses.length)) {
+      process.exitCode = 1;
     }
 
     const results = rank(questionParts.join(" "), entries, o.limit);

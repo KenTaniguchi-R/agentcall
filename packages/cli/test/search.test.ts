@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { rank, renderResults, sanitize, tokenize, toEntries, type SearchEntry } from "../src/search.js";
+import { allRostersFailed, rank, renderResults, sanitize, tokenize, toEntries, type SearchEntry } from "../src/search.js";
 
 const entry = (over: Partial<SearchEntry>): SearchEntry => ({
   roster: "acme", handle: "tanaka", address: "tanaka@relay.test", task: "adr",
@@ -144,8 +144,19 @@ describe("rank", () => {
 describe("sanitize", () => {
   // Callee-authored text reaching a caller's terminal is escape-injection
   // surface — the same reason MAX_DETAIL_LENGTH exists in the protocol.
-  it("strips ANSI escapes and other control characters", () => {
-    expect(sanitize("\x1b[2Jwiped")).toBe("[2Jwiped");
+  // Matches sanitizeDetail's precedent there: a control character becomes a
+  // space, not nothing, so it can't glue two words together.
+  it("replaces ANSI escapes and other control characters with a space, rather than deleting them", () => {
+    expect(sanitize("\x1b[2Jwiped")).toBe(" [2Jwiped");
+  });
+  it("does not run two sentences together when it neutralizes a newline", () => {
+    // BundleTask.description permits embedded newlines. Deleting the
+    // newline outright would turn this into "auth.Also covers payroll." —
+    // the exact bug a card author would see as broken, unsanitized output.
+    expect(sanitize("Handles auth.\nAlso covers payroll.")).toBe("Handles auth. Also covers payroll.");
+  });
+  it("collapses a run of consecutive control characters (e.g. CRLF) to a single space", () => {
+    expect(sanitize("line one\r\nline two")).toBe("line one line two");
   });
   it("truncates past the limit", () => {
     expect(sanitize("x".repeat(300), 10)).toHaveLength(10);
@@ -196,6 +207,30 @@ describe("renderResults", () => {
       .toMatch(/acme.*stale/i);
   });
 
+  // With no --roster, every joined roster merges into ONE ranking, and every
+  // address is handle@<same relay> — the roster name is the only way to tell
+  // where a suggested colleague came from. Tested in both directions so an
+  // unconditional prefix (or a permanently-absent one) would fail one side.
+  it("does not prefix a result with its roster when only one roster is in scope", () => {
+    const out = renderResults(results, [{ name: "acme", ageSeconds: 5, stale: false }]);
+    expect(out).not.toContain("[acme]");
+  });
+
+  it("prefixes each result with its own roster when more than one roster is in scope", () => {
+    const multi = rank("auth migration", [
+      { roster: "acme", handle: "tanaka", address: "tanaka@relay.test", task: "adr",
+        name: "ADR history", description: "Why decisions were made.", keywords: ["auth", "migration"] },
+      { roster: "other", handle: "mia", address: "mia@relay.test", task: "auth-flow",
+        name: "Auth migration guide", description: "How auth migrated.", keywords: ["auth", "migration"] },
+    ]);
+    const out = renderResults(multi, [
+      { name: "acme", ageSeconds: 5, stale: false },
+      { name: "other", ageSeconds: 5, stale: false },
+    ]);
+    expect(out).toContain("[acme] tanaka@relay.test");
+    expect(out).toContain("[other] mia@relay.test");
+  });
+
   it("says when a member's tasks were not fully indexed", () => {
     const truncated = rank("payroll", [
       { roster: "acme", handle: "mia", address: "mia@relay.test", task: "payroll",
@@ -223,9 +258,33 @@ describe("renderResults", () => {
     // And no EXTRA lines: \p{Cc} matches "\n" itself, so a naive whole-output
     // check can't tell "no escapes" from "an injected newline split this into
     // an extra line that forges a result or paints over real output."
-    // sanitize() strips newlines from field content, so this fixture — one
-    // non-truncated result — renders exactly 4 lines: address+task,
-    // description, matched, call command. A 5th would mean one leaked through.
+    // sanitize() neutralizes newlines in field content (replacing them with
+    // a space, never leaving a literal "\n"), so this fixture — one
+    // non-truncated result, one roster in scope — renders exactly 4 lines:
+    // address+task, description, matched, call command. A 5th would mean one
+    // leaked through.
     expect(lines).toHaveLength(4);
+  });
+});
+
+describe("allRostersFailed", () => {
+  // Not this case: nothing was even attempted (no rosters joined at all).
+  it("is false when there were no memberships to try", () => {
+    expect(allRostersFailed(0, 0)).toBe(false);
+  });
+  // Not this case: every attempted roster refreshed (or failed-open to a
+  // stale cache) successfully — a genuine "no match" result is possible.
+  it("is false when every membership produced a status", () => {
+    expect(allRostersFailed(3, 3)).toBe(false);
+  });
+  // Not this case: partial failure. Real results (or a real stale warning)
+  // reached the user for the rosters that did succeed.
+  it("is false when only some memberships failed", () => {
+    expect(allRostersFailed(3, 1)).toBe(false);
+  });
+  // This IS the case: every roster was attempted and every one failed, so
+  // "no match" would misrepresent a total outage as a genuine empty result.
+  it("is true when there was at least one membership and none produced a status", () => {
+    expect(allRostersFailed(2, 0)).toBe(true);
   });
 });
