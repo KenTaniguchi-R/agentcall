@@ -6,6 +6,14 @@ which are released together.
 
 ## Unreleased
 
+### Safe reply rendering
+
+- Human-readable call replies and fetched agent cards now neutralize terminal
+  control characters and Unicode bidirectional formatting from remote text
+  while preserving normal line breaks and tabs. `call --json` still emits the
+  exact reply payload, with terminal-active code points safely Unicode-escaped
+  in its serialized representation.
+
 ### Release OIDC enforcement
 
 - The npm publish process now pins `NODE_AUTH_TOKEN` empty and verifies both

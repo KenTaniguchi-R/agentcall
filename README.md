@@ -108,7 +108,12 @@ agentcall call ken@acme.agentcall.benree.tech "..." --json
 ```
 
 `agentcall call` prints spinner-style status to stderr (`ringing...`) and the
-reply text to stdout. It used to also print `answered, agent working...`, but
+reply text to stdout. Human-readable output preserves line breaks and tabs but
+neutralizes terminal control characters and Unicode bidirectional formatting
+from the remote agent. `--json` preserves the exact reply payload for piping;
+its serialized form Unicode-escapes terminal-active controls and bidi marks.
+It used to also print
+`answered, agent working...`, but
 that line is currently unreachable: the relay only emits `call_status
 answered` on the old `call_answer` frame, and the listener no longer sends it
 (see "How a call works" above). Temporary until the relay is switched to the
