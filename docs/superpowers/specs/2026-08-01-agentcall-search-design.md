@@ -197,10 +197,24 @@ absolute, not relative to a corpus. `--roster` narrows to one. Each result names
 roster it came from, and a roster that fails to refresh degrades on its own (per the
 table below) without taking the others down.
 
-New `rosterCacheFile` in `packages/cli/src/paths.ts` → `~/.agentcall/roster.json`,
-mode `0600` under a `0700` directory, matching `saveConfig`/`saveContacts`, because
-the bundle contains capabilities granted privately to you. Written temp-file-then-
-rename so an interrupted refresh cannot manufacture a corrupt cache.
+Two new paths in `packages/cli/src/paths.ts`, both mode `0600` under a `0700`
+directory, matching `saveConfig`/`saveContacts` — the bundle contains capabilities
+granted privately to you:
+
+- `rostersFile` → `~/.agentcall/rosters.json`. **Membership records**
+  (`name → {relay, roster_id}`). This is user data: the join secret is discarded
+  after join, so this file is the only surviving way to reach a roster you belong
+  to. It **throws** on corruption, exactly like `loadContacts`
+  (`packages/cli/src/contacts.ts:33`).
+- `rosterCacheFile` → `~/.agentcall/roster-cache.json`. **Fetched bundles**, keyed
+  by roster name. Derived data: rebuilds on corruption, costing one refetch.
+
+Splitting them is load-bearing. Collapsing both into one file means the
+rebuild-on-corruption rule silently destroys the `roster_id` of a roster you are
+still a member of and can no longer rejoin.
+
+Both are written temp-file-then-rename so an interrupted write cannot manufacture
+corruption.
 
 The ranker lives in a new `packages/cli/src/search.ts` as pure functions with no I/O
 and no clock. Network stays in `api.ts` (`fetchRosterBundle`); rendering stays in the
@@ -303,7 +317,7 @@ escape sequences.
 
 ## Cache and failure policy
 
-One file, a map keyed by local roster name. Each entry carries
+`roster-cache.json` is a map keyed by local roster name. Each entry carries
 `{relay, caller, roster_id, etag, fetched_at, entries, skipped}`.
 
 **The `(relay, caller, roster_id)` triple is validated on read.** If any of the three
@@ -335,10 +349,10 @@ deleting the feature. The 404 row is the one case where the relay is reporting t
 your *access* changed, and serving stale results there would advertise people you can
 no longer reach.
 
-Corrupt cache rebuilds rather than throwing, unlike `loadContacts`
-(`packages/cli/src/contacts.ts:33`), which throws by design. The distinction is that
-the cache is derived data — losing it costs a refetch — while `contacts.json` is the
-only copy of user data.
+Corrupt `roster-cache.json` rebuilds rather than throwing; corrupt `rosters.json`
+throws, like `loadContacts` (`packages/cli/src/contacts.ts:33`). That is the whole
+reason the two files are separate: losing derived bundles costs a refetch, while
+losing a membership record is unrecoverable once the join secret is gone.
 
 ## The honest tradeoff
 
