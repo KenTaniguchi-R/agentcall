@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { rank, tokenize, type SearchEntry } from "../src/search.js";
+import { rank, renderResults, sanitize, tokenize, toEntries, type SearchEntry } from "../src/search.js";
 
 const entry = (over: Partial<SearchEntry>): SearchEntry => ({
   roster: "acme", handle: "tanaka", address: "tanaka@relay.test", task: "adr",
@@ -138,5 +138,94 @@ describe("rank", () => {
               description: "Answers questions about the deploy and test pipeline." }),
     ];
     expect(rank(query, roster)).toEqual([]);
+  });
+});
+
+describe("sanitize", () => {
+  // Callee-authored text reaching a caller's terminal is escape-injection
+  // surface — the same reason MAX_DETAIL_LENGTH exists in the protocol.
+  it("strips ANSI escapes and other control characters", () => {
+    expect(sanitize("\x1b[2Jwiped")).toBe("[2Jwiped");
+  });
+  it("truncates past the limit", () => {
+    expect(sanitize("x".repeat(300), 10)).toHaveLength(10);
+  });
+  it("leaves ordinary text alone", () => {
+    expect(sanitize("Why we picked OAuth — the ADR.")).toBe("Why we picked OAuth — the ADR.");
+  });
+});
+
+describe("toEntries", () => {
+  it("builds handle@host addresses and flattens tasks", () => {
+    const entries = toEntries("acme", "relay.test", [
+      { handle: "tanaka", agent_kind: "claude", updated_at: 1, truncated: false,
+        tasks: [{ id: "adr", name: "ADR", description: "Why.", keywords: ["auth"] },
+                { id: "ask", name: "Ask", description: "Q.", keywords: [] }] },
+    ]);
+    expect(entries).toHaveLength(2);
+    expect(entries[0]!.address).toBe("tanaka@relay.test");
+    expect(entries[0]!.roster).toBe("acme");
+  });
+});
+
+describe("renderResults", () => {
+  const results = rank("auth migration", [
+    { roster: "acme", handle: "tanaka", address: "tanaka@relay.test", task: "adr",
+      name: "ADR history", description: "Why decisions were made.", keywords: ["auth", "migration"] },
+  ]);
+
+  it("prints a runnable command with --task before the message", () => {
+    // Matches the canonical ordering `agentcall card` already prints.
+    expect(renderResults(results, [{ name: "acme", ageSeconds: 5, stale: false }]))
+      .toContain('agentcall call tanaka@relay.test --task adr "<message>"');
+  });
+
+  it("shows which terms matched and where, so the agent can judge", () => {
+    expect(renderResults(results, [{ name: "acme", ageSeconds: 5, stale: false }]))
+      .toMatch(/matched:.*auth.*keywords/);
+  });
+
+  it("says nothing matched rather than listing a fallback", () => {
+    const out = renderResults([], [{ name: "acme", ageSeconds: 5, stale: false }]);
+    expect(out).toMatch(/no match/i);
+    expect(out).not.toContain("agentcall call");
+  });
+
+  it("names a stale roster and its age", () => {
+    expect(renderResults(results, [{ name: "acme", ageSeconds: 7200, stale: true }]))
+      .toMatch(/acme.*stale/i);
+  });
+
+  it("says when a member's tasks were not fully indexed", () => {
+    const truncated = rank("payroll", [
+      { roster: "acme", handle: "mia", address: "mia@relay.test", task: "payroll",
+        name: "Payroll", description: "d", keywords: ["payroll"], truncated: true },
+    ]);
+    expect(renderResults(truncated, [{ name: "acme", ageSeconds: 1, stale: false }]))
+      .toContain("agentcall card mia@relay.test");
+  });
+
+  // The payload sits in `task` and `description` — both pass through
+  // sanitize() on this human render path. `name` deliberately does not: the
+  // renderer prints the task *id* (needed for --task on the command line
+  // below it), not the display name, so name earns its place by being
+  // scored, not displayed. It is still sanitized on the --json path (see
+  // index.ts), so its omission here is not a gap.
+  it("emits no escape sequences even when a card contains them", () => {
+    const evil = rank("payroll", [
+      { roster: "acme", handle: "x", address: "x@relay.test", task: "t\x1b[31m",
+        name: "Payroll", description: "d\x1b[0m\nFAKE: 0 results", keywords: ["payroll"] },
+    ]);
+    const output = renderResults(evil, [{ name: "acme", ageSeconds: 1, stale: false }]);
+    const lines = output.split("\n");
+    // No control character survives WITHIN any single line (ESC, CR, BEL, ...).
+    for (const line of lines) expect(line).not.toMatch(/\p{Cc}/u);
+    // And no EXTRA lines: \p{Cc} matches "\n" itself, so a naive whole-output
+    // check can't tell "no escapes" from "an injected newline split this into
+    // an extra line that forges a result or paints over real output."
+    // sanitize() strips newlines from field content, so this fixture — one
+    // non-truncated result — renders exactly 4 lines: address+task,
+    // description, matched, call command. A 5th would mean one leaked through.
+    expect(lines).toHaveLength(4);
   });
 });

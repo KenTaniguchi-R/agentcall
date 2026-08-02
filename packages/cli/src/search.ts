@@ -3,6 +3,12 @@
 // is consumed by an LLM, which does the final semantic pick. That division is
 // why this does not need embeddings: the expensive judgment already has a
 // model attached, so this only has to be a good, honest prefilter.
+//
+// This file must stay free of I/O — no fetch, no file read, no clock. That is
+// what makes "the query never leaves your machine" true rather than aspirational;
+// all network lives in searchRefresh.ts/api.ts instead.
+
+import type { BundleEntryType } from "@benree/agentcall-shared";
 
 export type SearchField = "keywords" | "name" | "description";
 
@@ -101,4 +107,67 @@ export function rank(query: string, entries: SearchEntry[], limit = DEFAULT_SEAR
     (a, b) => b.score - a.score || cmp(a.handle, b.handle) || cmp(a.task, b.task),
   );
   return scored.slice(0, limit);
+}
+
+// Callee-authored text lands on a caller's terminal, which is
+// escape-injection surface — ESC/CSI sequences can clear the screen, retitle
+// the window, or paint fake output over a real error. Same reasoning as
+// MAX_DETAIL_LENGTH in packages/shared/src/protocol.ts.
+//
+// Applied at RENDER time, not at parse time, so the cache stays faithful to
+// what the relay actually served and matching runs on the real text.
+export function sanitize(text: string, max = 200): string {
+  const stripped = text.replace(/[\p{Cc}\p{Cf}]/gu, "");
+  return stripped.length > max ? stripped.slice(0, max) : stripped;
+}
+
+export function toEntries(roster: string, host: string, entries: BundleEntryType[]): SearchEntry[] {
+  return entries.flatMap((e) =>
+    e.tasks.map((t) => ({
+      roster,
+      handle: e.handle,
+      address: `${e.handle}@${host}`,
+      task: t.id,
+      name: t.name,
+      description: t.description,
+      keywords: t.keywords,
+      truncated: e.truncated,
+    })),
+  );
+}
+
+export interface RosterStatus {
+  name: string;
+  ageSeconds: number;
+  stale: boolean;
+}
+
+export function renderResults(results: SearchResult[], rosters: RosterStatus[]): string {
+  const lines: string[] = [];
+  for (const r of rosters) {
+    if (r.stale) {
+      lines.push(`warning: roster "${r.name}" is ${Math.round(r.ageSeconds / 60)}m stale (relay unreachable)`);
+    }
+  }
+  if (results.length === 0) {
+    // No fallback list, ever. A tool that guesses when it does not know gets
+    // muted, and a muted tool finds nobody.
+    lines.push(`no match in ${rosters.map((r) => `"${r.name}"`).join(", ") || "any roster"}`);
+    return lines.join("\n");
+  }
+  for (const r of results) {
+    lines.push(`${r.address}  ${sanitize(r.task, 64)}`);
+    lines.push(`  ${sanitize(r.description, 200)}`);
+    lines.push(
+      `  matched: ${r.matched.map((m) => `${sanitize(m.term, 40)} (${m.fields.join(", ")})`).join(" · ")}`,
+    );
+    lines.push(`  agentcall call ${r.address} --task ${sanitize(r.task, 64)} "<message>"`);
+    // No silent truncation: if the bundle dropped tasks for this member, say
+    // so and point at the command that shows the full card.
+    if (r.truncated) {
+      lines.push(`  (more tasks not indexed — see: agentcall card ${r.address})`);
+    }
+    lines.push("");
+  }
+  return lines.join("\n").trimEnd();
 }
