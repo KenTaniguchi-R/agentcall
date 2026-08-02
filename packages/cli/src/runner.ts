@@ -4,6 +4,11 @@ import { AGENT_TIMEOUT_MS, MAX_REPLY_BYTES } from "@benree/agentcall-shared";
 import { resolveAgentBin } from "./bin.js";
 import { CAPS, FULL_ACCESS_ENVELOPE, type Cap, type Envelope } from "./tasks.js";
 
+// Gated on the codex-resume-sandbox probe. See that test and Task 5 of the
+// multi-turn plan: if `-c sandbox_mode` does not confine a resumed session,
+// threading codex would let a read-only task write to disk, so it stays off.
+export const CODEX_THREADING_ENABLED = true;
+
 export type AgentKind = "claude" | "codex";
 export interface SpawnSpec { cmd: string; args: string[]; cwd: string; env?: NodeJS.ProcessEnv }
 export interface AgentOutput { text: string; session_id?: string }
@@ -129,6 +134,22 @@ export function buildSpawnSpec(
   // --allowedTools, and now the only thing confining its writes. Note it does
   // NOT confine reads: `codex exec --sandbox read-only` still reads ~/.ssh.
   const sandbox = envelope.caps.includes("write") ? "workspace-write" : "read-only";
+  if (resume) {
+    // `codex exec resume` accepts neither --sandbox nor --cd (verified against
+    // the installed CLI, 2026-08-01). --sandbox is the ONLY thing confining
+    // codex's writes, so the envelope rides the -c config override instead;
+    // packages/cli/test/codex-resume-sandbox.probe.test.ts is what proves that
+    // override is actually honoured. The working directory is inherited from
+    // the recorded session, which is why the context binding pins workdir and
+    // refuses a resume when it changed.
+    return {
+      cmd: resolveBin(kind),
+      args: ["exec", "resume", resume, "--ignore-user-config", "--skip-git-repo-check",
+        "--json", "-c", guardCodexConfigArg(), "-c", `sandbox_mode="${sandbox}"`, prompt],
+      cwd: workdir,
+      env: { ...process.env, AGENTCALL_CALL_ID: callId, AGENTCALL_GUARD_MODE: "observe" },
+    };
+  }
   return {
     cmd: resolveBin(kind),
     // --ignore-user-config drops the owner's ~/.codex: their MCP servers,

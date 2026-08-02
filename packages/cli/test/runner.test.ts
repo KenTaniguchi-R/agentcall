@@ -431,6 +431,41 @@ describe("buildSpawnSpec resume (claude)", () => {
   });
 });
 
+describe("buildSpawnSpec resume (codex)", () => {
+  const bin = () => "/usr/bin/codex";
+
+  it("uses the resume subcommand with the session id", () => {
+    const spec = buildSpawnSpec("codex", "hi", "/w", bin, { caps: ["read"] }, "c1", "sess-abc");
+    expect(spec.args.slice(0, 3)).toEqual(["exec", "resume", "sess-abc"]);
+  });
+
+  // resume has no --sandbox, so the envelope rides the config override instead.
+  // Without this the resumed session keeps whatever sandbox it was created with.
+  it("re-applies the envelope through -c sandbox_mode", () => {
+    const ro = buildSpawnSpec("codex", "hi", "/w", bin, { caps: ["read"] }, "c1", "sess-abc");
+    expect(ro.args).toContain(`sandbox_mode="read-only"`);
+    const rw = buildSpawnSpec("codex", "hi", "/w", bin, { caps: ["read", "write"] }, "c1", "sess-abc");
+    expect(rw.args).toContain(`sandbox_mode="workspace-write"`);
+  });
+
+  it("never passes --sandbox or --cd on a resume, which the subcommand rejects", () => {
+    const spec = buildSpawnSpec("codex", "hi", "/w", bin, { caps: ["read"] }, "c1", "sess-abc");
+    expect(spec.args).not.toContain("--sandbox");
+    expect(spec.args).not.toContain("--cd");
+  });
+
+  it("keeps --ignore-user-config and the guard on a resumed spawn", () => {
+    const spec = buildSpawnSpec("codex", "hi", "/w", bin, { caps: ["read"] }, "c1", "sess-abc");
+    expect(spec.args).toContain("--ignore-user-config");
+    expect(spec.args.some((a) => a.startsWith("hooks.PreToolUse="))).toBe(true);
+  });
+
+  it("puts the prompt last", () => {
+    const spec = buildSpawnSpec("codex", "follow up", "/w", bin, { caps: ["read"] }, "c1", "sess-abc");
+    expect(spec.args.at(-1)).toBe("follow up");
+  });
+});
+
 // A codex spawn inherits every MCP server, plugin and app in the owner's
 // ~/.codex — separate processes that read the filesystem outside codex's
 // sandbox entirely. On a developer machine that routinely includes a
