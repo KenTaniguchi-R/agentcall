@@ -16,7 +16,7 @@ import { runDoctor } from "./doctor.js";
 import { loadContacts, addContact, removeContact, resolveAddress } from "./contacts.js";
 
 const program = new Command();
-program.name("agentcall").description("Call other people's coding agents").version("0.3.0");
+program.name("agentcall").description("Call other people's coding agents").version("0.4.0");
 
 program
   .command("setup")

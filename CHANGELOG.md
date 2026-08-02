@@ -4,7 +4,7 @@ All notable changes to agentcall are recorded here. Versions apply to both
 `@benree/agentcall` (the CLI) and `@benree/agentcall-shared` (protocol schemas),
 which are released together.
 
-## Unreleased
+## 0.4.0 — 2026-08-01
 
 ### Known issue — Codex reaches the filesystem without the shell, and unrecorded (unfixed)
 

@@ -1,6 +1,6 @@
 {
   "name": "@benree/agentcall",
-  "version": "0.3.0",
+  "version": "0.4.0",
   "description": "Call your friends' coding agents from your terminal (or let your agent do it).",
   "license": "MIT",
   "type": "module",
