@@ -169,6 +169,40 @@ describe.sequential("CLI command actions", () => {
     expect(out.stdout).toMatch(/assertion 1.*ask/i);
   });
 
+  it("renders the effective policy as a per-caller and per-task capability report", async () => {
+    const testHome = home();
+    const paths = getPaths(testHome);
+    saveConfig(paths, {
+      org: "acme", handle: "ken", token: "tok", relay: "https://relay.test", agent_kind: "claude",
+    });
+    mkdirSync(join(paths.tasksDir, "deploy"), { recursive: true });
+    writeFileSync(join(paths.tasksDir, "deploy", "SKILL.md"), [
+      "---",
+      "name: Deploy production",
+      "description: Build and deploy the service.",
+      "tools: [read, write, exec]",
+      "---",
+      "Deploy carefully.",
+    ].join("\n"));
+    writeFileSync(paths.policyFile, JSON.stringify({
+      default_offer: ["ask"],
+      callers: {
+        alice: { offer: ["deploy"] },
+        "blocked-bot": { block: true },
+      },
+    }));
+
+    const out = await runCommand(testHome, ["policy"]);
+
+    expect(out.code).toBe(0);
+    expect(out.stderr).toBe("");
+    expect(out.stdout).toContain("Effective capability policy");
+    expect(out.stdout).toMatch(new RegExp(`Everyone registered[\\s\\S]*ask — Ask a question[\\s\\S]*Working directory: ${paths.publicDir}`));
+    expect(out.stdout).toMatch(/Named caller rule: alice \(before roster grants\)[\s\S]*deploy — Deploy production[\s\S]*exec — run shell commands/);
+    expect(out.stdout).toContain("WARNING: exec can read, change, and send data outside this working directory");
+    expect(out.stdout).toMatch(/Named caller rule: blocked-bot \(before roster grants\)[\s\S]*BLOCKED — no task can run/);
+  });
+
   it("rejects a CLI policy edit that would break an assertion and preserves the file", async () => {
     const testHome = home();
     const paths = getPaths(testHome);
