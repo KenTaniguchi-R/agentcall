@@ -1,8 +1,8 @@
 import { describe, expect, it } from "vitest";
 import {
   CallRequest, CallerFrame, RelayToCallerFrame, ListenerToRelayFrame,
-  HANDLE_RE, RESERVED_HANDLES, MAX_MESSAGE_BYTES, MAX_SESSION_ID_LENGTH, parseAddress, safeParseFrame,
-  RegisterRequest, CallReply, IncomingCall, CallError, MAX_DETAIL_LENGTH, sanitizeDetail,
+  HANDLE_RE, RESERVED_HANDLES, MAX_MESSAGE_BYTES, parseAddress, safeParseFrame,
+  RegisterRequest, CallReply, CallError, MAX_DETAIL_LENGTH, sanitizeDetail,
   CallAccepted, CallStarted, CancelCall, CallCancelled, CallNotCancelled, RelayToListenerFrame,
   TASK_ID_RE, MAX_TASK_ID_LENGTH,
 } from "../src/index.js";
@@ -65,24 +65,7 @@ describe("frames", () => {
   });
 });
 
-describe("session_id bounds", () => {
-  it("rejects a CallRequest with an oversized session_id", () => {
-    const f = { type: "call_request", to: "ken", message: "hi", session_id: "s".repeat(MAX_SESSION_ID_LENGTH + 1) };
-    expect(CallRequest.safeParse(f).success).toBe(false);
-    expect(safeParseFrame(CallerFrame, JSON.stringify(f))).toBeNull();
-  });
-
-  it("accepts a CallRequest with a session_id within the bound", () => {
-    const f = { type: "call_request", to: "ken", message: "hi", session_id: "s".repeat(MAX_SESSION_ID_LENGTH) };
-    expect(CallRequest.safeParse(f).success).toBe(true);
-  });
-
-  it("applies the same session_id bound to other frames carrying it", () => {
-    const oversized = "s".repeat(MAX_SESSION_ID_LENGTH + 1);
-    expect(CallReply.safeParse({ type: "call_reply", call_id: "x", text: "t", session_id: oversized }).success).toBe(false);
-    expect(IncomingCall.safeParse({ type: "incoming_call", call_id: "x", from: "a", message: "m", session_id: oversized }).success).toBe(false);
-  });
-
+describe("CallReply task bounds", () => {
   it("bounds CallReply.task with the same TASK_ID_RE as other task fields", () => {
     expect(CallReply.safeParse({ type: "call_reply", call_id: "x", text: "t", task: "Not Valid!" }).success).toBe(false);
     expect(CallReply.safeParse({ type: "call_reply", call_id: "x", text: "t", task: "valid-task" }).success).toBe(true);
@@ -181,5 +164,58 @@ describe("cancellation and acknowledgement frames", () => {
     }
     expect(RelayToListenerFrame.safeParse({ type: "cancel_call", call_id: "c1" }).success).toBe(true);
     expect(ListenerToRelayFrame.safeParse({ type: "cancel_call", call_id: "c1" }).success).toBe(false);
+  });
+});
+
+import {
+  CONTEXT_ID_RE, ErrorCode,
+  CONTEXT_TTL_MS, MAX_CONTEXT_TURNS, MAX_CONTEXTS, RATE_LIMIT_PER_HOUR,
+} from "../src/protocol.js";
+
+describe("context_id", () => {
+  const good = "ctx_AAAAAAAAAAAAAAAAAAAAAA"; // 22 base64url chars
+
+  it("accepts a minted id", () => {
+    expect(CONTEXT_ID_RE.test(good)).toBe(true);
+    // Exercises the full base64url alphabet: upper, lower, digit, - and _.
+    expect(CONTEXT_ID_RE.test("ctx_aB3-_xxxxxxxxxxxxxxxxx")).toBe(true);
+  });
+
+  it("rejects wrong prefix, wrong length, and non-base64url characters", () => {
+    expect(CONTEXT_ID_RE.test("AAAAAAAAAAAAAAAAAAAAAA")).toBe(false);
+    expect(CONTEXT_ID_RE.test("sess_AAAAAAAAAAAAAAAAAAAAAA")).toBe(false);
+    expect(CONTEXT_ID_RE.test("ctx_AAAAAAAAAAAAAAAAAAAAA")).toBe(false);  // 21
+    expect(CONTEXT_ID_RE.test("ctx_AAAAAAAAAAAAAAAAAAAAAAA")).toBe(false); // 23
+    expect(CONTEXT_ID_RE.test("ctx_AAAAAAAAAAAAAAAAAAAA+/")).toBe(false);
+    expect(CONTEXT_ID_RE.test("ctx_AAAAAAAAAAAAAAAAAA\nAA")).toBe(false);
+  });
+
+  // The old MAX_SESSION_ID_LENGTH cap allowed any string up to 256 bytes.
+  // A consumed field gets a shape, not a size limit.
+  it("rejects a 256-char string the old length cap allowed", () => {
+    expect(CallRequest.safeParse({
+      type: "call_request", to: "ken", message: "hi", context_id: "x".repeat(256),
+    }).success).toBe(false);
+  });
+
+  it("round-trips on request and reply, and stays optional", () => {
+    expect(CallRequest.safeParse({
+      type: "call_request", to: "ken", message: "hi", context_id: good,
+    }).success).toBe(true);
+    expect(CallRequest.safeParse({ type: "call_request", to: "ken", message: "hi" }).success).toBe(true);
+    expect(CallReply.safeParse({
+      type: "call_reply", call_id: "c1", text: "ok", context_id: good,
+    }).success).toBe(true);
+  });
+
+  it("adds context_unknown to the error codes", () => {
+    expect(ErrorCode.safeParse("context_unknown").success).toBe(true);
+  });
+
+  it("exports threading bounds and the raised rate limit", () => {
+    expect(CONTEXT_TTL_MS).toBe(1_800_000);
+    expect(MAX_CONTEXT_TURNS).toBe(10);
+    expect(MAX_CONTEXTS).toBe(100);
+    expect(RATE_LIMIT_PER_HOUR).toBe(30);
   });
 });

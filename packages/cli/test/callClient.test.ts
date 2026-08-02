@@ -45,14 +45,14 @@ describe("callAgent", () => {
         expect(f).toMatchObject({ type: "call_request", to: "ken", message: "hi" });
         ws.send(JSON.stringify({ type: "call_status", state: "ringing" }));
         ws.send(JSON.stringify({ type: "call_status", state: "answered" }));
-        ws.send(JSON.stringify({ type: "call_reply", call_id: "c1", text: "yo", session_id: "s9" }));
+        ws.send(JSON.stringify({ type: "call_reply", call_id: "c1", text: "yo", context_id: "ctx_AAAAAAAAAAAAAAAAAAAAAA" }));
         ws.close(1000);
       });
     });
     const states: string[] = [];
     const reply = await callAgent({ relay, ...base, onStatus: (s) => states.push(s) });
     expect(reply.text).toBe("yo");
-    expect(reply.session_id).toBe("s9");
+    expect(reply.context_id).toBe("ctx_AAAAAAAAAAAAAAAAAAAAAA");
     expect(states).toEqual(["ringing", "answered"]);
   });
 

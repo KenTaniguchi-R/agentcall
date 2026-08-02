@@ -117,7 +117,7 @@ export class HandleDO extends DurableObject {
       this.send(ws, { type: "call_status", state: "ringing" });
       this.send(listener, {
         type: "incoming_call", call_id, from: att.from,
-        message: frame.message, session_id: frame.session_id, task: frame.task,
+        message: frame.message, context_id: frame.context_id, task: frame.task,
       });
       return;
     }
@@ -136,7 +136,7 @@ export class HandleDO extends DurableObject {
     if (frame.type === "call_result") {
       const text = truncateUtf8Bytes(frame.text, MAX_REPLY_BYTES);
       if (caller) {
-        this.send(caller, { type: "call_reply", call_id: frame.call_id, text, session_id: frame.session_id, task: frame.task });
+        this.send(caller, { type: "call_reply", call_id: frame.call_id, text, context_id: frame.context_id, task: frame.task });
         try { caller.close(1000, "done"); } catch { /* closed */ }
       }
       await this.ctx.storage.delete(`call:${frame.call_id}`);

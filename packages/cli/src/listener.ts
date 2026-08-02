@@ -117,7 +117,7 @@ export function startListener(deps: ListenerDeps): { stop(): void } {
             call_id,
             signal,
           );
-          send({ type: "call_result", call_id, text: out.text, session_id: out.session_id, task: task.id });
+          send({ type: "call_result", call_id, text: out.text, context_id: out.session_id, task: task.id });
           audit({ call_id, from, message: message.slice(0, 500), task: task.id, status: "ok", duration_ms: Date.now() - started });
         } catch (e) {
           const code = e instanceof AgentRunError ? e.code : "agent_error";

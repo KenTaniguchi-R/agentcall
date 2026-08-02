@@ -123,7 +123,7 @@ describe("startListener", () => {
     const [accepted, started, result] = await expectFrames;
     expect(accepted).toMatchObject({ type: "call_accepted", call_id: "c1" });
     expect(started).toMatchObject({ type: "call_started", call_id: "c1" });
-    expect(result).toMatchObject({ type: "call_result", call_id: "c1", text: "the answer", session_id: "s1" });
+    expect(result).toMatchObject({ type: "call_result", call_id: "c1", text: "the answer", context_id: "s1" });
     const audit = readFileSync(paths.callsLog, "utf8").trim().split("\n").map((l) => JSON.parse(l));
     expect(audit[0]).toMatchObject({ call_id: "c1", from: "shusaku", status: "ok" });
   });

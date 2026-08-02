@@ -25,25 +25,44 @@ export const MAX_REPLY_BYTES = 256_000;
 // sequences can clear the caller's screen, retitle their window, or paint
 // fake output over a real error.
 export const MAX_DETAIL_LENGTH = 500;
-// Bounds session_id, an otherwise-opaque caller-supplied token that today is
-// forwarded and dropped (see listener.ts) but has no reason to ever need to
-// be large — without a cap it's unbounded attacker-controlled bandwidth.
-export const MAX_SESSION_ID_LENGTH = 256;
+// The context id is minted by the callee (packages/cli/src/contexts.ts), never
+// by a caller, so its exact shape is known: "ctx_" + 22 base64url characters =
+// 128 bits of randomness. This replaces a 256-byte length cap that existed only
+// because the field was forwarded and dropped without ever being consumed. Now
+// that it selects a resumable agent session, a malformed value is rejected at
+// the schema boundary — before it reaches any store lookup.
+export const CONTEXT_ID_RE = /^ctx_[A-Za-z0-9_-]{22}$/;
+
+// A context is a follow-up within one sitting, not a durable relationship. See
+// the "Out of scope" section of the multi-turn design for why cross-day
+// continuity is deliberately excluded: a resumed session describes a working
+// tree that has since moved, and answers worse than a cold one.
+export const CONTEXT_TTL_MS = 30 * 60_000;
+export const MAX_CONTEXT_TURNS = 10;
+// Bounds the callee's on-disk binding store so inbound calls can never drive an
+// unbounded local write. Least-recently-used entries are evicted past this.
+export const MAX_CONTEXTS = 100;
 export const RELAY_CALL_TIMEOUT_MS = 360_000;
 export const AGENT_TIMEOUT_MS = 300_000;
-export const RATE_LIMIT_PER_HOUR = 10;
+// Was 10, raised when multi-turn landed. A threaded turn spawns a full agent,
+// so charging per turn is correct and stays — but at 10 a single five-turn
+// conversation consumed half a caller's hourly budget and two conversations
+// were a violation, which would have rate-limited the feature's own happy path.
+// MAX_CONTEXT_TURNS is the tighter, better-targeted bound on threading abuse,
+// so this limit does not have to carry that weight.
+export const RATE_LIMIT_PER_HOUR = 30;
 
 export const ErrorCode = z.enum([
   "unknown_handle", "offline", "busy", "timeout", "agent_error",
   "unauthorized", "rate_limited", "message_too_large", "protocol_error",
-  "blocked", "task_not_offered", "task_unknown",
+  "blocked", "task_not_offered", "task_unknown", "context_unknown",
 ]);
 
 export const CallRequest = z.object({
   type: z.literal("call_request"),
   to: z.string().regex(HANDLE_RE),
   message: z.string().min(1),
-  session_id: z.string().max(MAX_SESSION_ID_LENGTH).optional(),
+  context_id: z.string().regex(CONTEXT_ID_RE).optional(),
   task: z.string().regex(TASK_ID_RE).optional(),
 });
 export const CallStatus = z.object({
@@ -54,7 +73,7 @@ export const CallReply = z.object({
   type: z.literal("call_reply"),
   call_id: z.string(),
   text: z.string(),
-  session_id: z.string().max(MAX_SESSION_ID_LENGTH).optional(),
+  context_id: z.string().regex(CONTEXT_ID_RE).optional(),
   task: z.string().regex(TASK_ID_RE).optional(),
 });
 // detail is bounded here but NOT on CallFailed below: the same split the
@@ -74,7 +93,7 @@ export const IncomingCall = z.object({
   call_id: z.string(),
   from: z.string(),
   message: z.string(),
-  session_id: z.string().max(MAX_SESSION_ID_LENGTH).optional(),
+  context_id: z.string().regex(CONTEXT_ID_RE).optional(),
   task: z.string().regex(TASK_ID_RE).optional(),
 });
 export const CallAnswer = z.object({ type: z.literal("call_answer"), call_id: z.string() });
@@ -82,7 +101,7 @@ export const CallResult = z.object({
   type: z.literal("call_result"),
   call_id: z.string(),
   text: z.string(),
-  session_id: z.string().max(MAX_SESSION_ID_LENGTH).optional(),
+  context_id: z.string().regex(CONTEXT_ID_RE).optional(),
   task: z.string().regex(TASK_ID_RE).optional(),
 });
 export const CallFailed = z.object({
