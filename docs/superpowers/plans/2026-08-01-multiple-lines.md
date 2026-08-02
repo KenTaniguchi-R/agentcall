@@ -14,6 +14,8 @@
 
 - **TDD.** Every task writes the failing test first, runs it to see it fail, then implements. No exceptions.
 - **Build before typecheck.** `pnpm -r build && pnpm -r typecheck && pnpm -r test` from the repo root, in that order. `packages/cli` typechecks against `packages/shared`'s built `dist`.
+- **Every commit is green.** `pnpm -r build && pnpm -r typecheck && pnpm -r test` must pass before every commit in every task — no exceptions, no "the next task fixes it". This is why the migration is **additive**: new types land *alongside* the old ones (`paths.ts` exports `Paths`/`getPaths` *and* `MachinePaths`/`getMachinePaths`; `config.ts` exports `Config` *and* `LineConfig`), each consumer moves over in its own task, and the legacy exports are deleted in Task 12 once nothing imports them. If a task's change would break an existing caller, that task updates the caller.
+- **Baseline is 504 tests** (73 shared / 67 relay / 364 cli). A task that ends with fewer passing than it started has broken something.
 - **Protocol types live in `packages/shared`.** Never redeclare a frame shape in `apps/relay` or `packages/cli`.
 - **Stage files explicitly** — `git add <file> <file>`. Never `git add -A` or `git add .`.
 - **No live agent spawn in tests.** `packages/cli/test/runner.test.ts`'s fake binary is the seam.
@@ -43,8 +45,8 @@
 | File | Change |
 |---|---|
 | `packages/shared/src/protocol.ts` | Export `AgentKind` type + `AGENT_KINDS` const |
-| `packages/cli/src/paths.ts` | Replace `Paths` with `MachinePaths` + `LinePaths` |
-| `packages/cli/src/config.ts` | `Config` → `LineConfig`; `resolveWorkdir` takes `LinePaths` |
+| `packages/cli/src/paths.ts` | Add `MachinePaths` + `LinePaths` alongside `Paths` (deleted in Task 12) |
+| `packages/cli/src/config.ts` | Add `LineConfig` + `resolveLineWorkdir` alongside `Config` (deleted in Task 12) |
 | `packages/cli/src/launchd.ts` | Plist path and `HOME` derive from `userHome` |
 | `packages/cli/src/guard.ts` | `decide()` gets `userHome`; per-line task dirs as extra denied roots |
 | `packages/cli/src/guard-entry.ts` | Resolve `LinePaths` from `AGENTCALL_LINE`, fail closed if absent |
@@ -288,12 +290,18 @@ export function getLinePaths(machine: MachinePaths, name: string): LinePaths {
 }
 ```
 
-The tree will not compile until Task 5. That is expected — Tasks 2–5 land as one compiling unit only at Task 5's commit. Commit anyway (below): the repo tolerates a red intermediate on a feature branch, and splitting these keeps each reviewable.
+**Additive — do not delete anything.** Keep the existing `Paths` interface and
+`getPaths` export exactly as they are, and add the four new declarations above them
+in the same file. Every current consumer keeps compiling untouched; each moves to
+`MachinePaths`/`LinePaths` in its own later task, and Task 12 deletes `Paths` and
+`getPaths` once nothing imports them. A comment on the legacy pair saying so is
+welcome; removing them here is not.
 
-- [ ] **Step 4: Run the paths test**
+- [ ] **Step 4: Run the full suite**
 
-Run: `cd packages/cli && pnpm vitest run test/paths.test.ts`
-Expected: PASS. Other CLI tests will fail to compile — expected, addressed by Task 5.
+Run from the repo root: `pnpm -r build && pnpm -r typecheck && pnpm -r test`
+Expected: all pass — 504 tests plus the new `paths.test.ts` cases. Nothing else
+changed, so nothing else may break.
 
 - [ ] **Step 5: Commit**
 
@@ -576,7 +584,12 @@ export function assertCallableLine(cfg: LineConfig): asserts cfg is CallableLine
 }
 ```
 
-`resolveWorkdir(cfg, p)` keeps its logic; change its second parameter to `LinePaths` and its default branch from `p.publicDir` to `p.shareDir`. Delete `loadConfig`/`saveConfig` — Task 4's `lines.ts` replaces them.
+**Additive again:** leave `Config`, `CallableConfig`, `assertCallableConfig`,
+`loadConfig`, `saveConfig`, and the existing `resolveWorkdir` exactly as they are.
+Add `LineConfig`, `CallableLineConfig`, `assertCallableLine`, and a new
+`resolveLineWorkdir(cfg: LineConfig, p: LinePaths)` — same logic as `resolveWorkdir`,
+but defaulting to `p.shareDir` instead of `p.publicDir`. Task 12 deletes the legacy
+half once its last consumer has moved.
 
 Then create `packages/cli/src/lines.ts`:
 
@@ -894,9 +907,18 @@ and inside `plistContent`, replace `<key>HOME</key><string>${p.home}</string>` w
 
 with `${p.listenerLog}` becoming `${m.listenerLog}`. Rename the parameter `p` to `m` throughout the module. `LAUNCH_LABEL` stays a single constant — one process, one label.
 
+**This changes a public signature, so update every caller in this same task** — the
+green-commit constraint applies here as much as anywhere. The callers are
+`index.ts` (`rotate` at the `isLaunchAgentInstalled`/`installLaunchAgent` pair, and
+`uninstall`), `setup.ts` (the `installLaunchAgentFn` call), and any launchd call in
+`packages/cli/test/`. Each becomes `getMachinePaths()` instead of `getPaths()` —
+`getMachinePaths` already exists from Task 2 and needs no other change to those
+files. `doctor.ts` only imports `LAUNCH_LABEL` and is unaffected.
+
 - [ ] **Step 4: Run test to verify it passes**
 
-Run: `cd packages/cli && pnpm vitest run test/launchd.test.ts`
+Run: `cd packages/cli && pnpm vitest run test/launchd.test.ts`, then the full gate
+from the repo root: `pnpm -r build && pnpm -r typecheck && pnpm -r test`
 Expected: PASS.
 
 - [ ] **Step 5: Commit**
@@ -1221,7 +1243,14 @@ export interface ListenerDeps {
 }
 ```
 
-Inside `connect()`, read `const config = deps.loadConfig();` first and use it for the socket headers and for `resolveWorkdir(config, deps.paths)`. Pass `deps.paths.name` as `runAgent`'s new trailing `lineName` argument at the `run(...)` call site (`listener.ts:110-119`).
+Inside `connect()`, read `const config = deps.loadConfig();` first and use it for the socket headers and for `resolveLineWorkdir(config, deps.paths)` (Task 4's `LinePaths` variant). Pass `deps.paths.name` as `runAgent`'s new trailing `lineName` argument at the `run(...)` call site (`listener.ts:110-119`).
+
+**`ListenerDeps` is a public signature — update its callers in this same task.** The
+only production caller is `index.ts`'s `listen` action; point it at
+`startAllListeners(getMachinePaths())` and delete its `loadConfig`/`assertCallableConfig`
+preamble. `packages/cli/test/listener.test.ts` constructs `ListenerDeps` directly and
+must move from `config:` to `loadConfig: () => ...` throughout — mechanical, but it is
+the bulk of the diff and the green-commit constraint depends on it.
 
 Create `packages/cli/src/listenAll.ts`:
 
@@ -1996,6 +2025,15 @@ Retarget the shared modules — mechanical, no behaviour change:
 
 In `index.ts`, add `--line <name>` to `card`, `task new`, `allow`, `revoke`, `block`, `unblock`, `offer`, `unoffer`, `rotate`, and start each action with `const ctx = resolveLine(getMachinePaths(), { line: o.line });`. Replace `policyVerbAction`'s `loadConfig`/`!cfg.agent_kind` preamble with `resolveLine` + `assertCallableLine(ctx.config)`.
 
+**This is the deletion point for the legacy half.** Tasks 2–11 added the new types
+alongside the old ones so every commit stayed green; by the end of this task nothing
+imports them, so delete: `Paths` and `getPaths` (`paths.ts`), and `Config`,
+`CallableConfig`, `assertCallableConfig`, `loadConfig`, `saveConfig`, and
+`resolveWorkdir` (`config.ts`). Verify with `grep -rn "getPaths\|loadConfig\|saveConfig\|assertCallableConfig" packages/cli/src packages/cli/test` — the only surviving
+hits should be `loadLineConfig`/`saveLineConfig`. If a caller still needs one, that
+caller was missed by an earlier task: move it now rather than keeping the legacy
+export alive.
+
 - [ ] **Step 4: Run the full suite**
 
 Run: `pnpm -r build && pnpm -r typecheck && pnpm -r test`
@@ -2157,18 +2195,31 @@ Run from the repo root, in this order:
 pnpm -r build && pnpm -r typecheck && pnpm -r test
 ```
 
-Expected: all three pass. Then a manual smoke test against a scratch state root:
+Expected: all three pass. Then a smoke test **against a local relay only**:
 
 ```bash
+# Terminal 1 — a throwaway relay on localhost. Never the production relay:
+# handle release is not implemented (#16), so every name registered there is
+# spent forever. Do not point this at agentcall.benree.tech.
+cd apps/relay && pnpm dev            # serves http://localhost:8787
+
+# Terminal 2
 export AGENTCALL_HOME=$(mktemp -d)
-node packages/cli/dist/index.js setup --handle smoke-a --agent claude --relay https://agentcall.benree.tech --skip-launchd --no-verify --no-snippet
+export AGENTCALL_RELAY=http://localhost:8787
+node packages/cli/dist/index.js setup --handle smoke-a --agent claude --skip-launchd --no-verify --no-snippet
 node packages/cli/dist/index.js line add codex --handle smoke-b --agent codex --skip-launchd --no-verify
 node packages/cli/dist/index.js line list
 node packages/cli/dist/index.js doctor
-unset AGENTCALL_HOME
+unset AGENTCALL_HOME AGENTCALL_RELAY
 ```
 
-Expected: two lines listed, `smoke-a` primary. **Note both handles are now permanently spent** — handle release is not implemented (#16), so use throwaway names you will not want later.
+Expected: two lines listed, `claude` primary, `smoke-a@localhost:8787` and
+`smoke-b@localhost:8787` as the addresses. `doctor` reports both lines; agent checks
+may fail if no `claude`/`codex` binary is present, which is fine — the line
+enumeration and relay registration are what this exercises.
+
+**If `wrangler dev` will not start in this environment, stop and report it rather
+than falling back to the production relay.**
 
 - [ ] **Step 5: Document and commit**
 
@@ -2189,4 +2240,16 @@ git commit -m "feat(cli): wire the line commands, outbound selection and multi-l
 
 **Type consistency.** `MachinePaths`/`LinePaths` (Task 2) are the parameter types everywhere downstream; `LineConfig` (Task 4) replaces `Config`; `LineContext` (Task 5) is what commands receive; `assertCallableLine` replaces `assertCallableConfig` consistently in Tasks 4, 12, 14. `listLines` returns `LineSummary[]` (may be broken) and `readyLines` returns only usable lines — Tasks 8, 9, 10 and 13 use whichever matches their tolerance for a broken line, deliberately.
 
-**Ordering.** Tasks 2–5 are one compiling unit; the tree does not typecheck between them. Task 12 is the first point where `pnpm -r typecheck` is green again, and Task 14 is the first full-suite gate.
+**Ordering.** The migration is additive: Tasks 2–11 add the new types alongside the
+old ones and move consumers over one task at a time, so **every commit passes
+`pnpm -r build && pnpm -r typecheck && pnpm -r test`**. Task 12 is the deletion point
+for the legacy exports (`Paths`, `getPaths`, `Config`, `loadConfig`, `saveConfig`,
+`assertCallableConfig`, `resolveWorkdir`); by then nothing imports them. Tasks that
+change a public signature — 6 (`launchd`), 8 (`ListenerDeps`), 12 (the shared
+modules) — update their callers within the same task for exactly this reason.
+
+**Amended after the pre-flight scan** (2026-08-01): the first draft had Tasks 2–5
+land as one non-compiling unit, and Task 14 smoke-testing against the production
+relay. Both were changed — the first to keep every commit bisectable and green, the
+second because handle release is not implemented (#16), so a smoke test against
+production spends global handles permanently.
