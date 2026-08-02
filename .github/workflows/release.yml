@@ -110,15 +110,28 @@ jobs:
             echo "npm $minimum or newer is required for trusted publishing; found $npm_version."
             exit 1
           }
-          test -z "$NODE_AUTH_TOKEN" || {
-            echo "Release must use OIDC trusted publishing, not NODE_AUTH_TOKEN."
-            exit 1
-          }
       - name: Publish with keyless provenance
         env:
           RELEASE_TAG: ${{ github.event.release.tag_name }}
           NPM_DIST_TAG: ${{ github.event.release.prerelease && 'next' || 'latest' }}
+          # setup-node's generated .npmrc references this variable. Pin it empty
+          # in the process that publishes so job/workflow env cannot silently
+          # replace npm trusted publishing with a long-lived registry token.
+          NODE_AUTH_TOKEN: ""
         run: |
+          test -z "${NODE_AUTH_TOKEN:-}" || {
+            echo "Release must use OIDC trusted publishing, not NODE_AUTH_TOKEN."
+            exit 1
+          }
+          test -n "${ACTIONS_ID_TOKEN_REQUEST_URL:-}" || {
+            echo "OIDC request URL unavailable; npm trusted publishing cannot proceed."
+            exit 1
+          }
+          test -n "${ACTIONS_ID_TOKEN_REQUEST_TOKEN:-}" || {
+            echo "OIDC request token unavailable; npm trusted publishing cannot proceed."
+            exit 1
+          }
+
           version=${RELEASE_TAG#v}
           release_dir="$RUNNER_TEMP/agentcall-release"
 

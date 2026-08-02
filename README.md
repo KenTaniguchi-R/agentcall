@@ -701,6 +701,10 @@ provenance, and attaches the exact tarballs, SHA-256 checksums, and CycloneDX
 SBOM to the GitHub release. A partial retry skips an existing package only when
 the registry integrity exactly matches the rebuilt tarball. Stable releases use
 the npm `latest` dist-tag; GitHub prereleases use `next` and cannot displace it.
+The publish process pins `NODE_AUTH_TOKEN` empty and refuses to run unless the
+GitHub OIDC request environment is present, so a missing `id-token: write` grant
+or accidental return to a long-lived npm token fails before either package is
+published.
 
 The published tarball is installed and exercised without pnpm on Node 20, 22,
 and 24 in CI, including `agentcall doctor`; this is what enforces the CLI's
