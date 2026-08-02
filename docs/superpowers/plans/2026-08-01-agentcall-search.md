@@ -20,7 +20,8 @@
 - **No live network and no live `claude`/`codex` spawn in tests.** CLI tests mock `ws`/`fs`; relay tests drive routes through `SELF.fetch`.
 - **Relay rate-limit bindings must exist in both `apps/relay/wrangler.jsonc` and the `Env` type in `apps/relay/src/index.ts`.** Adding one in a single place fails at runtime, not at compile time.
 - **`RELAY_HOST` in `apps/relay/src/index.ts` is deliberately not exported** — workerd rejects non-handler named exports from the entry module. Do not export it.
-- Exact constant values, copied from the spec: `MAX_ROSTER_MEMBERS = 200`, `MAX_BUNDLE_TASKS_PER_CARD = 10`, `MAX_BUNDLE_BYTES = 4_500_000`, keyword string max 40 chars, max 20 keywords per task, cache TTL 15 minutes, default search limit 5, field weights `keywords: 3, name: 2, description: 1`.
+- Exact constant values, copied from the spec: `MAX_ROSTER_MEMBERS = 200`, `MAX_BUNDLE_TASKS_PER_CARD = 10`, `MAX_BUNDLE_BYTES = 4_500_000`, `MAX_KEYWORD_LENGTH = 40`, `MAX_TASK_KEYWORDS = 20`, `MAX_TASK_ID_LENGTH = 64`, cache TTL 15 minutes, default search limit 5, field weights `keywords: 3, name: 2, description: 1`.
+- **Bounds are named constants that the schemas themselves consume, never bare literals.** `MAX_KEYWORD_LENGTH` / `MAX_TASK_KEYWORDS` live in `packages/shared/src/card.ts`; `MAX_TASK_ID_LENGTH` lives in `packages/shared/src/protocol.ts` beside `TASK_ID_RE`, pinned to it by test. This exists so the bundle-size guard and the schema read one source — a literal in either place recreates the drift the guard is there to catch.
 
 ## File Structure
 
@@ -350,7 +351,13 @@ describe("the bounds are arithmetic, not hope", () => {
     const shape = CardTask.shape;
     const maxName = shape.name.maxLength ?? 0;
     const maxDescription = shape.description.maxLength ?? 0;
-    const worstTask = 64 + maxName + maxDescription + 20 * 40; // id + name + description + keywords
+    // Every term traces to one named constant or a live schema read. Do NOT
+    // hardcode: zod 4 does not expose .maxLength on a ZodArray (it returns
+    // undefined — only .element.maxLength works), so the array caps are shared
+    // via constants that the SCHEMAS themselves consume. That is what makes the
+    // guard track the schema instead of restating it.
+    const worstTask =
+      MAX_TASK_ID_LENGTH + maxName + maxDescription + MAX_TASK_KEYWORDS * MAX_KEYWORD_LENGTH;
     const worst = MAX_ROSTER_MEMBERS * MAX_BUNDLE_TASKS_PER_CARD * worstTask;
     expect(worst).toBeLessThanOrEqual(MAX_BUNDLE_BYTES);
   });
@@ -405,7 +412,7 @@ export const BundleTask = z.object({
   id: z.string().regex(TASK_ID_RE),
   name: z.string().max(100),
   description: z.string().max(1000),
-  keywords: z.array(z.string().max(40)).max(20).default([]),
+  keywords: z.array(z.string().max(MAX_KEYWORD_LENGTH)).max(MAX_TASK_KEYWORDS).default([]),
 });
 
 export const BundleEntry = z.object({
