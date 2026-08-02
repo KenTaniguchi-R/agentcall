@@ -14,6 +14,7 @@ import { execVerb, type Verb } from "./verbs.js";
 import { buildCardReport } from "./lint.js";
 import { runDoctor } from "./doctor.js";
 import { loadContacts, addContact, removeContact, resolveAddress } from "./contacts.js";
+import { findOutbound, loadOutbound, rememberOutbound } from "./contextsOut.js";
 import { forgetMembership, loadMemberships, saveMembership } from "./rosters.js";
 import { allRostersFailed, DEFAULT_SEARCH_LIMIT, rank, renderResults, sanitize, toEntries, type RosterStatus, type SearchEntry } from "./search.js";
 import { refreshRoster } from "./searchRefresh.js";
@@ -61,7 +62,9 @@ program
   .argument("<message...>", "message to send")
   .option("--json", "print the full reply envelope instead of just the text")
   .option("--task <id>", "task from the callee's card to perform (see: agentcall card <address>)")
-  .action(async (address: string, messageParts: string[], o: { json?: boolean; task?: string }) => {
+  .option("--continue", "continue the last conversation with this address")
+  .option("--context <id>", "continue a specific conversation by id")
+  .action(async (address: string, messageParts: string[], o: { json?: boolean; task?: string; continue?: boolean; context?: string }) => {
     const paths = getPaths();
     // Config is loaded before resolution so the address can be checked against
     // the relay this call will actually dial (see resolveAddress).
@@ -74,6 +77,36 @@ program
     }
     if (parsed.warning) console.error(parsed.warning);
     const message = messageParts.join(" ");
+
+    // --continue resolves against what the callee told us last time. The task
+    // is re-sent explicitly: without it turn 2 would re-run policy resolution
+    // and could land on a different task than the context was minted under,
+    // which admission would then reject -- a self-inflicted context_unknown.
+    let contextId = o.context;
+    let task = o.task;
+    if (o.continue) {
+      if (contextId) {
+        console.error("Use --continue or --context, not both.");
+        process.exitCode = 1;
+        return;
+      }
+      const prev = findOutbound(loadOutbound(paths), {
+        relay: relayUrl(cfg), from: cfg.handle, to: parsed.handle,
+      });
+      if (!prev) {
+        console.error(`No open conversation with ${address}. Call without --continue to start one.`);
+        process.exitCode = 1;
+        return;
+      }
+      if (task !== undefined && task !== prev.task) {
+        console.error(`That conversation is on task "${prev.task}", not "${task}".`);
+        process.exitCode = 1;
+        return;
+      }
+      contextId = prev.context_id;
+      task = prev.task;
+    }
+
     try {
       const reply = await callAgent({
         relay: relayUrl(cfg),
@@ -81,9 +114,19 @@ program
         token: cfg.token,
         to: parsed.handle,
         message,
-        task: o.task,
+        task,
+        contextId,
         onStatus: (s) => console.error(s === "ringing" ? "ringing..." : "answered, agent working..."),
       });
+      if (reply.context_id && reply.task) {
+        rememberOutbound(paths, {
+          relay: relayUrl(cfg), from: cfg.handle, to: parsed.handle,
+          task: reply.task, context_id: reply.context_id, at: Date.now(),
+        });
+        // stderr, never stdout: reply.text must stay pipeable, and this matches
+        // the existing "ringing..." / "answered" convention.
+        console.error("conversation open — add --continue to follow up");
+      }
       console.log(o.json ? JSON.stringify(reply) : reply.text);
     } catch (e) {
       console.error(e instanceof CallError ? `Call failed (${e.code}): ${e.message}` : String(e));

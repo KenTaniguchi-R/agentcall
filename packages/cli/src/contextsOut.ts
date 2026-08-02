@@ -1,0 +1,57 @@
+import { chmodSync, existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { z } from "zod";
+import { CONTEXT_ID_RE } from "@benree/agentcall-shared";
+import type { Paths } from "./paths.js";
+
+// The caller's half, and deliberately a separate file from contexts.ts: this
+// holds only opaque tokens the callee issued us, so losing it costs one
+// retyped question. contexts.ts holds real agent session ids and gates a
+// security property. Different blast radius, different file.
+export const OutboundContextSchema = z.object({
+  relay: z.string().min(1),
+  from: z.string().min(1),
+  to: z.string().min(1),
+  // The task the CONTEXT was resolved under, taken from the reply rather than
+  // from what we requested -- `--task` is optional and the callee's policy
+  // picks when it is omitted.
+  task: z.string().min(1),
+  context_id: z.string().regex(CONTEXT_ID_RE),
+  at: z.number().int(),
+});
+export type OutboundContext = z.infer<typeof OutboundContextSchema>;
+
+export type OutboundKey = { relay: string; from: string; to: string };
+
+const sameTarget = (a: OutboundContext, k: OutboundKey) =>
+  a.relay === k.relay && a.from === k.from && a.to === k.to;
+
+// Fails SAFE, same posture as loadContexts: an unreadable or malformed store
+// yields no entries, so --continue reports "nothing stored" instead of
+// resuming against garbage.
+export function loadOutbound(p: Paths): OutboundContext[] {
+  if (!existsSync(p.contextsOutFile)) return [];
+  try {
+    const parsed = z.array(OutboundContextSchema).safeParse(JSON.parse(readFileSync(p.contextsOutFile, "utf8")));
+    return parsed.success ? parsed.data : [];
+  } catch {
+    return [];
+  }
+}
+
+export function findOutbound(list: OutboundContext[], key: OutboundKey): OutboundContext | undefined {
+  return list.find((e) => sameTarget(e, key));
+}
+
+// One open conversation per callee. A second call to the same address
+// replaces the first rather than accumulating, so --continue never has to
+// guess which of several threads was meant.
+export function rememberOutbound(p: Paths, entry: OutboundContext): void {
+  const next = [entry, ...loadOutbound(p).filter((e) => !sameTarget(e, entry))];
+  // Same posture as contexts.ts's saveContexts: mkdirSync's mode is silently
+  // ignored when the directory already exists, so chmodSync is the actual
+  // guard.
+  mkdirSync(p.dir, { recursive: true, mode: 0o700 });
+  chmodSync(p.dir, 0o700);
+  writeFileSync(p.contextsOutFile, JSON.stringify(next, null, 2) + "\n", { mode: 0o600 });
+  chmodSync(p.contextsOutFile, 0o600);
+}
