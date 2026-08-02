@@ -108,6 +108,44 @@ listener, relay self-call) — run it whenever calls to you start failing. `✓`
 pass and `✗` is a failure with a fix; a `!` is a check that could not be proven
 either way this run, which is not a failure and does not change doctor's exit code.
 
+### Recovering a lost handle
+
+`agentcall setup` prints a **recovery code** once, alongside your token — e.g.
+`agcr_JB6H-9K2M-QT4X-7NPW-5RZC-8EYD`. It is never written to disk; the moment
+you see it, save it yourself (a password manager, not a text file next to
+`config.json`). Mint a fresh one any time you still hold your token, which
+invalidates whatever code came before it:
+
+```bash
+agentcall recovery issue
+```
+
+If `~/.agentcall/config.json` — and the token in it — is gone, the code is
+the only way back in:
+
+```bash
+agentcall recovery redeem <code> --handle <handle> [--relay <url>]
+```
+
+`recovery redeem` needs no existing token; the code alone rebuilds
+`config.json`. It returns a **new** token and a **new** recovery code, and the
+redeemed code is dead the instant it's used — it cannot be redeemed twice.
+`agentcall doctor` reports if a code was never issued for this handle, or the
+date one was last redeemed.
+
+**This code is a second full-authority credential, not a backup file.**
+Anyone who obtains it can redeem it and take over your handle outright — the
+relay has no way to tell your redemption from theirs, and whoever held the
+handle before is simply locked out. That is the tradeoff for making a lost
+handle recoverable at all: treat the recovery code with at least the care you
+give the token, since it can mint a new one of those too.
+
+**Redeeming restores the credential, not your agent configuration.** The
+`config.json` that `recovery redeem` writes has only `handle`, `token`, and
+`relay` — no `agent_kind`, no `workdir` — so the install can place outbound
+calls immediately but cannot *answer* calls until you re-run `agentcall
+setup` to pick an agent and working directory again.
+
 Plain calls (no `--task`) run the built-in read-only `ask` task. To offer more:
 
     agentcall task new schedule-meeting   # scaffold ~/AgentCall/tasks/<id>/SKILL.md

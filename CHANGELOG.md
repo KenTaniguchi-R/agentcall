@@ -6,6 +6,49 @@ which are released together.
 
 ## Unreleased
 
+### Added — a recovery code covers a lost `config.json`
+
+- **`POST /v1/register` now returns a `recovery_code`** alongside the token —
+  Crockford base32, 24 characters, `agcr_`-prefixed and hyphen-grouped (e.g.
+  `agcr_JB6H-9K2M-QT4X-7NPW-5RZC-8EYD`). `agentcall setup` prints it once to
+  the terminal and never writes it to disk; the owner is responsible for
+  storing it themselves.
+- **`agentcall recovery issue`** mints a fresh code, invalidating whatever
+  code came before it. Requires the current token.
+- **`agentcall recovery redeem <code> --handle <handle> [--relay <url>]`**
+  rebuilds `~/.agentcall/config.json` from the code alone — no token needed —
+  for when the config file, and the token in it, are both gone. It returns a
+  new token and a new recovery code; the redeemed code cannot be used again.
+  The config it writes is caller-only (`handle`, `token`, `relay`), so the
+  owner still has to re-run `agentcall setup` to become callable again.
+- **`agentcall doctor`** gained a `recovery code` check: it warns (`!`, not a
+  failure) if no code was ever issued for the handle, and reports the date if
+  one has been redeemed.
+- Relay: `POST /v1/recovery/issue`, `POST /v1/recovery/redeem`, and
+  `GET /v1/recovery/state`, backed by two new columns on `handles`
+  (`recovery_hash`, `recovery_redeemed_at`; migration
+  `0005_handle_recovery.sql`). Issuing and redeeming both overwrite
+  `recovery_hash` in the same conditional `UPDATE` that authenticates the
+  request, so a consumed or superseded code cannot be reused.
+- **This is a second full-authority credential.** Anyone holding a valid
+  recovery code can redeem it and take over the handle; the relay cannot tell
+  a legitimate recovery from a stolen one. That is the accepted tradeoff for
+  making a lost handle recoverable at all — see the README for the full
+  warning.
+
+### Fixed — `/v1/token/rotate` had a race that could kill the winning token
+
+- The handler used to verify the caller's token and then run an unconditional
+  `UPDATE handles SET token_hash = ? WHERE handle = ?`. Two concurrent
+  rotations from the same handle could both pass verification and both write,
+  so the first caller's brand-new token was silently overwritten by the
+  second's — the first caller was locked out with no error to explain why.
+  The `UPDATE` is now conditioned on the token hash just authenticated
+  (`WHERE handle = ? AND token_hash = ?`), a compare-and-swap: exactly one
+  concurrent rotation wins, and the loser gets the same `401` a bad token
+  would produce instead of silently destroying the winner's new token.
+  `recovery/issue` uses the identical CAS pattern for the same reason.
+
 ### Fixed — `doctor`'s tool-guard check called healthy installs broken
 
 The check asked a real `claude` spawn to read a canary `.env` and required a
