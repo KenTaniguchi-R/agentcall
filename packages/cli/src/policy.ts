@@ -1,7 +1,7 @@
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { dirname } from "node:path";
 import { z } from "zod";
-import { ROSTER_ID_RE } from "@benree/agentcall-shared";
+import { HANDLE_RE, MAX_CARD_BLOCKED_CALLERS, ROSTER_ID_RE, TASK_ID_RE } from "@benree/agentcall-shared";
 import type { Paths } from "./paths.js";
 import type { Task } from "./tasks.js";
 
@@ -29,15 +29,85 @@ export const PolicySchema = z.object({
 });
 export type Policy = z.infer<typeof PolicySchema>;
 
+export const ManagedPolicySchema = z.object({
+  version: z.literal(1),
+  // Omitted means the administrator does not constrain task grants. An empty
+  // list is an intentional deny-all ceiling.
+  allowed_tasks: z.array(z.string().regex(TASK_ID_RE)).optional(),
+  blocked_callers: z.array(z.string().regex(HANDLE_RE)).default([]),
+}).strict();
+export type ManagedPolicy = z.infer<typeof ManagedPolicySchema>;
+
 export const DEFAULT_POLICY: Policy = { description: "", default_offer: ["ask"], callers: {}, groups: {} };
 
 // Missing file -> safe default (fresh install). Malformed file -> THROW:
 // silently falling back to DEFAULT_POLICY would grant `ask` to callers the
 // owner explicitly blocked. The listener maps the throw to a call_failed
 // agent_error without spawning anything.
+function readOptionalJson<T>(file: string, label: string, schema: z.ZodType<T>): T | undefined {
+  let raw: string;
+  try {
+    raw = readFileSync(file, "utf8");
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === "ENOENT") return undefined;
+    throw new Error(`${label} is unreadable: ${String(error)}`, { cause: error });
+  }
+  try {
+    return schema.parse(JSON.parse(raw));
+  } catch (error) {
+    throw new Error(`${label} is invalid: ${String(error)}`, { cause: error });
+  }
+}
+
+export function loadUserPolicy(p: Paths): Policy {
+  return readOptionalJson(p.policyFile, "user policy", PolicySchema) ?? DEFAULT_POLICY;
+}
+
+function applyManagedPolicy(user: Policy, managed: ManagedPolicy): Policy {
+  const allowed = managed.allowed_tasks === undefined
+    ? undefined
+    : new Set(managed.allowed_tasks);
+  const filter = (offers: string[]) => allowed === undefined
+    ? [...offers]
+    : offers.filter((id) => allowed.has(stripPlus(id)));
+
+  const callerEntries = new Map(Object.entries(user.callers).map(([handle, entry]) => [
+    handle,
+    { offer: filter(entry.offer), block: entry.block },
+  ]));
+  for (const handle of managed.blocked_callers) {
+    const entry = callerEntries.get(handle) ?? { offer: [], block: false };
+    callerEntries.set(handle, { ...entry, block: true });
+  }
+
+  return {
+    description: user.description,
+    default_offer: filter(user.default_offer),
+    callers: Object.fromEntries(callerEntries),
+    groups: Object.fromEntries(Object.entries(user.groups).map(([name, group]) => [
+      name,
+      { ...group, offer: filter(group.offer) },
+    ])),
+  };
+}
+
+function validateEffectivePolicy(policy: Policy): Policy {
+  const blocked = Object.values(policy.callers).filter((entry) => entry.block).length;
+  if (blocked > MAX_CARD_BLOCKED_CALLERS) {
+    throw new Error(
+      `effective policy blocks ${blocked} callers; at most ${MAX_CARD_BLOCKED_CALLERS} can be enforced and published`,
+    );
+  }
+  return policy;
+}
+
+// Enforcement and publication use the effective policy. A missing managed
+// file is intentionally silent; any other read or parse failure is fatal so an
+// administrator restriction can never disappear through fallback.
 export function loadPolicy(p: Paths): Policy {
-  if (!existsSync(p.policyFile)) return DEFAULT_POLICY;
-  return PolicySchema.parse(JSON.parse(readFileSync(p.policyFile, "utf8")));
+  const user = loadUserPolicy(p);
+  const managed = readOptionalJson(p.managedPolicyFile, "managed policy", ManagedPolicySchema);
+  return validateEffectivePolicy(managed === undefined ? user : applyManagedPolicy(user, managed));
 }
 
 // Writes the exact shape PolicySchema parses, so hand-edits and the CLI

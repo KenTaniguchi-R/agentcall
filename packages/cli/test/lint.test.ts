@@ -115,4 +115,16 @@ describe("buildCardReport", () => {
     expect(text).toContain("mia: intro");
     expect(text).toContain("Blocked: spammer");
   });
+
+  it("renders the administrator-filtered menu rather than raw user grants", () => {
+    const h = home();
+    const p = { ...getPaths(h), managedPolicyFile: join(h, "managed-policy.json") };
+    writeSkill(h, "intro", "---\ndescription: d\n---\n");
+    writeFileSync(p.policyFile, JSON.stringify({ default_offer: ["ask", "intro"] }));
+    writeFileSync(p.managedPolicyFile, JSON.stringify({ version: 1, allowed_tasks: ["ask"] }));
+
+    const text = buildCardReport(cfg, p).menu.join("\n");
+    expect(text).toContain("ask");
+    expect(text).not.toContain("intro");
+  });
 });

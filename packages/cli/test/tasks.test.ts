@@ -14,10 +14,13 @@ function writeSkill(home: string, id: string, skillMd: string) {
 }
 
 describe("paths", () => {
-  it("exposes tasksDir and policyFile", () => {
-    const p = getPaths("/tmp/fakehome");
+  it("keeps the managed policy outside user-controlled home relocation", () => {
+    const p = getPaths("/tmp/fakehome", "darwin");
     expect(p.tasksDir).toBe("/tmp/fakehome/AgentCall/tasks");
     expect(p.policyFile).toBe("/tmp/fakehome/.agentcall/policy.json");
+    expect(p.managedPolicyFile).toBe("/Library/Application Support/agentcall/policy.json");
+    expect(getPaths("/tmp/other-home", "darwin").managedPolicyFile).toBe(p.managedPolicyFile);
+    expect(getPaths("/tmp/fakehome", "linux").managedPolicyFile).toBe("/etc/agentcall/policy.json");
   });
 });
 

@@ -8,7 +8,7 @@ import { startListener } from "./listener.js";
 import { runSetup } from "./setup.js";
 import { installLaunchAgent, isLaunchAgentInstalled, uninstallLaunchAgent } from "./launchd.js";
 import { publishCard } from "./card.js";
-import { loadPolicy, savePolicy } from "./policy.js";
+import { loadPolicy, loadUserPolicy, savePolicy } from "./policy.js";
 import { loadTasks, scaffoldTask } from "./tasks.js";
 import { execVerb, type Verb } from "./verbs.js";
 import { buildCardReport } from "./lint.js";
@@ -560,7 +560,9 @@ function policyVerbAction(verb: Verb) {
       return;
     }
     try {
-      const { policy, lines } = execVerb(loadPolicy(paths), loadTasks(paths), verb, a, b);
+      // Mutations edit user intent, never the administrator-filtered view.
+      // Enforcement and card publication apply the managed ceiling separately.
+      const { policy, lines } = execVerb(loadUserPolicy(paths), loadTasks(paths), verb, a, b);
       savePolicy(paths, policy);
       for (const line of lines) console.log(line);
       try {

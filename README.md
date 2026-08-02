@@ -365,6 +365,44 @@ to the resolved task directory. This is a real boundary for `Read`, `Write`,
 It is not a boundary for `exec`, and Codex has no equivalent read boundary;
 see the residual risks below.
 
+### Managed policy
+
+An administrator can place a machine policy at
+`/Library/Application Support/agentcall/policy.json` on macOS or
+`/etc/agentcall/policy.json` on Linux. This path is absolute and is never moved
+by `HOME` or `AGENTCALL_HOME`; deploy the directory and file as root-owned and
+not writable by ordinary users.
+
+```json
+{
+  "version": 1,
+  "allowed_tasks": ["ask", "schedule-meeting"],
+  "blocked_callers": ["contractor-bot"]
+}
+```
+
+`allowed_tasks` is a ceiling over every user default, per-caller grant, and
+roster-group grant. Omit it to leave task grants unconstrained; set it to `[]`
+to deny every task. `blocked_callers` is added to the user's own blocks and
+cannot be undone in `~/.agentcall/policy.json`. CLI policy commands continue to
+edit only that user file, while listener enforcement and card publication use
+the effective, administrator-filtered policy.
+
+The combined user and managed block set is limited to 200 distinct callers,
+matching the relay card protocol. Exceeding it fails policy loading so local
+enforcement cannot drift from an older card that the relay still serves.
+
+A missing managed file means the machine is unmanaged. If the file exists but
+cannot be read, parsed, or validated, policy loading fails closed and no agent
+is spawned. Deploy replacements atomically so a reader never observes a
+partially written file.
+
+This layer is the policy model for managed deployment, not by itself a complete
+tamper boundary. Fleet enforcement must also install AgentCall and this file in
+administrator-owned locations and verify a signed release; a user-owned npm
+installation can be modified by that user. In-product self-update remains
+disabled/deferred so it cannot bypass an IT-pinned version.
+
 ## Security model (v1, explicit)
 
 - Address = capability to call. Callers must themselves be registered — the

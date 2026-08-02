@@ -6,6 +6,14 @@ which are released together.
 
 ## Unreleased
 
+### Added — administrator-managed policy ceiling
+
+- macOS and Linux now have fixed, `AGENTCALL_HOME`-independent managed-policy
+  paths. Administrators can cap every task grant and impose unoverridable caller
+  blocks without rewriting the user's policy.
+- Missing managed policy remains unmanaged behavior; unreadable, malformed, or
+  invalid managed policy fails closed instead of falling back to user defaults.
+
 ### Changed — verifiable npm releases
 
 - Every third-party GitHub Action is pinned to an immutable commit.

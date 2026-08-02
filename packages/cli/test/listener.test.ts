@@ -292,6 +292,28 @@ describe("startListener task resolution", () => {
     expect(audit[0]).toMatchObject({ call_id: "c1", from: "spammer", status: "blocked" });
   });
 
+  it("enforces an administrator block even when user policy allows the caller", async () => {
+    let spawned = false;
+    const relayReady = new Promise<WsSocket>((resolveWs) => {
+      void fakeRelay((ws) => resolveWs(ws)).then((url) => {
+        const deps = baseDeps(url);
+        seedPolicy(deps.paths, { default_offer: ["ask"], callers: {} });
+        deps.paths.managedPolicyFile = join(deps.paths.dir, "managed-policy.json");
+        writeFileSync(deps.paths.managedPolicyFile, JSON.stringify({
+          version: 1,
+          blocked_callers: ["spammer"],
+        }));
+        stopper = startListener({ ...deps, run: async () => { spawned = true; return { text: "x" }; } });
+      });
+    });
+    const ws = await relayReady;
+    const expectFrames = frames(ws, 1);
+    ws.send(JSON.stringify({ type: "incoming_call", call_id: "managed-block", from: "spammer", message: "hi" }));
+    const [failed] = await expectFrames;
+    expect(failed).toMatchObject({ type: "call_failed", call_id: "managed-block", code: "blocked" });
+    expect(spawned).toBe(false);
+  });
+
   it("refuses an ungranted task with the caller's offered menu, without spawning", async () => {
     let spawned = false;
     const relayReady = new Promise<WsSocket>((resolveWs) => {
