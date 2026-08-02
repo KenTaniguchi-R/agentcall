@@ -62,12 +62,23 @@
 
 ## Task 1: `AgentKind` moves to `packages/shared`
 
-Five files declare `"claude" | "codex"` inline. Consolidate before anything else touches them, so later tasks import one name.
+Seven sites declare `"claude" | "codex"` inline. Consolidate before anything else touches them, so later tasks import one name.
 
 **Files:**
 - Modify: `packages/shared/src/protocol.ts`
 - Modify: `packages/cli/src/config.ts:9`, `setup.ts:24,65,175`, `api.ts:41`
+- Modify: `packages/cli/src/bin.ts:54` (`resolveAgentBin`'s parameter), `packages/cli/src/index.ts:43` (the `as` cast in the `setup` action)
 - Test: `packages/shared/test/protocol.test.ts`
+
+**Done means this returns only the `AGENT_KINDS` declaration:**
+
+```bash
+grep -rn '"claude" *| *"codex"' packages/cli/src apps/relay/src packages/shared/src
+```
+
+*(Corrected 2026-08-01 after the Task 1 review: the first draft said "five files" and
+omitted `bin.ts` and `index.ts`, so the consolidation the task exists for was not
+actually complete. The grep above is the real acceptance test.)*
 
 **Interfaces:**
 - Produces: `AGENT_KINDS: readonly ["claude", "codex"]`, `type AgentKind = "claude" | "codex"`, `AgentKindSchema: z.ZodEnum`
