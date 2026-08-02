@@ -1,13 +1,27 @@
-import { spawn } from "node:child_process";
+import { execFileSync, spawn } from "node:child_process";
 import { fileURLToPath } from "node:url";
 import { AGENT_TIMEOUT_MS, MAX_REPLY_BYTES } from "@benree/agentcall-shared";
 import { resolveAgentBin } from "./bin.js";
 import { CAPS, FULL_ACCESS_ENVELOPE, type Cap, type Envelope } from "./tasks.js";
 
-// Gated on the codex-resume-sandbox probe. See that test and Task 5 of the
-// multi-turn plan: if `-c sandbox_mode` does not confine a resumed session,
-// threading codex would let a read-only task write to disk, so it stays off.
-export const CODEX_THREADING_ENABLED = true;
+// The exact codex-cli release against which the live resume-sandbox probe
+// passed. Threading fails closed on every other version: a CLI upgrade changes
+// the security boundary and must be re-probed before resumed sessions are
+// trusted again.
+export const CODEX_THREADING_VERIFIED_VERSION = "0.146.0";
+
+export function codexThreadingEnabled(
+  resolveBin: (kind: AgentKind) => string = resolveAgentBin,
+  readVersion: (bin: string) => string = (bin) =>
+    execFileSync(bin, ["--version"], { encoding: "utf8", stdio: ["ignore", "pipe", "ignore"] }),
+): boolean {
+  try {
+    const match = readVersion(resolveBin("codex")).match(/\b(\d+\.\d+\.\d+)\b/);
+    return match?.[1] === CODEX_THREADING_VERIFIED_VERSION;
+  } catch {
+    return false;
+  }
+}
 
 export type AgentKind = "claude" | "codex";
 export interface SpawnSpec { cmd: string; args: string[]; cwd: string; env?: NodeJS.ProcessEnv }

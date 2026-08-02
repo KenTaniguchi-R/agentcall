@@ -61,7 +61,7 @@ function seededPaths(): ReturnType<typeof getPaths> {
 // custom config field (e.g. workdir) or seeded policy/tasks spread this and
 // override, or seed onto `.paths` before calling startListener.
 function baseDeps(relay: string) {
-  return { config: { ...cfg, relay }, paths: seededPaths(), relay };
+  return { config: { ...cfg, relay }, paths: seededPaths(), relay, codexThreadingEnabled: () => true };
 }
 
 describe("startListener workdir", () => {
@@ -397,6 +397,8 @@ async function oneCall(
     run?: (...a: any[]) => Promise<{ text: string; session_id?: string }>;
     saveContexts?: () => void;
     frameCount?: number;
+    config?: CallableConfig;
+    codexThreadingEnabled?: () => boolean;
   } = {},
 ): Promise<{ frames: any[]; paths: ReturnType<typeof getPaths> }> {
   let deps!: ReturnType<typeof baseDeps>;
@@ -407,11 +409,13 @@ async function oneCall(
       void collected.then(resolve);
     }).then((url) => {
       deps = baseDeps(url);
+      if (opts.config) deps.config = opts.config;
       opts.seed?.(deps.paths);
       stopper = startListener({
         ...deps,
         run: opts.run ?? (async () => ({ text: "ok", session_id: "real-agent-session" })),
         saveContexts: opts.saveContexts,
+        codexThreadingEnabled: opts.codexThreadingEnabled ?? deps.codexThreadingEnabled,
       });
     });
   });
@@ -452,6 +456,41 @@ describe("listener contexts", () => {
     expect(stored[0]!.agent_session_id).toBe("real-agent-session");
     expect(stored[0]!.caller).toBe("sota");
     expect(stored[0]!.context_id).toBe(result.context_id);
+  });
+
+  it("does not mint a codex context when the installed CLI lacks current sandbox evidence", async () => {
+    const errors: string[] = [];
+    const spy = vi.spyOn(console, "error").mockImplementation((...args: unknown[]) => errors.push(args.map(String).join(" ")));
+    try {
+      const { frames: f, paths } = await oneCall(
+        { message: "hi" },
+        {
+          config: { ...cfg, agent_kind: "codex" },
+          codexThreadingEnabled: () => false,
+        },
+      );
+      expect(f.find((x) => x.type === "call_result").context_id).toBeUndefined();
+      expect(loadContexts(paths)).toEqual([]);
+      expect(errors).toEqual([expect.stringMatching(/Codex conversation threading is disabled.*last verified/i)]);
+    } finally {
+      spy.mockRestore();
+    }
+  });
+
+  it("refuses an existing codex context after sandbox evidence is withdrawn", async () => {
+    let spawned = false;
+    const { frames: f } = await oneCall(
+      { message: "resume", context_id: SEEDED_CTX },
+      {
+        config: { ...cfg, agent_kind: "codex" },
+        codexThreadingEnabled: () => false,
+        frameCount: 1,
+        seed: seedBinding({ agent_kind: "codex" }),
+        run: async () => { spawned = true; return { text: "unsafe" }; },
+      },
+    );
+    expect(f[0]).toMatchObject({ type: "call_failed", code: "context_unknown" });
+    expect(spawned).toBe(false);
   });
 
   it("delivers a completed answer without a context when context persistence fails", async () => {
