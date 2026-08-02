@@ -42,7 +42,7 @@ async function relayFetch(relay: string, path: string, init: RequestInit, timeou
 
 export async function registerHandle(
   relay: string, handle: string, agentKind?: "claude" | "codex", opts: { timeoutMs?: number } = {},
-): Promise<{ token: string; address: string }> {
+): Promise<{ token: string; address: string; recovery_code?: string }> {
   assertValidHandle(handle);
   const res = await relayFetch(
     relay,
@@ -56,7 +56,7 @@ export async function registerHandle(
   );
   if (res.status === 409) throw new ApiError(`Handle "${handle}" is already taken.`, "handle_taken");
   if (!res.ok) throw new ApiError(`Registration failed (${res.status}).`, "invalid");
-  return (await res.json()) as { token: string; address: string };
+  return (await res.json()) as { token: string; address: string; recovery_code?: string };
 }
 
 // Presence is caller-only on the relay now, so this always authenticates —
@@ -196,4 +196,61 @@ export async function fetchCard(
   if (res.status === 404) throw new ApiError(`No card published for "${handle}".`, "unknown_handle");
   if (!res.ok) throw new ApiError(`Card fetch failed (${res.status}).`, "network");
   return AgentCard.parse(await res.json());
+}
+
+export async function issueRecoveryCode(
+  relay: string, auth: { handle: string; token: string }, opts: { timeoutMs?: number } = {},
+): Promise<{ recovery_code: string }> {
+  const res = await relayFetch(
+    relay,
+    "/v1/recovery/issue",
+    { method: "POST", headers: { Authorization: `Bearer ${auth.token}`, "X-AgentCall-Handle": auth.handle } },
+    opts.timeoutMs ?? RELAY_TIMEOUT_MS,
+  );
+  if (res.status === 401) throw new ApiError("Your credentials were rejected. Re-run `agentcall setup`.", "invalid");
+  if (res.status === 429) throw new ApiError("Too many recovery requests — try again in a minute.", "network");
+  if (!res.ok) throw new ApiError(`Could not issue a recovery code (${res.status}).`, "network");
+  return (await res.json()) as { recovery_code: string };
+}
+
+// No Authorization header: the code IS the credential, and this is the one
+// command that has to work with no local config at all.
+export async function redeemRecoveryCode(
+  relay: string, handle: string, code: string, opts: { timeoutMs?: number } = {},
+): Promise<{ token: string; recovery_code: string; address: string }> {
+  assertValidHandle(handle);
+  const res = await relayFetch(
+    relay,
+    "/v1/recovery/redeem",
+    {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ handle, recovery_code: code }),
+    },
+    opts.timeoutMs ?? RELAY_TIMEOUT_MS,
+  );
+  // The relay deliberately can't tell you which of these it was.
+  if (res.status === 401) {
+    throw new ApiError(
+      "That recovery code was not accepted. It may be wrong, already used, or issued for a different handle.",
+      "invalid",
+    );
+  }
+  if (res.status === 400) throw new ApiError("That doesn't look like a recovery code (expected `agcr_...`).", "invalid");
+  if (res.status === 429) throw new ApiError("Too many recovery attempts — try again in a minute.", "network");
+  if (!res.ok) throw new ApiError(`Recovery failed (${res.status}).`, "network");
+  return (await res.json()) as { token: string; recovery_code: string; address: string };
+}
+
+export async function getRecoveryState(
+  relay: string, auth: { handle: string; token: string }, opts: { timeoutMs?: number } = {},
+): Promise<{ issued: boolean; redeemed_at: number | null }> {
+  const res = await relayFetch(
+    relay,
+    "/v1/recovery/state",
+    { headers: { Authorization: `Bearer ${auth.token}`, "X-AgentCall-Handle": auth.handle } },
+    opts.timeoutMs ?? RELAY_TIMEOUT_MS,
+  );
+  if (!res.ok) throw new ApiError(`Could not read recovery state (${res.status}).`, "network");
+  return (await res.json()) as { issued: boolean; redeemed_at: number | null };
 }

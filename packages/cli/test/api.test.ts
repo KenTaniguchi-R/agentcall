@@ -1,6 +1,9 @@
 import { createServer, type Server, type IncomingMessage, type ServerResponse } from "node:http";
 import { afterEach, describe, expect, it } from "vitest";
-import { registerHandle, getStatus, fetchCard, pushCard, rotateToken, createRoster, joinRoster, fetchRosterBundle } from "../src/api.js";
+import {
+  registerHandle, getStatus, fetchCard, pushCard, rotateToken, createRoster, joinRoster, fetchRosterBundle,
+  issueRecoveryCode, redeemRecoveryCode, getRecoveryState,
+} from "../src/api.js";
 
 let server: Server;
 afterEach(() => {
@@ -262,5 +265,95 @@ describe("roster api", () => {
     });
     const out = await fetchRosterBundle(relay, { handle: "ken", token: "t" }, "a".repeat(22), '"etag-1"');
     expect(out).toBe("not-modified");
+  });
+});
+
+describe("recovery api", () => {
+  it("issueRecoveryCode sends auth headers and returns the code", async () => {
+    let seen: { method?: string; url?: string; auth?: string; handleHeader?: string } = {};
+    const relay = await startServer((req, res) => {
+      seen = {
+        method: req.method,
+        url: req.url,
+        auth: req.headers.authorization as string,
+        handleHeader: req.headers["x-agentcall-handle"] as string,
+      };
+      res.writeHead(200, { "content-type": "application/json" });
+      res.end(JSON.stringify({ recovery_code: "agcr_AAAA-AAAA-AAAA-AAAA-AAAA-AAAA" }));
+    });
+    const out = await issueRecoveryCode(relay, { handle: "ken", token: "tok" });
+    expect(out.recovery_code).toBe("agcr_AAAA-AAAA-AAAA-AAAA-AAAA-AAAA");
+    expect(seen.method).toBe("POST");
+    expect(seen.url).toBe("/v1/recovery/issue");
+    expect(seen.auth).toBe("Bearer tok");
+    expect(seen.handleHeader).toBe("ken");
+  });
+
+  it("maps a rejected issue to a re-run-setup message", async () => {
+    const relay = await serve(401, { error: "unauthorized" });
+    await expect(issueRecoveryCode(relay, { handle: "ken", token: "bad" })).rejects.toMatchObject({
+      message: expect.stringMatching(/agentcall setup/),
+    });
+  });
+
+  it("maps a throttled issue to its own message", async () => {
+    const relay = await serve(429, { error: "rate limited" });
+    await expect(issueRecoveryCode(relay, { handle: "ken", token: "tok" })).rejects.toMatchObject({
+      message: expect.stringMatching(/too many/i),
+    });
+  });
+
+  it("redeemRecoveryCode posts handle + code and needs no token", async () => {
+    let seen: { auth?: string; body?: string } = {};
+    const relay = await startServer((req, res, body) => {
+      seen = { auth: req.headers.authorization as string, body };
+      res.writeHead(200, { "content-type": "application/json" });
+      res.end(JSON.stringify({ token: "new", recovery_code: "agcr_x", address: "ken@relay.test" }));
+    });
+    const out = await redeemRecoveryCode(relay, "ken", "agcr_old");
+    expect(out.token).toBe("new");
+    expect(JSON.parse(seen.body!)).toEqual({ handle: "ken", recovery_code: "agcr_old" });
+    expect(seen.auth).toBeUndefined();
+  });
+
+  // The relay deliberately returns the same 401 for wrong code, unknown
+  // handle, already-used, and lost-race, so the client message must not
+  // claim to know which of those it was.
+  it("redeemRecoveryCode turns a 401 into a clear, non-specific ApiError", async () => {
+    const relay = await serve(401, { error: "unauthorized" });
+    await expect(redeemRecoveryCode(relay, "ken", "agcr_bad")).rejects.toThrow(
+      /recovery code was not accepted/i,
+    );
+  });
+
+  it("redeemRecoveryCode maps a 400 to a malformed-code message", async () => {
+    const relay = await serve(400, { error: "bad request" });
+    await expect(redeemRecoveryCode(relay, "ken", "not-a-code")).rejects.toThrow(
+      /doesn't look like a recovery code/i,
+    );
+  });
+
+  it("redeemRecoveryCode maps a 429 to a throttled message", async () => {
+    const relay = await serve(429, { error: "rate limited" });
+    await expect(redeemRecoveryCode(relay, "ken", "agcr_x")).rejects.toThrow(/too many/i);
+  });
+
+  it("getRecoveryState returns issued and redeemed_at", async () => {
+    const relay = await serve(200, { issued: false, redeemed_at: null });
+    expect(await getRecoveryState(relay, { handle: "ken", token: "t" })).toEqual({
+      issued: false, redeemed_at: null,
+    });
+  });
+
+  it("getRecoveryState sends caller credentials", async () => {
+    let seen: { auth?: string; handleHeader?: string } = {};
+    const relay = await startServer((req, res) => {
+      seen = { auth: req.headers.authorization as string, handleHeader: req.headers["x-agentcall-handle"] as string };
+      res.writeHead(200, { "content-type": "application/json" });
+      res.end(JSON.stringify({ issued: true, redeemed_at: 123 }));
+    });
+    await getRecoveryState(relay, { handle: "me", token: "tok" });
+    expect(seen.auth).toBe("Bearer tok");
+    expect(seen.handleHeader).toBe("me");
   });
 });
