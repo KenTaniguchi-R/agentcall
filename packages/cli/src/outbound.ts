@@ -3,7 +3,10 @@ import type { LineContext } from "./lineContext.js";
 import type { MachinePaths } from "./paths.js";
 import { resolvePrimary } from "./person.js";
 
-function host(relay: string): string {
+// Exported so callers that derive a display address from a possibly-invalid
+// relay string (e.g. commands/line.ts's listLinesReport) share this exact
+// fallback instead of growing a second one that could drift out of step.
+export function host(relay: string): string {
   try {
     return new URL(relay).host;
   } catch {

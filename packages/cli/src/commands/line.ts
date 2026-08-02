@@ -5,6 +5,7 @@ import { registerHandle } from "../api.js";
 import { publishCard } from "../card.js";
 import type { LineConfig } from "../config.js";
 import { assertValidLineName, listLines, readyLines, saveLineConfig } from "../lines.js";
+import { host } from "../outbound.js";
 import { getLinePaths, type LinePaths, type MachinePaths } from "../paths.js";
 import { loadPerson, resolvePrimary, savePerson } from "../person.js";
 import { DEFAULT_POLICY } from "../policy.js";
@@ -105,7 +106,15 @@ export function removeLine(m: MachinePaths, name: string, opts: RemoveLineOpts =
   const target = all.find((l) => l.name === name);
   if (!target) throw new Error(`No line named "${name}".`);
 
-  if (all.length === 1) {
+  // Usable lines only — not raw directory count. listLines' "reportable, not
+  // fatal" contract means `all` also includes orphaned/broken entries: a
+  // stray half-made directory sitting next to your one real line must not
+  // let that real line be removed (all.length would be 2, masking this
+  // guard), and removing the orphan itself, with a real line still
+  // standing, must not be blocked by it either. Only trips when the line
+  // being removed is itself usable and is the last one.
+  const targetIsUsable = target.ok && target.config !== undefined;
+  if (targetIsUsable && readyLines(m).length <= 1) {
     throw new Error(
       `"${name}" is the only line on this machine — removing it would leave you unable to answer or call. ` +
         `Use \`agentcall uninstall --purge\` to remove agentcall entirely.`,
@@ -175,7 +184,12 @@ export function listLinesReport(
   }
   return listLines(m).map((l) => ({
     name: l.name,
-    address: l.config ? `${l.config.handle}@${new URL(l.config.relay).host}` : "—",
+    // host() (shared with outbound.ts) falls back to the raw string on an
+    // unparseable relay instead of throwing — a broken line must still show
+    // up in the listing (marked broken below), same contract listLines
+    // itself already guarantees. A bare `new URL(...).host` here would take
+    // down the whole `line list` command over one bad config.json.
+    address: l.config ? `${l.config.handle}@${host(l.config.relay)}` : "—",
     relay: l.config?.relay ?? "—",
     state: !l.ok ? "broken" : !l.config!.agent_kind ? "caller-only" : presence(l.config!) ? "online" : "offline",
     primary: l.name === primary,

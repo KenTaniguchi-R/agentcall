@@ -1,11 +1,11 @@
 import { describe, expect, it, beforeEach, vi } from "vitest";
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { getLinePaths, getMachinePaths, type MachinePaths } from "../src/paths.js";
 import { saveLineConfig } from "../src/lines.js";
 import { loadPerson, savePerson } from "../src/person.js";
-import { addLine, removeLine, setPrimary } from "../src/commands/line.js";
+import { addLine, listLinesReport, removeLine, setPrimary } from "../src/commands/line.js";
 
 // addLine/removeLine fall back to the real installLaunchAgent/
 // uninstallLaunchAgent whenever a test omits its opts seam
@@ -64,16 +64,22 @@ describe("addLine", () => {
 
   it("refuses a name that already exists", async () => {
     saveLineConfig(getLinePaths(m, "codex"), base);
+    let called = false;
     await expect(addLine(m, { name: "codex", handle: "other", agent: "codex", relay: "https://r.example",
-      register: ok, installLaunchAgentFn: () => {}, publishCardFn: async () => undefined, verify: false }))
+      register: async () => { called = true; return { token: "t", address: "a" }; },
+      installLaunchAgentFn: () => {}, publishCardFn: async () => undefined, verify: false }))
       .rejects.toThrow(/already/);
+    expect(called).toBe(false);
   });
 
   it("refuses a handle another line already holds", async () => {
     saveLineConfig(getLinePaths(m, "claude"), { ...base, handle: "ken-cdx" });
+    let called = false;
     await expect(addLine(m, { name: "codex", handle: "ken-cdx", agent: "codex", relay: "https://r.example",
-      register: ok, installLaunchAgentFn: () => {}, publishCardFn: async () => undefined, verify: false }))
+      register: async () => { called = true; return { token: "t", address: "a" }; },
+      installLaunchAgentFn: () => {}, publishCardFn: async () => undefined, verify: false }))
       .rejects.toThrow(/ken-cdx/);
+    expect(called).toBe(false);
   });
 
   it("warns when the handle is a predictable derivative of an existing one", async () => {
@@ -94,13 +100,19 @@ describe("addLine", () => {
 });
 
 describe("removeLine", () => {
-  it("archives the line rather than deleting it", () => {
+  it("archives the line rather than deleting it, preserving calls.log", () => {
     saveLineConfig(getLinePaths(m, "codex"), base);
     saveLineConfig(getLinePaths(m, "claude"), base);
     savePerson(m, { primary_line: "claude" });
+    const callsLogContent = "2026-08-01T00:00:00Z inbound from mia: hello\n";
+    writeFileSync(getLinePaths(m, "codex").callsLog, callsLogContent);
     removeLine(m, "codex", { confirm: true, uninstallFn: () => {}, installFn: () => {} });
     expect(existsSync(getLinePaths(m, "codex").dir)).toBe(false);
-    expect(readdirSync(m.removedDir)[0]).toMatch(/^codex-/);
+    const archivedName = readdirSync(m.removedDir)[0]!;
+    expect(archivedName).toMatch(/^codex-/);
+    // The archive exists to preserve the audit trail of what this address
+    // disclosed — prove it actually does, not just that a directory moved.
+    expect(readFileSync(join(m.removedDir, archivedName, "calls.log"), "utf8")).toBe(callsLogContent);
   });
 
   it("deletes outright with --purge", () => {
@@ -137,6 +149,27 @@ describe("removeLine", () => {
     savePerson(m, { primary_line: "claude" });
     removeLine(m, "half", { confirm: true, uninstallFn: () => {}, installFn: () => {} });
     expect(existsSync(getLinePaths(m, "half").dir)).toBe(false);
+  });
+
+  it("refuses the only usable line even when a stray orphaned directory exists", () => {
+    saveLineConfig(getLinePaths(m, "claude"), base);
+    mkdirSync(getLinePaths(m, "half").dir, { recursive: true });
+    savePerson(m, { primary_line: "claude" });
+    // Raw directory count is 2 (claude + the orphan), but only claude is
+    // usable — removing it would still leave zero lines that can answer or
+    // call, so the guard must trip on usable count, not directory count.
+    expect(() => removeLine(m, "claude", { confirm: true, uninstallFn: () => {} })).toThrow(/uninstall --purge/);
+  });
+});
+
+describe("listLinesReport", () => {
+  it("lists a line with an unparseable relay instead of throwing, alongside a healthy one", () => {
+    saveLineConfig(getLinePaths(m, "claude"), base);
+    saveLineConfig(getLinePaths(m, "broken"), { ...base, handle: "ken-b", relay: "not-a-url" });
+    savePerson(m, { primary_line: "claude" });
+    const rows = listLinesReport(m);
+    expect(rows.map((r) => r.name)).toEqual(["broken", "claude"]);
+    expect(rows.find((r) => r.name === "broken")!.address).toBe("ken-b@not-a-url");
   });
 });
 
