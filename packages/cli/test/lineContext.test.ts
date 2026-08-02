@@ -44,6 +44,13 @@ describe("resolveLine", () => {
     expect(ctx.paths.configFile).toContain(join("lines", "codex"));
   });
 
+  it("treats an empty-string AGENTCALL_LINE as unset, falling back to the primary", () => {
+    saveLineConfig(getLinePaths(m, "claude"), cfg);
+    savePerson(m, { primary_line: "claude" });
+    process.env.AGENTCALL_LINE = "";
+    expect(resolveLine(m).name).toBe("claude");
+  });
+
   it("names the available lines when asked for one that does not exist", () => {
     saveLineConfig(getLinePaths(m, "claude"), cfg);
     expect(() => resolveLine(m, { line: "nope" })).toThrow(/claude/);

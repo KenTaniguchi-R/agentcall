@@ -43,4 +43,17 @@ describe("rotateLine", () => {
       { rotate: async () => ({ token: "new" }), log: (s) => out.push(s) });
     expect(out.join(" ")).toMatch(/restart the listener/i);
   });
+
+  // A caller-only line (no agent_kind) has no listener socket of its own — the
+  // pre-lines code guarded this with `else if (cfg.agent_kind)`; lines dropped
+  // it and started printing reconnect/restart guidance unconditionally, which
+  // makes no sense for a line that was never listening in the first place.
+  it("does not print listener guidance for a caller-only line", async () => {
+    saveLineConfig(getLinePaths(m, "caller"), { handle: "ken-c", token: "old", relay: "https://r.example" });
+    const out: string[] = [];
+    await rotateLine(resolveLine(m, { line: "caller" }),
+      { rotate: async () => ({ token: "new" }), log: (s) => out.push(s) });
+    expect(out.join(" ")).not.toMatch(/listener/i);
+    expect(out.join(" ")).not.toMatch(/reconnect/i);
+  });
 });

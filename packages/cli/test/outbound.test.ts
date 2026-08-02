@@ -82,4 +82,14 @@ describe("pickOutboundLine", () => {
     saveLineConfig(getLinePaths(m, "home"), { handle: "ken", token: "t", relay: A });
     expect(() => pickOutboundLine(m, A, { as: "nonexistent" })).toThrow(/No line named "nonexistent"/);
   });
+
+  // Wiring guard for `index.ts`'s `call`/`status`: proves the same function
+  // this file already exercises above is what selects a line from the
+  // destination's relay, not some fixed per-process config.
+  it("call resolves its line from the destination address, not from a fixed config", () => {
+    saveLineConfig(getLinePaths(m, "home"), { handle: "ken", token: "t", relay: A });
+    const ctx = pickOutboundLine(m, A);
+    expect(ctx.config.handle).toBe("ken");
+    expect(ctx.config.token).toBe("t");
+  });
 });

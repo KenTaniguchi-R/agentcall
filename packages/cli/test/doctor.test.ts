@@ -268,6 +268,27 @@ describe("runDoctor", () => {
     expect(out).toContain("✗ relay config");
     expect(out).not.toContain("relay status — offline");
   });
+
+  // relayUrl(cfg) prefers AGENTCALL_RELAY over cfg.relay, and the check above
+  // validates THAT value with `new URL(relayUrl(cfg))` — so a broken env var
+  // must be named in the detail, not the (perfectly valid) cfg.relay it
+  // overrode. Naming the wrong string here would send the owner to edit a
+  // config.json field that was never the problem.
+  it("names the actually-validated relay (AGENTCALL_RELAY), not cfg.relay, when it's malformed", async () => {
+    const m = freshMachine();
+    saveLineConfig(getLinePaths(m, LINE), { handle: "ken", token: "t", agent_kind: "claude", relay: "https://relay.example" });
+    process.env.AGENTCALL_RELAY = "not a url";
+    try {
+      const lines: string[] = [];
+      const code = await runDoctor({ ...baseDeps, machine: m, log: (l) => lines.push(l) });
+      expect(code).toBe(1);
+      const out = lines.join("\n");
+      expect(out).toContain("not a url");
+      expect(out).not.toContain("relay.example");
+    } finally {
+      delete process.env.AGENTCALL_RELAY;
+    }
+  });
 });
 
 describe("runDoctor across lines", () => {

@@ -2,14 +2,16 @@ import { rmSync } from "node:fs";
 import { Command } from "commander";
 import type { AgentKind } from "@benree/agentcall-shared";
 import { getMachinePaths } from "./paths.js";
-import { assertCallableLine, relayUrl } from "./config.js";
+import { assertCallableLine, relayUrl, type LineConfig } from "./config.js";
 import { callAgent, CallError } from "./callClient.js";
 import { getStatus, fetchCard, ApiError } from "./api.js";
 import { startAllListeners } from "./listenAll.js";
+import { startListener } from "./listener.js";
 import { runSetup } from "./setup.js";
 import { uninstallLaunchAgent } from "./launchd.js";
 import { publishCard } from "./card.js";
 import { loadPolicy, savePolicy } from "./policy.js";
+import { loadLineConfig, readyLines } from "./lines.js";
 import { loadTasks, scaffoldTask } from "./tasks.js";
 import { execVerb, type Verb } from "./verbs.js";
 import { buildCardReport } from "./lint.js";
@@ -17,7 +19,10 @@ import { runDoctor } from "./doctor.js";
 import { loadContacts, addContact, removeContact, resolveAddress } from "./contacts.js";
 import { resolveLine } from "./lineContext.js";
 import type { LineContext } from "./lineContext.js";
+import { pickOutboundLine } from "./outbound.js";
 import { rotateLine } from "./commands/rotate.js";
+import { addLine, listLinesReport, removeLine, setPrimary } from "./commands/line.js";
+import { ask as ttyAsk } from "./tty.js";
 
 const program = new Command();
 program.name("agentcall").description("Call other people's coding agents").version("0.4.0");
@@ -62,29 +67,31 @@ program
   .argument("<message...>", "message to send")
   .option("--json", "print the full reply envelope instead of just the text")
   .option("--task <id>", "task from the callee's card to perform (see: agentcall card <address>)")
-  .action(async (address: string, messageParts: string[], o: { json?: boolean; task?: string }) => {
+  .option("--as <line>", "line to call from (defaults to the primary line on the destination's relay)")
+  .action(async (address: string, messageParts: string[], o: { json?: boolean; task?: string; as?: string }) => {
     const machine = getMachinePaths();
-    // The line is resolved before address resolution so the address can be
-    // checked against the relay this call will actually dial (see
-    // resolveAddress). Every line lives on one machine's `--line` selection
-    // today; picking a line by the DESTINATION's relay is pickOutboundLine's
-    // job (Task 14).
+    // The address is resolved BEFORE line selection now: which line places
+    // this call depends on the destination's host (pickOutboundLine matches
+    // it against each line's own relay), so the destination has to be known
+    // first. No relay is passed to resolveAddress here — with several lines
+    // possibly on several relays, "the configured relay" isn't a single
+    // thing to compare against anymore; pickOutboundLine's own error already
+    // names which relays this machine actually holds lines on when none fit.
+    const parsed = resolveAddress(machine, address);
+    if (!parsed.ok) {
+      console.error(parsed.error);
+      process.exitCode = 1;
+      return;
+    }
     let ctx: LineContext;
     try {
-      ctx = resolveLine(machine);
+      ctx = pickOutboundLine(machine, `https://${parsed.host}`, { as: o.as });
     } catch (e) {
       console.error(String(e instanceof Error ? e.message : e));
       process.exitCode = 1;
       return;
     }
     const cfg = ctx.config;
-    const parsed = resolveAddress(machine, address, relayUrl(cfg));
-    if (!parsed.ok) {
-      console.error(parsed.error);
-      process.exitCode = 1;
-      return;
-    }
-    if (parsed.warning) console.error(parsed.warning);
     const message = messageParts.join(" ");
     try {
       const reply = await callAgent({
@@ -108,13 +115,22 @@ program
   .command("status")
   .description("check whether a handle's agent is currently online")
   .argument("<address>", "contact name or handle@host to check")
-  .action(async (address: string) => {
+  .option("--as <line>", "line to check from (defaults to the primary line on the destination's relay)")
+  .action(async (address: string, o: { as?: string }) => {
     const machine = getMachinePaths();
     // Presence is caller-only on the relay, so status needs credentials —
-    // this used to fall back to the default relay with no config at all.
+    // same reasoning as `call` above for resolving the address before the
+    // line: which line has credentials for this relay depends on the
+    // destination's host.
+    const parsed = resolveAddress(machine, address);
+    if (!parsed.ok) {
+      console.error(parsed.error);
+      process.exitCode = 1;
+      return;
+    }
     let ctx: LineContext;
     try {
-      ctx = resolveLine(machine);
+      ctx = pickOutboundLine(machine, `https://${parsed.host}`, { as: o.as });
     } catch (e) {
       console.error(String(e instanceof Error ? e.message : e));
       process.exitCode = 1;
@@ -122,13 +138,6 @@ program
     }
     const cfg = ctx.config;
     const cfgRelay = relayUrl(cfg);
-    const parsed = resolveAddress(machine, address, cfgRelay);
-    if (!parsed.ok) {
-      console.error(parsed.error);
-      process.exitCode = 1;
-      return;
-    }
-    if (parsed.warning) console.error(parsed.warning);
     try {
       const { online } = await getStatus(cfgRelay, parsed.handle, { handle: cfg.handle, token: cfg.token });
       console.log(online ? "online" : "offline");
@@ -157,13 +166,9 @@ program
       let ctx: LineContext;
       try {
         ctx = resolveLine(machine, { line: o.line });
+        assertCallableLine(ctx.config);
       } catch (e) {
         console.error(String(e instanceof Error ? e.message : e));
-        process.exitCode = 1;
-        return;
-      }
-      if (!ctx.config.agent_kind) {
-        console.error("This line is caller-only (no agent configured) — no card to review.");
         process.exitCode = 1;
         return;
       }
@@ -184,13 +189,9 @@ program
       let ctx: LineContext;
       try {
         ctx = resolveLine(machine, { line: o.line });
+        assertCallableLine(ctx.config);
       } catch (e) {
         console.error(String(e instanceof Error ? e.message : e));
-        process.exitCode = 1;
-        return;
-      }
-      if (!ctx.config.agent_kind) {
-        console.error("This line is caller-only (no agent configured) and has nothing to publish a card for.");
         process.exitCode = 1;
         return;
       }
@@ -352,14 +353,154 @@ program.command("unoffer").description("stop offering a task publicly")
   .argument("<task-id>").option("--line <name>", "line to use (defaults to the primary line)")
   .action((taskId: string, o: { line?: string }) => runPolicyVerb("unoffer", taskId, undefined, o));
 
+const line = program.command("line").description("manage the addresses (lines) this machine answers on and calls from");
+
+line
+  .command("add")
+  .description("register another address on this machine")
+  .argument("<name>", "local name for this line, e.g. codex (never shared — the handle is)")
+  .option("--handle <handle>", "handle to register (prompted if omitted)")
+  .option("--agent <agent>", "agent kind: claude or codex (omit with --caller-only)")
+  .option("--relay <url>", "relay URL to register against")
+  .option("--caller-only", "register a handle to call others without making this line's agent callable")
+  .option("--skip-launchd", "skip reinstalling the background listener")
+  .option("--no-verify", "skip verifying the agent can answer a test call")
+  .action(
+    async (
+      name: string,
+      o: { handle?: string; agent?: string; relay?: string; callerOnly?: boolean; skipLaunchd?: boolean; verify?: boolean },
+    ) => {
+      const machine = getMachinePaths();
+      if (!o.callerOnly && o.agent !== "claude" && o.agent !== "codex") {
+        console.error("Pass --agent claude or --agent codex, or --caller-only for a line that can only call out.");
+        process.exitCode = 1;
+        return;
+      }
+      const handle = o.handle ?? (await ttyAsk(`Choose a handle for "${name}" (e.g. ${name}): `)).trim();
+      if (!handle) {
+        console.error("A handle is required.");
+        process.exitCode = 1;
+        return;
+      }
+      const relay = (o.relay ?? relayUrl()).replace(/\/+$/, "");
+      try {
+        const { address } = await addLine(machine, {
+          name,
+          handle,
+          relay,
+          agent: o.callerOnly ? undefined : (o.agent as AgentKind),
+          callerOnly: o.callerOnly,
+          verify: o.verify,
+          installLaunchAgentFn: o.skipLaunchd ? () => {} : undefined,
+        });
+        console.log(`Added line "${name}": ${address}`);
+      } catch (e) {
+        console.error(String(e instanceof Error ? e.message : e));
+        process.exitCode = 1;
+      }
+    },
+  );
+
+line
+  .command("list")
+  .description("list the addresses this machine holds, which is primary, and whether each is online")
+  .action(async () => {
+    const machine = getMachinePaths();
+    // listLinesReport's presence callback is synchronous (it's a pure report
+    // over what's already on disk), so the network round-trip has to happen
+    // first: one relay status check per callable line, keyed by handle
+    // (unique per machine — addLine refuses a duplicate) since listLinesReport
+    // re-reads config from disk itself and won't hand back the same object
+    // reference this loop read.
+    const online = new Map<string, boolean>();
+    for (const l2 of readyLines(machine)) {
+      if (!l2.config.agent_kind) continue; // caller-only: nothing listens, nothing to probe
+      try {
+        online.set(
+          l2.config.handle,
+          (await getStatus(relayUrl(l2.config), l2.config.handle, { handle: l2.config.handle, token: l2.config.token })).online,
+        );
+      } catch {
+        online.set(l2.config.handle, false);
+      }
+    }
+    const rows = listLinesReport(machine, (cfg: LineConfig) => online.get(cfg.handle) ?? false);
+    if (rows.length === 0) {
+      console.log("No lines yet. Run `agentcall setup` to create the first one.");
+      return;
+    }
+    for (const r of rows) {
+      console.log(`${r.name.padEnd(10)} ${r.address.padEnd(32)} ${r.state}${r.primary ? "   primary" : ""}`);
+    }
+  });
+
+line
+  .command("remove")
+  .description("remove a line (archives calls.log; the handle can never be reused, see README)")
+  .argument("<name>", "line to remove")
+  .option("--yes", "confirm removal — required, since the handle can never be reclaimed")
+  .option("--purge", "delete outright instead of archiving calls.log")
+  .action((name: string, o: { yes?: boolean; purge?: boolean }) => {
+    try {
+      removeLine(getMachinePaths(), name, { confirm: o.yes, purge: o.purge });
+      console.log(`Removed line "${name}".`);
+    } catch (e) {
+      console.error(String(e instanceof Error ? e.message : e));
+      process.exitCode = 1;
+    }
+  });
+
+line
+  .command("primary")
+  .description("set which line places an outbound call when several could answer it")
+  .argument("<name>", "line to make primary")
+  .action((name: string) => {
+    try {
+      setPrimary(getMachinePaths(), name);
+      console.log(`Primary line is now "${name}".`);
+    } catch (e) {
+      console.error(String(e instanceof Error ? e.message : e));
+      process.exitCode = 1;
+    }
+  });
+
 program
   .command("listen")
   .description("run the foreground listener (launchd runs this in the background after setup)")
-  .action(() => {
-    // One process, every callable line: startAllListeners enumerates
-    // ~/.agentcall/lines itself and opens one socket per callable line, so
-    // there's no single config/paths pair to load up front here anymore.
-    const l = startAllListeners(getMachinePaths());
+  .option("--line <name>", "run only this line instead of every callable line")
+  .action((o: { line?: string }) => {
+    const machine = getMachinePaths();
+    let l: { stop(): void };
+    if (o.line) {
+      // Single-line foreground run: mirrors startAllListeners' own per-line
+      // wiring (listenAll.ts) instead of duplicating it — same loadConfig
+      // re-read on every reconnect, so a rotated token or edited workdir
+      // still takes effect without a restart.
+      let ctx: LineContext;
+      try {
+        ctx = resolveLine(machine, { line: o.line });
+        assertCallableLine(ctx.config);
+      } catch (e) {
+        console.error(String(e instanceof Error ? e.message : e));
+        process.exitCode = 1;
+        return;
+      }
+      l = startListener({
+        relay: relayUrl(ctx.config),
+        paths: ctx.paths,
+        loadConfig: () => {
+          const cfg = loadLineConfig(ctx.paths);
+          assertCallableLine(cfg);
+          return cfg;
+        },
+      });
+      console.log(`listening as ${ctx.config.handle} (line ${ctx.name})`);
+    } else {
+      // One process, every callable line: startAllListeners enumerates
+      // ~/.agentcall/lines itself and opens one socket per callable line, so
+      // there's no single config/paths pair to load up front here.
+      l = startAllListeners(machine);
+    }
     process.on("SIGTERM", () => {
       l.stop();
       process.exit(0);

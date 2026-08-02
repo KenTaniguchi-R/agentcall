@@ -155,6 +155,12 @@ export async function runSetup(opts: SetupOpts): Promise<{ ready: boolean }> {
     callerOnly: !callable,
     installLaunchAgentFn: opts.skipLaunchd ? () => {} : opts.installLaunchAgentFn,
     resolveBin: resolveBinFn,
+    // addLine has its own post-registration verify step (AddLineOpts.verify,
+    // default on) — always false here because runSetup below does its own,
+    // richer verify pass (formatted checks plus the ready/not-ready summary)
+    // over the exact same line. Without this, `agentcall setup` would spawn
+    // the agent twice for one verification.
+    verify: false,
   });
 
   const ctx = resolveLine(machine, { line: name });

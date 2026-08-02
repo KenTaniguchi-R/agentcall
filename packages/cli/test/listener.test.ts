@@ -455,10 +455,12 @@ describe("startListener line name propagation", () => {
       captured.envelope as never, captured.callId!, captured.lineName!,
     );
     expect(spec.env?.AGENTCALL_LINE).toBe(paths.name);
-    // Pins the callId position too (4 string-shaped positions — workdir,
-    // callId, lineName, plus kind — sit in this call's tail), so a
-    // workdir<->callId swap can't compile-clean and slide through this same
-    // test while only the separate workdir test (above) catches it.
+    // Pins the callId position too. buildSpawnSpec's tail has 4 plain-`string`-
+    // typed positions that a swap among them would compile clean: prompt,
+    // workdir, callId, lineName. `kind` also sits in that tail (position 0)
+    // but is typed `AgentKind` ("claude"|"codex"), not `string` — swapping it
+    // with any of the four above fails to typecheck, so it needs no separate
+    // runtime assertion here the way callId/workdir/lineName do.
     expect(spec.env?.AGENTCALL_CALL_ID).toBe("c1");
   });
 });

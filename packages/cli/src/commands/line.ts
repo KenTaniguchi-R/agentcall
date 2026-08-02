@@ -3,7 +3,7 @@ import { join } from "node:path";
 import type { AgentKind } from "@benree/agentcall-shared";
 import { registerHandle } from "../api.js";
 import { publishCard } from "../card.js";
-import type { LineConfig } from "../config.js";
+import { resolveLineWorkdir, type LineConfig } from "../config.js";
 import { assertValidLineName, listLines, readyLines, saveLineConfig } from "../lines.js";
 import { launchPathDirs } from "../launchPath.js";
 import { host } from "../outbound.js";
@@ -11,6 +11,7 @@ import { getLinePaths, type LinePaths, type MachinePaths } from "../paths.js";
 import { loadPerson, resolvePrimary, savePerson } from "../person.js";
 import { DEFAULT_POLICY } from "../policy.js";
 import { uninstallLaunchAgent, installLaunchAgent } from "../launchd.js";
+import { formatCheck, verifyAgent, type VerifyFns } from "../verify.js";
 
 export interface AddLineOpts {
   name: string;
@@ -18,8 +19,16 @@ export interface AddLineOpts {
   relay: string;
   agent?: AgentKind;
   callerOnly?: boolean;
+  // false skips the post-registration verify step (commander's --no-verify
+  // on `line add`). Defaults to true for a callable line; irrelevant for a
+  // caller-only one, which has no agent to verify. setup.ts passes false
+  // here unconditionally — it does its own richer verify pass (with a
+  // ready/not-ready summary) after addLine returns, and running both would
+  // spawn the agent twice for one `agentcall setup`.
   verify?: boolean;
+  verifyFns?: VerifyFns;
   warn?: (line: string) => void;
+  log?: (line: string) => void;
   // Test seams. publishCardFn returns Promise<unknown> rather than
   // typeof publishCard's Promise<CardUploadType> so a test double can return
   // undefined without constructing a full card upload.
@@ -93,6 +102,24 @@ export async function addLine(m: MachinePaths, opts: AddLineOpts): Promise<{ add
     // launchPathDirs (which reads readyLines(m)) sees it — the derived PATH
     // covers this line's agent kind alongside every other ready line's.
     (opts.installLaunchAgentFn ?? installLaunchAgent)(m, undefined, opts.extraPathDirs ?? launchPathDirs(m, opts.resolveBin));
+
+    // Verification is best-effort feedback, not a gate: the handle is already
+    // spent (see above), so a failed verify warns rather than throwing —
+    // there's nothing left to undo, and the line still answers once the
+    // owner fixes whatever verifyAgent found.
+    if (opts.verify !== false) {
+      const log = opts.log ?? console.log;
+      const checks = await verifyAgent(agentKind, resolveLineWorkdir(cfg, paths).dir, opts.verifyFns);
+      for (const c of checks) log(formatCheck(c));
+      const failure = checks.find((c) => !c.ok);
+      if (failure) {
+        (opts.warn ?? console.error)(
+          `Warning: line "${opts.name}" did not pass verification (${failure.name}` +
+            `${failure.detail ? ` — ${failure.detail}` : ""}). It's registered and will still receive calls; ` +
+            `run \`agentcall doctor\` to check again once fixed.`,
+        );
+      }
+    }
   }
 
   // person.json is written LAST, and only for the first line, so a failed

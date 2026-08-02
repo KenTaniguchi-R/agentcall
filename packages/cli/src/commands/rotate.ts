@@ -1,5 +1,6 @@
 import { rotateToken } from "../api.js";
 import { relayUrl } from "../config.js";
+import { LAUNCH_LABEL } from "../launchd.js";
 import type { LineContext } from "../lineContext.js";
 import { saveLineConfig } from "../lines.js";
 
@@ -21,11 +22,17 @@ export async function rotateLine(ctx: LineContext, deps: RotateDeps = {}): Promi
     relayUrl(ctx.config), { handle: ctx.config.handle, token: ctx.config.token },
   );
   saveLineConfig(ctx.paths, { ...ctx.config, token });
-  log(
-    `Token rotated for line "${ctx.name}" (${ctx.config.handle}). The old token is invalid for new ` +
-      `connections immediately, but this line's listener won't use the new one until its next reconnect ` +
-      `— other lines are unaffected either way.\n` +
-      `If the old token may have leaked, restart the listener now (\`agentcall listen\`, or your background ` +
-      `listener) to force it off the relay immediately instead of waiting for that reconnect.`,
-  );
+  // A caller-only line (no agent_kind) has no listener socket of its own — the
+  // whole "next reconnect" / "restart to force it off now" paragraph below is
+  // about a listener this line doesn't have. Pre-lines code guarded this with
+  // `else if (cfg.agent_kind)`; only print it for a line that can actually be
+  // listening.
+  const listenerGuidance = ctx.config.agent_kind
+    ? `, but this line's listener won't use the new one until its next reconnect — other lines are ` +
+      `unaffected either way.\n` +
+      `If the old token may have leaked, restart the listener now to force it off the relay immediately ` +
+      `instead of waiting for that reconnect: \`agentcall listen\` in the foreground, or for the background ` +
+      `one, \`launchctl kickstart -k gui/$UID/${LAUNCH_LABEL}\`.`
+    : ".";
+  log(`Token rotated for line "${ctx.name}" (${ctx.config.handle}). The old token is invalid for new connections immediately${listenerGuidance}`);
 }

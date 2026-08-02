@@ -1,5 +1,5 @@
 import { describe, expect, it, beforeEach } from "vitest";
-import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, statSync } from "node:fs";
+import { existsSync, mkdtempSync, mkdirSync, writeFileSync, readFileSync, statSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { getMachinePaths, type MachinePaths } from "../src/paths.js";
@@ -31,8 +31,12 @@ describe("savePerson / loadPerson", () => {
 
   it("does not leave a temp file behind", () => {
     savePerson(m, { primary_line: "claude" });
-    const leftovers = readFileSync(m.personFile, "utf8");
-    expect(leftovers).toContain("claude");
+    // The previous version of this test only re-read personFile itself —
+    // which would pass even if the .tmp file were never cleaned up, since
+    // rename(2) doesn't require the source to vanish for the destination to
+    // exist. Actually stat the .tmp path to prove the claim in the name.
+    expect(existsSync(`${m.personFile}.tmp`)).toBe(false);
+    expect(readFileSync(m.personFile, "utf8")).toContain("claude");
   });
 });
 

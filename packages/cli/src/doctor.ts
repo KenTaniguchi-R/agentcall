@@ -129,11 +129,16 @@ export async function runDoctor(deps: DoctorDeps): Promise<number> {
       new URL(relayUrl(cfg));
     } catch {
       relayValid = false;
+      // relayUrl(cfg), not cfg.relay: AGENTCALL_RELAY, when set, is what
+      // relayUrl actually validates (it takes precedence over cfg.relay — see
+      // config.ts). Naming cfg.relay here would send the owner to fix a
+      // config.json field that a valid AGENTCALL_RELAY override already
+      // bypassed.
       report({
         name: "relay config",
         ok: false,
-        detail: `"${cfg.relay}" is not a valid URL`,
-        hint: "fix `relay` in ~/.agentcall/lines/<line>/config.json",
+        detail: `"${relayUrl(cfg)}" is not a valid URL`,
+        hint: "fix `relay` in ~/.agentcall/lines/<line>/config.json — or, if set, AGENTCALL_RELAY, which takes precedence",
       });
     }
 

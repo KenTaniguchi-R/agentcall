@@ -151,6 +151,55 @@ describe("addLine", () => {
       installLaunchAgentFn: (_m, _execCmd, extraPathDirs) => { captured = extraPathDirs; } });
     expect(captured?.slice().sort()).toEqual(["/opt/claude-dir", "/opt/codex-dir", "/opt/npx-dir"].sort());
   });
+
+  // AddLineOpts.verify was accepted but never read (flagged in Task 10's
+  // report). Wired here to mirror setup.ts's own post-registration verify
+  // step: verification runs by default for a callable line, and a failure
+  // warns (the handle is already spent — see the comment above the
+  // saveLineConfig call) rather than throwing.
+  describe("verify", () => {
+    it("verifies the agent by default and warns, without throwing, when it fails", async () => {
+      const warnings: string[] = [];
+      await expect(addLine(m, {
+        name: "codex", handle: "ken-cdx", agent: "codex", relay: "https://r.example",
+        register: ok, installLaunchAgentFn: () => {}, publishCardFn: async () => undefined,
+        warn: (s) => warnings.push(s),
+        verifyFns: { resolveBin: () => { throw new Error("no codex binary on PATH"); } },
+      })).resolves.toBeDefined();
+      expect(warnings.join(" ")).toMatch(/verif/i);
+    });
+
+    it("logs a passing verification", async () => {
+      const logs: string[] = [];
+      await addLine(m, {
+        name: "codex", handle: "ken-cdx", agent: "codex", relay: "https://r.example",
+        register: ok, installLaunchAgentFn: () => {}, publishCardFn: async () => undefined,
+        log: (s) => logs.push(s),
+        verifyFns: { resolveBin: () => "/fake/bin/codex", execFn: () => {}, runFn: async () => ({ text: "OK" }) },
+      });
+      expect(logs.join(" ")).toMatch(/agent run/i);
+    });
+
+    it("skips verification entirely when verify is false, even if verifyFns would fail", async () => {
+      let touched = false;
+      await addLine(m, {
+        name: "codex", handle: "ken-cdx", agent: "codex", relay: "https://r.example",
+        register: ok, installLaunchAgentFn: () => {}, publishCardFn: async () => undefined, verify: false,
+        verifyFns: { resolveBin: () => { touched = true; throw new Error("must not run"); } },
+      });
+      expect(touched).toBe(false);
+    });
+
+    it("never verifies a caller-only line — there is no agent to verify", async () => {
+      let touched = false;
+      await addLine(m, {
+        name: "caller", handle: "ken-c", relay: "https://r.example", callerOnly: true,
+        register: ok, installLaunchAgentFn: () => {}, publishCardFn: async () => undefined,
+        verifyFns: { resolveBin: () => { touched = true; throw new Error("must not run"); } },
+      });
+      expect(touched).toBe(false);
+    });
+  });
 });
 
 describe("removeLine", () => {
@@ -253,6 +302,10 @@ describe("listLinesReport", () => {
     const rows = listLinesReport(m);
     expect(rows.map((r) => r.name)).toEqual(["broken", "claude"]);
     expect(rows.find((r) => r.name === "broken")!.address).toBe("ken-b@not-a-url");
+    // The happy-path formatting ("<handle>@<relay host>") had no assertion of
+    // its own — only the broken row did, above. `base.relay` is
+    // "https://r.example", so this pins the host-only, scheme-stripped form.
+    expect(rows.find((r) => r.name === "claude")!.address).toBe("ken@r.example");
   });
 });
 
