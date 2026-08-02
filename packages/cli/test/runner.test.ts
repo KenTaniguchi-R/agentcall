@@ -399,6 +399,38 @@ describe("guard hook wiring", () => {
   });
 });
 
+describe("buildSpawnSpec resume (claude)", () => {
+  const bin = () => "/usr/bin/claude";
+
+  it("adds --resume with the agent session id", () => {
+    const spec = buildSpawnSpec("claude", "hi", "/w", bin, { caps: ["read"] }, "c1", "sess-abc");
+    const i = spec.args.indexOf("--resume");
+    expect(i).toBeGreaterThan(-1);
+    expect(spec.args[i + 1]).toBe("sess-abc");
+  });
+
+  it("omits --resume when no session is given", () => {
+    const spec = buildSpawnSpec("claude", "hi", "/w", bin, { caps: ["read"] }, "c1");
+    expect(spec.args).not.toContain("--resume");
+  });
+
+  // The envelope is re-applied per spawn, so a resumed session cannot inherit
+  // capabilities from the turn that created it.
+  it("still carries the full envelope and guard on a resumed spawn", () => {
+    const spec = buildSpawnSpec("claude", "hi", "/w", bin, { caps: ["read"] }, "c1", "sess-abc");
+    expect(spec.args).toContain("--allowedTools");
+    expect(spec.args).toContain("--permission-mode");
+    expect(spec.args).toContain("dontAsk");
+    expect(spec.args).toContain("--settings");
+    expect(spec.args[spec.args.indexOf("--allowedTools") + 1]).toBe("Read,Grep,Glob,LS");
+  });
+
+  it("keeps the prompt as the -p value", () => {
+    const spec = buildSpawnSpec("claude", "follow up", "/w", bin, { caps: ["read"] }, "c1", "sess-abc");
+    expect(spec.args[spec.args.indexOf("-p") + 1]).toBe("follow up");
+  });
+});
+
 // A codex spawn inherits every MCP server, plugin and app in the owner's
 // ~/.codex — separate processes that read the filesystem outside codex's
 // sandbox entirely. On a developer machine that routinely includes a

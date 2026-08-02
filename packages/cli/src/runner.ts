@@ -107,13 +107,19 @@ export function claudeAllowedTools(envelope: Envelope): string {
 export function buildSpawnSpec(
   kind: AgentKind, prompt: string, workdir: string, resolveBin: (kind: AgentKind) => string = resolveAgentBin,
   envelope: Envelope = FULL_ACCESS_ENVELOPE, callId: string = "unknown",
+  // The REAL agent session id, resolved from a context binding by the listener.
+  // A caller-supplied context id must never reach this parameter.
+  resume?: string,
 ): SpawnSpec {
   if (kind === "claude") {
     return {
       cmd: resolveBin(kind),
-      args: ["-p", prompt, "--output-format", "json",
+      args: [
+        ...(resume ? ["--resume", resume] : []),
+        "-p", prompt, "--output-format", "json",
         "--permission-mode", "dontAsk", "--allowedTools", claudeAllowedTools(envelope),
-        "--settings", guardSettingsJson()],
+        "--settings", guardSettingsJson(),
+      ],
       cwd: workdir,
       env: { ...process.env, AGENTCALL_CALL_ID: callId },
     };
@@ -184,8 +190,12 @@ export function truncateUtf8(text: string, maxBytes: number): string {
 export function runAgent(
   kind: AgentKind, prompt: string, workdir: string, timeoutMs: number = AGENT_TIMEOUT_MS, specOverride?: SpawnSpec,
   envelope: Envelope = FULL_ACCESS_ENVELOPE, callId: string = "unknown", signal?: AbortSignal,
+  // Note for a later cleanup (not done here): runAgent now takes nine
+  // positional parameters and should become an options object. That belongs
+  // with the #49 work in #48 Phase 1, not in this change.
+  resume?: string,
 ): Promise<AgentOutput> {
-  const spec = specOverride ?? buildSpawnSpec(kind, prompt, workdir, resolveAgentBin, envelope, callId);
+  const spec = specOverride ?? buildSpawnSpec(kind, prompt, workdir, resolveAgentBin, envelope, callId, resume);
   return new Promise<AgentOutput>((resolve, reject) => {
     // detached: true makes the child its own process group leader, so any
     // grandchildren it forks share its process group unless they detach
