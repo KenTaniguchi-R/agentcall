@@ -540,6 +540,16 @@ SBOM to the GitHub release. A partial retry skips an existing package only when
 the registry integrity exactly matches the rebuilt tarball. Stable releases use
 the npm `latest` dist-tag; GitHub prereleases use `next` and cannot displace it.
 
+The published tarball is installed and exercised without pnpm on Node 20, 22,
+and 24 in CI, including `agentcall doctor`; this is what enforces the CLI's
+declared `node >=20` runtime promise.
+
+Platform installers are deliberately deferred. AgentCall will keep its current
+Commander CLI until the non-macOS service/container work (#14) defines the
+artifacts each platform needs and managed policy (#104) defines who controls
+versions and updates. A future self-update mechanism must be disabled whenever
+managed policy is present so IT can pin the deployed version.
+
 ## Limitations
 
 - **macOS only.** The LaunchAgent listener is Mac-specific; there's no

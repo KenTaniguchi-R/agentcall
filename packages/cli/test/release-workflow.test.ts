@@ -5,6 +5,7 @@ import { parse } from "yaml";
 
 const root = join(import.meta.dirname, "../../..");
 const workflow = readFileSync(join(root, ".github/workflows/release.yml"), "utf8");
+const ciWorkflow = readFileSync(join(root, ".github/workflows/ci.yml"), "utf8");
 const workflowFiles = ["ci.yml", "invariants.yml", "release.yml", "stale-claims.yml"];
 
 function actionReferences(value: unknown): string[] {
@@ -19,6 +20,12 @@ function actionReferences(value: unknown): string[] {
 }
 
 describe("npm release workflow", () => {
+  it("tests the packed CLI and doctor at the declared Node version floor", () => {
+    expect(ciWorkflow).toContain("node: [20, 22, 24]");
+    expect(ciWorkflow).toContain('"$agentcall_bin" doctor');
+    expect(ciWorkflow).toContain('grep -F "No agentcall config found" "$RUNNER_TEMP/doctor-output"');
+  });
+
   it("binds both published packages to their monorepo source", () => {
     for (const directory of ["shared", "cli"]) {
       const manifest = JSON.parse(readFileSync(join(root, "packages", directory, "package.json"), "utf8"));
