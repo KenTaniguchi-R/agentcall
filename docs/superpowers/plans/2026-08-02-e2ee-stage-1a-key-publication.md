@@ -720,7 +720,11 @@ import {
 } from "@benree/agentcall-shared";
 import { registerHandle } from "./helpers.js";
 
-const HOST = "agentcall.benree.tech";
+// Must match the host the existing relay tests fetch, because the GET handler
+// derives the record address from `new URL(c.req.url).host`. A mismatch makes
+// the published address and the served address differ and the equality
+// assertion below fail.
+const HOST = "relay.test";
 
 async function newIdentity(handle: string) {
   const token = await registerHandle(handle);
@@ -855,7 +859,7 @@ describe("key publication endpoints", () => {
 });
 ```
 
-If `apps/relay/test/helpers.ts` does not already export a `registerHandle(handle: string): Promise<string>` returning a token, add one there following the pattern the existing roster tests use, and include it in this task's commit.
+`apps/relay/test/helpers.ts` already exports `registerHandle(handle, kind?, org?): Promise<string>` returning a token, and `wsAuth`. Verified 2026-08-02 — no change needed there.
 
 - [ ] **Step 2: Run test to verify it fails**
 
