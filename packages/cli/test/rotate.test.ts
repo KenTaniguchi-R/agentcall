@@ -25,11 +25,22 @@ describe("rotateLine", () => {
     expect(JSON.parse(readFileSync(getLinePaths(m, "codex").configFile, "utf8")).token).toBe("old");
   });
 
-  it("tells the owner the listener picks it up on reconnect", async () => {
+  it("tells the owner the listener picks it up on the next reconnect, not immediately", async () => {
     saveLineConfig(getLinePaths(m, "claude"), base);
     const out: string[] = [];
     await rotateLine(resolveLine(m, { line: "claude" }),
       { rotate: async () => ({ token: "new" }), log: (s) => out.push(s) });
-    expect(out.join(" ")).toMatch(/reconnect/i);
+    expect(out.join(" ")).toMatch(/next reconnect/i);
+  });
+
+  // The safety-relevant half of the message: if the old token leaked, the
+  // owner needs to know a restart is what forces it off the relay NOW,
+  // rather than waiting on an unbounded "next reconnect".
+  it("tells the owner how to force the old token off the relay if it may have leaked", async () => {
+    saveLineConfig(getLinePaths(m, "claude"), base);
+    const out: string[] = [];
+    await rotateLine(resolveLine(m, { line: "claude" }),
+      { rotate: async () => ({ token: "new" }), log: (s) => out.push(s) });
+    expect(out.join(" ")).toMatch(/restart the listener/i);
   });
 });

@@ -94,9 +94,14 @@ whether your Mac was awake).
 agentcall rotate
 ```
 
-`agentcall rotate` swaps this install's token for a fresh one, immediately
-invalidating the old one, and restarts the background listener so it picks the
-new one up. Releasing a handle entirely isn't supported yet — see Limitations.
+`agentcall rotate` swaps one line's token for a fresh one — pass `--line <name>`
+on a multi-line machine, or it rotates the primary line. The old token stops
+working for new connections immediately, but a listener that's already
+connected keeps its live socket and only starts using the new token on its
+next reconnect; other lines are unaffected. If the old token may have leaked,
+restart the listener (`agentcall listen`, or the background one) to force it
+off the relay right away instead of waiting. Releasing a handle entirely isn't
+supported yet — see Limitations.
 
 ```bash
 # Check your own install is healthy

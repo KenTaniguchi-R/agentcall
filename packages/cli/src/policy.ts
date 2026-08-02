@@ -1,6 +1,7 @@
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { dirname } from "node:path";
 import { z } from "zod";
+import type { LinePaths } from "./paths.js";
 import type { Task } from "./tasks.js";
 
 export const PolicySchema = z.object({
@@ -20,24 +21,18 @@ export type Policy = z.infer<typeof PolicySchema>;
 
 export const DEFAULT_POLICY: Policy = { description: "", default_offer: ["ask"], callers: {} };
 
-// Structural, not `Paths`: both the legacy flat `Paths` and the per-line
-// `LinePaths` carry a `policyFile`, and this is the only field either
-// function touches. A named type here would force a choice between the two
-// shapes; this accepts whichever the caller has.
-interface HasPolicyFile { policyFile: string }
-
 // Missing file -> safe default (fresh install). Malformed file -> THROW:
 // silently falling back to DEFAULT_POLICY would grant `ask` to callers the
 // owner explicitly blocked. The listener maps the throw to a call_failed
 // agent_error without spawning anything.
-export function loadPolicy(p: HasPolicyFile): Policy {
+export function loadPolicy(p: LinePaths): Policy {
   if (!existsSync(p.policyFile)) return DEFAULT_POLICY;
   return PolicySchema.parse(JSON.parse(readFileSync(p.policyFile, "utf8")));
 }
 
 // Writes the exact shape PolicySchema parses, so hand-edits and the CLI
 // verbs (verbs.ts) interoperate on the same file.
-export function savePolicy(p: HasPolicyFile, policy: Policy): void {
+export function savePolicy(p: LinePaths, policy: Policy): void {
   mkdirSync(dirname(p.policyFile), { recursive: true });
   writeFileSync(p.policyFile, JSON.stringify(policy, null, 2) + "\n");
 }
