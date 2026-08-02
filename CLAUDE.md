@@ -80,6 +80,18 @@ cd packages/cli && pnpm test    # vitest, mocked ws/fs — no live agent spawn
 `apps/relay && pnpm dev` runs the Worker locally against `wrangler dev` for manual
 testing (WS auth, register, status).
 
+### `apps/relay && pnpm dev` needs local D1 migrations applied first
+
+`wrangler dev` does not apply `apps/relay/migrations/*.sql` to the local D1
+instance for you. If any migration is missing — e.g. `0002_agent_kind_nullable.sql`
+(makes `agent_kind` nullable for caller-only lines) or `0003_cards.sql` (adds
+the `cards` table) — `/v1/register`'s `INSERT INTO handles` throws (missing
+table, or a NOT NULL violation on a caller-only registration), and the handler
+(`apps/relay/src/index.ts`, the `/v1/register` route) turns ANY insert failure
+into a 409 `"handle taken"`. That looks exactly like a real handle collision
+and is not one. Run `wrangler d1 migrations apply agentcall --local` from
+`apps/relay` before registering anything against a fresh local D1.
+
 Before calling any task done: `pnpm -r build && pnpm -r typecheck && pnpm -r test`
 must all pass at the repo root. **Build first** — `packages/cli` typechecks against
 `packages/shared`'s built `dist`, so running build last checks the *previous* run's

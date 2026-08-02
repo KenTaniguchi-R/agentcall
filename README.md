@@ -182,7 +182,10 @@ permanently the moment registration succeeds — see Limitations) and writes
 the relay and nobody you call ever sees it — only the handle is shared. Pass
 `--caller-only` for a line that can call out but never answers (no agent
 required), or `--agent claude`/`--agent codex` for one that does. `--no-verify`
-skips the post-registration test call, same as `setup --no-verify`.
+skips the post-registration test call, same as `setup --no-verify`. Like `line
+remove` below, a callable `line add` reinstalls the LaunchAgent afterward
+(`--skip-launchd` to skip it) — since one process serves every line, adding one
+briefly drops every other line's socket and any calls in flight on them too.
 
 `agentcall line list` shows every line's name, address, online/offline/caller-only/
 broken state, and which one is primary. `agentcall line remove <name> --yes`
