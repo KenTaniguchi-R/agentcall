@@ -1,6 +1,7 @@
 import { chmodSync, existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from "node:fs";
 import { z } from "zod";
 import { BundleEntry, ROSTER_ID_RE } from "@benree/agentcall-shared";
+import { NAME_RE } from "./contacts.js";
 import type { Paths } from "./paths.js";
 
 // Two stores with DELIBERATELY OPPOSITE corruption policies, kept in one file
@@ -60,7 +61,15 @@ export function loadMemberships(p: Paths): Membership[] {
   }
 }
 
+// Mirrors addContact's NAME_RE check in contacts.ts. UX and consistency only
+// (typo-catching, unambiguous CLI arguments) — not a security boundary. A
+// computed __proto__ key does not trigger prototype mutation here, and a
+// builtin-shadowing name like "constructor" is caught downstream by
+// readCached's mandatory relay/caller check.
 export function saveMembership(p: Paths, m: Membership): void {
+  if (!NAME_RE.test(m.name)) {
+    throw new Error(`Invalid roster name "${m.name}" — start with a letter or digit, then letters, digits, ".", "_", "-" (no @).`);
+  }
   const rosters = loadMemberships(p).filter((r) => r.name.toLowerCase() !== m.name.toLowerCase());
   rosters.push(m);
   writeAtomic(p.rostersFile, p.dir, { rosters });

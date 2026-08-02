@@ -48,6 +48,15 @@ describe("memberships (user data)", () => {
     saveMembership(p, { name: "acme", relay: "https://r.test", roster_id: "a".repeat(22) });
     expect(statSync(p.rostersFile).mode & 0o777).toBe(0o600);
   });
+
+  // Mirrors addContact's own NAME_RE check in contacts.ts: UX and
+  // consistency (typo-catching, unambiguous CLI arguments), not a security
+  // boundary — readCached's relay/caller check is what actually gates access.
+  it("rejects an invalid local name", () => {
+    const p = paths();
+    expect(() => saveMembership(p, { name: "not valid!", relay: "https://r.test", roster_id: "a".repeat(22) }))
+      .toThrow(/invalid roster name/i);
+  });
 });
 
 describe("bundle cache (derived data)", () => {
