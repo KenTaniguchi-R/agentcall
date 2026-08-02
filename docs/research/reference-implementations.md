@@ -25,7 +25,7 @@ Use references by problem shape, not by technology stack:
 | [A2A](https://github.com/a2aproject/A2A) and [a2a-js](https://github.com/a2aproject/a2a-js) | The normative [protocol sources](https://github.com/a2aproject/A2A/tree/main/specification), release notes, TCK, and Agent Card signing code | Public protocol nouns and operations; generated bindings; conformance tests; canonical JWS-signed cards verified through published JWKS | #9, #10, #21, #101 |
 | [EnterpriseReady](https://www.enterpriseready.io/) | [Audit log guide](https://www.enterpriseready.io/features/audit-log/) and category teardowns | Procurement requirements as concrete product behavior; audit after successful mutation; RBAC and evidence before SSO/SCIM breadth | #15, #17, #18, #99, #102 |
 | [RFC 6121 / XMPP IM](https://datatracker.ietf.org/doc/html/rfc6121), [RFC 6120 / XMPP Core](https://datatracker.ietf.org/doc/html/rfc6120), and [ejabberd](https://github.com/processone/ejabberd) | RFC 6121 roster subscription and presence states; RFC 6120 `node@domain/resource` addressing | A roster as directional consent, not just a member list; separately addressable concurrent sessions for one identity | #44, #48, #116 |
-| [SPIFFE federation](https://spiffe.io/docs/latest/spiffe-specs/spiffe_federation/) | Trust domains, bundle endpoints, and endpoint-profile rules | Each namespace authority owns a trust domain and publishes verification material; never pool private signing keys across authorities | #12, #101, #120 |
+| [SPIFFE federation](https://spiffe.io/docs/latest/spiffe-specs/spiffe_federation/) | Trust domains, bundle endpoints, and endpoint-profile rules | Each namespace authority owns a trust domain and publishes verification material; bind each public-key bundle to its domain and never verify against a cross-domain key pool | #12, #101, #120 |
 
 ### Headscale and Tailscale: enrollment credentials
 
@@ -95,6 +95,44 @@ Historical designs that explain the current target and planned cutover:
 - [A2A adoption](../superpowers/specs/2026-08-01-a2a-adoption-design.md)
 - [A2A task store and operations](../superpowers/specs/2026-08-01-a2a-task-store-design.md)
 
+### Agent identity: compatible shape, no protocol adoption
+
+The active AI-agent identity proposals are still pre-consensus. Preserve the
+common shape without claiming adoption: `handle@host` is scoped by the host
+trust domain, the identifier is separate from every rotatable credential, and
+a verifier selects public keys by expected host and handle before selecting
+`kid`. A host-wide JWKS without an authenticated handle-to-key binding does not
+prove which handle owns a key.
+
+A2A v1.0 defines JWS-signed Agent Cards but does not name Ed25519 directly.
+Ed25519 fits that generic JWS contract through RFC 9864's fully specified
+`alg: Ed25519` plus RFC 8037's `kty: OKP` / `crv: Ed25519` key representation.
+RFC 9864 deprecates the older polymorphic `EdDSA` algorithm identifier; do not
+emit or accept it by default. A card-supplied `jku` is discovery metadata, not
+authority: it must match an endpoint already bound to the expected host and
+must never cause an arbitrary pre-verification fetch.
+
+JWKS discovery on the same relay still trusts that relay on first contact. It
+supports host-authorized signing and continuity after pinning; it is not an
+end-to-end proof against a malicious relay unless an independent trust anchor,
+transparency mechanism, or out-of-band pin is added.
+
+Current watch points, checked 2026-08-02:
+
+- `draft-klrc-aiagent-auth-03` is an active individual draft with no formal
+  IETF standing; watch for WIMSE adoption or a competing adopted profile.
+- `draft-ietf-oauth-identity-chaining-17` is in the RFC Editor queue with
+  editing in progress, but is not yet a published RFC.
+- A2A's signing contract requires RFC 8785 canonicalization and JWS, permits
+  `jku`, and leaves the algorithm choice open; watch for a narrower algorithm
+  profile or standardized JWKS location.
+- MCP workload-identity federation and proof-of-possession remain watch items,
+  not AgentCall dependencies.
+
+Applied in AgentCall:
+
+- [Agent identity compatibility decision](../superpowers/specs/2026-08-02-agent-identity-compatibility.md)
+
 ### XMPP, Matrix, NATS, and SPIFFE: federation
 
 AgentCall's `handle@host` address belongs to the federated-messaging problem
@@ -105,9 +143,10 @@ show tenancy as structural isolation with explicit exports and imports. XMPP add
 directional roster consent and per-resource addressing. SPIFFE supplies the trust
 domain and verification-bundle model.
 
-Do not adopt full room-state replication, XMPP semantics, or NATS subject syntax
-by analogy. Use these references before choosing federation signing, discovery,
-consent, tenant isolation, and multi-session identity semantics.
+Do not adopt full room-state replication, XMPP semantics, SPIFFE credential
+formats, or NATS subject syntax by analogy. Use these references before choosing
+federation signing, discovery, consent, tenant isolation, and multi-session
+identity semantics.
 
 ## Distribution and managed deployment
 

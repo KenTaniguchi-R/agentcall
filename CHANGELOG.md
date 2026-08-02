@@ -6,6 +6,22 @@ which are released together.
 
 ## Unreleased
 
+### Documentation — trust-domain-scoped agent identity
+
+- The future Agent Card signing design now preserves `handle@host` as a
+  trust-domain-scoped name while separating identity, routing, and rotatable
+  credentials. Ed25519 uses RFC 9864's fully specified `alg: Ed25519` with
+  RFC 8037's `kty: OKP` / `crv: Ed25519` key representation; the deprecated
+  polymorphic `EdDSA` algorithm is rejected by default.
+- Verification must select a configured JWKS by the expected host and handle
+  before resolving `kid`; cross-domain/cross-handle key pools and arbitrary
+  card-supplied `jku` fetches are explicitly rejected. Same-relay discovery is
+  documented as host-authorized or trust-on-first-use, not proof against a
+  malicious relay operator. The current unsigned-card trust boundary remains
+  documented until #101 implements the zero-user cutover.
+- The living reference index records the date-sensitive IETF, A2A, and MCP
+  watch points without prematurely adopting a pre-consensus identity protocol.
+
 ### Documentation — cloud data map and residency decision
 
 - A living inventory now covers every D1 table, Durable Object storage shape,
