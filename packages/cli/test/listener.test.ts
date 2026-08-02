@@ -6,7 +6,7 @@ import { WebSocketServer, type WebSocket as WsSocket } from "ws";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { startListener } from "../src/listener.js";
 import { getLinePaths, getMachinePaths, type LinePaths, type MachinePaths } from "../src/paths.js";
-import { AgentRunError } from "../src/runner.js";
+import { AgentRunError, buildSpawnSpec } from "../src/runner.js";
 import type { CallableLineConfig } from "../src/config.js";
 
 let httpServer: Server;
@@ -385,6 +385,58 @@ describe("startListener task resolution", () => {
     expect(spawned).toBe(false);
     const audit = readFileSync(paths.callsLog, "utf8").trim().split("\n").map((l) => JSON.parse(l));
     expect(audit[0].error).toMatch(/JSON|SyntaxError/i);
+  });
+});
+
+describe("startListener line name propagation", () => {
+  // Task 7 made the PreToolUse guard fail closed without AGENTCALL_LINE: no
+  // env var, no tool call succeeds, for every task on that call. If
+  // listener.ts:139's `deps.paths.name` ever regresses back to the old
+  // hardcoded `""`, every answered call on every line dies at its first tool
+  // use — silently, with the generic DENY_REASON, no path, no rule name. That
+  // failure mode is too silent to trust to "the two halves of this chain are
+  // each covered by their own unit test" (runner.test.ts's "AGENTCALL_LINE
+  // propagation" proves buildSpawnSpec maps a given lineName into
+  // env.AGENTCALL_LINE; this only needs to prove the listener still passes
+  // it) — a refactor can keep both halves individually green while the
+  // wiring between them silently rots. This goes through startListener end
+  // to end and lands the assertion on the actual env var a spawned process
+  // would see, not on an intermediate string.
+  it("threads the real line name through to AGENTCALL_LINE on the spawned process", async () => {
+    const paths = getLinePaths(freshMachine(), "sales");
+    const captured: {
+      kind?: "claude" | "codex"; prompt?: string; workdir?: string;
+      envelope?: unknown; callId?: string; lineName?: string;
+    } = {};
+    const relayReady = new Promise<WsSocket>((resolveWs) => {
+      void fakeRelay((ws) => resolveWs(ws)).then((url) => {
+        stopper = startListener({
+          relay: url, paths,
+          loadConfig: () => ({ ...cfg, relay: url }),
+          run: async (kind, prompt, workdir, _timeoutMs, _specOverride, envelope, callId, _signal, lineName) => {
+            captured.kind = kind; captured.prompt = prompt; captured.workdir = workdir;
+            captured.envelope = envelope; captured.callId = callId; captured.lineName = lineName;
+            return { text: "ok" };
+          },
+        });
+      });
+    });
+    const ws = await relayReady;
+    const done = frames(ws, 3); // accepted, started, result
+    ws.send(JSON.stringify({ type: "incoming_call", call_id: "c1", from: "shusaku", message: "hi" }));
+    await done;
+
+    expect(captured.lineName).toBe("sales");
+
+    // Re-derive a spawn spec from exactly what the listener handed run(...),
+    // through the real buildSpawnSpec — same as runAgent itself would do —
+    // so the assertion lands on env.AGENTCALL_LINE, the value the guard
+    // subprocess actually reads, not on the intermediate lineName string.
+    const spec = buildSpawnSpec(
+      captured.kind!, captured.prompt!, captured.workdir!, () => "/fake/claude",
+      captured.envelope as never, captured.callId!, captured.lineName!,
+    );
+    expect(spec.env?.AGENTCALL_LINE).toBe("sales");
   });
 });
 
