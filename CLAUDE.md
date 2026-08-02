@@ -110,6 +110,21 @@ wall-clock dependent, not node-version dependent — pinning CI to one node vers
 lowers the odds but does not fix it. The fix is to make the window explicit rather
 than ambient.
 
+### `packages/cli/test/runner.test.ts`'s process-group-kill test has a known flake
+
+`"kills the whole process group on timeout, so a grandchild holding stdout doesn't
+hang the promise"` spawns a real detached child (which spawns its own grandchild),
+waits for a real 500ms `runAgent` timeout to fire, asserts the whole thing completed
+in under 5s, then sleeps 300ms and asserts the grandchild is actually gone
+(`process.kill(pid, 0)` throws). All four numbers are wall-clock, not mocked, so
+under load — several vitest workers doing real process spawns/kills at once, as
+happens repeatedly running the full suite in this repo — either the 5s ceiling or the
+300ms post-SIGTERM grace period can be missed even though the kill logic itself is
+correct. Seen failing standalone and passing when re-run in isolation; not
+node-version dependent, same class of flake as the register.test.ts one above. The
+fix is the same kind: make the deadlines a mockable/injectable clock rather than
+real timers, not chase a bigger margin.
+
 ## TDD
 
 This codebase was built test-first and stays that way. Write the failing test before

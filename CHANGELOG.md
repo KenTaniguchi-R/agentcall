@@ -6,6 +6,40 @@ which are released together.
 
 ## Unreleased
 
+### Added — Multiple lines: several agentcall addresses on one machine
+
+A single Mac can now hold more than one agentcall address ("line"), each with its
+own handle, relay token, agent kind (or none, for caller-only), policy, tasks, and
+working directory under `~/.agentcall/lines/<name>/`. One supervised process still
+runs — `agentcall listen` now opens one socket per callable line instead of
+assuming exactly one.
+
+- `agentcall line add <name> --handle <h> --agent <claude|codex>` registers another
+  address; `--caller-only` for a line that only calls out. `agentcall line list`,
+  `agentcall line remove <name> --yes`, and `agentcall line primary <name>` round
+  out the group.
+- `agentcall call`/`agentcall status` pick whichever line is registered on the
+  destination's relay automatically (the primary, when more than one line shares
+  it); `--as <line>` overrides. `agentcall listen --line <name>` runs a single line
+  in the foreground instead of every callable one.
+- `--line <name>` (or `AGENTCALL_LINE`) now selects which line `rotate`, `card`,
+  `task new`, and the six policy verbs act on.
+- `agentcall setup` is first-run only now: run again on a machine that already has
+  a line and it prints the existing lines and points at `line add` instead of
+  clobbering the one config.json that used to exist.
+- The tool guard's task-directory denial and per-call audit log (`calls.log`,
+  `tools.log`) are per line, so an answering agent on one address can't rewrite or
+  read another address's task grants or history.
+- **An address is not a security boundary between lines on the same machine** —
+  see the README's "Several agents, several addresses" section for what splitting
+  into lines does and does not separate.
+
+This removes the single flat `~/.agentcall/config.json` (and `Config`/`Paths`/
+`loadConfig`/`assertCallableConfig`) entirely; every command now resolves a
+`LineContext` instead. `AddLineOpts.verify` (accepted, previously unread) now runs
+a post-registration verify pass by default, mirroring `setup`'s; `--no-verify` on
+`line add` skips it.
+
 ### Fixed — `doctor`'s tool-guard check called healthy installs broken
 
 The check asked a real `claude` spawn to read a canary `.env` and required a
