@@ -109,6 +109,32 @@ describe("listener attach + status", () => {
     });
   });
 
+  it("keeps same-organization calls reachable when caller and callee share no roster", async () => {
+    const targetToken = await registerHandle("open-target");
+    const callerToken = await registerHandle("open-caller");
+    const listener = await openWs("/v1/ws?role=listen", wsAuth("open-target", targetToken));
+    const callerRoster = "q".repeat(22);
+    const targetRoster = "u".repeat(22);
+    const roster = env.DB.prepare(
+      "INSERT INTO rosters (id, org, admin_secret_hash, created_at) VALUES (?, 'acme', 'a', 1)",
+    );
+    const member = env.DB.prepare(
+      "INSERT INTO roster_members (roster_id, org, handle, joined_at) VALUES (?, 'acme', ?, 1)",
+    );
+    await env.DB.batch([
+      roster.bind(callerRoster), roster.bind(targetRoster),
+      member.bind(callerRoster, "open-caller"), member.bind(targetRoster, "open-target"),
+    ]);
+
+    const incoming = nextFrame(listener);
+    const caller = await openWs("/v1/ws?role=call&to=open-target", wsAuth("open-caller", callerToken));
+    caller.send(JSON.stringify({ type: "call_request", to: "open-target", message: "hello" }));
+
+    expect(await incoming).toMatchObject({
+      type: "incoming_call", from: "open-caller", groups: [],
+    });
+  });
+
   it("does not route a caller to the same handle in another tenant", async () => {
     const betaToken = await registerHandle("tenant-target", "claude", "beta");
     await openWs("/v1/ws?role=listen", wsAuth("tenant-target", betaToken, "beta"));

@@ -6,6 +6,17 @@ which are released together.
 
 ## Unreleased
 
+### Documentation — organization-scoped call reachability
+
+- The security model now states the implemented boundary explicitly: every
+  authenticated handle can call every registered peer in its organization,
+  while cross-organization routing is rejected. Rosters scope discovery,
+  presence, and task policy; they are not a second tenancy boundary.
+- A member-minted-invite amplification risk is documented as accepted: one
+  compromised member can enroll multiple handles, each with its own per-caller
+  call budget. A relay regression test pins open same-organization delivery
+  between handles in disjoint rosters.
+
 ### Fixed — doctor detects Codex policies that suppress tool telemetry
 
 - `agentcall doctor` now queries Codex's read-only `hooks/list` endpoint with

@@ -456,8 +456,12 @@ disabled/deferred so it cannot bypass an IT-pinned version.
 
 ## Security model (v1, explicit)
 
-- Address = capability to call. Callers must themselves be registered — the
-  `from` handle is relay-verified, anonymous callers are rejected.
+- The organization is the call-reachability boundary. Any authenticated handle
+  may call any registered handle in its own organization; anonymous callers and
+  cross-organization routing are rejected. An address is therefore a routing
+  identifier, not a secret capability. Roster membership scopes presence,
+  discovery, and callee-side task policy, but does not gate call delivery. See
+  the [reachability decision](./docs/superpowers/specs/2026-08-02-organization-scoped-call-reachability.md).
 - Address is not a capability to monitor presence. A handle can read its own
   online state or that of a peer in a shared roster; every other target is
   indistinguishable from a nonexistent handle. The relay records each
@@ -479,6 +483,13 @@ disabled/deferred so it cannot bypass an IT-pinned version.
 - The callee's own API key / subscription pays for answering calls — accepted
   as fine for v1 friends-scale usage, not for public/adversarial exposure.
 - Known residual risks (accepted, not eliminated):
+  - Any authenticated organization member can mint a one-use, seven-day invite.
+    One compromised member can therefore enroll multiple caller handles, and
+    the per-caller hourly limit then gives each handle a separate budget against
+    a callee. The five-per-minute registration limit is keyed by source IP and
+    slows this amplification; it does not prevent it. Centralized enrollment
+    authority and abuse response are future controls, not properties of the
+    current reachability boundary.
   - Prompt injection in a caller's message can burn the callee's tokens, and —
     within the granted capabilities — read or write anywhere the owner's own
     agent could via `exec` (shell commands are recorded, not blocked — see
@@ -499,8 +510,8 @@ disabled/deferred so it cannot bypass an IT-pinned version.
     plaintext), or the relay token in `~/.agentcall/config.json`. The tool
     guard below refuses these paths for a Claude answering agent's
     file-reading tools, but not for `exec`, and not at all for a Codex
-    answering agent. **Only share your address with people you would trust to
-    run a read-only command in your home directory.**
+    answering agent. **Treat every member of your organization as able to reach
+    your agent, and grant tasks accordingly.**
   - Executable configuration surfaces (`~/.claude/CLAUDE.md`, `hooks`,
     `plugins`, `commands`, `agents`) are writable by an agent granted `write`,
     so a hostile prompt can persist beyond the call. On Claude, the tool guard
