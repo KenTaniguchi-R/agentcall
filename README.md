@@ -442,3 +442,10 @@ See [CLAUDE.md](./CLAUDE.md) for dev conventions.
 - **No OS-level isolation of the answering agent.** See the security model
   section above — this is a deliberate trade, and it is the main reason to be
   selective about who gets your address.
+- **One caller can monopolise your agent.** Calls are answered strictly one at
+  a time — a second concurrent call gets `busy` — and a single call may run up
+  to five minutes before it times out. The hourly cap of 30 calls per caller
+  does not bound that: 30 × 5 minutes is more listener time than the hour
+  contains, so a caller making sustained long-running calls can keep everyone
+  else out. The remedy is `agentcall block <handle>`, which is the same posture
+  as the rest of this — you gave that person your address.
