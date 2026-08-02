@@ -9,8 +9,8 @@ are research notes, not decisions.** No implementation follows from them without
 a separate call.
 
 Docs #1–6 date from 2026-07-31 and were produced together; read them as one body of
-work rather than six independent studies. #7 is a later addition and is the only one
-that carries a backlog.
+work rather than six independent studies. #7 and #8 are later additions and are the
+only ones that carry a backlog.
 
 ## Reading order
 
@@ -28,8 +28,9 @@ produced in. Later research revised earlier conclusions, so the production order
 | 5 | [claude-code-enforcement-surfaces](./2026-07-31-claude-code-enforcement-surfaces.md) | With the OS sandbox gone, what can actually enforce policy — and what can't? |
 | 6 | [lessons-from-composio](./2026-07-31-lessons-from-composio.md) | How does a shipping Claude Code plugin do this, and what should we copy? |
 | 7 | [cotal-enterprise-installability](./2026-08-01-cotal-enterprise-installability.md) | Which tool does an enterprise actually install — and what has to be true for it to be ours? |
+| 8 | [buy-vs-build-third-party-landscape](./2026-08-02-buy-vs-build-third-party-landscape.md) | Which parts of that gap does someone else already sell — and do we pass a security review? |
 
-Four notes on the sequence:
+Five notes on the sequence:
 
 - **#3 predates two decisions made the same day.** `agent-coordination-landscape` was
   written before the sandbox was dropped and before Q&A-first was chosen. Its
@@ -44,10 +45,18 @@ Four notes on the sequence:
   Every other doc assumes the caller already knows the address. In a 500-person company
   they do not, and that is the asker's half of the #2 pain in #1. Discovery is a
   separate problem from calling, and only calling is built.
-- **#7 amends #3 and is the only doc with a backlog.** #3 scored Cotal as
+- **#8 is the only doc that reads the code.** #1–#7 study the market; #8 asks which
+  parts of #7's gap are commodity, and cites `file:line` against the tree at
+  2026-08-02 rather than reasoning from the README. Two of its findings are properties
+  of our own repo that no market research would surface: we publish the CLI with no
+  provenance and no release workflow, and D1's always-on 30-day Time Travel makes an
+  erasure request structurally unanswerable. Read it last; it depends on #7 for the
+  gap and on #5 for what enforcement is left after the sandbox was dropped.
+- **#7 amends #3 and is the first doc with a backlog.** #3 scored Cotal as
   inside-your-own-perimeter and therefore disjoint from us. The enterprise pivot makes
   that deployment shape ours too, so #7 re-runs the comparison and turns the differences
-  into checklist items. Read it last; it depends on #1–#6 and cites them by section.
+  into checklist items. Read it after #1–#6; it depends on them and cites them by
+  section.
 
 ## The five findings that matter
 
