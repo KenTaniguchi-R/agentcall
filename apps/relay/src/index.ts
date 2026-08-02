@@ -5,22 +5,14 @@ import { mountRoster } from "./roster.js";
 import { constantTimeEqual, generateToken, sha256Hex } from "./auth.js";
 import { authenticateRequest, identityKey, registrationAddressHost } from "./tenant.js";
 import { sharedRosterIds } from "./groups.js";
+import { checkLimit, NATIVE_CARD, NATIVE_READ, REGISTER, type RateLimitEnv } from "./ratelimit/index.js";
 
 export { HandleDO } from "./do.js";
+export { RateLimiterDO } from "./ratelimit/do.js";
 
-export type Env = {
+export type Env = RateLimitEnv & {
   DB: D1Database;
   HANDLE_DO: DurableObjectNamespace;
-  REGISTER_RL: RateLimit;
-  CARD_RL: RateLimit;
-  // Shared ceiling for status and the two card representations, keyed by
-  // source IP. They were previously unbounded, which left the handle
-  // namespace scrapeable for free and every probe waking a Durable Object at
-  // the operator's expense.
-  READ_RL: RateLimit;
-  // Roster join + bundle. Join verifies a shared secret; bundle returns up to
-  // MAX_ROSTER_MEMBERS records at once. Neither belongs under READ_RL.
-  ROSTER_RL: RateLimit;
   BOOTSTRAP_TOKEN?: string;
 };
 const app = new Hono<{ Bindings: Env }>();
@@ -33,7 +25,7 @@ async function handleExists(db: D1Database, org: string, handle: string): Promis
 
 app.post("/v1/register", async (c) => {
   const ip = c.req.header("cf-connecting-ip") ?? "unknown";
-  if (!(await c.env.REGISTER_RL.limit({ key: ip })).success) return c.json({ error: "rate limited" }, 429);
+  if (!(await checkLimit(c.env, ip, REGISTER))) return c.json({ error: "rate limited" }, 429);
   const body = RegisterRequest.safeParse(await c.req.json().catch(() => null));
   if (!body.success) return c.json({ error: "invalid request" }, 400);
   const { invite, handle, agent_kind } = body.data;
@@ -84,7 +76,7 @@ app.post("/v1/admin/invite", async (c) => {
   const [expectedHash, suppliedHash] = await Promise.all([sha256Hex(configured), sha256Hex(supplied)]);
   if (!constantTimeEqual(expectedHash, suppliedHash)) return c.json({ error: "unauthorized" }, 401);
   const ip = c.req.header("cf-connecting-ip") ?? "unknown";
-  if (!(await c.env.REGISTER_RL.limit({ key: `bootstrap:${ip}` })).success) {
+  if (!(await checkLimit(c.env, `bootstrap:${ip}`, REGISTER))) {
     return c.json({ error: "rate limited" }, 429);
   }
   const body = BootstrapInviteRequest.safeParse(await c.req.json().catch(() => null));
@@ -96,7 +88,7 @@ app.post("/v1/invite", async (c) => {
   const identity = await authenticateRequest(c.env.DB, c.req);
   if (!identity) return c.json({ error: "unauthorized" }, 401);
   const { org, handle } = identity;
-  if (!(await c.env.REGISTER_RL.limit({ key: `invite:${org}:${handle}` })).success) {
+  if (!(await checkLimit(c.env, `invite:${org}:${handle}`, REGISTER))) {
     return c.json({ error: "rate limited" }, 429);
   }
   return c.json(await createOrgInvite(c.env.DB, org, handle));
@@ -120,14 +112,13 @@ app.post("/v1/invite", async (c) => {
 // identity still needs an explicit generation/recovery design so a replacement
 // owner cannot inherit the prior owner's stored state.
 //
-// Reuses REGISTER_RL rather than adding a binding: 5/min is the right ceiling
-// for an operation a human runs once in a blue moon, and the distinct key
-// prefix keeps it from sharing a budget with actual registrations.
+// Token rotation shares the 5/min credential-operation policy. Its distinct
+// key keeps it from sharing a budget with registrations or invite creation.
 app.post("/v1/token/rotate", async (c) => {
   const identity = await authenticateRequest(c.env.DB, c.req);
   if (!identity) return c.json({ error: "unauthorized" }, 401);
   const { org, handle } = identity;
-  if (!(await c.env.REGISTER_RL.limit({ key: `rotate:${org}:${handle}` })).success) {
+  if (!(await checkLimit(c.env, `rotate:${org}:${handle}`, REGISTER))) {
     return c.json({ error: "rate limited" }, 429);
   }
   const next = generateToken();
@@ -143,7 +134,7 @@ app.get("/v1/status/:handle", async (c) => {
   if (!identity) return c.json({ error: "unauthorized" }, 401);
   const { org } = identity;
   const ip = c.req.header("cf-connecting-ip") ?? "unknown";
-  if (!(await c.env.READ_RL.limit({ key: ip })).success) return c.json({ error: "rate limited" }, 429);
+  if (!(await checkLimit(c.env, ip, NATIVE_READ))) return c.json({ error: "rate limited" }, 429);
   const handle = c.req.param("handle");
   if (!(await handleExists(c.env.DB, org, handle))) return c.json({ error: "unknown handle" }, 404);
   const stub = c.env.HANDLE_DO.get(c.env.HANDLE_DO.idFromName(identityKey(org, handle)));
@@ -154,7 +145,7 @@ app.put("/v1/card", async (c) => {
   const identity = await authenticateRequest(c.env.DB, c.req);
   if (!identity) return c.json({ error: "unauthorized" }, 401);
   const { org, handle } = identity;
-  if (!(await c.env.CARD_RL.limit({ key: `${org}:${handle}` })).success) return c.json({ error: "rate limited" }, 429);
+  if (!(await checkLimit(c.env, `${org}:${handle}`, NATIVE_CARD))) return c.json({ error: "rate limited" }, 429);
   const body = CardUpload.safeParse(await c.req.json().catch(() => null));
   if (!body.success) return c.json({ error: "invalid card" }, 400);
   await c.env.DB.prepare(
@@ -169,7 +160,7 @@ app.get("/v1/card/:handle", async (c) => {
   if (!identity) return c.json({ error: "unauthorized" }, 401);
   const { org, handle: viewer } = identity;
   const ip = c.req.header("cf-connecting-ip") ?? "unknown";
-  if (!(await c.env.READ_RL.limit({ key: ip })).success) return c.json({ error: "rate limited" }, 429);
+  if (!(await checkLimit(c.env, ip, NATIVE_READ))) return c.json({ error: "rate limited" }, 429);
   const handle = c.req.param("handle");
   const row = await c.env.DB.prepare("SELECT card_json, updated_at FROM cards WHERE org = ? AND handle = ?")
     .bind(org, handle).first<{ card_json: string; updated_at: number }>();

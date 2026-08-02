@@ -100,16 +100,6 @@ pins 24, the version the repo is developed on. So CI does *not* verify the promi
 `engines` makes to people installing the published CLI on older node — that needs a
 job installing the built tarball, not a workspace build.
 
-### `apps/relay/test/register.test.ts` has a known flake
-
-The burst test registers 5 handles from one IP and expects the 6th to 429.
-`REGISTER_RL` is `{ limit: 5, period: 60 }`, so it only holds if all six requests
-land inside the same 60s window. On a slow runner they don't, and the 6th comes back
-200. Seen failing on a GitHub runner while the same commit passed locally. It is
-wall-clock dependent, not node-version dependent — pinning CI to one node version
-lowers the odds but does not fix it. The fix is to make the window explicit rather
-than ambient.
-
 ## TDD
 
 This codebase was built test-first and stays that way. Write the failing test before

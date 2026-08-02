@@ -19,7 +19,7 @@ export async function registerHandle(
     method: "POST",
     // Synthetic per-handle source IP: without it every call in a test file
     // shares the same "unknown" fallback key and would collide with the
-    // register-endpoint rate limit (REGISTER_RL) across unrelated tests.
+    // register-endpoint rate limit across unrelated tests.
     headers: { "content-type": "application/json", "cf-connecting-ip": `test-${handle}` },
     body: JSON.stringify({ invite: await issueInvite(org, handle), handle, agent_kind: kind }),
   });
