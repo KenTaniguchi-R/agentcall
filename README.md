@@ -176,11 +176,12 @@ card automatically. Callers see your menu with `agentcall card <address>`.
 don't — that's what rosters and `agentcall search` are for.
 
 A **roster** is an opt-in group whose members can discover each other's
-published tasks. One person creates it and shares the id and secret:
+published tasks. Creation returns separate join and admin secrets. Store the
+admin secret in a password manager and share only the id and join secret:
 
 ```bash
 agentcall roster create --as acme
-# prints an id and a join secret, shown once and not recoverable
+# prints an id, join secret, and admin secret; all are shown once
 
 # everyone else:
 agentcall roster join <roster-id> --secret <secret> --as acme
@@ -225,13 +226,25 @@ anywhere. Refreshing a roster does tell the relay that your handle refreshed
 that roster at that time, so search *activity* isn't private — only the query
 is.
 
-**There is no way to remove a roster member and no way to rotate a roster's
-join secret.** If the secret leaks, abandon the roster and create a new one —
-membership lifecycle (expel, rotate, teardown) is deliberate follow-up work,
-not yet built. `agentcall roster forget` only drops your *local* record of
-having joined; it does not leave the roster, because there is no leave
-operation — your membership on the relay is unchanged. Someone who believes
-`forget` removed them from the roster is still a member.
+Membership has an explicit lifecycle:
+
+```bash
+agentcall roster leave acme                    # relay leave + local cleanup
+agentcall roster expel acme <handle>           # requires the admin secret
+agentcall roster rotate acme                   # closes the door; members stay
+agentcall roster rotate acme --evict --yes     # incident response: clear all members
+agentcall roster delete acme --yes              # teardown; audit events survive
+```
+
+Administrative commands resolve the secret from `--admin-secret`, then
+`AGENTCALL_ADMIN_SECRET`, then an interactive prompt. The flag is convenient
+for scripts but can appear in shell history and process listings. The admin
+secret is never stored by AgentCall and cannot be recovered; if every copy is
+lost, abandon and recreate the roster. Expulsion revokes future fetches, not
+data already cached or copied. An expelled member can rejoin while the old join
+secret remains valid, so rotate it after expulsion if they may still know it.
+`agentcall roster forget` remains the explicit local-only escape hatch when the
+relay is unreachable; use `leave` for actual membership removal.
 
 Results are hints, not permission: a task can appear in search and still be
 refused when you call it, because the callee's policy is what actually
