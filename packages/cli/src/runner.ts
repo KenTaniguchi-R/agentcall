@@ -108,7 +108,7 @@ export function guardCodexConfigArg(): string {
 // reproduce codex-cli 0.146.0's canonical identity for this one session hook
 // and supply trust for its exact synthetic key. A CLI-side normalization
 // change makes the hash mismatch and fails closed (the hook is skipped).
-const CODEX_SESSION_GUARD_KEY = "/<session-flags>/config.toml:pre_tool_use:0:0";
+export const CODEX_SESSION_GUARD_KEY = "/<session-flags>/config.toml:pre_tool_use:0:0";
 
 function canonicalize(value: unknown): unknown {
   if (Array.isArray(value)) return value.map(canonicalize);

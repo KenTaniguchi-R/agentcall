@@ -191,7 +191,7 @@ describe("runDoctor", () => {
     expect(lines.join("\n")).toContain("! tool guard");
   });
 
-  it("does not run the tool guard check for a codex install", async () => {
+  it("checks Codex tool telemetry without invoking Claude's enforcing guard probe", async () => {
     const p = freshPaths();
     saveConfig(p, { org: "acme", handle: "ken", token: "t", agent_kind: "codex", relay: "https://relay.example" });
     const lines: string[] = [];
@@ -206,9 +206,39 @@ describe("runDoctor", () => {
       guardFn: async () => {
         throw new Error("checkGuard must not run for a codex install");
       },
+      codexGuardFn: async () => JSON.stringify({
+        id: 2,
+        result: { data: [{ cwd: p.publicDir, hooks: [{
+          key: "/<session-flags>/config.toml:pre_tool_use:0:0",
+          enabled: true,
+          trustStatus: "trusted",
+        }] }] },
+      }),
       log: (l) => lines.push(l),
     });
     expect(code).toBe(0);
-    expect(lines.join("\n")).not.toContain("tool guard");
+    expect(lines.join("\n")).toContain("✓ codex tool telemetry");
+  });
+
+  it("exits nonzero when Codex managed-only policy suppresses AgentCall's session hook", async () => {
+    const p = freshPaths();
+    saveConfig(p, { org: "acme", handle: "ken", token: "t", agent_kind: "codex", relay: "https://relay.example" });
+    const lines: string[] = [];
+    const code = await runDoctor({
+      ...baseDeps,
+      paths: p,
+      verifyFns: {
+        resolveBin: () => "/fake/bin/codex",
+        execFn: () => {},
+        runFn: async () => ({ text: "OK" }),
+      },
+      codexGuardFn: async () => JSON.stringify({
+        id: 2, result: { data: [{ cwd: p.publicDir, hooks: [] }] },
+      }),
+      log: (line) => lines.push(line),
+    });
+    expect(code).toBe(1);
+    expect(lines.join("\n")).toContain("✗ codex tool telemetry");
+    expect(lines.join("\n")).toContain("allow_managed_hooks_only");
   });
 });

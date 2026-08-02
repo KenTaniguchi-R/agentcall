@@ -5,7 +5,11 @@ import { callAgent } from "./callClient.js";
 import { loadConfig, relayUrl, resolveWorkdir, type Config, type Workdir } from "./config.js";
 import { LAUNCH_LABEL } from "./launchd.js";
 import type { Paths } from "./paths.js";
-import { checkGuard, checkRelaySelfCall, formatCheck, short, verifyAgent, type GuardBinaryProbeFn, type GuardProbeFn, type VerifyCheck, type VerifyFns } from "./verify.js";
+import {
+  checkCodexGuard, checkGuard, checkRelaySelfCall, formatCheck, short, verifyAgent,
+  type CodexGuardProbeFn, type GuardBinaryProbeFn, type GuardProbeFn,
+  type VerifyCheck, type VerifyFns,
+} from "./verify.js";
 
 export interface DoctorDeps {
   paths: Paths;
@@ -18,6 +22,7 @@ export interface DoctorDeps {
   log?: (line: string) => void;
   guardFn?: GuardProbeFn;
   guardBinaryFn?: GuardBinaryProbeFn;
+  codexGuardFn?: CodexGuardProbeFn;
 }
 
 const defaultLaunchctlList = () =>
@@ -96,15 +101,19 @@ export async function runDoctor(deps: DoctorDeps): Promise<number> {
   // Falls back to publicDir when workdir didn't resolve: per the ladder
   // semantics above, a static-check failure reports itself but must not stop
   // the agent checks from running.
-  const agentChecks = await verifyAgent(cfg.agent_kind, workdir?.dir ?? deps.paths.publicDir, deps.verifyFns);
+  const agentWorkdir = workdir?.dir ?? deps.paths.publicDir;
+  const agentChecks = await verifyAgent(cfg.agent_kind, agentWorkdir, deps.verifyFns);
   for (const c of agentChecks) report(c);
   const agentOk = agentChecks.every((c) => c.ok);
 
-  // Claude-only: the guard is registered on claude spawns, and checkGuard
-  // spawns claude to probe it. Gated on agentOk because probing through a
-  // broken agent tests nothing.
+  // Runtime-specific guard evidence. Claude needs a real tool attempt plus a
+  // direct binary fallback; Codex exposes its effective hook status through
+  // app-server without another model call. Gated on agentOk because a broken
+  // agent install cannot answer calls regardless of hook state.
   if (cfg.agent_kind === "claude" && agentOk) {
     report(await checkGuard(deps.guardFn, deps.guardBinaryFn));
+  } else if (cfg.agent_kind === "codex" && agentOk) {
+    report(await checkCodexGuard(agentWorkdir, deps.codexGuardFn));
   }
 
   if (agentOk && online) {

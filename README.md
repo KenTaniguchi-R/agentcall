@@ -526,12 +526,13 @@ also refused. Every tool call reaching the guard is recorded to
 `~/.agentcall/tools.log`; on verified codex-cli 0.146.0, Codex runs the same
 hook in observe-only mode so long as `allow_managed_hooks_only` is not enabled,
 so it records attempts but does not refuse them.
-`agentcall doctor` verifies the
-Claude guard is in force: it asks a real `claude` spawn to read a canary `.env`
-and requires the denial to appear in the
-log. When the model refuses that read on its own the guard is never consulted and the
-run proves nothing, so doctor falls back to invoking the guard directly and reports
-`!` — unverified, not broken.
+`agentcall doctor` verifies the Claude guard is in force: it asks a real
+`claude` spawn to read a canary `.env` and requires the denial to appear in the
+log. When the model refuses that read on its own the guard is never consulted
+and the run proves nothing, so doctor falls back to invoking the guard directly
+and reports `!` — unverified, not broken. For Codex, doctor makes no additional
+model call: it queries `hooks/list` with AgentCall's exact production overrides
+and fails unless the session hook is present, enabled, and trusted.
 
 Two limits, stated plainly:
 
@@ -550,7 +551,8 @@ Two limits, stated plainly:
   claim observation on other releases: a changed normalization makes the hash
   mismatch and the hook skip silently rather than widening trust. An administrator
   setting `allow_managed_hooks_only = true` also disables this session hook;
-  managed-hook installation or detection remains future work. Codex has no
+  `agentcall doctor` detects and fails on that condition. Installing AgentCall's
+  guard as an administrator-managed hook remains future work. Codex has no
   `Read`/`Grep`/`Glob` tools, and much of what it does reach the filesystem with is
   `Bash` (`sed -n '1,200p' file`) — exactly
   the surface the point above says cannot be bounded by matching command strings. Its

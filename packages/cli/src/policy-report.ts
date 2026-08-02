@@ -109,6 +109,7 @@ export function renderPolicyReport(
       "  Codex can execute shell commands whether or not a task declares exec.",
       "  On verified codex-cli 0.146.0, shell tool attempts are recorded by an observe-only hook unless managed-only hooks are required.",
       "  Other Codex releases or allow_managed_hooks_only=true may silently skip that hook; non-hooked read routes remain unrecorded.",
+      "  Run agentcall doctor to verify the exact Codex session hook is active and trusted on this machine.",
     );
   }
 

@@ -7,6 +7,7 @@ import {
   codexHookConfigArg, codexHookTrustArg, CODEX_HOOK_TRUST_VERIFIED_VERSION,
   GUARD_TIMEOUT_S,
 } from "../src/runner.js";
+import { checkCodexGuard } from "../src/verify.js";
 
 // Env-gated OFF by default. This launches a real authenticated Codex and is
 // deliberately excluded from CI:
@@ -19,6 +20,12 @@ import {
 const enabled = process.env.AGENTCALL_PROBE_CODEX_HOOKS === "1";
 
 describe.skipIf(!enabled)("codex exact-hook trust", () => {
+  it("doctor discovers the production session hook as enabled and trusted", async () => {
+    expect(await checkCodexGuard(process.cwd())).toMatchObject({
+      name: "codex tool telemetry", ok: true, detail: "trusted session hook",
+    });
+  }, 20_000);
+
   it("runs the trusted session hook but not an unrelated user hook", () => {
     const probedVersion = execFileSync("codex", ["--version"], { encoding: "utf8" })
       .match(/\b(\d+\.\d+\.\d+)\b/)?.[1];
