@@ -29,6 +29,13 @@
     // Roster join verifies a shared secret, so it is a credential-checking
     // endpoint and must not share READ_RL's 60/min read allowance. Keyed by
     // source IP *and* roster id at the call site.
-    { "name": "ROSTER_RL", "namespace_id": "1004", "simple": { "limit": 10, "period": 60 } }
+    { "name": "ROSTER_RL", "namespace_id": "1004", "simple": { "limit": 10, "period": 60 } },
+    // Recovery issue/redeem/state. Redeem authenticates an offline-guessable
+    // credential against a known handle, so it must not share REGISTER_RL's
+    // budget. Checked on BOTH a handle key and an IP key at the call site:
+    // one key alone lets an attacker grind many handles from one IP, or one
+    // handle from many IPs. 3/60s is the tightest the binding allows —
+    // `period` accepts only 10 or 60.
+    { "name": "RECOVER_RL", "namespace_id": "1005", "simple": { "limit": 3, "period": 60 } }
   ]
 }

@@ -20,6 +20,9 @@ export type Env = {
   // Roster join + bundle. Join verifies a shared secret; bundle returns up to
   // MAX_ROSTER_MEMBERS records at once. Neither belongs under READ_RL.
   ROSTER_RL: RateLimit;
+  // Recovery issue/redeem/state — see wrangler.jsonc. Deliberately separate
+  // from REGISTER_RL: this endpoint checks a credential.
+  RECOVER_RL: RateLimit;
 };
 // Not exported: workerd treats every named export of the entry module as a
 // potential WorkerEntrypoint and rejects non-handler values outright
