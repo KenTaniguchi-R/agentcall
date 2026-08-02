@@ -16,8 +16,29 @@
 - **Stage files explicitly** — `git add <file> <file>`, never `git add -A` or `git add .`.
 - **Before calling any task done:** `pnpm -r build && pnpm -r typecheck && pnpm -r test` must pass from the repo root, **in that order**. `packages/cli` typechecks against `packages/shared`'s built `dist`, so building last checks the previous run's types.
 - **`typecheck` covers `src` and `test`.** New test files are type-checked; a signature change that leaves a stale call site in `test/` must fail the build, not surface at runtime.
-- **Closes #49.** Reference it in the final commit.
 - **Coordinate before starting the CLI half.** A parallel session is implementing #23 on branch `docs/23-multi-turn-calls` and its spec says it consumes `commands/call.ts` from this work. Use one worktree per session (`CONTRIBUTING.md`); this plan's author lost an uncommitted file to a shared-worktree collision already.
+
+## Rebase note — read before Task 2
+
+**This plan was written against `index.ts` as it stood before PR #63 landed. It has been rebased; the differences below are binding.**
+
+**#49 is CLOSED.** PR #63 (`test/49-command-actions`) closed it by a different and better route than this plan proposed: it extracted `runCli(argv, { writeOut, writeErr })` and `createProgram()` as an in-process seam, added `cli-entry.ts` as the bin shim, and added `packages/cli/test/cli-actions.test.ts` — 199 lines driving commands *through* the Commander seam, asserting argv parsing, stream routing, exit status, relay requests against a local http server, and durable state. No task here closes #49. Do not write that in a commit message.
+
+**What that changes for the better.** This plan's original weakness was stated in its own Task 2 rationale: extracting untested code is unverified by construction, with no net to catch a behavior change. `cli-actions.test.ts` **is** that net, and it tests something this plan's per-command tests structurally cannot — that `index.ts` still *wires* each command correctly. A broken `.action(run(...))` would pass every unit test in Tasks 2–7 and fail `cli-actions.test.ts`.
+
+**So the CLI tasks gain one mandatory step each:** after extracting, run
+
+```bash
+cd packages/cli && pnpm vitest run test/cli-actions.test.ts
+```
+
+and it must pass unchanged. If a command you extracted is covered there and the file needs editing to accommodate your change, you have changed behavior — stop and report it rather than amending the test. (`setup` and `listen` are deliberately excluded from that file; Task 7 must not add them.)
+
+**Line references shift by exactly +1** throughout `index.ts`, because `createProgram()` opens at line 21 and the program body below it is otherwise unchanged. Where a task says `index.ts:244-314`, read `245-315`. Current landmarks: `createProgram()` :21, `contacts` :194, `roster` :245, `search` :318, `task` :408, `allow` :427, `listen` :441, `uninstall` :488, `runCli` :509.
+
+**`run()` goes inside `createProgram()`**, above the first `.command()`, not at module scope. Its contract is already compatible with the new seam: `run()` sets `process.exitCode = 1` on a thrown error, and `runCli` returns `process.exitCode ?? 0` after restoring the previous value. Do not make command functions return exit codes — `runCli` owns that translation and already isolates the process-global.
+
+**The remaining justification for Tasks 2–7 is structural, and narrower than the plan first claimed.** `index.ts` is 527 lines with 24 `process.exitCode = 1` assignments still inside command actions. #48 adds five more commands. The seam test covers wiring; it does not make business logic unit-testable, and it does not shrink the file. That is the case for continuing — not #49.
 
 ---
 
@@ -35,7 +56,7 @@
 
 **CLI — created:** `packages/cli/src/commands/{roster,search,contacts,call,card,policy,account}.ts`
 
-**CLI — modified:** `packages/cli/src/index.ts` (500 lines → ~120).
+**CLI — modified:** `packages/cli/src/index.ts` (527 lines → ~150; the floor is higher than the original plan's ~120 because `createProgram`/`runCli`/`CliOutput` stay).
 
 Command-to-file mapping, covering all 26 commands:
 
@@ -823,13 +844,22 @@ Cases: `setup` throws when `runSetup` resolves `{ ready: false }` and does not t
 - [ ] **Step 5: Confirm `index.ts` holds no logic**
 
 ```bash
-cd /Users/ryuseitaniguchi/coding/agentcall
-wc -l packages/cli/src/index.ts          # expect ~120, down from 500
-grep -c "process.exitCode" packages/cli/src/index.ts   # expect 2: run() and the parseAsync catch
-grep -c "} catch" packages/cli/src/index.ts            # expect 2: same two
+wc -l packages/cli/src/index.ts                        # expect ~150, down from 527
+grep -c "process.exitCode" packages/cli/src/index.ts   # expect 4
+grep -c "} catch" packages/cli/src/index.ts            # expect 3
 ```
 
-If any `grep` exceeds its expected count, an action still holds logic. Find it and move it.
+The expected counts account for the `runCli` seam that PR #63 added — they are **not** zero, and driving them to zero would delete that seam. The four `process.exitCode` references are: the assignment inside `run()`, and the three inside `runCli` (`previousExitCode` capture, the `undefined` reset, and the `?? 0` read plus the `finally` restore). The three `catch` blocks are: `run()`, and the two nested ones in `runCli`.
+
+If either `grep` exceeds its expected count, an action still holds logic. Find it and move it.
+
+Then confirm the seam still holds:
+
+```bash
+cd packages/cli && pnpm vitest run test/cli-actions.test.ts
+```
+
+Expected: PASS, with `test/cli-actions.test.ts` unmodified by this plan.
 
 - [ ] **Step 6: Verify and commit**
 
@@ -838,7 +868,7 @@ pnpm -r build && pnpm -r typecheck && pnpm -r test
 git add packages/cli/src/commands/account.ts packages/cli/src/index.ts packages/cli/test/commands-account.test.ts
 git commit -m "refactor(cli): extract account commands; index.ts is wiring only
 
-Closes #49.
+
 
 index.ts goes from 500 lines holding 26 command actions to ~120 lines of
 commander wiring. Every action is now a plain function with an injected io,
