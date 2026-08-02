@@ -81,7 +81,8 @@ describe("context_id", () => {
 
   it("accepts a minted id", () => {
     expect(CONTEXT_ID_RE.test(good)).toBe(true);
-    expect(CONTEXT_ID_RE.test("ctx_aB3-_xxxxxxxxxxxxxxxx")).toBe(true);
+    // Exercises the full base64url alphabet: upper, lower, digit, - and _.
+    expect(CONTEXT_ID_RE.test("ctx_aB3-_xxxxxxxxxxxxxxxxx")).toBe(true);
   });
 
   it("rejects wrong prefix, wrong length, and non-base64url characters", () => {
