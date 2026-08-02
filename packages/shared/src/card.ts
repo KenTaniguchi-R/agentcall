@@ -12,6 +12,11 @@ export const CardTask = z.object({
   name: z.string().min(1).max(100),
   description: z.string().min(1).max(1000),
   examples: z.array(z.string().max(500)).max(10).default([]),
+  // Bounded per-string like every neighbouring field. Unbounded keyword
+  // strings amplify: 20 per task x 50 tasks x 200 roster members, re-sent on
+  // every bundle refresh. These are the highest-weighted field in
+  // `agentcall search`, so they are the callee's precision lever.
+  keywords: z.array(z.string().min(1).max(40)).max(20).default([]),
 });
 
 // What a callee pushes to the relay: full task list + visibility policy.

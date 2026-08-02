@@ -43,6 +43,10 @@ export const SkillFrontmatter = z.object({
   name: z.string().min(1).max(100).optional(),
   description: z.string().min(1).max(1000),
   examples: z.array(z.string().max(500)).max(10).default([]),
+  // Mirrors CardTask.keywords in packages/shared exactly. The two must not
+  // drift: this is the authoring side of the field the search ranker weights
+  // highest.
+  keywords: z.array(z.string().min(1).max(40)).max(20).default([]),
   tools: z.array(z.enum(CAPS)).default(["read"]),
   timeout_s: z.number().int().positive().max(300).optional(),
 });
@@ -53,6 +57,7 @@ export interface Task {
   name: string;
   description: string;
   examples: string[];
+  keywords: string[];
   envelope: Envelope;
   timeout_s?: number;
   skill: string; // SKILL.md body (after the frontmatter), embedded into the spawn prompt
@@ -63,6 +68,7 @@ export const ASK_TASK: Task = {
   name: "Ask a question",
   description: "Answer questions using the files in the public directory.",
   examples: [],
+  keywords: [],
   envelope: { caps: ["read"] },
   skill: "",
 };
@@ -109,6 +115,7 @@ export function loadTasks(p: Paths, warn: (msg: string) => void = console.error)
       name: fm.name ?? id,
       description: fm.description,
       examples: fm.examples,
+      keywords: fm.keywords,
       envelope: { caps: fm.tools },
       timeout_s: fm.timeout_s,
       skill: body,
@@ -128,6 +135,9 @@ description: TODO — one line callers will see on your card
 # timeout_s: 300
 # examples:
 #   - An example message a caller might send
+# keywords:              # search terms; weighted highest by \`agentcall search\`
+#   - auth
+#   - migration
 ---
 # Instructions for this task
 

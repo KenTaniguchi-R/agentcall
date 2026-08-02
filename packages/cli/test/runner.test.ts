@@ -25,7 +25,7 @@ describe("buildPrompt", () => {
   it("embeds the task name, id, and SKILL.md content when a non-ask task is given", () => {
     const task: Task = {
       id: "schedule-meeting", name: "Schedule a meeting", description: "Book a time.",
-      examples: [], envelope: { caps: ["read"] },
+      examples: [], keywords: [], envelope: { caps: ["read"] },
       skill: "# Steps\nCheck the calendar first.",
     };
     const out = buildPrompt("ken", "shusaku", "next tue?", task);

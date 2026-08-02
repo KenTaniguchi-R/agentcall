@@ -28,8 +28,8 @@ function assertOnlyAllowedKeys(obj: unknown, definitionName: string): void {
 }
 
 const TASKS = [
-  { id: "ask", name: "Ask", description: "Answer a question.", examples: ["what owns billing?"] },
-  { id: "triage", name: "Triage", description: "Triage an incident.", examples: [] },
+  { id: "ask", name: "Ask", description: "Answer a question.", examples: ["what owns billing?"], keywords: [] },
+  { id: "triage", name: "Triage", description: "Triage an incident.", examples: [], keywords: [] },
 ];
 
 const card = () =>

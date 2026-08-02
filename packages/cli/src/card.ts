@@ -12,7 +12,7 @@ import type { Task } from "./tasks.js";
 const stripPlus = (id: string) => id.replace(/^\+/, "");
 
 // The upload contains only advertisement fields (id/name/description/
-// examples) — never envelopes or SKILL.md content. Envelopes are
+// examples/keywords) — never envelopes or SKILL.md content. Envelopes are
 // enforcement detail that stays on the callee's machine; the card and the
 // enforcement both derive from the same SKILL.md frontmatter, so they cannot
 // disagree.
@@ -41,7 +41,7 @@ export function buildCardUpload(cfg: Config, policy: Policy, tasks: Task[]): Car
     agent_kind: cfg.agent_kind,
     tasks: tasks
       .filter((t) => referenced.has(t.id))
-      .map(({ id, name, description, examples }) => ({ id, name, description, examples })),
+      .map(({ id, name, description, examples, keywords }) => ({ id, name, description, examples, keywords })),
     default_offer: defaultOffer,
     grants,
   };
