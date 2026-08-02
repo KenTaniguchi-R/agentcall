@@ -5,6 +5,7 @@ import { mountRoster } from "./roster.js";
 import { mountRecovery } from "./recovery.js";
 import { generateToken, generateRecoveryCode, normalizeRecoveryCode, sha256Hex, verifyHandleToken } from "./auth.js";
 import { INSTALL_SH } from "./install-sh.js";
+import { RELAY_HOST } from "./host.js";
 
 export { HandleDO } from "./do.js";
 
@@ -25,12 +26,6 @@ export type Env = {
   // from REGISTER_RL: this endpoint checks a credential.
   RECOVER_RL: RateLimit;
 };
-// Not exported: workerd treats every named export of the entry module as a
-// potential WorkerEntrypoint and rejects non-handler values outright
-// ("Incorrect type for map entry 'RELAY_HOST'"), killing the worker at
-// startup under current wrangler/workerd. Nothing outside this file uses it.
-const RELAY_HOST = "agentcall.benree.tech";
-
 const app = new Hono<{ Bindings: Env }>();
 mountA2A(app);
 mountRoster(app);
