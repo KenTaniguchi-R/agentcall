@@ -1,9 +1,10 @@
 import { describe, expect, it } from "vitest";
-import { CardTask } from "../src/card.js";
+import { CardTask, MAX_TASK_KEYWORDS, MAX_KEYWORD_LENGTH } from "../src/card.js";
 import {
   BundleEntry, MAX_BUNDLE_BYTES, MAX_BUNDLE_TASKS_PER_CARD, MAX_ROSTER_MEMBERS,
   ROSTER_ID_RE, RosterBundle,
 } from "../src/roster.js";
+import { MAX_TASK_ID_LENGTH } from "../src/protocol.js";
 
 const ENTRY = {
   handle: "tanaka", agent_kind: "claude", updated_at: 1, truncated: false,
@@ -55,7 +56,7 @@ describe("the bounds are arithmetic, not hope", () => {
     const shape = CardTask.shape;
     const maxName = shape.name.maxLength ?? 0;
     const maxDescription = shape.description.maxLength ?? 0;
-    const worstTask = 64 + maxName + maxDescription + 20 * 40; // id + name + description + keywords
+    const worstTask = MAX_TASK_ID_LENGTH + maxName + maxDescription + MAX_TASK_KEYWORDS * MAX_KEYWORD_LENGTH; // id + name + description + keywords
     const worst = MAX_ROSTER_MEMBERS * MAX_BUNDLE_TASKS_PER_CARD * worstTask;
     expect(worst).toBeLessThanOrEqual(MAX_BUNDLE_BYTES);
   });

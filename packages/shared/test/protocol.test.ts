@@ -4,6 +4,7 @@ import {
   HANDLE_RE, RESERVED_HANDLES, MAX_MESSAGE_BYTES, MAX_SESSION_ID_LENGTH, parseAddress, safeParseFrame,
   RegisterRequest, CallReply, IncomingCall, CallError, MAX_DETAIL_LENGTH, sanitizeDetail,
   CallAccepted, CallStarted, CancelCall, CallCancelled, CallNotCancelled, RelayToListenerFrame,
+  TASK_ID_RE, MAX_TASK_ID_LENGTH,
 } from "../src/index.js";
 
 describe("handle rules", () => {
@@ -16,6 +17,15 @@ describe("handle rules", () => {
   it("reserves system names", () => {
     expect(RESERVED_HANDLES).toContain("admin");
     expect(RESERVED_HANDLES).toContain("www");
+  });
+});
+
+describe("task id bounds", () => {
+  it("MAX_TASK_ID_LENGTH matches TASK_ID_RE", () => {
+    // A MAX_TASK_ID_LENGTH-character id (all a's) must match.
+    expect(TASK_ID_RE.test("a".repeat(MAX_TASK_ID_LENGTH))).toBe(true);
+    // One character longer must not match.
+    expect(TASK_ID_RE.test("a".repeat(MAX_TASK_ID_LENGTH + 1))).toBe(false);
   });
 });
 

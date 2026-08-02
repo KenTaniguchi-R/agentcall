@@ -2,6 +2,8 @@ import { z } from "zod";
 import { HANDLE_RE, TASK_ID_RE } from "./protocol.js";
 
 export const MAX_CARD_TASKS = 50;
+export const MAX_TASK_KEYWORDS = 20;
+export const MAX_KEYWORD_LENGTH = 40;
 
 // A `tier` field ("T1" | "T2") used to ride along here, reserving T2 for
 // approval-gated tasks. No code ever branched on it and the approval gate is
@@ -16,7 +18,7 @@ export const CardTask = z.object({
   // strings amplify: 20 per task x 50 tasks x 200 roster members, re-sent on
   // every bundle refresh. These are the highest-weighted field in
   // `agentcall search`, so they are the callee's precision lever.
-  keywords: z.array(z.string().min(1).max(40)).max(20).default([]),
+  keywords: z.array(z.string().min(1).max(MAX_KEYWORD_LENGTH)).max(MAX_TASK_KEYWORDS).default([]),
 });
 
 // What a callee pushes to the relay: full task list + visibility policy.

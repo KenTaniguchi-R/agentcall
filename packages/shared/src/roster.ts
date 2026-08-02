@@ -1,5 +1,6 @@
 import { z } from "zod";
-import { HANDLE_RE, TASK_ID_RE } from "./protocol.js";
+import { HANDLE_RE, TASK_ID_RE, MAX_TASK_ID_LENGTH } from "./protocol.js";
+import { MAX_TASK_KEYWORDS, MAX_KEYWORD_LENGTH } from "./card.js";
 
 // A roster id is relay-generated and opaque. Deliberately NOT a memorable
 // name: on a shared multi-tenant relay a global name like "acme" would be
@@ -36,7 +37,7 @@ export const BundleTask = z.object({
   id: z.string().regex(TASK_ID_RE),
   name: z.string().max(100),
   description: z.string().max(1000),
-  keywords: z.array(z.string().max(40)).max(20).default([]),
+  keywords: z.array(z.string().max(MAX_KEYWORD_LENGTH)).max(MAX_TASK_KEYWORDS).default([]),
 });
 
 export const BundleEntry = z.object({
