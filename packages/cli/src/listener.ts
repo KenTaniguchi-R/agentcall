@@ -172,9 +172,19 @@ export function startListener(deps: ListenerDeps): { stop(): void } {
           // corrupt config.json, a workdir deleted out from under a running
           // listener, etc. See the comment above connect(): this must not
           // propagate, or one line's bad config takes down every other
-          // line's socket in this same process. Audit it and keep retrying
-          // with the normal backoff, the same as a network-level ws error.
-          audit({ type: "reconnect_error", error: String(e).slice(0, 2000) });
+          // line's socket in this same process — an unhandled throw here is
+          // a multi-line outage, not a single-line one. console.error, not a
+          // new log file: the launchd plist already routes stderr to
+          // listenerLog, so this lands in the right place with no plumbing,
+          // and it's visible in a foreground `agentcall listen` too. Named by
+          // line, since with N lines in one process an error that doesn't
+          // say which one is nearly useless. Keep retrying rather than
+          // giving up: the owner may be mid-edit, or `rotate` may be
+          // rewriting the file underneath this read, and a line that
+          // permanently drops out on one bad read would need a full process
+          // restart to come back — worse than a noisy retry loop. `doctor`
+          // and `line list` are what surface a line stuck offline.
+          console.error(`agentcall: line "${deps.paths.name}" reconnect failed, retrying: ${String(e)}`);
           scheduleReconnect();
         }
       }, backoff(attempt++)).unref?.();

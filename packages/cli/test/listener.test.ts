@@ -3,7 +3,7 @@ import { mkdirSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { WebSocketServer, type WebSocket as WsSocket } from "ws";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { startListener } from "../src/listener.js";
 import { getLinePaths, getMachinePaths, type LinePaths, type MachinePaths } from "../src/paths.js";
 import { AgentRunError } from "../src/runner.js";
@@ -412,6 +412,14 @@ function fakeSocketFactory(onConnect: (url: string, opts: { headers: Record<stri
   return { factory, last: () => sockets.at(-1)! };
 }
 
+// One tick of the event loop — enough for a single zero-delay `setTimeout`
+// (scheduleReconnect's deferred `connect()`, with `backoffMs: () => 0`) to
+// run. A 0ms timer still doesn't fire until the current synchronous block
+// finishes, so tests that force a reconnect via `.emit("close")` need this
+// before the effects of the next `connect()` (a new socket, a fresh
+// Authorization header, a caught error) are observable.
+const tick = () => new Promise<void>((r) => setTimeout(r, 0));
+
 describe("startListener config reload", () => {
   let linePaths: LinePaths;
   beforeEach(() => { linePaths = seededPaths(); });
@@ -436,16 +444,88 @@ describe("startListener config reload", () => {
       backoffMs: () => 0,
     });
     sockets.last().emit("close");          // force a reconnect
-    // scheduleReconnect defers the next connect() through a real
-    // `setTimeout`, even with backoffMs returning 0 — a 0ms timer still
-    // doesn't fire until the current synchronous block finishes, so a tick
-    // has to be awaited before the next `sockets.last()` reflects it.
-    await new Promise((r) => setTimeout(r, 0));
+    await tick();
     token = "new";
     sockets.last().emit("close");
-    await new Promise((r) => setTimeout(r, 0));
+    await tick();
     l.stop();
     expect(seen[0]).toBe("Bearer old");
     expect(seen.at(-1)).toBe("Bearer new");
+  });
+});
+
+describe("startListener reconnect isolation", () => {
+  // Proves the isolation claim behind putting N lines in one process: a line
+  // whose config goes bad AFTER startup (not the "throws at start" case
+  // above) must not crash any other line's socket in the same process, and
+  // must keep retrying rather than permanently dropping out. Two real
+  // `startListener` instances stand in for "two lines up" — production has
+  // exactly this shape via `startAllListeners`, one `startListener` call per
+  // line, all in the same process.
+  it("a reconnect that throws doesn't crash other lines, doesn't touch their sockets, and keeps retrying", async () => {
+    const errors: string[] = [];
+    const errorSpy = vi.spyOn(console, "error").mockImplementation((...args: unknown[]) => {
+      errors.push(args.map(String).join(" "));
+    });
+    try {
+      // The healthy line: normal config throughout, never reconnects on its
+      // own during this test.
+      const healthyPaths = getLinePaths(freshMachine(), "healthy");
+      const healthySockets = fakeSocketFactory(() => {});
+      const healthy = startListener({
+        relay: "https://r.example", paths: healthyPaths,
+        loadConfig: () => ({ handle: "h", token: "t", relay: "https://r.example", agent_kind: "claude" }),
+        socketFactory: healthySockets.factory,
+        backoffMs: () => 0,
+      });
+      const healthySocketBeforeBreak = healthySockets.last();
+
+      // The broken line: its SECOND loadConfig() call throws — simulating a
+      // config.json that went bad, or a workdir removed, sometime after this
+      // line's listener already started successfully once.
+      let loadConfigCalls = 0;
+      const brokenPaths = getLinePaths(freshMachine(), "broken");
+      const brokenSockets = fakeSocketFactory(() => {});
+      const broken = startListener({
+        relay: "https://r.example", paths: brokenPaths,
+        loadConfig: () => {
+          loadConfigCalls++;
+          if (loadConfigCalls === 2) throw new Error("config.json is corrupt");
+          return { handle: "b", token: "t", relay: "https://r.example", agent_kind: "claude" };
+        },
+        socketFactory: brokenSockets.factory,
+        backoffMs: () => 0,
+      });
+      const brokenSocketBeforeBreak = brokenSockets.last();
+
+      // Force the broken line's reconnect — this is the attempt whose
+      // loadConfig() throws (call #2).
+      brokenSockets.last().emit("close");
+      await tick();
+
+      // (a) nothing escaped the process — reaching this line at all is part
+      // of the proof, plus the throw was actually caught and reported.
+      expect(errors.some((e) => e.includes('"broken"') && e.includes("config.json is corrupt"))).toBe(true);
+      // No new socket was created for the broken line on this attempt:
+      // loadConfig() threw before the socket factory was ever called.
+      expect(brokenSockets.last()).toBe(brokenSocketBeforeBreak);
+
+      // (b) the healthy line's socket is untouched — same object, not
+      // silently torn down or replaced by a bug that reconnects every line
+      // instead of just the broken one.
+      expect(healthySockets.last()).toBe(healthySocketBeforeBreak);
+
+      // (c) the broken line keeps retrying rather than giving up: its
+      // scheduled reconnect fires again on its own (no external nudge needed
+      // here — the catch block calls scheduleReconnect()), and this time
+      // loadConfig() succeeds (call #3), producing a genuinely new socket.
+      await tick();
+      expect(brokenSockets.last()).not.toBe(brokenSocketBeforeBreak);
+
+      healthy.stop();
+      broken.stop();
+    } finally {
+      errorSpy.mockRestore();
+    }
   });
 });
