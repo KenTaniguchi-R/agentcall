@@ -11,7 +11,8 @@
 ## Global Constraints
 
 - **This is Phase 1 of `docs/superpowers/specs/2026-08-01-roster-lifecycle-design.md`.** Read that spec's "Phase 1 — Prerequisite refactor" section before starting.
-- **No behavior changes.** Every user-visible string, exit code, and side effect stays byte-identical. If a change seems like an improvement, it belongs in a different commit.
+- **No behavior changes,** with exactly one carved-out exception below. Every user-visible string, exit code, and side effect stays byte-identical. If a change seems like an improvement, it belongs in a different commit.
+- **The one accepted exception: error-message formatting converges on the bare message.** Today about half the 26 commands catch their own errors and print `e.message`; the rest have no `catch` and fall through to `runCli`'s outer handler at `index.ts:492`, which prints `String(e)` — rendering an `Error` as `"Error: <message>"`. Routing every command through `run()` makes all of them print the bare `<message>`, so the previously-unwrapped commands lose an `"Error: "` prefix. **This is accepted as intentional cleanup** (decided 2026-08-01): the prefix is noise on a message already written for a human, and the bare form is already the majority behavior, so this makes the CLI consistent rather than inconsistent. Do not special-case any command to preserve the prefix, and do not change `run()` to print `String(e)` — that would break the larger group instead. Call it out in the PR description and CHANGELOG.
 - **Protocol types live in `packages/shared`.** This plan adds none, but do not introduce local frame shapes.
 - **Stage files explicitly** — `git add <file> <file>`, never `git add -A` or `git add .`.
 - **Before calling any task done:** `pnpm -r build && pnpm -r typecheck && pnpm -r test` must pass from the repo root, **in that order**. `packages/cli` typechecks against `packages/shared`'s built `dist`, so building last checks the previous run's types.
