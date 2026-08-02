@@ -1,6 +1,6 @@
 import { execFileSync } from "node:child_process";
 import { createServer, type Server } from "node:http";
-import { mkdtempSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
@@ -152,6 +152,38 @@ describe.sequential("CLI command actions", () => {
     const out = await runCommand(home(), ["roster", "join", A]);
     expect(out.code).toBe(1);
     expect(out.stderr).toMatch(/required option.*--key/i);
+  });
+
+  it("exposes policy assertion failures through agentcall lint", async () => {
+    const testHome = home();
+    const paths = getPaths(testHome);
+    saveConfig(paths, { org: "acme", handle: "ken", token: "tok", relay: "https://relay.test", agent_kind: "claude" });
+    mkdirSync(join(testHome, ".agentcall"), { recursive: true });
+    writeFileSync(paths.policyFile, JSON.stringify({
+      default_offer: ["ask"], tests: [{ caller: "mia", deny: ["ask"] }],
+    }));
+
+    const out = await runCommand(testHome, ["lint"]);
+
+    expect(out.code).toBe(1);
+    expect(out.stdout).toMatch(/assertion 1.*ask/i);
+  });
+
+  it("rejects a CLI policy edit that would break an assertion and preserves the file", async () => {
+    const testHome = home();
+    const paths = getPaths(testHome);
+    saveConfig(paths, { org: "acme", handle: "ken", token: "tok", relay: "https://relay.test", agent_kind: "claude" });
+    mkdirSync(join(testHome, ".agentcall"), { recursive: true });
+    const original = {
+      default_offer: ["ask"], tests: [{ caller: "mia", accept: ["ask"] }],
+    };
+    writeFileSync(paths.policyFile, JSON.stringify(original));
+
+    const out = await runCommand(testHome, ["unoffer", "ask"]);
+
+    expect(out.code).toBe(1);
+    expect(out.stderr).toMatch(/assertion 1.*ask/i);
+    expect(JSON.parse(readFileSync(paths.policyFile, "utf8"))).toEqual(original);
   });
 
   it("prints one-time roster credentials before a colliding local save can fail", async () => {

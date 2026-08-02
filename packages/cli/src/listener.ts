@@ -34,6 +34,10 @@ export function startListener(deps: ListenerDeps): { stop(): void } {
   // `agentcall listen` with a clear message, not fail every inbound call
   // individually. Changing it therefore needs a listener restart.
   const workdir = resolveWorkdir(deps.config, deps.paths);
+  // Validate before opening the socket. Hot edits are still loaded per call
+  // below, but a listener must never advertise availability when its initial
+  // effective policy is malformed or contradicts an assertion.
+  loadPolicy(deps.paths);
   const queue = new SerialQueue(deps.maxPending ?? 0);
   const backoff = deps.backoffMs ?? ((n) => Math.min(1000 * 2 ** n, 60_000) + Math.random() * 500);
   const codexCanThread = deps.config.agent_kind === "codex"

@@ -37,6 +37,14 @@ export function execVerb(
     groups: Object.fromEntries(
       Object.entries(policy.groups).map(([k, v]) => [k, { roster_id: v.roster_id, offer: [...v.offer] }]),
     ),
+    ...(policy.tests === undefined ? {} : {
+      tests: policy.tests.map((test) => ({
+        caller: test.caller,
+        groups: [...test.groups],
+        accept: [...test.accept],
+        deny: [...test.deny],
+      })),
+    }),
   });
   // Enforcement (resolveTask) only ever offers ids that exist on disk; the
   // printed menu must match, or an owner reading `allow`'s output would

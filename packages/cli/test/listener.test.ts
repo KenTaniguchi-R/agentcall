@@ -106,6 +106,20 @@ describe("startListener workdir", () => {
   });
 });
 
+describe("startListener policy assertions", () => {
+  it("refuses to start before opening a socket when an assertion is broken", () => {
+    const paths = seededPaths();
+    mkdirSync(join(paths.home, ".agentcall"), { recursive: true });
+    writeFileSync(paths.policyFile, JSON.stringify({
+      default_offer: ["ask"], tests: [{ caller: "mia", deny: ["ask"] }],
+    }));
+    expect(() => startListener({
+      relay: "http://127.0.0.1:1", paths, config: cfg,
+      run: async () => ({ text: "unused" }),
+    })).toThrow(/assertion 1.*ask/i);
+  });
+});
+
 describe("startListener", () => {
   it("answers an incoming call: accepted -> started -> result, and audits", async () => {
     let paths!: ReturnType<typeof getPaths>;
@@ -422,12 +436,14 @@ describe("startListener task resolution", () => {
       void fakeRelay((ws) => resolveWs(ws)).then((url) => {
         const deps = baseDeps(url);
         paths = deps.paths;
-        mkdirSync(paths.dir, { recursive: true });
-        writeFileSync(paths.policyFile, "{corrupt");
         stopper = startListener({ ...deps, run: async () => { spawned = true; return { text: "x" }; } });
       });
     });
     const ws = await relayReady;
+    // Startup validated the original policy; this simulates a broken hot edit
+    // so the per-call reload must still fail closed.
+    mkdirSync(paths.dir, { recursive: true });
+    writeFileSync(paths.policyFile, "{corrupt");
     const expectFrames = frames(ws, 1);
     ws.send(JSON.stringify({ type: "incoming_call", call_id: "c5", from: "a", message: "hi" }));
     const [failed] = await expectFrames;

@@ -6,6 +6,15 @@ which are released together.
 
 ## Unreleased
 
+### Added — executable policy assertions
+
+- User and administrator-managed policy files can assert accepted and denied
+  tasks for direct callers and relay-attested roster groups. Assertions run on
+  the composed effective policy, including managed ceilings and blocks.
+- `agentcall lint` exits nonzero on a broken assertion. CLI policy edits reject
+  a breaking change before saving it, and the listener validates at startup
+  and before every call so a hand edit fails closed.
+
 ### Changed — roster join credentials are independently manageable
 
 - The single roster-wide join secret is replaced by keyed credentials with a

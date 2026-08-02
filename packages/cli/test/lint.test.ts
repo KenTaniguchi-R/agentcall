@@ -47,11 +47,32 @@ describe("buildCardReport", () => {
     expect(r.problems.join("\n")).toContain('"also-gone"');
   });
 
+  it("flags group grants to missing tasks even when an assertion accepts them", () => {
+    const h = home();
+    const p = getPaths(h);
+    writeFileSync(p.policyFile, JSON.stringify({
+      default_offer: ["ask"],
+      groups: { eng: { roster_id: "e".repeat(22), offer: ["group-gone"] } },
+      tests: [{ caller: "mia", groups: ["eng"], accept: ["group-gone"] }],
+    }));
+    const r = buildCardReport(cfg, p);
+    expect(r.problems.join("\n")).toContain('grant for group eng references "group-gone"');
+  });
+
   it("reports a malformed policy file as a problem instead of throwing", () => {
     const p = getPaths(home());
     writeFileSync(p.policyFile, "{corrupt");
     const r = buildCardReport(cfg, p);
     expect(r.problems.join("\n")).toContain("policy.json");
+  });
+
+  it("reports a broken policy assertion as a problem", () => {
+    const p = getPaths(home());
+    writeFileSync(p.policyFile, JSON.stringify({
+      default_offer: ["ask"], tests: [{ caller: "mia", deny: ["ask"] }],
+    }));
+    const r = buildCardReport(cfg, p);
+    expect(r.problems.join("\n")).toMatch(/assertion 1.*ask/i);
   });
 
   it("is quiet after a push and stale after a change", async () => {
