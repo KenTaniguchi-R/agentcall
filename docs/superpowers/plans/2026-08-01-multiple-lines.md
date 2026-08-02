@@ -469,7 +469,7 @@ export function resolvePrimary(m: MachinePaths, lineNames: string[]): string {
 - [ ] **Step 4: Run test to verify it passes**
 
 Run: `cd packages/cli && pnpm vitest run test/person.test.ts`
-Expected: PASS (7 tests).
+Expected: PASS (9 tests).
 
 - [ ] **Step 5: Commit**
 
