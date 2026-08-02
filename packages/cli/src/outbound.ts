@@ -38,6 +38,14 @@ export function pickOutboundLine(
     return { machine: m, ...chosen };
   }
 
+  // No lines at all is a different failure from "lines, but none on this
+  // relay", and it needs a different answer: telling someone with no install
+  // to `line add --relay` presumes an install they do not have. It is also the
+  // string the packed-CLI consumer job pins as what an unconfigured install
+  // must say (see .github/workflows/ci.yml) — keep the phrase if you reword.
+  if (lines.length === 0) {
+    throw new Error("No agentcall config found. Run `agentcall setup` first.");
+  }
   const candidates = lines.filter((l) => host(l.config.relay) === want);
   if (candidates.length === 0) {
     const relays = [...new Set(lines.map((l) => host(l.config.relay)))];

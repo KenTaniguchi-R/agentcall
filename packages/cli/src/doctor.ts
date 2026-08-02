@@ -83,7 +83,10 @@ export async function runDoctor(deps: DoctorDeps): Promise<number> {
 
   const lineList = listLines(deps.machine);
   if (lineList.length === 0) {
-    report({ name: "config", ok: false, detail: "this machine has no lines configured", hint: "run `agentcall setup` first" });
+    // "No agentcall config found" is pinned by the packed-CLI consumer job in
+    // .github/workflows/ci.yml, which asserts what an unconfigured install
+    // tells a first-time user. Keep the phrase if you reword this.
+    report({ name: "config", ok: false, detail: "No agentcall config found — this machine has no lines", hint: "run `agentcall setup` first" });
     return checks.every((c) => c.ok) ? 0 : 1;
   }
 
