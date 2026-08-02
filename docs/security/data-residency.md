@@ -68,7 +68,7 @@ object is restricted.
 |---|---|---|
 | WebSocket state and serialized attachments | Live listener/caller sockets; caller handle, relay-attested roster IDs, call ID, and test timeout. Personal/relationship metadata. Messages and replies pass over these sockets in plaintext but are not written to application storage. | Socket lifetime; attachments support hibernation and disappear with the socket. |
 | `call:*` | Call ID, caller handle, deadline, and call state. Personal activity metadata; no prompt or reply body. | Deleted on result, failure, confirmed cancellation, or caller close. Otherwise an alarm is scheduled for the configured six-minute deadline; alarm delivery may be delayed or retried, so six minutes is the logical timeout rather than a strict physical-retention maximum. |
-| `rl:*` | Per-caller timestamps inside the callee's object. Personal activity metadata. | Timestamps older than one hour are logically ignored, but the physical array is only rewritten when that caller next incurs a charged call. It can therefore remain indefinitely for an inactive caller. |
+| `rl:*` | Per-caller timestamps inside the callee's object. Personal activity metadata. | One-hour logical window. A charged call starts an expired-key sweep at most once per minute; each event processes at most four 128-key pages. A short-lived cursor (temporarily repeating one `rl:<handle>` key) and alarm continue larger backlogs in bounded events until complete, then delete the cursor. An idle object with no pending sweep can retain stale keys until its next charged call, but cannot accumulate while idle. A non-identifying timestamp throttles new sweeps. |
 
 ### `RateLimiterDO`
 

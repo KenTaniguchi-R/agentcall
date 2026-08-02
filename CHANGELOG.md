@@ -6,6 +6,13 @@ which are released together.
 
 ## Unreleased
 
+### Bounded call rate-limit retention
+
+- Handle Durable Objects now sweep expired per-caller rate-limit keys on the
+  next charged call, with at most four 128-key pages of work per event. Larger
+  backlogs continue by alarm until drained; dormant objects with no pending
+  sweep do no work and cannot keep accumulating historical callers.
+
 ### Consistent roster group grants
 
 - Roster bundle discovery now applies the same deterministic first-50 shared
