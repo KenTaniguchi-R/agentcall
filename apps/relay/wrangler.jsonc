@@ -16,10 +16,10 @@
     { "name": "HANDLE_DO", "class_name": "HandleDO" },
     { "name": "RATE_LIMITER_DO", "class_name": "RateLimiterDO" }
   ] },
-  "migrations": [
-    { "tag": "v1", "new_sqlite_classes": ["HandleDO"] },
-    { "tag": "v2", "new_sqlite_classes": ["RateLimiterDO"] }
-  ],
+  "exports": {
+    "HandleDO": { "type": "durable-object", "storage": "sqlite" },
+    "RateLimiterDO": { "type": "durable-object", "storage": "sqlite" }
+  },
   "routes": [{ "pattern": "agentcall.benree.tech", "custom_domain": true }],
   // Burst/abuse throttling only — the binding's `period` must be 10 or 60
   // seconds (no hourly window like RATE_LIMIT_PER_HOUR on the DO side), so

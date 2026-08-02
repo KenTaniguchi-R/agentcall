@@ -6,6 +6,13 @@ which are released together.
 
 ## Unreleased
 
+### Changed — Durable Object lifecycle is declarative
+
+- Relay deployments now declare `HandleDO` and `RateLimiterDO` as SQLite-backed
+  Durable Object exports instead of maintaining an ordered migration-tag ledger.
+  This preserves the existing namespaces while making future class renames,
+  transfers, and deletions explicit in Wrangler's deployment reconciliation.
+
 ### Added — multi-turn calls: `agentcall call --continue`
 
 - **`agentcall call <address> "..." --continue`** follows up on your last
