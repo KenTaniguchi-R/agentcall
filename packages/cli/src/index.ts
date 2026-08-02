@@ -15,7 +15,7 @@ import { buildCardReport } from "./lint.js";
 import { runDoctor } from "./doctor.js";
 import { loadContacts, addContact, removeContact, resolveAddress } from "./contacts.js";
 import { DEFAULT_SEARCH_LIMIT } from "./search.js";
-import { realDeps, rosterCreate, rosterForget, rosterJoin, rosterList } from "./commands/roster.js";
+import { ExitOnly, realDeps, rosterCreate, rosterForget, rosterJoin, rosterList } from "./commands/roster.js";
 import { search } from "./commands/search.js";
 
 export function createProgram(): Command {
@@ -31,7 +31,9 @@ function run<A extends unknown[]>(fn: (...a: A) => Promise<void> | void) {
     try {
       await fn(...a);
     } catch (e) {
-      console.error(e instanceof Error ? e.message : String(e));
+      // ExitOnly: the failure was already reported (e.g. per-roster errors
+      // printed in a loop); a summary message here would be redundant.
+      if (!(e instanceof ExitOnly)) console.error(e instanceof Error ? e.message : String(e));
       process.exitCode = 1;
     }
   };

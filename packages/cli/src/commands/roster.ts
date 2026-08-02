@@ -21,6 +21,12 @@ export function realDeps(): Deps {
   };
 }
 
+// Thrown by a command that must exit non-zero WITHOUT printing anything —
+// the failure has already been reported to the user by other means. search
+// uses it for the every-roster-failed case, which prints per-roster errors
+// in its loop and then needs exit 1 without a redundant summary line.
+export class ExitOnly extends Error {}
+
 export async function rosterCreate(d: Deps, o: { as: string }): Promise<void> {
   const cfg = loadConfig(d.paths);
   const { roster_id, secret } = await createRoster(relayUrl(cfg), { handle: cfg.handle, token: cfg.token });

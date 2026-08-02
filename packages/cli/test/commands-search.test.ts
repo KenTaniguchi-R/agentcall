@@ -2,7 +2,7 @@ import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { beforeEach, afterEach, describe, expect, it, vi } from "vitest";
-import type { Deps, Io } from "../src/commands/roster.js";
+import { ExitOnly, type Deps, type Io } from "../src/commands/roster.js";
 import { saveConfig } from "../src/config.js";
 import { saveMembership } from "../src/rosters.js";
 import { getPaths } from "../src/paths.js";
@@ -69,12 +69,16 @@ describe("search", () => {
     expect(json.results).toMatchObject([{ roster: "working", handle: "sota", task: "ask" }]);
   });
 
-  it("throws when every joined roster fails, rather than reporting no matches", async () => {
+  it("throws ExitOnly when every joined roster fails, rather than reporting no matches", async () => {
     saveMembership(deps.paths, { name: "one", relay: "https://r.test", roster_id: "a".repeat(22) });
     saveMembership(deps.paths, { name: "two", relay: "https://r.test", roster_id: "b".repeat(22) });
     vi.mocked(refreshRoster).mockRejectedValue(new Error("down"));
 
-    await expect(search(deps, ["typescript"], { limit: 5, json: true })).rejects.toThrow();
+    // ExitOnly specifically, not a plain Error: run() recognizes it and
+    // prints nothing extra, because the per-roster errors below already
+    // told the user what happened — asserting a message here would verify
+    // output that no longer exists.
+    await expect(search(deps, ["typescript"], { limit: 5, json: true })).rejects.toBeInstanceOf(ExitOnly);
 
     // The empty-result JSON still printed — this is a caller-facing signal
     // distinct from the thrown failure, per allRostersFailed's contract.

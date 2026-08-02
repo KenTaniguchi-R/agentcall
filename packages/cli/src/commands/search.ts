@@ -2,7 +2,7 @@ import { loadConfig, relayUrl } from "../config.js";
 import { loadMemberships } from "../rosters.js";
 import { allRostersFailed, rank, renderResults, sanitize, toEntries, type RosterStatus, type SearchEntry } from "../search.js";
 import { refreshRoster } from "../searchRefresh.js";
-import type { Deps } from "./roster.js";
+import { ExitOnly, type Deps } from "./roster.js";
 
 export async function search(
   d: Deps,
@@ -60,6 +60,8 @@ export async function search(
   }
 
   if (failed) {
-    throw new Error("Every joined roster failed to refresh — see the errors above.");
+    // ExitOnly: per-roster errors already printed above; a summary line
+    // here would be new, undeclared output that didn't exist pre-refactor.
+    throw new ExitOnly();
   }
 }
