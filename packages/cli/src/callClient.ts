@@ -1,5 +1,8 @@
 import WebSocket from "ws";
-import { RelayToCallerFrame, safeParseFrame, sanitizeDetail, type CallReplyType, type ErrorCodeType } from "@benree/agentcall-shared";
+import {
+  RelayToCallerFrame, safeParseFrame, sanitizeDetail,
+  type CallReplyType, type CallStatusType, type ErrorCodeType,
+} from "@benree/agentcall-shared";
 
 export class CallError extends Error {
   constructor(message: string, public code: ErrorCodeType | "connection_failed", public offered?: string[]) {
@@ -12,6 +15,7 @@ const HUMAN: Record<string, string> = {
   unknown_handle: "No agent is registered at that address.",
   busy: "That agent is busy (queue full). Try again in a few minutes.",
   timeout: "The call timed out.",
+  canceled: "The call was canceled.",
   rate_limited: "You are calling this agent too often. Try later.",
   unauthorized: "Your credentials were rejected. Re-run `agentcall setup`.",
   agent_error: "The remote agent hit an error while answering.",
@@ -25,12 +29,18 @@ const HUMAN: Record<string, string> = {
 
 export interface CallOpts {
   relay: string; org: string; from: string; token: string; to: string; message: string;
-  contextId?: string; onStatus?: (state: string) => void; timeoutMs?: number;
+  contextId?: string; onStatus?: (state: CallStatusType["state"]) => void; timeoutMs?: number;
   // Interval for the caller-side keepalive ping below; overridable for tests.
   pingIntervalMs?: number;
   // Task id from the callee's card to perform; omitted lets the callee's
   // policy pick a default (single offered task, or "ask").
   task?: string;
+}
+
+export function callStatusMessage(state: CallStatusType["state"]): string {
+  if (state === "ringing") return "ringing...";
+  if (state === "answered") return "answered...";
+  return "agent working...";
 }
 
 export function callAgent(opts: CallOpts): Promise<CallReplyType> {

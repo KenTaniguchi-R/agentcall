@@ -20,13 +20,65 @@ describe("call flow", () => {
     const incoming = await nextFrame(listener);
     expect(incoming).toMatchObject({ type: "incoming_call", from: "h-caller", message: "what is 2+2?" });
 
-    listener.send(JSON.stringify({ type: "call_answer", call_id: incoming.call_id }));
+    listener.send(JSON.stringify({ type: "call_accepted", call_id: incoming.call_id }));
     expect(await nextFrame(caller)).toMatchObject({ type: "call_status", state: "answered" });
+    listener.send(JSON.stringify({ type: "call_started", call_id: incoming.call_id }));
+    expect(await nextFrame(caller)).toMatchObject({ type: "call_status", state: "working" });
 
     const ctxId = "ctx_AAAAAAAAAAAAAAAAAAAAAA";
     listener.send(JSON.stringify({ type: "call_result", call_id: incoming.call_id, text: "4", context_id: ctxId }));
     expect(await nextFrame(caller)).toMatchObject({ type: "call_reply", text: "4", context_id: ctxId });
     expect((await closed(caller)).code).toBe(1000);
+  });
+
+  it("keeps accepting the legacy call_answer frame during listener upgrades", async () => {
+    const { callerToken, listener } = await setupPair("legacy-callee", "legacy-caller");
+    const caller = await openWs("/v1/ws?role=call&to=legacy-callee", wsAuth("legacy-caller", callerToken));
+    caller.send(JSON.stringify({ type: "call_request", to: "legacy-callee", message: "hello" }));
+    await nextFrame(caller); // ringing
+    const incoming = await nextFrame(listener);
+
+    listener.send(JSON.stringify({ type: "call_answer", call_id: incoming.call_id }));
+    expect(await nextFrame(caller)).toMatchObject({ type: "call_status", state: "working" });
+  });
+
+  it("does not regress or repeat caller status for out-of-order acknowledgements", async () => {
+    const { callerToken, listener } = await setupPair("order-callee", "order-caller");
+    const caller = await openWs("/v1/ws?role=call&to=order-callee", wsAuth("order-caller", callerToken));
+    caller.send(JSON.stringify({ type: "call_request", to: "order-callee", message: "hello" }));
+    await nextFrame(caller); // ringing
+    const incoming = await nextFrame(listener);
+
+    listener.send(JSON.stringify({ type: "call_started", call_id: incoming.call_id }));
+    expect(await nextFrame(caller)).toMatchObject({ type: "call_status", state: "working" });
+    listener.send(JSON.stringify({ type: "call_accepted", call_id: incoming.call_id }));
+    listener.send(JSON.stringify({ type: "call_started", call_id: incoming.call_id }));
+    listener.send(JSON.stringify({ type: "call_result", call_id: incoming.call_id, text: "done" }));
+    expect(await nextFrame(caller)).toMatchObject({ type: "call_reply", text: "done" });
+  });
+
+  it("terminates the caller with canceled after the listener confirms cancellation", async () => {
+    const { callerToken, listener } = await setupPair("cancel-callee", "cancel-caller");
+    const caller = await openWs("/v1/ws?role=call&to=cancel-callee", wsAuth("cancel-caller", callerToken));
+    caller.send(JSON.stringify({ type: "call_request", to: "cancel-callee", message: "stop me" }));
+    await nextFrame(caller); // ringing
+    const incoming = await nextFrame(listener);
+
+    listener.send(JSON.stringify({ type: "call_cancelled", call_id: incoming.call_id, phase: "running" }));
+    expect(await nextFrame(caller)).toMatchObject({ type: "call_error", code: "canceled" });
+    expect((await closed(caller)).code).toBe(1000);
+  });
+
+  it("keeps the call live when the listener cannot confirm cancellation", async () => {
+    const { callerToken, listener } = await setupPair("late-callee", "late-caller");
+    const caller = await openWs("/v1/ws?role=call&to=late-callee", wsAuth("late-caller", callerToken));
+    caller.send(JSON.stringify({ type: "call_request", to: "late-callee", message: "still running" }));
+    await nextFrame(caller); // ringing
+    const incoming = await nextFrame(listener);
+
+    listener.send(JSON.stringify({ type: "call_not_cancelled", call_id: incoming.call_id, reason: "too_late" }));
+    listener.send(JSON.stringify({ type: "call_result", call_id: incoming.call_id, text: "finished" }));
+    expect(await nextFrame(caller)).toMatchObject({ type: "call_reply", text: "finished" });
   });
 
   it("returns offline immediately when no listener", async () => {
