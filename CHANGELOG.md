@@ -12,6 +12,8 @@ which are released together.
 - Published releases now build and test both packages from the tagged `main`
   commit, publish through npm OIDC with keyless provenance, and attach the exact
   tarballs, SHA-256 checksums, and a CycloneDX SBOM to the GitHub release.
+- Clean tarball consumers now exercise `agentcall doctor` on Node 20, 22, and
+  24, enforcing the published CLI's declared runtime floor.
 
 ### Changed — roster mutations emit complete audit evidence
 

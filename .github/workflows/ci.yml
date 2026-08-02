@@ -78,6 +78,11 @@ jobs:
           agentcall_bin="$RUNNER_TEMP/agentcall-global/bin/agentcall"
           "$agentcall_bin" --version
           "$agentcall_bin" --help
+          if "$agentcall_bin" doctor >"$RUNNER_TEMP/doctor-output" 2>&1; then
+            echo "doctor unexpectedly reported a clean, unconfigured install as healthy"
+            exit 1
+          fi
+          grep -F "No agentcall config found" "$RUNNER_TEMP/doctor-output"
           if "$agentcall_bin" status nobody@example.invalid >"$RUNNER_TEMP/status-output" 2>&1; then
             echo "status unexpectedly succeeded without a configured identity"
             exit 1
