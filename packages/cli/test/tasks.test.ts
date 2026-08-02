@@ -110,6 +110,26 @@ describe("loadTasks", () => {
     writeSkill(home, "intro", "---\nname: Owner introduction\ndescription: d\n---\nbody\n");
     expect(loadTasks(getPaths(home), () => {}).find((t) => t.id === "intro")!.name).toBe("Owner introduction");
   });
+  it("loads an absolute existing workdir", () => {
+    const home = tempHome();
+    const project = join(home, "code", "payments");
+    mkdirSync(project, { recursive: true });
+    writeSkill(home, "payments", `---\ndescription: d\nworkdir: ${project}\n---\nbody\n`);
+    expect(loadTasks(getPaths(home), () => {}).find((t) => t.id === "payments")!.workdir).toBe(project);
+  });
+
+  it("skips task workdirs that are relative, missing, or not directories", () => {
+    const home = tempHome();
+    const file = join(home, "not-a-directory");
+    writeFileSync(file, "x");
+    writeSkill(home, "relative", "---\ndescription: d\nworkdir: code/api\n---\n");
+    writeSkill(home, "missing", "---\ndescription: d\nworkdir: /no/such/project\n---\n");
+    writeSkill(home, "file", `---\ndescription: d\nworkdir: ${file}\n---\n`);
+    const warnings: string[] = [];
+    const ids = loadTasks(getPaths(home), (warning) => warnings.push(warning)).map((t) => t.id);
+    expect(ids).toEqual(["ask"]);
+    expect(warnings).toHaveLength(3);
+  });
   it("skips missing SKILL.md, missing frontmatter, bad YAML, and schema violations — each with a warning", () => {
     const home = tempHome();
     mkdirSync(join(home, "AgentCall", "tasks", "empty-dir"), { recursive: true });

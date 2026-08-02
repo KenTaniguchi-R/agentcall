@@ -61,6 +61,18 @@ describe("guard-entry as a real process", () => {
     expect(JSON.parse(calls)).toMatchObject({ type: "tool_denied" });
   });
 
+  it("denies a file-shaped read outside AGENTCALL_ALLOWED_ROOT", () => {
+    const home = mkdtempSync(join(tmpdir(), "guard-"));
+    const allowed = join(home, "code", "payments");
+    const r = run(
+      { tool_name: "Read", tool_input: { file_path: join(home, "code", "payroll", "salary.ts") }, cwd: allowed },
+      home,
+      { AGENTCALL_ALLOWED_ROOT: allowed },
+    );
+    expect(r.status).toBe(0);
+    expect(JSON.parse(r.stdout).hookSpecificOutput.permissionDecision).toBe("deny");
+  });
+
   it("exits 2 on unparseable input", () => {
     const home = mkdtempSync(join(tmpdir(), "guard-"));
     const r = runRaw("{not json", home);
