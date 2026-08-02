@@ -1,4 +1,4 @@
-import { describe, expect, it, beforeEach } from "vitest";
+import { describe, expect, it, beforeEach, vi } from "vitest";
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -6,6 +6,26 @@ import { getLinePaths, getMachinePaths, type MachinePaths } from "../src/paths.j
 import { saveLineConfig } from "../src/lines.js";
 import { loadPerson, savePerson } from "../src/person.js";
 import { addLine, removeLine, setPrimary } from "../src/commands/line.js";
+
+// addLine/removeLine fall back to the real installLaunchAgent/
+// uninstallLaunchAgent whenever a test omits its opts seam
+// (installLaunchAgentFn/uninstallFn/installFn) — and the real ones shell out
+// to the actual `launchctl bootstrap`/`bootout` on whoever's machine runs
+// this suite, regardless of how sandboxed MachinePaths.userHome is (the
+// launchd *session* is the real logged-in user's; only the plist file path
+// is sandboxed). That already happened once while writing this file: it
+// booted out the developer's real listener and replaced it with one
+// pointing at a since-deleted tmp dir. Mocking the module here turns a
+// missing seam into an immediate, loud test failure instead of a silent
+// real-system side effect — every test below must pass its own no-op.
+vi.mock("../src/launchd.js", () => ({
+  installLaunchAgent: () => {
+    throw new Error("real installLaunchAgent reached in a test — pass installLaunchAgentFn/installFn");
+  },
+  uninstallLaunchAgent: () => {
+    throw new Error("real uninstallLaunchAgent reached in a test — pass uninstallFn");
+  },
+}));
 
 let m: MachinePaths;
 beforeEach(() => {

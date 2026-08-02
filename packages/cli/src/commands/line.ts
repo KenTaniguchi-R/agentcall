@@ -2,7 +2,7 @@ import { existsSync, mkdirSync, renameSync, rmSync, writeFileSync } from "node:f
 import { join } from "node:path";
 import type { AgentKind } from "@benree/agentcall-shared";
 import { registerHandle } from "../api.js";
-import { publishCardForLine } from "../card.js";
+import { publishCard } from "../card.js";
 import type { LineConfig } from "../config.js";
 import { assertValidLineName, listLines, readyLines, saveLineConfig } from "../lines.js";
 import { getLinePaths, type LinePaths, type MachinePaths } from "../paths.js";
@@ -19,8 +19,10 @@ export interface AddLineOpts {
   verify?: boolean;
   warn?: (line: string) => void;
   // Test seams. publishCardFn returns Promise<unknown> rather than
-  // typeof publishCardForLine's Promise<CardUploadType> so a test double can
-  // return undefined without constructing a full card upload.
+  // typeof publishCard's Promise<CardUploadType> so a test double can return
+  // undefined without constructing a full card upload. publishCard's second
+  // parameter is structural (policyFile/tasksDir/cardSnapshotFile), so
+  // LinePaths satisfies it directly — no line-scoped variant needed.
   register?: typeof registerHandle;
   publishCardFn?: (cfg: LineConfig, p: LinePaths) => Promise<unknown>;
   installLaunchAgentFn?: typeof installLaunchAgent;
@@ -71,7 +73,7 @@ export async function addLine(m: MachinePaths, opts: AddLineOpts): Promise<{ add
       writeFileSync(paths.policyFile, JSON.stringify(DEFAULT_POLICY, null, 2) + "\n", { mode: 0o600 });
     }
     try {
-      await (opts.publishCardFn ?? publishCardForLine)(cfg, paths);
+      await (opts.publishCardFn ?? publishCard)(cfg, paths);
     } catch (e) {
       (opts.warn ?? console.error)(
         `Warning: could not publish the card (${String(e)}). Run \`agentcall card push --line ${opts.name}\` later.`,
