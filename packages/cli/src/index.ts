@@ -1,5 +1,6 @@
 import { rmSync } from "node:fs";
 import { Command } from "commander";
+import type { AgentKind } from "@benree/agentcall-shared";
 import { getPaths } from "./paths.js";
 import { loadConfig, saveConfig, relayUrl, assertCallableConfig } from "./config.js";
 import { callAgent, CallError } from "./callClient.js";
@@ -40,7 +41,7 @@ program
     }) => {
       const result = await runSetup({
         handle: o.handle,
-        agent: o.agent as "claude" | "codex" | undefined,
+        agent: o.agent as AgentKind | undefined,
         relay: o.relay,
         snippet: o.snippet,
         skipLaunchd: o.skipLaunchd,

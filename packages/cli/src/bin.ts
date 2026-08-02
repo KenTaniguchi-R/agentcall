@@ -1,6 +1,7 @@
 import { existsSync, realpathSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { delimiter, dirname, join, resolve } from "node:path";
+import type { AgentKind } from "@benree/agentcall-shared";
 
 // Roots whose contents don't survive the session that created them. A dir
 // under any of these must never be treated as the preferred resolution of a
@@ -51,7 +52,7 @@ function resolveOnPath(name: string, pathEnv: string): string | null {
 // listener's environment (launchd's fixed PATH, no shell rc) can't come up
 // empty-handed where an interactive shell would have succeeded. `env` is
 // overridable for tests; production callers should leave it as process.env.
-export function resolveAgentBin(agentKind: "claude" | "codex", env: NodeJS.ProcessEnv = process.env): string {
+export function resolveAgentBin(agentKind: AgentKind, env: NodeJS.ProcessEnv = process.env): string {
   const resolved = resolveOnPath(agentKind, env.PATH ?? "");
   if (!resolved) {
     throw new Error(
