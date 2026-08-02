@@ -5,7 +5,11 @@ import { join } from "node:path";
 import { getLinePaths, getMachinePaths, type MachinePaths } from "../src/paths.js";
 import { saveLineConfig } from "../src/lines.js";
 import { loadPerson, savePerson } from "../src/person.js";
-import { addLine, listLinesReport, removeLine, setPrimary } from "../src/commands/line.js";
+import {
+  addLine as addLineImpl, listLinesReport,
+  removeLine as removeLineImpl, setPrimary,
+  type AddLineOpts, type RemoveLineOpts,
+} from "../src/commands/line.js";
 
 // addLine/removeLine fall back to the real installLaunchAgent/
 // uninstallLaunchAgent whenever a test omits its opts seam
@@ -36,6 +40,22 @@ beforeEach(() => {
 
 const ok = async () => ({ token: "tok", address: "ken-cdx@r.example" });
 const base = { handle: "ken", token: "t", relay: "https://r.example", agent_kind: "claude" as const };
+
+// launchPathDirs (addLine's/removeLine's extraPathDirs default — see
+// launchPath.ts) falls back to the real `which` via defaultResolveBin
+// whenever resolveBin/extraPathDirs is omitted, and it's evaluated eagerly
+// as an argument expression, so it runs even when installLaunchAgentFn/
+// installFn is a total no-op. These wrappers default resolveBin to a
+// deterministic no-op so no test below shells out by accident; the two
+// tests that assert on the derivation itself pass their own resolveBin,
+// which overrides this default.
+const noNetworkResolveBin = () => null;
+function addLine(m: MachinePaths, opts: AddLineOpts): ReturnType<typeof addLineImpl> {
+  return addLineImpl(m, { resolveBin: noNetworkResolveBin, ...opts });
+}
+function removeLine(m: MachinePaths, name: string, opts: RemoveLineOpts = {}): void {
+  removeLineImpl(m, name, { resolveBin: noNetworkResolveBin, ...opts });
+}
 
 describe("addLine", () => {
   it("registers, then writes config.json as the first thing on disk", async () => {
@@ -210,8 +230,16 @@ describe("removeLine", () => {
       confirm: true,
       uninstallFn: () => {},
       installFn: (_m, _execCmd, extraPathDirs) => { captured = extraPathDirs; },
+      // codex resolves to a real dir too, not null — if launchPathDirs ran
+      // BEFORE the archive (i.e. against a machine state that still has
+      // codex), codex's dir would leak into the result and this assertion
+      // would fail. A resolveBin that only resolves the survivor would let
+      // "not empty" pass regardless of ordering; this pins "survivors only".
       resolveBin: (name) =>
-        name === "claude" ? "/opt/claude-dir/claude" : name === "npx" ? "/opt/npx-dir/npx" : null,
+        name === "claude" ? "/opt/claude-dir/claude"
+        : name === "codex" ? "/opt/codex-dir/codex"
+        : name === "npx" ? "/opt/npx-dir/npx"
+        : null,
     });
     expect(captured).toEqual(["/opt/claude-dir", "/opt/npx-dir"]);
   });

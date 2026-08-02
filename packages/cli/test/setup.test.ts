@@ -2,13 +2,32 @@ import { existsSync, mkdtempSync, readFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { runSetup, warnIfOutsideLaunchdPath } from "../src/setup.js";
+import { runSetup, warnIfOutsideLaunchdPath, type SetupOpts } from "../src/setup.js";
 import { getLinePaths, getMachinePaths, type MachinePaths } from "../src/paths.js";
 import { listLines, saveLineConfig } from "../src/lines.js";
 import { loadPerson, savePerson } from "../src/person.js";
 import { addLine, type AddLineOpts } from "../src/commands/line.js";
 import type { LineConfig } from "../src/config.js";
 import { AgentRunError } from "../src/runner.js";
+
+// addLine/removeLine (and so runSetup, which delegates to addLine) fall back
+// to the real installLaunchAgent/uninstallLaunchAgent whenever a seam is
+// omitted — and the real ones shell out to the actual `launchctl bootstrap`/
+// `bootout` on whoever's machine runs this suite, regardless of how
+// sandboxed MachinePaths.userHome is (only the plist *file* path is
+// sandboxed; the launchd *session* is the real logged-in user's). This is
+// the same guard line-cmd.test.ts carries, added there after this exact
+// class of bug booted out the developer's real listener — every test below
+// must pass its own skipLaunchd/installLaunchAgentFn, or fail loudly here
+// instead of silently reaching the real thing.
+vi.mock("../src/launchd.js", () => ({
+  installLaunchAgent: () => {
+    throw new Error("real installLaunchAgent reached in a test — pass skipLaunchd or installLaunchAgentFn");
+  },
+  uninstallLaunchAgent: () => {
+    throw new Error("real uninstallLaunchAgent reached in a test — pass an uninstall seam");
+  },
+}));
 
 // A local stand-in for the relay: registerHandle's real implementation
 // spends the handle it registers permanently (handle release isn't
@@ -28,6 +47,18 @@ const base: LineConfig = { handle: "ken", token: "t", relay: R, agent_kind: "cla
 const fakeAddLine = (m: MachinePaths, opts: AddLineOpts) =>
   addLine(m, { ...opts, register: stubRegister, publishCardFn: opts.publishCardFn ?? (async () => undefined) });
 
+// addLine derives extraPathDirs (launchPathDirs, see launchPath.ts) eagerly
+// as an argument expression, so it runs even when installLaunchAgentFn is a
+// total no-op — and by default that derivation falls back to the real
+// `which` via defaultResolveBin. run() below defaults resolveBin to this so
+// no test in this file shells out by accident; "threads its resolveBin
+// seam..." overrides it explicitly to prove an override still reaches
+// addLine's derivation.
+const noNetworkResolveBin = () => null;
+function run(opts: SetupOpts): Promise<{ ready: boolean }> {
+  return runSetup({ resolveBin: noNetworkResolveBin, ...opts });
+}
+
 let home: string;
 let m: MachinePaths;
 beforeEach(() => {
@@ -41,16 +72,20 @@ afterEach(() => {
 
 describe("runSetup", () => {
   it("creates person.json plus one line, and marks it primary", async () => {
-    await runSetup({
+    await run({
       handle: "ken", agent: "claude", relay: R, yes: true, snippet: false, verify: false,
       addLineFn: fakeAddLine, skipLaunchd: true,
     });
     expect(loadPerson(m).primary_line).toBe("claude");
     expect(listLines(m).map((l) => l.name)).toEqual(["claude"]);
+    // mkdirSync(paths.shareDir) is addLine's (commands/line.ts), not tested
+    // anywhere else — this is the callable half of what the old flat-config
+    // "registers, writes config, creates public dir" test asserted.
+    expect(existsSync(getLinePaths(m, "claude").shareDir)).toBe(true);
   });
 
   it("names the line after the agent kind", async () => {
-    await runSetup({
+    await run({
       handle: "ken", agent: "codex", relay: R, yes: true, snippet: false, verify: false,
       addLineFn: fakeAddLine, skipLaunchd: true,
     });
@@ -61,7 +96,7 @@ describe("runSetup", () => {
     saveLineConfig(getLinePaths(m, "claude"), base);
     savePerson(m, { primary_line: "claude" });
     const out: string[] = [];
-    const res = await runSetup({
+    const res = await run({
       handle: "other", agent: "codex", relay: R, yes: true, snippet: false, verify: false,
       addLineFn: fakeAddLine, skipLaunchd: true, log: (s) => out.push(s),
     });
@@ -71,11 +106,14 @@ describe("runSetup", () => {
   });
 
   it("creates an agentless line under --caller-only", async () => {
-    await runSetup({
+    await run({
       handle: "ken", callerOnly: true, relay: R, yes: true, snippet: false, verify: false,
       addLineFn: fakeAddLine, skipLaunchd: true,
     });
     expect(listLines(m)[0]!.config!.agent_kind).toBeUndefined();
+    // The caller-only half of the old flat-config test: no agent means no
+    // shareDir/tasksDir/policy — addLine's `if (agentKind)` block never runs.
+    expect(existsSync(getLinePaths(m, "caller").shareDir)).toBe(false);
   });
 
   // Regression: re-running setup used to run agent detection (and its
@@ -86,7 +124,7 @@ describe("runSetup", () => {
     saveLineConfig(getLinePaths(m, "claude"), base);
     savePerson(m, { primary_line: "claude" });
     const asked: string[] = [];
-    await runSetup({
+    await run({
       relay: R, snippet: false, verify: false, skipLaunchd: true, addLineFn: fakeAddLine,
       hasBin: () => true, // both claude and codex on PATH — would normally prompt
       io: { ask: async (q) => { asked.push(q); return "claude"; } },
@@ -96,7 +134,7 @@ describe("runSetup", () => {
 
   it("prompts for a missing handle via io.ask", async () => {
     const asked: string[] = [];
-    await runSetup({
+    await run({
       agent: "claude", relay: R, snippet: false, verify: false, skipLaunchd: true, addLineFn: fakeAddLine,
       io: { ask: async (q) => { asked.push(q); return "asked-handle"; } },
     });
@@ -105,7 +143,7 @@ describe("runSetup", () => {
   });
 
   it("detects the agent kind via injectable hasBin when --agent is omitted", async () => {
-    await runSetup({
+    await run({
       handle: "ken2", relay: R, snippet: false, verify: false, skipLaunchd: true, addLineFn: fakeAddLine,
       hasBin: (name) => name === "codex",
       io: { ask: async () => "y" },
@@ -121,7 +159,7 @@ describe("runSetup", () => {
     });
     try {
       let launchdCalled = false;
-      await runSetup({
+      await run({
         handle: "ken3", relay: R, snippet: false, verify: false, addLineFn: fakeAddLine,
         hasBin: () => false,
         installLaunchAgentFn: () => { launchdCalled = true; },
@@ -143,7 +181,7 @@ describe("runSetup", () => {
   // is only possible if the seam actually reached addLine.
   it("threads its resolveBin seam through to installLaunchAgent's extraPathDirs", async () => {
     let captured: string[] | undefined;
-    await runSetup({
+    await run({
       handle: "ken4", agent: "claude", relay: R, snippet: false, verify: false, addLineFn: fakeAddLine,
       resolveBin: (name) => (name === "claude" || name === "npx" ? `/Users/x/.local/bin/${name}` : null),
       installLaunchAgentFn: (_m, _execCmd, extraPathDirs) => { captured = extraPathDirs; },
@@ -156,7 +194,7 @@ describe("runSetup", () => {
   // exercises them — kept here so the behavior stays covered somewhere.
   it("seeds policy.json + tasks dir and publishes the card", async () => {
     const cardCalls: LineConfig[] = [];
-    await runSetup({
+    await run({
       handle: "ken", agent: "claude", relay: R, snippet: false, verify: false, skipLaunchd: true,
       addLineFn: (m2, opts) =>
         addLine(m2, { ...opts, register: stubRegister, publishCardFn: async (cfg) => { cardCalls.push(cfg); } }),
@@ -177,7 +215,7 @@ describe("setup progress output", () => {
       logs.push(a.map(String).join(" "));
     });
     try {
-      await runSetup({
+      await run({
         handle: "ken9", agent: "claude", relay: R, snippet: false, verify: false, skipLaunchd: true,
         addLineFn: fakeAddLine,
       });
@@ -222,7 +260,7 @@ describe("caller-only setup", () => {
       logs.push(a.map(String).join(" "));
     });
     try {
-      await runSetup({
+      await run({
         handle: "solo2", callerOnly: true, relay: R, snippet: false, verify: false, addLineFn: fakeAddLine,
         hasBin: () => false,
       });
@@ -238,7 +276,7 @@ describe("caller-only setup", () => {
   it("asks 'Make your agent callable' and answering n yields caller-only", async () => {
     const asked: string[] = [];
     let launchdCalled = false;
-    await runSetup({
+    await run({
       handle: "asker", relay: R, snippet: false, verify: false, addLineFn: fakeAddLine,
       hasBin: () => true, // agents ARE installed; user still opts out
       io: { ask: async (q) => { asked.push(q); return "n"; } },
@@ -250,7 +288,7 @@ describe("caller-only setup", () => {
   });
 
   it("an empty answer defaults to callable", async () => {
-    await runSetup({
+    await run({
       handle: "defaulter", relay: R, snippet: false, verify: false, skipLaunchd: true, addLineFn: fakeAddLine,
       hasBin: (name) => name === "claude",
       io: { ask: async () => "" },
@@ -266,7 +304,7 @@ describe("runSetup verification", () => {
       logs.push(String(msg));
     });
     try {
-      const result = await runSetup({
+      const result = await run({
         handle: "ken", agent: "claude", relay: R, snippet: false, skipLaunchd: true, addLineFn: fakeAddLine,
         verifyFns: { resolveBin: () => "/fake/bin/claude", runFn: async () => ({ text: "OK" }) },
       });
@@ -284,7 +322,7 @@ describe("runSetup verification", () => {
     });
     try {
       const installed: string[] = [];
-      const result = await runSetup({
+      const result = await run({
         handle: "ken", agent: "claude", relay: R, snippet: false, addLineFn: fakeAddLine,
         installLaunchAgentFn: () => {
           installed.push("yes");
@@ -313,7 +351,7 @@ describe("runSetup verification", () => {
 
   it("--no-verify (verify:false) skips verification entirely", async () => {
     let ran = false;
-    const result = await runSetup({
+    const result = await run({
       handle: "ken", agent: "claude", relay: R, snippet: false, skipLaunchd: true, verify: false,
       addLineFn: fakeAddLine,
       verifyFns: {
@@ -330,7 +368,7 @@ describe("runSetup verification", () => {
 
   it("caller-only setup never verifies", async () => {
     let ran = false;
-    const result = await runSetup({
+    const result = await run({
       handle: "solo", relay: R, snippet: false, skipLaunchd: true, callerOnly: true, addLineFn: fakeAddLine,
       verifyFns: {
         resolveBin: () => "/fake/bin/claude",

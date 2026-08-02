@@ -38,13 +38,6 @@ export interface SetupOpts {
   log?: (s: string) => void;
 }
 
-// Moved to launchPath.ts, which also needs it (for launchPathDirs) and
-// can't import it back from here without a cycle (launchPath.ts is now the
-// thing setup.ts, commands/line.ts, and index.ts all depend on for
-// installLaunchAgent's PATH). Re-exported so existing `from "./setup.js"`
-// callers/tests keep working unchanged.
-export { resolveExtraPathDirs } from "./launchPath.js";
-
 async function detectAgentKind(
   opts: SetupOpts, hasBin: (name: string) => boolean, ask: (q: string) => Promise<string>,
 ): Promise<AgentKind> {
