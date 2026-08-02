@@ -7,7 +7,11 @@ import {
 import { resolveWorkdir, type CallableConfig } from "./config.js";
 import type { Paths } from "./paths.js";
 import { buildPrompt } from "./prompt.js";
-import { AgentRunError, runAgent } from "./runner.js";
+import { AgentRunError, CODEX_THREADING_ENABLED, runAgent } from "./runner.js";
+import {
+  admitContext, loadContexts, mintContextId, pruneContexts, saveContexts, upsertContext,
+  type ContextBinding,
+} from "./contexts.js";
 import { SerialQueue } from "./queue.js";
 import { loadPolicy, resolveTask } from "./policy.js";
 import { loadTasks } from "./tasks.js";
@@ -70,7 +74,7 @@ export function startListener(deps: ListenerDeps): { stop(): void } {
         return;
       }
 
-      const { call_id, from, message, task: requestedTask } = frame;
+      const { call_id, from, message, task: requestedTask, context_id } = frame;
       const started = Date.now();
 
       // Resolve caller -> task -> envelope BEFORE the message is placed in any
@@ -90,6 +94,46 @@ export function startListener(deps: ListenerDeps): { stop(): void } {
         return;
       }
       const task = resolution.task;
+
+      // Task resolution above ran on the verified `from` and local files only
+      // (see policy.ts's CaMeL invariant). context_id is caller-controlled, so
+      // it is consulted only AFTER, and only to confirm the binding was made
+      // under the SAME task. It can narrow a call, never select one. Inverting
+      // this order reopens the hole the design exists to close.
+      const now = Date.now();
+      const threadingAvailable =
+        task.threadable && (deps.config.agent_kind === "claude" || CODEX_THREADING_ENABLED);
+      const contexts = pruneContexts(loadContexts(deps.paths), now);
+      // Explicitly typed: `let binding = undefined` infers the type `undefined`
+      // and rejects the assignment below.
+      let binding: ContextBinding | undefined;
+      if (context_id !== undefined) {
+        // `threadingAvailable` gates admission as well as minting. A binding
+        // outlives the conditions it was minted under: the owner can add
+        // `write`/`exec` to a task's SKILL.md (or set `threadable: false`) and
+        // admitContext would still match on the unchanged task *id*, resuming a
+        // conversation against an envelope the owner has just decided must not
+        // carry one. Same for the codex gate — an old binding must not be able
+        // to hand runAgent a resume id after CODEX_THREADING_ENABLED goes false.
+        binding = threadingAvailable
+          ? admitContext(contexts, {
+              context_id, caller: from, task: task.id,
+              agent_kind: deps.config.agent_kind, workdir: workdir.dir, now,
+            })
+          : undefined;
+        // One code for every failure — expired, not yours, wrong task, wrong
+        // directory, threading withdrawn. Distinguishing them would tell an
+        // attacker that a guessed token exists but belongs to someone else. And
+        // this FAILS the call rather than quietly starting a fresh session,
+        // because a silent almost-right answer is the #43/#51 failure mode.
+        if (!binding) {
+          send({ type: "call_failed", call_id, code: "context_unknown" });
+          audit({ call_id, from, message: message.slice(0, 500), task: task.id,
+                  status: "context_unknown", duration_ms: 0 });
+          return;
+        }
+      }
+
       const timeoutMs = task.timeout_s !== undefined ? task.timeout_s * 1000 : AGENT_TIMEOUT_MS;
 
       // call_accepted is sent from *inside* the job, not after tryEnqueue
@@ -109,16 +153,45 @@ export function startListener(deps: ListenerDeps): { stop(): void } {
         try {
           const out = await run(
             deps.config.agent_kind,
-            buildPrompt(deps.config.handle, from, message, task, workdir),
+            buildPrompt(deps.config.handle, from, message, task, workdir, binding !== undefined),
             workdir.dir,
             timeoutMs,
             undefined,
             task.envelope,
             call_id,
             signal,
+            binding?.agent_session_id,
           );
-          send({ type: "call_result", call_id, text: out.text, context_id: out.session_id, task: task.id });
-          audit({ call_id, from, message: message.slice(0, 500), task: task.id, status: "ok", duration_ms: Date.now() - started });
+
+          // Mint on a fresh threadable call; roll the existing binding forward
+          // on a resumed one. The agent's session id can change between turns,
+          // so it is re-read from the output rather than assumed stable.
+          let contextId: string | undefined;
+          if (threadingAvailable && out.session_id) {
+            const next = {
+              context_id: binding?.context_id ?? mintContextId(),
+              agent_session_id: out.session_id,
+              caller: from,
+              task: task.id,
+              agent_kind: deps.config.agent_kind,
+              workdir: workdir.dir,
+              turns: (binding?.turns ?? 0) + 1,
+              created_at: binding?.created_at ?? now,
+              last_used_at: now,
+            };
+            saveContexts(deps.paths, pruneContexts(upsertContext(contexts, next), now));
+            contextId = next.context_id;
+          }
+
+          // context_id, never out.session_id: the minted handle is the only
+          // thing that travels. The audit log gets the same treatment — it is
+          // the owner's file, but it is also what gets pasted into a bug report.
+          send({ type: "call_result", call_id, text: out.text, context_id: contextId, task: task.id });
+          audit({
+            call_id, from, message: message.slice(0, 500), task: task.id, status: "ok",
+            duration_ms: Date.now() - started,
+            context_id: contextId, turn: (binding?.turns ?? 0) + 1,
+          });
         } catch (e) {
           const code = e instanceof AgentRunError ? e.code : "agent_error";
           // runAgent settles from the child's exit handler, so reaching here
