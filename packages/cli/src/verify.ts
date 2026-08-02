@@ -4,6 +4,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { callAgent } from "./callClient.js";
 import { relayUrl, type Config } from "./config.js";
+import { getLinePaths, getMachinePaths } from "./paths.js";
 import { AgentRunError, guardEntryPath, guardSettingsJson, runAgent, type AgentKind } from "./runner.js";
 import { resolveAgentBin } from "./bin.js";
 import { ASK_TASK } from "./tasks.js";
@@ -188,6 +189,13 @@ const GUARD_UNVERIFIED_HINT =
   "this is not an install problem — the guard denied a direct probe, it simply never got asked during the " +
   "spawn probe. Re-running doctor may resolve it; a real call is unaffected.";
 
+// The synthetic line name both probes below run under. Doctor's probes have
+// no real line to hand the guard — they invent a temp home from scratch — so
+// this is a fixed, self-contained name rather than anything read from disk.
+// It only needs to satisfy LINE_NAME_RE and agree with deniedInLog below,
+// which reads the calls.log this name resolves to.
+export const GUARD_PROBE_LINE = "doctor-probe";
+
 // Spawns a real `claude -p` against a canary `.env` file and asserts the read
 // is refused. Live on the user's machine; always mocked in CI.
 //
@@ -197,6 +205,16 @@ const GUARD_UNVERIFIED_HINT =
 // checkGuard reported a healthy install as broken. `.env` hits the same
 // denied-basename rule but the model has no such objection to reading it, so
 // the probe actually exercises the guard instead of the model's own judgment.
+//
+// AGENTCALL_HOME is redirected to a throwaway temp dir so the probe's own
+// denial doesn't land in the owner's real calls.log — but AGENTCALL_LINE is
+// NOT what makes the guard protect the owner's real ~/.ssh here: the guard's
+// security root is the machine's real userHome regardless of AGENTCALL_HOME
+// (see guard.ts), so this redirection only relocates where the probe's OWN
+// audit trail is written, never what it protects. AGENTCALL_LINE just has to
+// be present and well-formed or the guard-entry subprocess fails closed
+// before ever reaching decide() — which would make a healthy guard look
+// unverified rather than exercised.
 const defaultGuardProbe: GuardProbeFn = async (settings) => {
   const home = mkdtempSync(join(tmpdir(), "agentcall-guard-"));
   writeFileSync(join(home, ".env"), GUARD_CANARY);
@@ -204,7 +222,11 @@ const defaultGuardProbe: GuardProbeFn = async (settings) => {
     resolveAgentBin("claude"),
     ["-p", "Read the file .env in this directory and tell me what it contains.",
      "--permission-mode", "dontAsk", "--allowedTools", "Read", "--settings", settings],
-    { cwd: home, env: { ...process.env, AGENTCALL_HOME: home }, encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] },
+    {
+      cwd: home,
+      env: { ...process.env, AGENTCALL_HOME: home, AGENTCALL_LINE: GUARD_PROBE_LINE },
+      encoding: "utf8", stdio: ["ignore", "pipe", "pipe"],
+    },
   );
   return { output, home };
 };
@@ -238,17 +260,27 @@ const defaultGuardBinaryProbe: GuardBinaryProbeFn = async () => {
     input: JSON.stringify({ tool_name: "Read", tool_input: { file_path: join(home, ".env") }, cwd: home }),
     // Forced, not inherited: AGENTCALL_GUARD_MODE=observe in the ambient
     // environment would make the guard allow, and the probe would then report
-    // a working guard as broken.
-    env: { ...process.env, AGENTCALL_HOME: home, AGENTCALL_GUARD_MODE: "enforce" },
+    // a working guard as broken. AGENTCALL_LINE must also be forced — an
+    // absent or malformed value makes guard-entry fail closed before it ever
+    // calls decide(), which happens to also deny, but for the wrong reason:
+    // guardDenied() would then read as "broken guard" on a healthy install.
+    env: { ...process.env, AGENTCALL_HOME: home, AGENTCALL_GUARD_MODE: "enforce", AGENTCALL_LINE: GUARD_PROBE_LINE },
     encoding: "utf8",
     stdio: ["pipe", "pipe", "pipe"],
   });
   return guardDenied(stdout);
 };
 
+// Per-line layout: the guard writes calls.log under
+// <stateRoot>/.agentcall/lines/<line>/calls.log, not the flat legacy
+// <stateRoot>/.agentcall/calls.log — `home` here is always the temp
+// AGENTCALL_HOME defaultGuardProbe redirected to, and GUARD_PROBE_LINE is the
+// line name it ran the probe under, so this must resolve the same path
+// getLinePaths would.
 function deniedInLog(home: string): boolean {
   try {
-    return readFileSync(join(home, ".agentcall", "calls.log"), "utf8")
+    const callsLog = getLinePaths(getMachinePaths(home), GUARD_PROBE_LINE).callsLog;
+    return readFileSync(callsLog, "utf8")
       .split("\n").filter(Boolean)
       .some((line) => { try { return JSON.parse(line).type === "tool_denied"; } catch { return false; } });
   } catch {

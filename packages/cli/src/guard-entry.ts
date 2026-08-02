@@ -5,19 +5,33 @@
 import { appendFileSync, mkdirSync, realpathSync } from "node:fs";
 import { dirname } from "node:path";
 import { FAIL_CLOSED_REASON, runGuard } from "./guard.js";
-import { getPaths } from "./paths.js";
+import { LINE_NAME_RE } from "./lines.js";
+import { getLinePaths, getMachinePaths } from "./paths.js";
 
 // Only the exact string opts out of enforcement. Anything else — a typo, a
 // stale value, an empty string — enforces, so a mangled env var cannot
 // silently downgrade the guard to watching.
 const mode = process.env.AGENTCALL_GUARD_MODE === "observe" ? "observe" : "enforce";
 
+// The guard runs as a subprocess of the answering agent and has no other way
+// to learn which line's call it is policing. Without it, tool events would be
+// audited against the wrong line — so an absent or malformed value fails
+// closed rather than guessing. Unconditional on `mode`: this indicates a
+// wiring bug (the runner always sets this env var), not an ordinary decide()
+// failure, so it is not eligible for observe mode's fail-open treatment.
+const lineName = process.env.AGENTCALL_LINE ?? "";
+if (!LINE_NAME_RE.test(lineName)) {
+  process.stderr.write(FAIL_CLOSED_REASON + "\n");
+  process.exit(2);
+}
+const machine = getMachinePaths();
+
 try {
   let raw = "";
   for await (const chunk of process.stdin) raw += chunk;
 
   const out = runGuard(raw, {
-    paths: getPaths(),
+    line: getLinePaths(machine, lineName),
     callId: process.env.AGENTCALL_CALL_ID ?? "unknown",
     now: () => new Date().toISOString(),
     // Plain realpathSync, which THROWS on a path that does not exist. That is

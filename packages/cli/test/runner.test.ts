@@ -411,3 +411,22 @@ describe("codex user-config isolation", () => {
     expect(spec.args).toContain("--ignore-user-config");
   });
 });
+
+describe("AGENTCALL_LINE propagation", () => {
+  it("injects the line name into a claude spawn", () => {
+    const spec = buildSpawnSpec("claude", "hi", "/work", () => "/bin/claude", undefined, "call-1", "codex");
+    expect(spec.env?.AGENTCALL_LINE).toBe("codex");
+    expect(spec.env?.AGENTCALL_CALL_ID).toBe("call-1");
+  });
+
+  it("injects the line name into a codex spawn alongside observe mode", () => {
+    const spec = buildSpawnSpec("codex", "hi", "/work", () => "/bin/codex", undefined, "call-2", "claude");
+    expect(spec.env?.AGENTCALL_LINE).toBe("claude");
+    expect(spec.env?.AGENTCALL_GUARD_MODE).toBe("observe");
+  });
+
+  it("defaults to an empty line name when none is given", () => {
+    const spec = buildSpawnSpec("claude", "hi", "/work", () => "/bin/claude");
+    expect(spec.env?.AGENTCALL_LINE).toBe("");
+  });
+});

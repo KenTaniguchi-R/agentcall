@@ -9,10 +9,18 @@ import { GUARD_TIMEOUT_S } from "../src/runner.js";
 // only way to measure what the timeout has to cover.
 const ENTRY = join(process.cwd(), "dist", "guard-entry.js");
 
+// The line name every test in this file runs under, unless it is
+// specifically exercising the "no line" fail-closed path. Per-line layout:
+// logs land at <home>/.agentcall/lines/<LINE>/{tools,calls}.log, not the flat
+// legacy <home>/.agentcall/{tools,calls}.log.
+const LINE = "test-line";
+const logPath = (home: string, file: "tools.log" | "calls.log") =>
+  join(home, ".agentcall", "lines", LINE, file);
+
 type Run = { status: number; stdout: string; stderr: string };
 
 function runEntry(input: string, home: string, extraEnv: NodeJS.ProcessEnv = {}): Run {
-  const env = { ...process.env, AGENTCALL_HOME: home, AGENTCALL_CALL_ID: "call-abc", ...extraEnv };
+  const env = { ...process.env, AGENTCALL_HOME: home, AGENTCALL_CALL_ID: "call-abc", AGENTCALL_LINE: LINE, ...extraEnv };
   try {
     // Pipe stderr rather than inheriting it, so the reason text can be
     // asserted — it is what makes exit 2 blocking rather than "hook failed".
@@ -31,11 +39,28 @@ const run = (payload: object, home: string, extraEnv?: NodeJS.ProcessEnv): Run =
 
 const runRaw = (raw: string, home: string): Run => runEntry(raw, home);
 
+// Explicitly omits AGENTCALL_LINE rather than overriding it with a falsy
+// value — `run`'s extraEnv spread can only override the key, not delete it,
+// and an absent env var is a materially different case from an empty string.
+function runWithoutLine(input: string, home: string, extraEnv: NodeJS.ProcessEnv = {}): Run {
+  const env: NodeJS.ProcessEnv = { ...process.env, AGENTCALL_HOME: home, AGENTCALL_CALL_ID: "call-abc", ...extraEnv };
+  delete env.AGENTCALL_LINE;
+  try {
+    const stdout = execFileSync(process.execPath, [ENTRY], {
+      input, env, encoding: "utf8", stdio: ["pipe", "pipe", "pipe"],
+    });
+    return { status: 0, stdout, stderr: "" };
+  } catch (e) {
+    const err = e as { status: number; stdout: string; stderr: string };
+    return { status: err.status, stdout: err.stdout ?? "", stderr: err.stderr ?? "" };
+  }
+}
+
 function one(home: string, body: string): Promise<void> {
   return new Promise<void>((ok, fail) => {
     const child = execFile(
       process.execPath, [ENTRY],
-      { env: { ...process.env, AGENTCALL_HOME: home, AGENTCALL_CALL_ID: "call-abc" } },
+      { env: { ...process.env, AGENTCALL_HOME: home, AGENTCALL_CALL_ID: "call-abc", AGENTCALL_LINE: LINE } },
       (err) => (err ? fail(err) : ok()),
     );
     child.stdin?.end(body);
@@ -48,7 +73,7 @@ describe("guard-entry as a real process", () => {
     const r = run({ tool_name: "Read", tool_input: { file_path: join(home, "a.ts") }, cwd: home }, home);
     expect(r.status).toBe(0);
     expect(r.stdout).toBe("");
-    const tools = readFileSync(join(home, ".agentcall", "tools.log"), "utf8").trim();
+    const tools = readFileSync(logPath(home, "tools.log"), "utf8").trim();
     expect(JSON.parse(tools)).toMatchObject({ type: "tool_call", call_id: "call-abc", allowed: true });
   });
 
@@ -57,7 +82,7 @@ describe("guard-entry as a real process", () => {
     const r = run({ tool_name: "Read", tool_input: { file_path: join(home, ".ssh/id_rsa") }, cwd: home }, home);
     expect(r.status).toBe(0);
     expect(JSON.parse(r.stdout).hookSpecificOutput.permissionDecision).toBe("deny");
-    const calls = readFileSync(join(home, ".agentcall", "calls.log"), "utf8").trim();
+    const calls = readFileSync(logPath(home, "calls.log"), "utf8").trim();
     expect(JSON.parse(calls)).toMatchObject({ type: "tool_denied" });
   });
 
@@ -86,7 +111,7 @@ describe("guard-entry as a real process", () => {
     );
     expect(r.status).toBe(0);
     expect(r.stdout).toBe("");
-    const calls = readFileSync(join(home, ".agentcall", "calls.log"), "utf8").trim();
+    const calls = readFileSync(logPath(home, "calls.log"), "utf8").trim();
     expect(JSON.parse(calls)).toMatchObject({ type: "tool_attempt_flagged" });
   });
 
@@ -122,10 +147,53 @@ describe("guard-entry as a real process", () => {
       tool_name: "Read", tool_input: { file_path: join(home, "a.ts") }, cwd: home,
     });
     await Promise.all(Array.from({ length: 8 }, () => one(home, body)));
-    const lines = readFileSync(join(home, ".agentcall", "tools.log"), "utf8").trim().split("\n");
+    const lines = readFileSync(logPath(home, "tools.log"), "utf8").trim().split("\n");
     expect(lines).toHaveLength(8);
     // Interleaved appends must still parse: a torn line means the audit trail
     // cannot be trusted, which is the whole point of the second stream.
     for (const l of lines) expect(() => JSON.parse(l)).not.toThrow();
+  });
+});
+
+// The guard runs as a subprocess of the answering agent with no other way to
+// learn which line's call it is policing. An absent or malformed
+// AGENTCALL_LINE must fail closed rather than guess — silently auditing
+// against the wrong line, or the wrong line's tasksDir denial not applying,
+// is a worse failure mode than blocking the tool call.
+describe("guard-entry requires AGENTCALL_LINE", () => {
+  it("fails closed and writes no log when AGENTCALL_LINE is absent", () => {
+    const home = mkdtempSync(join(tmpdir(), "guard-"));
+    const r = runWithoutLine(
+      JSON.stringify({ tool_name: "Read", tool_input: { file_path: join(home, "a.ts") }, cwd: home }),
+      home,
+    );
+    expect(r.status).toBe(2);
+    expect(r.stderr.trim()).not.toBe("");
+    expect(() => readFileSync(logPath(home, "tools.log"), "utf8")).toThrow();
+  });
+
+  it("fails closed on a malformed line name", () => {
+    const home = mkdtempSync(join(tmpdir(), "guard-"));
+    const r = run(
+      { tool_name: "Read", tool_input: { file_path: join(home, "a.ts") }, cwd: home },
+      home,
+      { AGENTCALL_LINE: "../evil" },
+    );
+    expect(r.status).toBe(2);
+    expect(r.stderr.trim()).not.toBe("");
+  });
+
+  // Unconditional on mode: a missing AGENTCALL_LINE is a wiring bug, not an
+  // ordinary decide() failure, so it is not eligible for observe mode's
+  // fail-open treatment (which exists so a broken guard doesn't take a
+  // healthy codex spawn down with it).
+  it("fails closed even when AGENTCALL_GUARD_MODE is observe", () => {
+    const home = mkdtempSync(join(tmpdir(), "guard-"));
+    const r = runWithoutLine(
+      JSON.stringify({ tool_name: "Read", tool_input: { file_path: join(home, "a.ts") }, cwd: home }),
+      home,
+      { AGENTCALL_GUARD_MODE: "observe" },
+    );
+    expect(r.status).toBe(2);
   });
 });

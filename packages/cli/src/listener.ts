@@ -116,6 +116,10 @@ export function startListener(deps: ListenerDeps): { stop(): void } {
             task.envelope,
             call_id,
             signal,
+            // No LinePaths reachable from here yet — Task 8 rewires the
+            // listener to be per-line. An empty AGENTCALL_LINE just means
+            // the guard subprocess fails closed, which is safe.
+            "",
           );
           send({ type: "call_result", call_id, text: out.text, session_id: out.session_id, task: task.id });
           audit({ call_id, from, message: message.slice(0, 500), task: task.id, status: "ok", duration_ms: Date.now() - started });

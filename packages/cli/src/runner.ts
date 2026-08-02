@@ -106,7 +106,7 @@ export function claudeAllowedTools(envelope: Envelope): string {
 // between a caller and the machine.
 export function buildSpawnSpec(
   kind: AgentKind, prompt: string, workdir: string, resolveBin: (kind: AgentKind) => string = resolveAgentBin,
-  envelope: Envelope = FULL_ACCESS_ENVELOPE, callId: string = "unknown",
+  envelope: Envelope = FULL_ACCESS_ENVELOPE, callId: string = "unknown", lineName: string = "",
 ): SpawnSpec {
   if (kind === "claude") {
     return {
@@ -115,7 +115,7 @@ export function buildSpawnSpec(
         "--permission-mode", "dontAsk", "--allowedTools", claudeAllowedTools(envelope),
         "--settings", guardSettingsJson()],
       cwd: workdir,
-      env: { ...process.env, AGENTCALL_CALL_ID: callId },
+      env: { ...process.env, AGENTCALL_CALL_ID: callId, AGENTCALL_LINE: lineName },
     };
   }
   // Codex has no per-tool granularity, so the envelope's write cap maps onto
@@ -137,7 +137,7 @@ export function buildSpawnSpec(
     args: ["exec", "--ignore-user-config", "--sandbox", sandbox, "--cd", workdir,
       "--skip-git-repo-check", "--json", "-c", guardCodexConfigArg(), prompt],
     cwd: workdir,
-    env: { ...process.env, AGENTCALL_CALL_ID: callId, AGENTCALL_GUARD_MODE: "observe" },
+    env: { ...process.env, AGENTCALL_CALL_ID: callId, AGENTCALL_GUARD_MODE: "observe", AGENTCALL_LINE: lineName },
   };
 }
 
@@ -183,9 +183,9 @@ export function truncateUtf8(text: string, maxBytes: number): string {
 
 export function runAgent(
   kind: AgentKind, prompt: string, workdir: string, timeoutMs: number = AGENT_TIMEOUT_MS, specOverride?: SpawnSpec,
-  envelope: Envelope = FULL_ACCESS_ENVELOPE, callId: string = "unknown", signal?: AbortSignal,
+  envelope: Envelope = FULL_ACCESS_ENVELOPE, callId: string = "unknown", signal?: AbortSignal, lineName: string = "",
 ): Promise<AgentOutput> {
-  const spec = specOverride ?? buildSpawnSpec(kind, prompt, workdir, resolveAgentBin, envelope, callId);
+  const spec = specOverride ?? buildSpawnSpec(kind, prompt, workdir, resolveAgentBin, envelope, callId, lineName);
   return new Promise<AgentOutput>((resolve, reject) => {
     // detached: true makes the child its own process group leader, so any
     // grandchildren it forks share its process group unless they detach

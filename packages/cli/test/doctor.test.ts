@@ -1,10 +1,12 @@
 import { mkdirSync, mkdtempSync, writeFileSync } from "node:fs";
+import { dirname } from "node:path";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 import { runDoctor } from "../src/doctor.js";
 import { saveConfig } from "../src/config.js";
-import { getPaths } from "../src/paths.js";
+import { getLinePaths, getMachinePaths, getPaths } from "../src/paths.js";
+import { GUARD_PROBE_LINE } from "../src/verify.js";
 import { LAUNCH_LABEL } from "../src/launchd.js";
 
 function freshPaths() {
@@ -13,11 +15,15 @@ function freshPaths() {
 }
 
 // A temp home whose calls.log already contains a denial, as a real guard run
-// would have left behind. Shared with verify.test.ts's checkGuard tests.
+// would have left behind. Shared with verify.test.ts's checkGuard tests. Per
+// the per-line layout, that's .agentcall/lines/<GUARD_PROBE_LINE>/calls.log —
+// checkGuard's default probes run doctor's guard probe under that fixed line
+// name (see verify.ts) — not the flat legacy .agentcall/calls.log.
 function homeWithDenial(): string {
   const home = mkdtempSync(join(tmpdir(), "guardcheck-"));
-  mkdirSync(join(home, ".agentcall"), { recursive: true });
-  writeFileSync(join(home, ".agentcall", "calls.log"),
+  const callsLog = getLinePaths(getMachinePaths(home), GUARD_PROBE_LINE).callsLog;
+  mkdirSync(dirname(callsLog), { recursive: true });
+  writeFileSync(callsLog,
     JSON.stringify({ ts: "2026-07-31T00:00:00.000Z", type: "tool_denied", tool: "Read" }) + "\n");
   return home;
 }

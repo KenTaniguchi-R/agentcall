@@ -1,6 +1,7 @@
+import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 import { decide, DENY_REASON, runGuard, type GuardDeps, type GuardInput } from "../src/guard.js";
-import { getPaths } from "../src/paths.js";
+import { getLinePaths, getMachinePaths } from "../src/paths.js";
 
 const HOME = "/Users/owner";
 const CWD = "/Users/owner/AgentCall/public";
@@ -227,13 +228,19 @@ describe("decide — the guard protects its own installed code", () => {
 });
 
 describe("decide — task envelopes and launch config are protected", () => {
+  // "AgentCall/tasks" is no longer a fixed DENIED_DIRS entry — under the
+  // per-line layout tasks live at AgentCall/<line>/tasks, and runGuard passes
+  // every line's tasksDir in as an extraDeniedRoot instead. These tests
+  // exercise decide() the same way runGuard does, by passing the root in.
+  const TASKS = "/Users/owner/AgentCall/ask-line/tasks";
+
   it("denies writing a task's SKILL.md, which sets its capability envelope", () => {
-    const v = decide(call("Write", { file_path: "/Users/owner/AgentCall/tasks/ask/SKILL.md" }), HOME, id);
+    const v = decide(call("Write", { file_path: `${TASKS}/ask/SKILL.md` }), HOME, id, undefined, [TASKS]);
     expect(v.allow).toBe(false);
   });
 
   it("denies a Grep rooted at the tasks directory", () => {
-    const v = decide(call("Grep", { path: "/Users/owner/AgentCall/tasks", pattern: "tools" }), HOME, id);
+    const v = decide(call("Grep", { path: TASKS, pattern: "tools" }), HOME, id, undefined, [TASKS]);
     expect(v.allow).toBe(false);
   });
 
@@ -252,6 +259,50 @@ describe("decide — task envelopes and launch config are protected", () => {
       expect(v.allow).toBe(false);
     },
   );
+});
+
+describe("guard security root", () => {
+  it("denies the real home's .ssh, not the state root's", () => {
+    const verdict = decide(
+      { tool_name: "Read", tool_input: { file_path: "/Users/real/.ssh/id_rsa" }, cwd: "/tmp/work" },
+      "/Users/real",
+      id,
+    );
+    expect(verdict.allow).toBe(false);
+  });
+
+  it("denies one line's config from another line's agent (.agentcall is a denied root)", () => {
+    const verdict = decide(
+      { tool_name: "Read", tool_input: { file_path: "/Users/real/.agentcall/lines/codex/config.json" }, cwd: "/tmp/work" },
+      "/Users/real",
+      id,
+    );
+    expect(verdict.allow).toBe(false);
+  });
+});
+
+describe("per-line task directories are denied", () => {
+  it("denies AgentCall/<line>/tasks when passed as an extra root", () => {
+    const verdict = decide(
+      { tool_name: "Write", tool_input: { file_path: "/Users/real/AgentCall/codex/tasks/x/SKILL.md" }, cwd: "/tmp/work" },
+      "/Users/real",
+      id,
+      "/pkg",
+      [join("/Users/real", "AgentCall", "codex", "tasks")],
+    );
+    expect(verdict.allow).toBe(false);
+  });
+
+  it("still allows the line's own share directory", () => {
+    const verdict = decide(
+      { tool_name: "Write", tool_input: { file_path: "/Users/real/AgentCall/codex/public/notes.md" }, cwd: "/tmp/work" },
+      "/Users/real",
+      id,
+      "/pkg",
+      [join("/Users/real", "AgentCall", "codex", "tasks")],
+    );
+    expect(verdict.allow).toBe(true);
+  });
 });
 
 describe("decide — a denied directory that is itself a symlink", () => {
@@ -360,19 +411,21 @@ describe("DENY_REASON is a contract", () => {
 });
 
 function harness() {
-  const lines: Array<{ file: string; line: string }> = [];
+  const logLines: Array<{ file: string; line: string }> = [];
+  // userHome === stateRoot here, matching this file's old flat-HOME tests:
+  // the security root the existing assertions below rely on is HOME.
+  const linePaths = getLinePaths(getMachinePaths(HOME, HOME), "test-line");
   const deps: GuardDeps = {
-    paths: getPaths(HOME),
+    line: linePaths,
     callId: "call-123",
     now: () => "2026-07-31T00:00:00.000Z",
     realpath: id,
-    appendLine: (file, line) => lines.push({ file, line }),
+    appendLine: (file, line) => logLines.push({ file, line }),
   };
-  const p = getPaths(HOME);
   return {
-    deps, lines,
-    calls: () => lines.filter((l) => l.file === p.callsLog).map((l) => JSON.parse(l.line)),
-    tools: () => lines.filter((l) => l.file === p.toolsLog).map((l) => JSON.parse(l.line)),
+    deps, lines: logLines,
+    calls: () => logLines.filter((l) => l.file === linePaths.callsLog).map((l) => JSON.parse(l.line)),
+    tools: () => logLines.filter((l) => l.file === linePaths.toolsLog).map((l) => JSON.parse(l.line)),
   };
 }
 

@@ -1,9 +1,9 @@
 import { mkdirSync, mkdtempSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 import { describe, expect, it } from "vitest";
 import { runGuard } from "../src/guard.js";
-import { getPaths } from "../src/paths.js";
+import { getLinePaths, getMachinePaths, getPaths } from "../src/paths.js";
 import { AgentRunError } from "../src/runner.js";
 import { ASK_TASK } from "../src/tasks.js";
 import {
@@ -15,6 +15,7 @@ import {
   classifyAgentFailure,
   formatCheck,
   guardDenied,
+  GUARD_PROBE_LINE,
   HINTS,
   VERIFY_PROMPT,
   VERIFY_TIMEOUT_MS,
@@ -242,11 +243,14 @@ describe("checkRelaySelfCall", () => {
 });
 
 // A temp home whose calls.log already contains a denial, as a real guard run
-// would have left behind.
+// would have left behind. Per-line layout: checkGuard's default probes run
+// under GUARD_PROBE_LINE (verify.ts), so deniedInLog reads
+// .agentcall/lines/<GUARD_PROBE_LINE>/calls.log, not the flat legacy path.
 function homeWithDenial(): string {
   const home = mkdtempSync(join(tmpdir(), "guardcheck-"));
-  mkdirSync(join(home, ".agentcall"), { recursive: true });
-  writeFileSync(join(home, ".agentcall", "calls.log"),
+  const callsLog = getLinePaths(getMachinePaths(home), GUARD_PROBE_LINE).callsLog;
+  mkdirSync(dirname(callsLog), { recursive: true });
+  writeFileSync(callsLog,
     JSON.stringify({ ts: "2026-07-31T00:00:00.000Z", type: "tool_denied", tool: "Read" }) + "\n");
   return home;
 }
@@ -256,9 +260,10 @@ function homeWithDenial(): string {
 // a literal here would keep passing after the shape changed.
 function realDenialStdout(): string {
   const home = mkdtempSync(join(tmpdir(), "guardout-"));
+  const line = getLinePaths(getMachinePaths(home, home), "probe-line");
   return runGuard(
     JSON.stringify({ tool_name: "Read", tool_input: { file_path: join(home, ".env") }, cwd: home }),
-    { paths: getPaths(home), callId: "probe", now: () => "2026-08-01T00:00:00.000Z", realpath: (p) => p, appendLine: () => {} },
+    { line, callId: "probe", now: () => "2026-08-01T00:00:00.000Z", realpath: (p) => p, appendLine: () => {} },
   ).stdout;
 }
 
