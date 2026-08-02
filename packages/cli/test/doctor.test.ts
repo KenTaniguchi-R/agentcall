@@ -8,10 +8,10 @@ import { saveLineConfig } from "../src/lines.js";
 import { getLinePaths, getMachinePaths, type MachinePaths } from "../src/paths.js";
 import { GUARD_PROBE_LINE } from "../src/verify.js";
 import { LAUNCH_LABEL } from "../src/launchd.js";
+import type { AgentKind } from "../src/runner.js";
 
-// A single-line machine: today runDoctor resolves the (only/primary) line via
-// resolveLine — Task 13 is what makes it loop over every line. LINE is the
-// name every test below saves its config under.
+// A single-line machine, still used by tests that only care about one line's
+// checks. Multi-line behavior gets its own describe block below.
 const LINE = "claude";
 
 function freshMachine(): MachinePaths {
@@ -41,12 +41,14 @@ const okVerifyFns = {
   execFn: () => {},
 };
 
+const fakeCall = async () => ({ type: "call_reply", call_id: "c1", text: "hi", task: "ask" }) as never;
+
 const baseDeps = {
   isDarwin: true,
   launchctlList: () => `12345\t0\t${LAUNCH_LABEL}\n`,
   getStatusFn: async () => ({ online: true }),
   verifyFns: okVerifyFns,
-  callFn: async () => ({ type: "call_reply", call_id: "c1", text: "hi", task: "ask" }) as never,
+  callFn: fakeCall,
   // Never spawn a real `claude` in tests: checkGuard's default probe does
   // that on a real machine, and every test below with agent_kind "claude"
   // would otherwise fall through to it and hang/burn credentials in CI.
@@ -55,6 +57,20 @@ const baseDeps = {
   // built dist/guard-entry.js, which does not exist when vitest runs from src.
   guardBinaryFn: async () => true,
 };
+
+// A VerifyFns whose agent-binary resolution fails for exactly one kind, so a
+// multi-line test can make one line's ladder fail without touching the
+// others sharing the same (single, non-per-line) deps.verifyFns seam.
+function failingVerifyFor(kind: AgentKind) {
+  return {
+    resolveBin: (k: AgentKind) => {
+      if (k === kind) throw new Error(`no ${k} binary on PATH`);
+      return `/fake/bin/${k}`;
+    },
+    runFn: async () => ({ text: "OK" }),
+    execFn: () => {},
+  };
+}
 
 describe("runDoctor", () => {
   it("exits 0 and runs every check including the relay self-call when all pass", async () => {
@@ -171,6 +187,9 @@ describe("runDoctor", () => {
     const out = lines.join("\n");
     expect(out).toContain("✗ background listener");
     expect(out).toContain("✓ agent run");
+    // Diagnostic-only: distinguishes "plist never installed" from "installed
+    // but not currently loaded" without itself turning the run red twice.
+    expect(out).toContain("! launch agent plist");
   });
 
   // Guards against a regression that deletes the `if (cfg.agent_kind ===
@@ -223,5 +242,105 @@ describe("runDoctor", () => {
     });
     expect(code).toBe(0);
     expect(lines.join("\n")).not.toContain("tool guard");
+  });
+
+  // A relay string that is syntactically not a URL currently reaches the
+  // network call and fails there — folding a config mistake into the same
+  // bucket as "the listener isn't running." Caught before the network call
+  // so the two are distinguishable in the output.
+  it("reports a malformed relay string as its own failure, not folded into offline", async () => {
+    const m = freshMachine();
+    saveLineConfig(getLinePaths(m, LINE), { handle: "ken", token: "t", agent_kind: "claude", relay: "not a url" });
+    let statusCalled = false;
+    const lines: string[] = [];
+    const code = await runDoctor({
+      ...baseDeps,
+      machine: m,
+      getStatusFn: async () => {
+        statusCalled = true;
+        return { online: true };
+      },
+      log: (l) => lines.push(l),
+    });
+    expect(code).toBe(1);
+    expect(statusCalled).toBe(false);
+    const out = lines.join("\n");
+    expect(out).toContain("✗ relay config");
+    expect(out).not.toContain("relay status — offline");
+  });
+});
+
+describe("runDoctor across lines", () => {
+  it("reports every line and exits non-zero if any callable line fails", async () => {
+    const m = freshMachine();
+    const base = { handle: "ken", token: "t", agent_kind: "claude" as const, relay: "https://relay.example" };
+    saveLineConfig(getLinePaths(m, "claude"), base);
+    saveLineConfig(getLinePaths(m, "codex"), { ...base, handle: "ken-cdx", agent_kind: "codex" as AgentKind });
+    const out: string[] = [];
+    const code = await runDoctor({
+      ...baseDeps,
+      machine: m,
+      log: (s) => out.push(s),
+      verifyFns: failingVerifyFor("codex"),
+    });
+    const joined = out.join("\n");
+    expect(joined).toContain("line claude");
+    expect(joined).toContain("line codex");
+    expect(code).toBe(1);
+  });
+
+  it("treats a caller-only line as fine, not as a failure, alongside a healthy callable line", async () => {
+    const m = freshMachine();
+    saveLineConfig(getLinePaths(m, LINE), { handle: "ken", token: "t", agent_kind: "claude", relay: "https://relay.example" });
+    saveLineConfig(getLinePaths(m, "caller"), { handle: "solo", token: "t", relay: "https://relay.example" });
+    const out: string[] = [];
+    const code = await runDoctor({ ...baseDeps, machine: m, log: (s) => out.push(s) });
+    expect(code).toBe(0);
+    expect(out.join("\n")).toContain("caller-only");
+  });
+
+  it("reports an orphaned line as broken and exits non-zero", async () => {
+    const m = freshMachine();
+    mkdirSync(getLinePaths(m, "half").dir, { recursive: true });
+    const out: string[] = [];
+    const code = await runDoctor({ ...baseDeps, machine: m, log: (s) => out.push(s) });
+    expect(out.join("\n")).toMatch(/half/);
+    expect(code).toBe(1);
+  });
+
+  it("probes the guard once per agent kind, not once per line", async () => {
+    const m = freshMachine();
+    const base = { handle: "ken-a", token: "t", agent_kind: "claude" as const, relay: "https://relay.example" };
+    saveLineConfig(getLinePaths(m, "a"), base);
+    saveLineConfig(getLinePaths(m, "b"), { ...base, handle: "ken-b" });
+    let probes = 0;
+    await runDoctor({
+      ...baseDeps,
+      machine: m,
+      log: () => {},
+      guardFn: async () => {
+        probes++;
+        return { output: "blocked", home: homeWithDenial() };
+      },
+    });
+    expect(probes).toBe(1);
+  });
+
+  it("checks the single launch agent once, not per line", async () => {
+    const m = freshMachine();
+    const base = { handle: "ken-a", token: "t", agent_kind: "claude" as const, relay: "https://relay.example" };
+    saveLineConfig(getLinePaths(m, "a"), base);
+    saveLineConfig(getLinePaths(m, "b"), { ...base, handle: "ken-b" });
+    let listed = 0;
+    await runDoctor({
+      ...baseDeps,
+      machine: m,
+      log: () => {},
+      launchctlList: () => {
+        listed++;
+        return LAUNCH_LABEL;
+      },
+    });
+    expect(listed).toBe(1);
   });
 });
