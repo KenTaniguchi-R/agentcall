@@ -1,4 +1,4 @@
-import { existsSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
 import { createServer, type Server } from "node:http";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -71,6 +71,28 @@ describe("runSetup", () => {
       const cfg = JSON.parse(readFileSync(p.configFile, "utf8"));
       expect(cfg).toMatchObject({ org: "acme", handle: "ken", token: "tok-123", agent_kind: "claude", relay });
       expect(existsSync(p.publicDir)).toBe(true);
+    } finally {
+      delete process.env.AGENTCALL_HOME;
+    }
+  });
+
+  it("refuses to overwrite a corrupt credential config as though it were a fresh install", async () => {
+    const home = mkdtempSync(join(tmpdir(), "agentcall-setup-"));
+    process.env.AGENTCALL_HOME = home;
+    try {
+      const relay = await fakeRelay();
+      const registerCount = registerBodies.length;
+      const p = getPaths(home);
+      mkdirSync(p.dir, { recursive: true });
+      writeFileSync(p.configFile, "{\"org\":\"acme\"", { flag: "wx" });
+      const before = readFileSync(p.configFile, "utf8");
+
+      await expect(runSetup({
+        invite: "replacement-invite", verify: false, handle: "ken", agent: "claude",
+        relay, snippet: false, skipLaunchd: true,
+      })).rejects.toThrow(/corrupt.*config\.json.*agentcall setup/i);
+      expect(readFileSync(p.configFile, "utf8")).toBe(before);
+      expect(registerBodies).toHaveLength(registerCount);
     } finally {
       delete process.env.AGENTCALL_HOME;
     }
