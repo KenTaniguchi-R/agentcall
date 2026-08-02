@@ -1,7 +1,7 @@
 import { rmSync } from "node:fs";
 import { Command } from "commander";
 import type { AgentKind } from "@benree/agentcall-shared";
-import { getPaths } from "./paths.js";
+import { getPaths, getMachinePaths } from "./paths.js";
 import { loadConfig, saveConfig, relayUrl, assertCallableConfig } from "./config.js";
 import { callAgent, CallError } from "./callClient.js";
 import { getStatus, fetchCard, rotateToken, ApiError } from "./api.js";
@@ -332,8 +332,9 @@ program
       // memory, so without a restart it reconnects with a dead credential and
       // 401s forever. Only restart a listener that's actually installed —
       // installLaunchAgent would otherwise create one the owner opted out of.
-      if (isLaunchAgentInstalled(paths)) {
-        installLaunchAgent(paths);
+      const machine = getMachinePaths();
+      if (isLaunchAgentInstalled(machine)) {
+        installLaunchAgent(machine);
         console.log("Background listener restarted with the new token.");
       } else if (cfg.agent_kind) {
         console.log("Restart `agentcall listen` so it picks up the new token.");
@@ -350,7 +351,7 @@ program
   .option("--purge", "also delete ~/.agentcall (config, token, logs)")
   .action((o: { purge?: boolean }) => {
     const paths = getPaths();
-    uninstallLaunchAgent(paths);
+    uninstallLaunchAgent(getMachinePaths());
     if (o.purge) rmSync(paths.dir, { recursive: true, force: true });
     console.log("agentcall listener removed." + (o.purge ? " Config purged." : ""));
   });

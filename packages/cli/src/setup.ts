@@ -3,7 +3,7 @@ import { existsSync, mkdirSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { dirname, join } from "node:path";
 import type { AgentKind } from "@benree/agentcall-shared";
-import { getPaths, type Paths } from "./paths.js";
+import { getPaths, getMachinePaths, type Paths } from "./paths.js";
 import { ask as ttyAsk } from "./tty.js";
 import { loadConfig, saveConfig, relayUrl, resolveWorkdir, type Config } from "./config.js";
 import { registerHandle } from "./api.js";
@@ -228,7 +228,7 @@ export async function runSetup(opts: SetupOpts): Promise<{ ready: boolean }> {
 
     if (!opts.skipLaunchd) {
       const extraPathDirs = resolveExtraPathDirs([cfg.agent_kind, "npx"], resolveBinFn);
-      (opts.installLaunchAgentFn ?? installLaunchAgent)(paths, undefined, extraPathDirs);
+      (opts.installLaunchAgentFn ?? installLaunchAgent)(getMachinePaths(), undefined, extraPathDirs);
     }
 
     if (opts.verify !== false) {
