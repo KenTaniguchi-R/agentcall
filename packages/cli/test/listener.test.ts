@@ -442,11 +442,24 @@ describe("startListener line name propagation", () => {
     // through the real buildSpawnSpec — same as runAgent itself would do —
     // so the assertion lands on env.AGENTCALL_LINE, the value the guard
     // subprocess actually reads, not on the intermediate lineName string.
+    //
+    // `toBe`, not `toContain`/`toMatch`, and this is load-bearing: the
+    // default workdir (position 3, `captured.workdir`) resolves to
+    // `<stateRoot>/AgentCall/sales/public` — which CONTAINS "sales" as a path
+    // segment. A 3<->9 argument swap (workdir <-> lineName) would only be
+    // caught because `toBe` requires exact equality; a looser matcher would
+    // let that specific swap through undetected, since the swapped-in
+    // workdir string still contains the line name as a substring.
     const spec = buildSpawnSpec(
       captured.kind!, captured.prompt!, captured.workdir!, () => "/fake/claude",
       captured.envelope as never, captured.callId!, captured.lineName!,
     );
     expect(spec.env?.AGENTCALL_LINE).toBe(paths.name);
+    // Pins the callId position too (4 string-shaped positions — workdir,
+    // callId, lineName, plus kind — sit in this call's tail), so a
+    // workdir<->callId swap can't compile-clean and slide through this same
+    // test while only the separate workdir test (above) catches it.
+    expect(spec.env?.AGENTCALL_CALL_ID).toBe("c1");
   });
 });
 

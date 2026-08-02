@@ -58,6 +58,15 @@ export function startListener(deps: ListenerDeps): { stop(): void } {
     if (stopped) return;
     const config = deps.loadConfig();
     const workdir = resolveLineWorkdir(config, deps.paths);
+    // `deps.relay`, not `config.relay`: the relay host is fixed at
+    // `startListener()` entry (set by `startAllListeners` from the config it
+    // read at process startup), so unlike the token/handle/workdir above,
+    // a changed relay host in config.json does NOT take effect on
+    // reconnect — only a full listener restart picks up a new relay. This is
+    // spec-faithful, not an oversight: `ListenerDeps.relay` was never
+    // re-derived from `loadConfig()`'s return value, only its other fields
+    // were. Deliberate partial reload, documented here so it doesn't read as
+    // a bug to the next person tracing a relay-host change that didn't take.
     const url = deps.relay.replace(/^http/, "ws") + "/v1/ws?role=listen";
     ws = newSocket(url, {
       headers: { Authorization: `Bearer ${config.token}`, "X-AgentCall-Handle": config.handle },
