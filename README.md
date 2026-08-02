@@ -626,6 +626,12 @@ the documented staged rollout for any create, delete, rename, or transfer. Read
 the post-deploy report as confirmation; treat any unexpected action as an
 incident and make no further production changes until it is understood.
 
+The hosted relay currently makes no regional residency claim. Read the living
+[cloud data map and residency decision](./docs/security/data-residency.md)
+before changing D1 placement, Durable Object ID derivation, Regional Services,
+logging, or analytics. Adding `.jurisdiction()` changes named DO IDs and is a
+state migration, not a configuration-only deploy.
+
 Monorepo layout:
 
 ```

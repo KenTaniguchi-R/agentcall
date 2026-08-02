@@ -1,4 +1,5 @@
 import { cloudflareTest, readD1Migrations } from "@cloudflare/vitest-pool-workers";
+import { readFile } from "node:fs/promises";
 import { defineConfig } from "vitest/config";
 
 export default defineConfig({
@@ -7,6 +8,9 @@ export default defineConfig({
     miniflare: {
       bindings: {
         TEST_MIGRATIONS: await readD1Migrations("./migrations"),
+        DATA_RESIDENCY_DOC: await readFile(
+          new URL("../../docs/security/data-residency.md", import.meta.url), "utf8",
+        ),
         BOOTSTRAP_TOKEN: "test-bootstrap-token",
         RATE_LIMIT_NOW: 1_000_000,
       },
