@@ -1,6 +1,7 @@
-import { SELF } from "cloudflare:test";
+import { env, SELF } from "cloudflare:test";
 import { describe, expect, it } from "vitest";
-import { registerHandle, issueInvite, wsAuth, openWs, closed, nextFrame } from "./helpers.js";
+import app from "../src/index.js";
+import { fixedRateLimit, registerHandle, issueInvite, wsAuth, openWs, closed, nextFrame } from "./helpers.js";
 
 describe("listener attach + status", () => {
   it("401s a listener with a bad token", async () => {
@@ -137,13 +138,10 @@ describe("listener attach + status", () => {
   it("throttles status reads from one source past the burst limit", async () => {
     const token = await registerHandle("rl-reader");
     const headers = { ...wsAuth("rl-reader", token), "cf-connecting-ip": "203.0.113.9" };
+    const limiter = fixedRateLimit(60);
     for (let i = 0; i < 60; i++) {
-      expect((await SELF.fetch("https://relay.test/v1/status/rl-absent", { headers })).status).toBe(404);
+      expect((await app.request("https://relay.test/v1/status/rl-absent", { headers }, { ...env, READ_RL: limiter })).status).toBe(404);
     }
-    let throttled = false;
-    for (let i = 0; i < 10 && !throttled; i++) {
-      throttled = (await SELF.fetch("https://relay.test/v1/status/rl-absent", { headers })).status === 429;
-    }
-    expect(throttled).toBe(true);
+    expect((await app.request("https://relay.test/v1/status/rl-absent", { headers }, { ...env, READ_RL: limiter })).status).toBe(429);
   });
 });

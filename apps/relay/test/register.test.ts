@@ -1,6 +1,7 @@
 import { env, SELF } from "cloudflare:test";
 import { describe, expect, it } from "vitest";
-import { issueInvite, registerHandle, wsAuth } from "./helpers.js";
+import app from "../src/index.js";
+import { fixedRateLimit, issueInvite, registerHandle, wsAuth } from "./helpers.js";
 
 // Each test uses its own synthetic source IP so the per-IP register rate
 // limit (5/60s, see wrangler.jsonc's REGISTER_RL) doesn't make unrelated
@@ -92,11 +93,21 @@ describe("POST /v1/register", () => {
 
   it("rate limits registration attempts from the same source past the configured burst limit", async () => {
     const ip = "203.0.113.99";
+    const limiter = fixedRateLimit(5);
     for (let i = 0; i < 5; i++) {
-      const res = await register({ org: "acme", handle: `rl-reg-${i}`, agent_kind: "claude" }, ip);
+      const invite = await issueInvite("acme", `rl-reg-${i}`);
+      const res = await app.request("https://relay.test/v1/register", {
+        method: "POST",
+        headers: { "content-type": "application/json", "cf-connecting-ip": ip },
+        body: JSON.stringify({ invite, handle: `rl-reg-${i}`, agent_kind: "claude" }),
+      }, { ...env, REGISTER_RL: limiter });
       expect(res.status).toBe(200);
     }
-    const sixth = await register({ org: "acme", handle: "rl-reg-6th", agent_kind: "claude" }, ip);
+    const sixth = await app.request("https://relay.test/v1/register", {
+      method: "POST",
+      headers: { "content-type": "application/json", "cf-connecting-ip": ip },
+      body: JSON.stringify({ invite: await issueInvite("acme", "rl-reg-6th"), handle: "rl-reg-6th", agent_kind: "claude" }),
+    }, { ...env, REGISTER_RL: limiter });
     expect(sixth.status).toBe(429);
   });
 

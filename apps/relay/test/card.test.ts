@@ -1,6 +1,7 @@
-import { SELF } from "cloudflare:test";
+import { env, SELF } from "cloudflare:test";
 import { describe, expect, it } from "vitest";
-import { registerHandle, wsAuth } from "./helpers.js";
+import app from "../src/index.js";
+import { fixedRateLimit, registerHandle, wsAuth } from "./helpers.js";
 
 const UPLOAD = {
   description: "Ken's public agent",
@@ -115,14 +116,11 @@ describe("GET /v1/card/:handle", () => {
     await putCard("rlcard", token);
     const viewer = await registerHandle("rlcard-viewer");
     const headers = { "cf-connecting-ip": "203.0.113.10", ...wsAuth("rlcard-viewer", viewer) };
+    const limiter = fixedRateLimit(60);
     for (let i = 0; i < 60; i++) {
-      expect((await SELF.fetch("https://relay.test/v1/card/rlcard", { headers })).status).toBe(200);
+      expect((await app.request("https://relay.test/v1/card/rlcard", { headers }, { ...env, READ_RL: limiter })).status).toBe(200);
     }
-    let throttled = false;
-    for (let i = 0; i < 10 && !throttled; i++) {
-      throttled = (await SELF.fetch("https://relay.test/v1/card/rlcard", { headers })).status === 429;
-    }
-    expect(throttled).toBe(true);
+    expect((await app.request("https://relay.test/v1/card/rlcard", { headers }, { ...env, READ_RL: limiter })).status).toBe(429);
   });
 
   it("401s when auth headers are present but invalid", async () => {

@@ -31,6 +31,13 @@ export function wsAuth(handle: string, token: string, org = "acme"): Record<stri
   return { Authorization: `Bearer ${token}`, "X-AgentCall-Org": org, "X-AgentCall-Handle": handle };
 }
 
+export function fixedRateLimit(limit: number): RateLimit {
+  let used = 0;
+  return {
+    limit: async () => ({ success: ++used <= limit }),
+  } as unknown as RateLimit;
+}
+
 export async function openWs(path: string, headers: Record<string, string>): Promise<WebSocket> {
   const res = await SELF.fetch(`https://relay.test${path}`, {
     headers: { Upgrade: "websocket", ...headers },
