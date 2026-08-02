@@ -6,6 +6,15 @@ which are released together.
 
 ## Unreleased
 
+### Recoverable roster audit-budget exhaustion
+
+- Members can always leave a roster after its 10,000-event membership audit
+  budget is exhausted, so the presence authorization boundary cannot trap a
+  member in a frozen roster.
+- Exhausted joins now identify the administrator recovery action. An
+  authenticated administrator can reset the budget without deleting the
+  roster; each effective reset writes a distinct append-only audit event.
+
 ### Employee transparency and local history
 
 - Added `agentcall history` so the person whose machine answers calls can see
