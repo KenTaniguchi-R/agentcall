@@ -1,10 +1,9 @@
 import { env, SELF } from "cloudflare:test";
 import { describe, expect, it } from "vitest";
-import app from "../src/index.js";
-import { fixedRateLimit, issueInvite, registerHandle, wsAuth } from "./helpers.js";
+import { issueInvite, registerHandle, wsAuth } from "./helpers.js";
 
 // Each test uses its own synthetic source IP so the per-IP register rate
-// limit (5/60s, see wrangler.jsonc's REGISTER_RL) doesn't make unrelated
+// limit (5/60s, see REGISTER in src/ratelimit) doesn't make unrelated
 // tests in this file collide with each other's budget.
 async function register(body: unknown, ip = "203.0.113.1") {
   const input = body as { org?: string; invite?: string; handle?: string; agent_kind?: string };
@@ -93,21 +92,20 @@ describe("POST /v1/register", () => {
 
   it("rate limits registration attempts from the same source past the configured burst limit", async () => {
     const ip = "203.0.113.99";
-    const limiter = fixedRateLimit(5);
     for (let i = 0; i < 5; i++) {
       const invite = await issueInvite("acme", `rl-reg-${i}`);
-      const res = await app.request("https://relay.test/v1/register", {
+      const res = await SELF.fetch("https://relay.test/v1/register", {
         method: "POST",
         headers: { "content-type": "application/json", "cf-connecting-ip": ip },
         body: JSON.stringify({ invite, handle: `rl-reg-${i}`, agent_kind: "claude" }),
-      }, { ...env, REGISTER_RL: limiter });
+      });
       expect(res.status).toBe(200);
     }
-    const sixth = await app.request("https://relay.test/v1/register", {
+    const sixth = await SELF.fetch("https://relay.test/v1/register", {
       method: "POST",
       headers: { "content-type": "application/json", "cf-connecting-ip": ip },
       body: JSON.stringify({ invite: await issueInvite("acme", "rl-reg-6th"), handle: "rl-reg-6th", agent_kind: "claude" }),
-    }, { ...env, REGISTER_RL: limiter });
+    });
     expect(sixth.status).toBe(429);
   });
 

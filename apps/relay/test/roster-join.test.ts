@@ -12,10 +12,10 @@ async function newRoster(handle: string) {
   return { token, ...(await res.json<{ roster_id: string; join_secret: string; admin_secret: string }>()) };
 }
 
-async function join(id: string, handle: string, token: string, secret: string) {
+async function join(id: string, handle: string, token: string, secret: string, ip = `test-${handle}`) {
   return SELF.fetch(`https://relay.test/v1/roster/${id}/join`, {
     method: "POST",
-    headers: { "content-type": "application/json", "cf-connecting-ip": `test-${handle}`, ...wsAuth(handle, token) },
+    headers: { "content-type": "application/json", "cf-connecting-ip": ip, ...wsAuth(handle, token) },
     body: JSON.stringify({ join_secret: secret }),
   });
 }
@@ -69,6 +69,19 @@ describe("POST /v1/roster/:id/join", () => {
     const res = await join("%2E%2E%2Fetc", "rj4b", token, "x");
     expect(res.status).toBe(400);
     expect(await res.json()).toEqual({ error: "invalid roster id" });
+  });
+
+  it("shares the credential-attempt budget across changing source IPs", async () => {
+    const r = await newRoster("rj-rate-limit");
+    const token = await registerHandle("rj-rate-limited");
+    for (let attempt = 0; attempt < 10; attempt++) {
+      expect((await join(
+        r.roster_id, "rj-rate-limited", token, "wrong", `198.51.100.${attempt + 1}`,
+      )).status).toBe(404);
+    }
+    expect((await join(
+      r.roster_id, "rj-rate-limited", token, "wrong", "203.0.113.250",
+    )).status).toBe(429);
   });
 
   it("is idempotent: rejoining does not duplicate membership", async () => {

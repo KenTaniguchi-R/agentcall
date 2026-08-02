@@ -12,23 +12,27 @@
     "database_id": "f67097f0-2521-4c41-a9d4-1402682038aa",
     "migrations_dir": "migrations"
   }],
-  "durable_objects": { "bindings": [{ "name": "HANDLE_DO", "class_name": "HandleDO" }] },
-  "migrations": [{ "tag": "v1", "new_sqlite_classes": ["HandleDO"] }],
+  "durable_objects": { "bindings": [
+    { "name": "HANDLE_DO", "class_name": "HandleDO" },
+    { "name": "RATE_LIMITER_DO", "class_name": "RateLimiterDO" }
+  ] },
+  "migrations": [
+    { "tag": "v1", "new_sqlite_classes": ["HandleDO"] },
+    { "tag": "v2", "new_sqlite_classes": ["RateLimiterDO"] }
+  ],
   "routes": [{ "pattern": "agentcall.benree.tech", "custom_domain": true }],
   // Burst/abuse throttling only — the binding's `period` must be 10 or 60
   // seconds (no hourly window like RATE_LIMIT_PER_HOUR on the DO side), so
   // this is a much shorter-window cap than that per-hour call limit.
   "ratelimits": [
-    { "name": "REGISTER_RL", "namespace_id": "1001", "simple": { "limit": 5, "period": 60 } },
     { "name": "CARD_RL", "namespace_id": "1002", "simple": { "limit": 20, "period": 60 } },
     // Shared by the two read endpoints (GET status, GET card), keyed by
     // source IP. 60/min is far above any human or agent's real read rate
     // while still putting a ceiling on namespace scraping and on the
     // Durable Object wakeups a status probe causes.
     { "name": "READ_RL", "namespace_id": "1003", "simple": { "limit": 60, "period": 60 } },
-    // Roster join verifies a shared secret, so it is a credential-checking
-    // endpoint and must not share READ_RL's 60/min read allowance. Keyed by
-    // source IP *and* roster id at the call site.
-    { "name": "ROSTER_RL", "namespace_id": "1004", "simple": { "limit": 10, "period": 60 } }
+    // Roster bundle reads remain native. Credential-checked roster writes use
+    // RATE_LIMITER_DO so their window is exact and shared across source IPs.
+    { "name": "ROSTER_READ_RL", "namespace_id": "1004", "simple": { "limit": 10, "period": 60 } }
   ]
 }

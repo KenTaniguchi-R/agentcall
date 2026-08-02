@@ -8,6 +8,7 @@ import {
 } from "@benree/agentcall-shared";
 import { authenticateRequest } from "./tenant.js";
 import { sharedRosterIds } from "./groups.js";
+import { checkLimit, NATIVE_READ } from "./ratelimit/index.js";
 
 // The card endpoint is public and cheap; a short TTL keeps the TCK's
 // Cache-Control/ETag checks satisfied without making policy edits slow to
@@ -57,7 +58,7 @@ export function mountA2A(app: Hono<{ Bindings: Env }>): void {
     const { org, handle: viewer } = identity;
 
     const ip = c.req.header("cf-connecting-ip") ?? "unknown";
-    if (!(await c.env.READ_RL.limit({ key: ip })).success) {
+    if (!(await checkLimit(c.env, ip, NATIVE_READ))) {
       const { status, body } = standardError(429, "rate limited");
       return c.json(body, status as 429);
     }

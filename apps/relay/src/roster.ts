@@ -9,6 +9,7 @@ import {
   MAX_ROSTER_MEMBERS, ROSTER_ID_RE, RotateRosterRequest, visibleTasks,
 } from "@benree/agentcall-shared";
 import { authenticateRequest } from "./tenant.js";
+import { checkLimit, NATIVE_ROSTER_READ, REGISTER, ROSTER_WRITE } from "./ratelimit/index.js";
 
 // 16 random bytes, base64url — 22 chars, inside ROSTER_ID_RE's 16..64 window.
 // Unguessable but not secret: it travels in URL paths and will be logged.
@@ -22,10 +23,9 @@ export function mountRoster(app: Hono<{ Bindings: Env }>): void {
     const identity = await authenticateRequest(c.env.DB, c.req);
     if (!identity) return c.json({ error: "unauthorized" }, 401);
     const { org, handle } = identity;
-    // Reuses REGISTER_RL with a distinct key prefix, the same technique
-    // /v1/token/rotate uses: creating rosters should cost what registering
-    // handles costs, so it cannot be used to cheaply fill D1 with rows.
-    if (!(await c.env.REGISTER_RL.limit({ key: `roster:${handle}` })).success) {
+    // Creating rosters uses the tighter registration policy so it cannot be
+    // used to cheaply fill D1 with rows.
+    if (!(await checkLimit(c.env, `roster:${org}:${handle}`, REGISTER))) {
       return c.json({ error: "rate limited" }, 429);
     }
     const roster_id = generateRosterId();
@@ -61,8 +61,7 @@ export function mountRoster(app: Hono<{ Bindings: Env }>): void {
     // and rejecting it here keeps junk out of the query path.
     if (!ROSTER_ID_RE.test(id)) return c.json({ error: "invalid roster id" }, 400);
 
-    const ip = c.req.header("cf-connecting-ip") ?? "unknown";
-    if (!(await c.env.ROSTER_RL.limit({ key: `join:${ip}:${id}` })).success) {
+    if (!(await checkLimit(c.env, `${org}:${id}`, ROSTER_WRITE))) {
       return c.json({ error: "rate limited" }, 429);
     }
 
@@ -120,8 +119,7 @@ export function mountRoster(app: Hono<{ Bindings: Env }>): void {
     if (!identity) return c.json({ error: "unauthorized" }, 401);
     const id = c.req.param("id");
     if (!ROSTER_ID_RE.test(id)) return c.json({ error: "invalid roster id" }, 400);
-    const ip = c.req.header("cf-connecting-ip") ?? "unknown";
-    if (!(await c.env.ROSTER_RL.limit({ key: `leave:${ip}:${id}` })).success) return c.json({ error: "rate limited" }, 429);
+    if (!(await checkLimit(c.env, `${identity.org}:${id}`, ROSTER_WRITE))) return c.json({ error: "rate limited" }, 429);
     const member = await c.env.DB.prepare(
       "SELECT 1 FROM roster_members WHERE roster_id = ? AND org = ? AND handle = ?",
     ).bind(id, identity.org, identity.handle).first();
@@ -142,8 +140,7 @@ export function mountRoster(app: Hono<{ Bindings: Env }>): void {
     if (!identity) return c.json({ error: "unauthorized" }, 401);
     const id = c.req.param("id");
     if (!ROSTER_ID_RE.test(id)) return c.json({ error: "invalid roster id" }, 400);
-    const ip = c.req.header("cf-connecting-ip") ?? "unknown";
-    if (!(await c.env.ROSTER_RL.limit({ key: `expel:${ip}:${id}` })).success) return c.json({ error: "rate limited" }, 429);
+    if (!(await checkLimit(c.env, `${identity.org}:${id}`, ROSTER_WRITE))) return c.json({ error: "rate limited" }, 429);
     const body = ExpelRosterRequest.safeParse(await c.req.json().catch(() => null));
     if (!body.success) return c.json(NOT_FOUND, 404);
     const roster = await adminRoster(c, id, body.data.admin_secret);
@@ -168,8 +165,7 @@ export function mountRoster(app: Hono<{ Bindings: Env }>): void {
     if (!identity) return c.json({ error: "unauthorized" }, 401);
     const id = c.req.param("id");
     if (!ROSTER_ID_RE.test(id)) return c.json({ error: "invalid roster id" }, 400);
-    const ip = c.req.header("cf-connecting-ip") ?? "unknown";
-    if (!(await c.env.ROSTER_RL.limit({ key: `rotate:${ip}:${id}` })).success) return c.json({ error: "rate limited" }, 429);
+    if (!(await checkLimit(c.env, `${identity.org}:${id}`, ROSTER_WRITE))) return c.json({ error: "rate limited" }, 429);
     const body = RotateRosterRequest.safeParse(await c.req.json().catch(() => null));
     if (!body.success) return c.json(NOT_FOUND, 404);
     const roster = await adminRoster(c, id, body.data.admin_secret);
@@ -198,8 +194,7 @@ export function mountRoster(app: Hono<{ Bindings: Env }>): void {
     if (!identity) return c.json({ error: "unauthorized" }, 401);
     const id = c.req.param("id");
     if (!ROSTER_ID_RE.test(id)) return c.json({ error: "invalid roster id" }, 400);
-    const ip = c.req.header("cf-connecting-ip") ?? "unknown";
-    if (!(await c.env.ROSTER_RL.limit({ key: `delete:${ip}:${id}` })).success) return c.json({ error: "rate limited" }, 429);
+    if (!(await checkLimit(c.env, `${identity.org}:${id}`, ROSTER_WRITE))) return c.json({ error: "rate limited" }, 429);
     const body = AdminSecretRequest.safeParse(await c.req.json().catch(() => null));
     if (!body.success) return c.json(NOT_FOUND, 404);
     const roster = await adminRoster(c, id, body.data.admin_secret);
@@ -224,7 +219,7 @@ export function mountRoster(app: Hono<{ Bindings: Env }>): void {
     if (!ROSTER_ID_RE.test(id)) return c.json({ error: "invalid roster id" }, 400);
 
     const ip = c.req.header("cf-connecting-ip") ?? "unknown";
-    if (!(await c.env.ROSTER_RL.limit({ key: `bundle:${ip}:${id}` })).success) {
+    if (!(await checkLimit(c.env, `${ip}:${id}`, NATIVE_ROSTER_READ))) {
       return c.json({ error: "rate limited" }, 429);
     }
 

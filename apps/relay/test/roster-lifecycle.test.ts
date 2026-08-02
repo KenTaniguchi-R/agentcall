@@ -10,10 +10,10 @@ async function create(handle: string) {
   return { token, ...(await res.json<{ roster_id: string; join_secret: string; admin_secret: string }>()) };
 }
 
-async function mutate(id: string, op: string, handle: string, token: string, body: unknown) {
+async function mutate(id: string, op: string, handle: string, token: string, body: unknown, ip = `${op}-${handle}`) {
   return SELF.fetch(`https://relay.test/v1/roster/${id}/${op}`, {
     method: "POST",
-    headers: { "content-type": "application/json", "cf-connecting-ip": `${op}-${handle}`, ...wsAuth(handle, token) },
+    headers: { "content-type": "application/json", "cf-connecting-ip": ip, ...wsAuth(handle, token) },
     body: JSON.stringify(body),
   });
 }
@@ -29,6 +29,26 @@ async function isMember(id: string, handle: string) {
 }
 
 describe("roster lifecycle", () => {
+  it("shares one budget across alternating write operations and source IPs", async () => {
+    const r = await create("alternating-limit");
+    const attempts = [
+      ["join", { join_secret: "wrong" }],
+      ["expel", {}],
+      ["rotate", {}],
+      ["delete", {}],
+    ] as const;
+    for (let attempt = 0; attempt < 10; attempt++) {
+      const [op, body] = attempts[attempt % attempts.length];
+      expect((await mutate(
+        r.roster_id, op, "alternating-limit", r.token, body, `192.0.2.${attempt + 1}`,
+      )).status).toBe(404);
+    }
+    expect((await mutate(
+      r.roster_id, "leave", "alternating-limit", r.token, {}, "198.51.100.200",
+    )).status).toBe(429);
+    expect(await isMember(r.roster_id, "alternating-limit")).toBe(true);
+  });
+
   it("lets a member leave, preserves evidence, and keeps the empty roster", async () => {
     const r = await create("leave1");
     expect((await mutate(r.roster_id, "leave", "leave1", r.token, {})).status).toBe(200);
