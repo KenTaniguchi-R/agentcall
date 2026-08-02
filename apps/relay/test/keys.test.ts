@@ -4,23 +4,26 @@ import {
   encryptionKeyTranscript, exportPublicKey, generateEncryptionKeyPair,
   generateIdentityKeyPair, HPKE_SUITE, identityTranscript, keyIdFor, signTranscript,
 } from "@benree/agentcall-shared";
-import { registerHandle } from "./helpers.js";
+import app from "../src/index.js";
+import { fixedRateLimit, registerHandle } from "./helpers.js";
 
-// Must match the host the existing relay tests fetch, because the GET handler
-// derives the record address from `new URL(c.req.url).host`. A mismatch makes
-// the published address and the served address differ and the equality
-// assertion below fail.
+// The address in a record is `handle@registrationAddressHost(org, url)`, and
+// registrationAddressHost returns the request hostname unchanged for any host
+// that is not the hosted relay. So for these tests the address host is exactly
+// the host fetched below — which is the whole point: publication and service
+// derive it the same way.
 const HOST = "relay.test";
 
 async function newIdentity(handle: string) {
   const token = await registerHandle(handle);
   const idKp = await generateIdentityKeyPair();
-  const identity = {
+  const record = {
     v: 1 as const,
     address: `${handle}@${HOST}`,
     identity_pub: await exportPublicKey(idKp.publicKey),
   };
-  return { token, idKp, identity, handle };
+  const signature = await signTranscript(idKp.privateKey, identityTranscript(record));
+  return { token, idKp, identity: record, identityBody: { record, signature }, handle };
 }
 
 function auth(handle: string, token: string) {
@@ -32,12 +35,20 @@ function auth(handle: string, token: string) {
   };
 }
 
-async function encRecord(who: Awaited<ReturnType<typeof newIdentity>>, epoch: number) {
+function putIdentity(who: { handle: string; token: string; identityBody: unknown }, body?: unknown) {
+  return SELF.fetch(`https://${HOST}/v1/keys/identity`, {
+    method: "PUT",
+    headers: auth(who.handle, who.token),
+    body: JSON.stringify(body ?? who.identityBody),
+  });
+}
+
+async function encRecord(who: Awaited<ReturnType<typeof newIdentity>>, epoch: number, address?: string) {
   const encKp = await generateEncryptionKeyPair();
   const pub = await exportPublicKey(encKp.publicKey);
   const record = {
     v: 1 as const,
-    address: `${who.handle}@${HOST}`,
+    address: address ?? `${who.handle}@${HOST}`,
     key_id: await keyIdFor(pub),
     suite: HPKE_SUITE,
     pub,
@@ -53,47 +64,79 @@ async function encRecord(who: Awaited<ReturnType<typeof newIdentity>>, epoch: nu
 describe("key publication endpoints", () => {
   it("publishes an identity key and refuses to replace it", async () => {
     const who = await newIdentity("kp-one");
-    const body = JSON.stringify({ record: who.identity });
 
-    const first = await SELF.fetch(`https://${HOST}/v1/keys/identity`, {
-      method: "PUT", headers: auth(who.handle, who.token), body,
-    });
-    expect(first.status).toBe(200);
+    expect((await putIdentity(who)).status).toBe(200);
 
     // Re-publishing the identical key is idempotent, not a replace attempt.
-    const again = await SELF.fetch(`https://${HOST}/v1/keys/identity`, {
-      method: "PUT", headers: auth(who.handle, who.token), body,
-    });
-    expect(again.status).toBe(200);
+    expect((await putIdentity(who)).status).toBe(200);
 
     // A genuinely different key for the same identity is the actual replace
     // attempt, and that is what must be refused.
     const otherKp = await generateIdentityKeyPair();
-    const second = await SELF.fetch(`https://${HOST}/v1/keys/identity`, {
-      method: "PUT",
-      headers: auth(who.handle, who.token),
-      body: JSON.stringify({
-        record: { ...who.identity, identity_pub: await exportPublicKey(otherKp.publicKey) },
-      }),
+    const otherRecord = { ...who.identity, identity_pub: await exportPublicKey(otherKp.publicKey) };
+    const second = await putIdentity(who, {
+      record: otherRecord,
+      signature: await signTranscript(otherKp.privateKey, identityTranscript(otherRecord)),
     });
     expect(second.status).toBe(409);
   });
 
   it("rejects an identity record whose address is not the caller", async () => {
     const who = await newIdentity("kp-two");
-    const res = await SELF.fetch(`https://${HOST}/v1/keys/identity`, {
-      method: "PUT",
-      headers: auth(who.handle, who.token),
-      body: JSON.stringify({ record: { ...who.identity, address: `someone-else@${HOST}` } }),
+    const record = { ...who.identity, address: `someone-else@${HOST}` };
+    const res = await putIdentity(who, {
+      record, signature: await signTranscript(who.idKp.privateKey, identityTranscript(record)),
     });
     expect(res.status).toBe(400);
   });
 
+  it("rejects an identity record naming a different relay host", async () => {
+    // The host is signed so a record cannot be lifted from one relay to
+    // another. Accepting this would store a record whose address the GET below
+    // rewrites to this host — permanently unverifiable against its signature.
+    const who = await newIdentity("kp-foreign-id");
+    const record = { ...who.identity, address: `${who.handle}@evil.example` };
+    const res = await putIdentity(who, {
+      record, signature: await signTranscript(who.idKp.privateKey, identityTranscript(record)),
+    });
+    expect(res.status).toBe(400);
+  });
+
+  it("rejects an identity record with no self-signature", async () => {
+    const who = await newIdentity("kp-nosig");
+    expect((await putIdentity(who, { record: who.identity })).status).toBe(400);
+  });
+
+  it("rejects an identity record signed by a different key than it publishes", async () => {
+    const who = await newIdentity("kp-wrongsig");
+    const impostor = await generateIdentityKeyPair();
+    const res = await putIdentity(who, {
+      record: who.identity,
+      signature: await signTranscript(impostor.privateKey, identityTranscript(who.identity)),
+    });
+    expect(res.status).toBe(400);
+  });
+
+  it("rejects an identity_pub that is not a P-256 public key", async () => {
+    // "AAAA" passes the base64url shape check but is not a point. Storing it
+    // would make every later encryption publish fail on import, forever, since
+    // an identity key cannot be replaced.
+    const who = await newIdentity("kp-badpoint");
+    const record = { ...who.identity, identity_pub: "AAAA" };
+    const res = await putIdentity(who, {
+      record, signature: await signTranscript(who.idKp.privateKey, identityTranscript(record)),
+    });
+    expect(res.status).toBe(400);
+
+    const row = await env.DB.prepare(
+      "SELECT identity_pub FROM identity_keys WHERE org = ? AND handle = ?",
+    ).bind("acme", who.handle).first();
+    expect(row).toBeNull();
+  });
+
   it("accepts a correctly signed encryption record and returns it", async () => {
     const who = await newIdentity("kp-three");
-    await SELF.fetch(`https://${HOST}/v1/keys/identity`, {
-      method: "PUT", headers: auth(who.handle, who.token), body: JSON.stringify({ record: who.identity }),
-    });
+    await putIdentity(who);
     const { record, signature } = await encRecord(who, 1);
 
     const put = await SELF.fetch(`https://${HOST}/v1/keys/encryption`, {
@@ -111,11 +154,33 @@ describe("key publication endpoints", () => {
     expect(json.encryption.signature).toBe(signature);
   });
 
+  it("serves the exact address that was signed", async () => {
+    // The served address is reconstructed, not stored. If publication and
+    // service ever derive it differently — org prefix, port, hostname vs host —
+    // the signature over the record stops verifying and the record, which is
+    // permanent, becomes worthless. Byte equality is the whole assertion.
+    const who = await newIdentity("kp-served");
+    await putIdentity(who);
+    const { record, signature } = await encRecord(who, 1);
+    await SELF.fetch(`https://${HOST}/v1/keys/encryption`, {
+      method: "PUT", headers: auth(who.handle, who.token), body: JSON.stringify({ record, signature }),
+    });
+
+    const got = await SELF.fetch(`https://${HOST}/v1/keys/${who.handle}`, {
+      headers: auth(who.handle, who.token),
+    });
+    const json = await got.json<{
+      identity: { address: string }; encryption: { record: { address: string } };
+    }>();
+
+    expect(json.identity.address).toBe(who.identity.address);
+    expect(json.encryption.record.address).toBe(record.address);
+    expect(json.identity.address).toBe(json.encryption.record.address);
+  });
+
   it("rejects an encryption record signed by the wrong identity", async () => {
     const who = await newIdentity("kp-four");
-    await SELF.fetch(`https://${HOST}/v1/keys/identity`, {
-      method: "PUT", headers: auth(who.handle, who.token), body: JSON.stringify({ record: who.identity }),
-    });
+    await putIdentity(who);
     const { record } = await encRecord(who, 1);
     const impostor = await generateIdentityKeyPair();
     const signature = await signTranscript(impostor.privateKey, encryptionKeyTranscript(record));
@@ -126,11 +191,22 @@ describe("key publication endpoints", () => {
     expect(res.status).toBe(400);
   });
 
+  it("rejects an encryption record naming a different relay host", async () => {
+    const who = await newIdentity("kp-foreign-enc");
+    await putIdentity(who);
+    // Correctly signed by the right identity — only the host is foreign. The
+    // signature check alone would let this through.
+    const body = await encRecord(who, 1, `${who.handle}@evil.example`);
+
+    const res = await SELF.fetch(`https://${HOST}/v1/keys/encryption`, {
+      method: "PUT", headers: auth(who.handle, who.token), body: JSON.stringify(body),
+    });
+    expect(res.status).toBe(400);
+  });
+
   it("rejects an epoch that does not advance", async () => {
     const who = await newIdentity("kp-five");
-    await SELF.fetch(`https://${HOST}/v1/keys/identity`, {
-      method: "PUT", headers: auth(who.handle, who.token), body: JSON.stringify({ record: who.identity }),
-    });
+    await putIdentity(who);
     const first = await encRecord(who, 5);
     await SELF.fetch(`https://${HOST}/v1/keys/encryption`, {
       method: "PUT", headers: auth(who.handle, who.token), body: JSON.stringify(first),
@@ -141,6 +217,31 @@ describe("key publication endpoints", () => {
       method: "PUT", headers: auth(who.handle, who.token), body: JSON.stringify(stale),
     });
     expect(res.status).toBe(409);
+  });
+
+  it("rejects an epoch equal to the current maximum", async () => {
+    // The boundary the strictly-lower test does not reach. It must be a clean
+    // 409, not a primary-key violation surfacing as a 500.
+    const who = await newIdentity("kp-equal-epoch");
+    await putIdentity(who);
+    const first = await encRecord(who, 5);
+    expect((await SELF.fetch(`https://${HOST}/v1/keys/encryption`, {
+      method: "PUT", headers: auth(who.handle, who.token), body: JSON.stringify(first),
+    })).status).toBe(200);
+
+    // A *different* key at the same epoch: the collision case, not a retry.
+    const sameEpoch = await encRecord(who, 5);
+    const res = await SELF.fetch(`https://${HOST}/v1/keys/encryption`, {
+      method: "PUT", headers: auth(who.handle, who.token), body: JSON.stringify(sameEpoch),
+    });
+    expect(res.status).toBe(409);
+
+    // And the stored record is still the first one, not half-overwritten.
+    const got = await SELF.fetch(`https://${HOST}/v1/keys/${who.handle}`, {
+      headers: auth(who.handle, who.token),
+    });
+    const json = await got.json<{ encryption: { record: { pub: string } } }>();
+    expect(json.encryption.record.pub).toBe(first.record.pub);
   });
 
   it("returns 404 for a handle with no published identity", async () => {
@@ -154,6 +255,41 @@ describe("key publication endpoints", () => {
   it("requires authentication to read keys", async () => {
     const res = await SELF.fetch(`https://${HOST}/v1/keys/anyone`);
     expect(res.status).toBe(401);
+  });
+
+  it("requires authentication to publish either kind of key", async () => {
+    for (const path of ["/v1/keys/identity", "/v1/keys/encryption"]) {
+      const res = await SELF.fetch(`https://${HOST}${path}`, {
+        method: "PUT", headers: { "content-type": "application/json" }, body: "{}",
+      });
+      expect(res.status).toBe(401);
+    }
+  });
+
+  it("rate limits both publication routes", async () => {
+    // Without a limit, an authenticated handle can hammer the signature
+    // verification path and grow encryption_keys without bound — there is no
+    // retention on that table.
+    //
+    // An injected limiter rather than 21 real requests against CARD_RL's
+    // 20-per-60s window: a wall-clock burst test is only correct if every
+    // request lands in the same window, which is exactly the ambient-window
+    // flake register.test.ts already has. A 401 here instead of 429 would also
+    // mean the check runs before authentication, so ordering is covered too.
+    const who = await newIdentity("kp-rl");
+    const { record, signature } = await encRecord(who, 1);
+    const bodies: Array<[string, unknown]> = [
+      ["/v1/keys/identity", who.identityBody],
+      ["/v1/keys/encryption", { record, signature }],
+    ];
+    for (const [path, body] of bodies) {
+      const res = await app.request(
+        `https://${HOST}${path}`,
+        { method: "PUT", headers: auth(who.handle, who.token), body: JSON.stringify(body) },
+        { ...env, CARD_RL: fixedRateLimit(0) },
+      );
+      expect(res.status).toBe(429);
+    }
   });
 });
 
