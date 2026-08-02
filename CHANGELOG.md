@@ -6,6 +6,20 @@ which are released together.
 
 ## Unreleased
 
+### Documentation — identity and address separation
+
+- Agent identity is now decided as an opaque, organization-scoped lifetime
+  separate from the reclaimable `handle@host` routing address, rotatable
+  credentials, and future lines/sessions.
+- Durable state, cards, roster membership, policy subjects, and audit actors
+  will attach to stable identity so handle reassignment cannot inherit the
+  previous owner's authority or data. Credential and signing-key rotation will
+  not change identity.
+- The runtime change is deliberately a coordinated zero-user cutover after the
+  recovery-credential change and before SSO/SCIM, reclaim, or card signing. It will
+  have no dual-read compatibility path and must fail closed if production row
+  counts contradict the zero-user premise.
+
 ### Documentation — Cloudflare Access boundary
 
 - Cloudflare Access is selected for the future human admin hostname and as a

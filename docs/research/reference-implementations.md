@@ -74,9 +74,22 @@ credential needs an explicit TTL, maximum-use policy, trusted-network policy, an
 lockout behavior. Organization-level and project-level identities can share a
 model while differing in management scope.
 
+AgentCall has decided to follow the entity boundary as well as the rotation
+pattern: a stable agent identity will own reclaimable addresses and multiple
+credentials. The handle, token hash, public signing key, and device/line will
+not be identity identifiers. User-facing CLI flows may hide login exchange and
+refresh, but administrative and audit surfaces will retain non-secret identity
+and credential IDs. This future boundary was rechecked against Infisical's
+current identity, Universal Auth, and client secret source on 2026-08-02; the
+runtime still uses `(org, handle)` today.
+
 Do not treat a renewable, non-expiring token as a default. It is an explicit
 secret-zero tradeoff for workloads that cannot retain bootstrap material, and it
 needs proof-of-possession or another bounded renewal mechanism.
+
+Decided for AgentCall:
+
+- [Identity and address separation](../superpowers/specs/2026-08-02-identity-address-separation.md)
 
 ### A2A: protocol and signed Agent Cards
 
