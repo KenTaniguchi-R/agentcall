@@ -9,6 +9,7 @@ export interface Paths {
   rostersFile: string; rosterCacheFile: string;
   contextsFile: string;
   contextsOutFile: string;
+  identityKeyFile: string; encryptionKeyFile: string;
 }
 
 export function managedPolicyPath(platform: NodeJS.Platform = process.platform): string {
@@ -40,5 +41,7 @@ export function getPaths(
     rosterCacheFile: join(dir, "roster-cache.json"),
     contextsFile: join(dir, "contexts.json"),
     contextsOutFile: join(dir, "contexts-out.json"),
+    identityKeyFile: join(dir, "identity.key.json"),
+    encryptionKeyFile: join(dir, "encryption.key.json"),
   };
 }
