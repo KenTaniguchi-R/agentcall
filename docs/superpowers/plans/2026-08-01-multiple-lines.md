@@ -150,8 +150,8 @@ git commit -m "refactor(shared): export AgentKind, drop five inline unions"
 The load-bearing split. `getPaths(home)` conflates the state root, the user's real home (plist `HOME`, `~/Library/LaunchAgents`, **the guard's security root**), and authored content. No field is named `home` afterwards — that reuse is what caused the conflation.
 
 **Files:**
-- Modify: `packages/cli/src/paths.ts` (full rewrite)
-- Test: `packages/cli/test/paths.test.ts`
+- Modify: `packages/cli/src/paths.ts` (additive — the new declarations land beside the existing `Paths`/`getPaths`, which stay until Task 12)
+- Create: `packages/cli/test/paths.test.ts` — **this file does not exist.** `getPaths` has never had a dedicated test; it is only exercised indirectly through the ten test files that build `Paths` to drive other modules. Nothing to preserve or merge.
 
 **Interfaces:**
 - Produces: `MachinePaths`, `LinePaths`, `getMachinePaths(stateRoot?, userHome?)`, `getLinePaths(m, name)`
