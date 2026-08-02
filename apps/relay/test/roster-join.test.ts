@@ -1,5 +1,5 @@
 import { env, SELF } from "cloudflare:test";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { MAX_ROSTER_MEMBERS } from "@benree/agentcall-shared";
 import { registerHandle, wsAuth } from "./helpers.js";
 
@@ -87,8 +87,17 @@ describe("POST /v1/roster/:id/join", () => {
   it("is idempotent: rejoining does not duplicate membership", async () => {
     const r = await newRoster("rj5");
     const token = await registerHandle("rj5b");
-    expect((await join(r.roster_id, "rj5b", token, r.join_secret)).status).toBe(200);
-    expect((await join(r.roster_id, "rj5b", token, r.join_secret)).status).toBe(200);
+    const clock = vi.spyOn(Date, "now").mockReturnValue(1_000_000);
+    try {
+      expect((await join(r.roster_id, "rj5b", token, r.join_secret)).status).toBe(200);
+      expect((await join(r.roster_id, "rj5b", token, r.join_secret)).status).toBe(200);
+    } finally {
+      clock.mockRestore();
+    }
+    const auditCount = await env.DB.prepare(
+      "SELECT COUNT(*) AS n FROM roster_events WHERE roster_id = ? AND event = 'roster.join' AND target_id = ?",
+    ).bind(r.roster_id, "rj5b").first<{ n: number }>();
+    expect(auditCount?.n).toBe(1);
   });
 
   it("409s when the roster is full, since the caller already proved the secret", async () => {

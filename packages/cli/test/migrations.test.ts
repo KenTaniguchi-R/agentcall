@@ -12,6 +12,7 @@ const historical = [
   "0005_handle_recovery.sql",
 ];
 const repair = readFileSync(join(migrationsDir, "0006_tenancy_and_roster_lifecycle.sql"), "utf8");
+const auditEvents = readFileSync(join(migrationsDir, "0007_roster_audit_events.sql"), "utf8");
 
 function legacyDatabase(): DatabaseSync {
   const db = new DatabaseSync(":memory:");
@@ -21,6 +22,12 @@ function legacyDatabase(): DatabaseSync {
 
 function columns(db: DatabaseSync, table: string): string[] {
   return db.prepare(`PRAGMA table_info(${table})`).all().map((row) => String(row.name));
+}
+
+function tenantDatabase(): DatabaseSync {
+  const db = legacyDatabase();
+  db.exec(repair);
+  return db;
 }
 
 describe("D1 migration reconciliation", () => {
@@ -74,5 +81,35 @@ describe("D1 migration reconciliation", () => {
     expect(() => db.exec(repair)).toThrow(/check constraint/i);
     expect(db.prepare("SELECT roster_id, handle FROM roster_members").get())
       .toEqual({ roster_id: "missing-roster", handle: "orphan" });
+  });
+
+  it("upgrades an empty roster audit log to the complete evidence schema", () => {
+    const db = tenantDatabase();
+
+    expect(() => db.exec(auditEvents)).not.toThrow();
+    expect(columns(db, "rosters")).toEqual([
+      "id", "org", "join_secret_hash", "admin_secret_hash", "created_at",
+      "audit_budget_used", "audit_budget_exhausted_at",
+    ]);
+    expect(columns(db, "roster_events")).toEqual([
+      "id", "event", "action_type", "roster_id", "org", "actor", "actor_type",
+      "target_type", "target_id", "actor_ip", "actor_country", "description", "at",
+    ]);
+  });
+
+  it("refuses to rebuild a roster audit log after its zero-row precondition changes", () => {
+    const db = tenantDatabase();
+    db.exec(
+      "INSERT INTO roster_events (roster_id, org, kind, actor, subject, at) " +
+        "VALUES ('existing', 'acme', 'join', 'ken', 'caller', 1)",
+    );
+
+    expect(() => db.exec(auditEvents)).toThrow(/check constraint/i);
+    expect(db.prepare(
+      "SELECT roster_id, org, kind, actor, subject, at FROM roster_events",
+    ).get()).toEqual({
+      roster_id: "existing", org: "acme", kind: "join", actor: "ken", subject: "caller", at: 1,
+    });
+    expect(columns(db, "rosters")).not.toContain("audit_budget_used");
   });
 });
