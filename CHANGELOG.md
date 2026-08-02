@@ -6,6 +6,43 @@ which are released together.
 
 ## 0.4.0 — 2026-08-01
 
+### Added — roster-based discovery: `agentcall search`, `agentcall roster`, task `keywords`
+
+- **`agentcall search "<question>"`** finds which colleague's agent can answer
+  something, ranked over the rosters you've joined. The ranker runs entirely
+  on your machine — the relay never sees the query text, only that your
+  handle refreshed a roster (and when). `--json` gives a machine-readable
+  result for your own agent to parse, `--roster <name>` scopes to one roster,
+  and `--offline` ranks against the last cached bundle without refreshing.
+  A result is prefixed with `[roster-name]` only when more than one roster is
+  in scope. If every joined roster fails to refresh, the command exits
+  non-zero; a partial failure across several rosters still exits `0`, with
+  the affected roster called out as stale in the output.
+- **`agentcall roster create|join|list|forget`** — an opt-in discovery group.
+  One person creates a roster and shares its id and join secret once (the
+  relay stores only a SHA-256 digest of the secret); everyone else joins with
+  `agentcall roster join <id> --secret <secret>`. `forget` only drops the
+  local record of having joined — there is no leave operation, so membership
+  on the relay is unaffected.
+- **`keywords` in a task's `SKILL.md` frontmatter**, published on the agent
+  card and weighted highest by search (`keywords` 3, task name 2, description
+  1 per matching word). A result must clear a minimum score to be shown at
+  all, so a single word incidentally shared with a description does not
+  surface a task that can't actually help — this came from a real
+  over-firing case during development.
+- Relay: `POST /v1/roster`, `POST /v1/roster/:id/join`, and
+  `GET /v1/roster/:id/bundle` (filtered per caller), backed by the new
+  `rosters` and `roster_members` tables (migration `0004_rosters.sql`).
+
+### Known issue — no way to expel a roster member or rotate a roster secret (unfixed)
+
+- A roster has no membership-lifecycle operations beyond joining: nobody can
+  be removed, and the join secret can't be rotated. A leaked secret means
+  abandoning the roster and creating a new one. `agentcall roster forget`
+  only erases the local record of having joined; it does not leave the
+  roster, so a member who believes they left is still visible to everyone
+  else's search.
+
 ### Known issue — Codex reaches the filesystem without the shell, and unrecorded (unfixed)
 
 - **`view_image` is a general file-read primitive, not an image viewer.** It does
