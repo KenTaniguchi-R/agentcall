@@ -6,6 +6,14 @@ which are released together.
 
 ## Unreleased
 
+### Consistent roster group grants
+
+- Roster bundle discovery now applies the same deterministic first-50 shared
+  roster cap as direct card projection and call admission, preventing search
+  from advertising a group-granted task that the call path would reject.
+- Bundle ETags now cover the actual caller-specific projection, so membership
+  changes cannot preserve stale group-granted tasks through a `304` response.
+
 ### Safe reply rendering
 
 - Human-readable call replies and fetched agent cards now neutralize terminal

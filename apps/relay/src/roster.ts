@@ -7,7 +7,7 @@ import { constantTimeEqual, generateToken, sha256Hex } from "./auth.js";
 import {
   AdminSecretRequest, DEFAULT_ROSTER_JOIN_KEY_EXPIRY_DAYS, ExpelRosterRequest,
   IssueRosterJoinKeyRequest, JoinRosterRequest, MAX_ACTIVE_ROSTER_JOIN_KEYS,
-  MAX_BUNDLE_TASKS_PER_CARD, MAX_LISTED_ROSTER_JOIN_KEYS, MAX_ROSTER_MEMBERS,
+  MAX_BUNDLE_TASKS_PER_CARD, MAX_CALLER_GROUPS, MAX_LISTED_ROSTER_JOIN_KEYS, MAX_ROSTER_MEMBERS,
   RevokeRosterJoinKeyRequest, ROSTER_ID_RE, visibleTasks,
 } from "@benree/agentcall-shared";
 import { authenticateRequest } from "./tenant.js";
@@ -429,24 +429,35 @@ export function mountRoster(app: Hono<{ Bindings: Env }>): void {
     ).bind(id, org, viewer).first();
     if (!member) return c.json(NOT_FOUND, 404);
 
-    // One bounded join, never N queries. Bounded by MAX_ROSTER_MEMBERS,
-    // which join enforces.
+    // One query, never one shared-group query per member. ranked_shared mirrors
+    // sharedRosterIds exactly: roster_id ascending, first MAX_CALLER_GROUPS.
+    // ROW_NUMBER applies the cap independently for each target before
+    // GROUP_CONCAT, so discovery cannot attest a group call admission omits.
     const { results } = await c.env.DB.prepare(
-      "SELECT c.handle, c.card_json, c.updated_at, GROUP_CONCAT(DISTINCT viewer_membership.roster_id) AS shared_rosters " +
-        "FROM roster_members m " +
-        "JOIN cards c ON c.org = m.org AND c.handle = m.handle " +
-        "LEFT JOIN roster_members shared ON shared.org = m.org AND shared.handle = m.handle " +
-        "LEFT JOIN roster_members viewer_membership ON viewer_membership.org = shared.org " +
-          "AND viewer_membership.roster_id = shared.roster_id AND viewer_membership.handle = ? " +
-        "WHERE m.roster_id = ? AND m.org = ? " +
-        "GROUP BY c.handle, c.card_json, c.updated_at ORDER BY c.handle",
-    ).bind(viewer, id, org).all<{
+      "WITH target_handles AS (" +
+        "SELECT handle, org FROM roster_members WHERE roster_id = ? AND org = ?" +
+      "), ranked_shared AS (" +
+        "SELECT target.handle, viewer_membership.roster_id, " +
+          "ROW_NUMBER() OVER (PARTITION BY target.handle ORDER BY viewer_membership.roster_id) AS group_rank " +
+        "FROM target_handles target " +
+        "JOIN roster_members shared ON shared.org = target.org AND shared.handle = target.handle " +
+        "JOIN roster_members viewer_membership ON viewer_membership.org = shared.org " +
+          "AND viewer_membership.roster_id = shared.roster_id AND viewer_membership.handle = ?" +
+      "), capped_shared AS (" +
+        "SELECT handle, GROUP_CONCAT(roster_id) AS shared_rosters FROM ranked_shared " +
+        "WHERE group_rank <= ? GROUP BY handle" +
+      ") " +
+      "SELECT c.handle, c.card_json, c.updated_at, capped_shared.shared_rosters " +
+        "FROM target_handles target " +
+        "JOIN cards c ON c.org = target.org AND c.handle = target.handle " +
+        "LEFT JOIN capped_shared ON capped_shared.handle = target.handle " +
+        "ORDER BY c.handle",
+    ).bind(id, org, viewer, MAX_CALLER_GROUPS).all<{
       handle: string; card_json: string; updated_at: number; shared_rosters: string | null;
     }>();
 
     const entries = [];
     let skipped = 0;
-    let newest = 0;
     for (const row of results ?? []) {
       const upload = parseStoredCard(row.card_json, org, row.handle);
       if (!upload) {
@@ -470,18 +481,24 @@ export function mountRoster(app: Hono<{ Bindings: Env }>): void {
         updated_at: row.updated_at,
         truncated: visible.length > MAX_BUNDLE_TASKS_PER_CARD,
       });
-      if (row.updated_at > newest) newest = row.updated_at;
     }
 
-    // Varies by caller (grants differ), so the ETag must include the viewer
-    // and the response must never enter a shared cache.
-    const etag = `"${id}-${org}-${viewer}-${newest}-${entries.length}-${skipped}"`;
+    const payload = { roster_id: id, entries, skipped };
+    const serialized = JSON.stringify(payload);
+    // Membership changes can alter group-granted tasks without touching the
+    // card timestamp or entry count. Hash the actual projection plus viewer
+    // identity so a conditional request cannot retain stale authorization.
+    const etag = `"${await sha256Hex(`${org}\0${viewer}\0${serialized}`)}"`;
     if (c.req.header("If-None-Match") === etag) {
       return new Response(null, { status: 304, headers: { ETag: etag, "Cache-Control": "private, no-store" } });
     }
-    return c.json({ roster_id: id, entries, skipped }, 200, {
-      ETag: etag,
-      "Cache-Control": "private, no-store",
+    return new Response(serialized, {
+      status: 200,
+      headers: {
+        "Content-Type": "application/json; charset=UTF-8",
+        ETag: etag,
+        "Cache-Control": "private, no-store",
+      },
     });
   });
 }
