@@ -20,11 +20,6 @@ jobs:
       # lockfile and CI can never drift onto different pnpm majors.
       - uses: pnpm/action-setup@v6
 
-      # 24 only. Not the `engines: >=20` floor -- pnpm 11.5.2 requires node
-      # >=22.13, so the toolchain cannot install this repo on 20 at all, and
-      # that floor is a promise to *consumers* of the published CLI which a
-      # workspace build does not exercise anyway. See CLAUDE.md.
-      #
       # `cache: pnpm` stays explicit. setup-node v5 added automatic caching
       # driven by the root `packageManager` field, and v6 narrowed that
       # automatic path to npm only -- so on v6+ dropping this line would
@@ -44,3 +39,47 @@ jobs:
       - run: pnpm -r typecheck
 
       - run: pnpm -r test
+      - name: Pack publishable workspaces
+        run: |
+          mkdir -p "$RUNNER_TEMP/agentcall-packages"
+          pnpm --filter @benree/agentcall-shared pack --pack-destination "$RUNNER_TEMP/agentcall-packages"
+          pnpm --filter @benree/agentcall pack --pack-destination "$RUNNER_TEMP/agentcall-packages"
+      - uses: actions/upload-artifact@v7
+        with:
+          name: packed-cli
+          path: ${{ runner.temp }}/agentcall-packages/*.tgz
+          if-no-files-found: error
+          retention-days: 1
+
+  packed-cli-consumer:
+    needs: verify
+    runs-on: macos-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        node: [20, 22, 24]
+    steps:
+      # No checkout or pnpm: this job exercises only what npm users receive.
+      - uses: actions/setup-node@v7
+        with:
+          node-version: ${{ matrix.node }}
+      - uses: actions/download-artifact@v8
+        with:
+          name: packed-cli
+          path: ${{ runner.temp }}/agentcall-packages
+      - name: Install and run the packed CLI
+        env:
+          AGENTCALL_HOME: ${{ runner.temp }}/agentcall-home
+          NPM_CONFIG_ENGINE_STRICT: "true"
+        run: |
+          npm install --global --prefix "$RUNNER_TEMP/agentcall-global" \
+            "$RUNNER_TEMP"/agentcall-packages/benree-agentcall-shared-*.tgz \
+            "$RUNNER_TEMP"/agentcall-packages/benree-agentcall-[0-9]*.tgz
+          agentcall_bin="$RUNNER_TEMP/agentcall-global/bin/agentcall"
+          "$agentcall_bin" --version
+          "$agentcall_bin" --help
+          if "$agentcall_bin" status nobody@example.invalid >"$RUNNER_TEMP/status-output" 2>&1; then
+            echo "status unexpectedly succeeded without a configured identity"
+            exit 1
+          fi
+          grep -F "No agentcall config found" "$RUNNER_TEMP/status-output"

@@ -92,14 +92,6 @@ script runs after the src pass; `apps/relay` already had `test` in its main
 `pnpm typecheck` green while every stale call site in `test/` fails at runtime
 instead — vitest strips types without checking them.
 
-### CI runs node 24 only, not the `engines` floor
-
-`packages/cli` declares `engines: { node: ">=20" }`, but **pnpm 11.5.2 requires node
->=22.13**, so the toolchain cannot install or build this repo on node 20 at all. CI
-pins 24, the version the repo is developed on. So CI does *not* verify the promise
-`engines` makes to people installing the published CLI on older node — that needs a
-job installing the built tarball, not a workspace build.
-
 ## TDD
 
 This codebase was built test-first and stays that way. Write the failing test before
