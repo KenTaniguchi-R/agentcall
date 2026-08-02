@@ -1277,7 +1277,10 @@ describe("tokenize", () => {
     expect(tokenize("architecture-history")).toEqual(["architecture", "history"]);
   });
   it("lowercases and drops punctuation", () => {
-    expect(tokenize("Why DID we?!")).toEqual(["did"]); // "why" and "we" are stopwords
+    // "why", "did", and "we" are all stopwords; "auth" is the only term
+    // carrying topical signal, and it survives lowercased. Do not pick an
+    // example word that is itself on the stopword list.
+    expect(tokenize("Why DID we AUTH?!")).toEqual(["auth"]);
   });
   it("NFKC-normalizes full-width input", () => {
     expect(tokenize("ＡＵＴＨ")).toEqual(["auth"]);
