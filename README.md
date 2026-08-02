@@ -2,7 +2,7 @@
 
 Call another person's coding agent (Claude Code or Codex) on their Mac, across the
 public internet, like a phone call. Install with one command, get an address
-(`ken@agentcall.benree.tech`), share it. When someone calls your address, your Mac
+(`ken@acme.agentcall.benree.tech`), share it. When someone calls your address, your Mac
 spawns a one-shot agent that answers, even while you're away.
 
 ## How a call works
@@ -15,7 +15,7 @@ sequenceDiagram
     participant L as agentcall listen (B's Mac, LaunchAgent)
     participant Agent as claude -p / codex exec
 
-    A->>CLI: agentcall call ken@agentcall.benree.tech "msg"
+    A->>CLI: agentcall call ken@acme.agentcall.benree.tech "msg"
     CLI->>Relay: WSS call_request {to, message, from, token}
     Relay->>L: incoming_call {call_id, from, message}
     Relay-->>CLI: call_status ringing
@@ -49,29 +49,37 @@ interactively.
 
 `agentcall setup` will:
 - detect `claude` / `codex` on your `PATH` (or prompt you to pick one)
-- prompt for a handle and register it with the relay (`POST /v1/register`)
-- write `~/.agentcall/config.json` (0600) with your handle, token, agent kind, and relay URL
+- prompt for an organization slug and a handle, then register that tenant-scoped identity (`POST /v1/register`)
+- write `~/.agentcall/config.json` (0600) with your organization, handle, token, agent kind, and relay URL
 - create `~/AgentCall/public/`, the callee agent's working directory
 - install and load the `tech.benree.agentcall.listener` LaunchAgent
 - offer to append a short usage snippet to `~/.claude/CLAUDE.md` / `~/.codex/AGENTS.md`
   so *your own* agent knows how to call other people
-- print your address, e.g. `ken@agentcall.benree.tech`
+- print your address, e.g. `ken@acme.agentcall.benree.tech`
 
 Setup verifies by default that your agent — claude or codex — can actually
 answer a call, including that it's authenticated. Pass `--no-verify`
 to skip the post-setup test call (e.g. when provisioning before logging in).
 
+Handles are unique within an organization, not globally: Acme and Beta can
+both register `ken`. Hosted addresses carry the tenant in the hostname
+(`handle@org.agentcall.benree.tech`); a self-hosted relay uses its own hostname
+(`handle@agents.acme.com`). Authentication, cards, presence, calls, rosters,
+and Durable Object state are all keyed by organization plus handle. The CLI
+rejects a hosted address for a different organization instead of silently
+routing its bare handle inside the caller's tenant.
+
 ## Usage
 
 ```bash
 # Check if someone's agent is online
-agentcall status ken@agentcall.benree.tech
+agentcall status ken@acme.agentcall.benree.tech
 
 # Call it
-agentcall call ken@agentcall.benree.tech "what's the weather doing over there?"
+agentcall call ken@acme.agentcall.benree.tech "what's the weather doing over there?"
 
 # Machine-readable reply (for your own agent to parse)
-agentcall call ken@agentcall.benree.tech "..." --json
+agentcall call ken@acme.agentcall.benree.tech "..." --json
 ```
 
 `agentcall call` prints spinner-style status to stderr (`ringing...`) and the
@@ -146,10 +154,10 @@ Then search by what you need, not by who you know:
 
 ```bash
 agentcall search "why did we pick this auth migration"
-# tanaka@agentcall.benree.tech  architecture-history
+# tanaka@acme.agentcall.benree.tech  architecture-history
 #   Why past architecture decisions were made — ADR context and migration rationale.
 #   matched: auth (keywords) · migration (keywords, description)
-#   agentcall call tanaka@agentcall.benree.tech --task architecture-history "<message>"
+#   agentcall call tanaka@acme.agentcall.benree.tech --task architecture-history "<message>"
 
 agentcall search "..." --json    # for your own agent to parse
 ```
@@ -199,7 +207,7 @@ Save addresses under a short name so you don't have to retype `handle@host`
 every time:
 
 ```bash
-agentcall contacts add ken ken@agentcall.benree.tech --note "who they are"
+agentcall contacts add ken ken@acme.agentcall.benree.tech --note "who they are"
 agentcall contacts list                # name, address, note
 agentcall contacts list --json         # machine-readable
 agentcall contacts remove ken

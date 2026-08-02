@@ -7,7 +7,7 @@ import { publishCard } from "../src/card.js";
 import { getPaths } from "../src/paths.js";
 import type { Config } from "../src/config.js";
 
-const cfg: Config = { handle: "ken", token: "t", agent_kind: "claude", relay: "https://r" };
+const cfg: Config = { org: "acme", handle: "ken", token: "t", agent_kind: "claude", relay: "https://r" };
 
 function home() {
   const h = mkdtempSync(join(tmpdir(), "agentcall-lint-"));

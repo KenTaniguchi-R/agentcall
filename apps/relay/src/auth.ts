@@ -19,8 +19,9 @@ export function constantTimeEqual(a: string, b: string): boolean {
   return diff === 0;
 }
 
-export async function verifyHandleToken(db: D1Database, handle: string, token: string): Promise<boolean> {
-  const row = await db.prepare("SELECT token_hash FROM handles WHERE handle = ?").bind(handle).first<{ token_hash: string }>();
+export async function verifyHandleToken(db: D1Database, org: string, handle: string, token: string): Promise<boolean> {
+  const row = await db.prepare("SELECT token_hash FROM handles WHERE org = ? AND handle = ?")
+    .bind(org, handle).first<{ token_hash: string }>();
   if (!row) return false;
   return constantTimeEqual(row.token_hash, await sha256Hex(token));
 }

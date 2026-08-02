@@ -77,7 +77,7 @@ function startRelay(
 }
 
 function seedConfig(testHome: string, relay: string): void {
-  saveConfig(getPaths(testHome), { handle: "ken", token: "tok", relay });
+  saveConfig(getPaths(testHome), { org: "acme", handle: "ken", token: "tok", relay });
 }
 
 const A = "a".repeat(22);

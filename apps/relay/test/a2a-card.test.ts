@@ -6,8 +6,9 @@ const ORIGIN = "https://example.com";
 
 async function seedCard(handle: string) {
   await registerHandle(handle);
-  await env.DB.prepare("INSERT OR REPLACE INTO cards (handle, card_json, updated_at) VALUES (?, ?, ?)")
+  await env.DB.prepare("INSERT OR REPLACE INTO cards (org, handle, card_json, updated_at) VALUES (?, ?, ?, ?)")
     .bind(
+      "acme",
       handle,
       JSON.stringify({
         description: "Ken's agent",
@@ -44,7 +45,7 @@ describe("GET /.well-known/agent-card.json", () => {
 
 describe("GET /v1/a2a/:handle/agent-card.json", () => {
   it("serves a conformant card for a known handle", async () => {
-    const res = await SELF.fetch(`${ORIGIN}/v1/a2a/ken/agent-card.json`);
+    const res = await SELF.fetch(`${ORIGIN}/v1/a2a/ken/agent-card.json`, { headers: { "X-AgentCall-Org": "acme" } });
     expect(res.status).toBe(200);
     const card = await res.json<any>();
     expect(card.name).toBe("ken");
@@ -56,7 +57,7 @@ describe("GET /v1/a2a/:handle/agent-card.json", () => {
   });
 
   it("never exposes grants or agent_kind", async () => {
-    const res = await SELF.fetch(`${ORIGIN}/v1/a2a/ken/agent-card.json`);
+    const res = await SELF.fetch(`${ORIGIN}/v1/a2a/ken/agent-card.json`, { headers: { "X-AgentCall-Org": "acme" } });
     const body = await res.text();
     expect(body).not.toContain("grants");
     expect(body).not.toContain("secret-task");
@@ -64,13 +65,13 @@ describe("GET /v1/a2a/:handle/agent-card.json", () => {
   });
 
   it("sets caching headers", async () => {
-    const res = await SELF.fetch(`${ORIGIN}/v1/a2a/ken/agent-card.json`);
+    const res = await SELF.fetch(`${ORIGIN}/v1/a2a/ken/agent-card.json`, { headers: { "X-AgentCall-Org": "acme" } });
     expect(res.headers.get("cache-control")).toMatch(/max-age=\d+/);
     expect(res.headers.get("etag")).toBeTruthy();
   });
 
   it("returns an AIP-193 404 for an unknown handle", async () => {
-    const res = await SELF.fetch(`${ORIGIN}/v1/a2a/nobody/agent-card.json`);
+    const res = await SELF.fetch(`${ORIGIN}/v1/a2a/nobody/agent-card.json`, { headers: { "X-AgentCall-Org": "acme" } });
     expect(res.status).toBe(404);
     const body = await res.json<any>();
     expect(body.error.code).toBe(404);
@@ -79,7 +80,7 @@ describe("GET /v1/a2a/:handle/agent-card.json", () => {
 
   it("rejects an unsupported A2A-Version with VersionNotSupported", async () => {
     const res = await SELF.fetch(`${ORIGIN}/v1/a2a/ken/agent-card.json`, {
-      headers: { "A2A-Version": "0.3" },
+      headers: { "A2A-Version": "0.3", "X-AgentCall-Org": "acme" },
     });
     expect(res.status).toBe(400);
     const body = await res.json<any>();
@@ -89,8 +90,13 @@ describe("GET /v1/a2a/:handle/agent-card.json", () => {
 
   it("accepts the advertised A2A-Version", async () => {
     const res = await SELF.fetch(`${ORIGIN}/v1/a2a/ken/agent-card.json`, {
-      headers: { "A2A-Version": "1.0" },
+      headers: { "A2A-Version": "1.0", "X-AgentCall-Org": "acme" },
     });
+    expect(res.status).toBe(200);
+  });
+
+  it("derives the tenant from the hosted request hostname", async () => {
+    const res = await SELF.fetch("https://acme.agentcall.benree.tech/v1/a2a/ken/agent-card.json");
     expect(res.status).toBe(200);
   });
 });

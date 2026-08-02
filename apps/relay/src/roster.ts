@@ -8,6 +8,7 @@ import {
   CardUpload, JoinRosterRequest, MAX_BUNDLE_TASKS_PER_CARD, MAX_ROSTER_MEMBERS,
   ROSTER_ID_RE, visibleTasks,
 } from "@benree/agentcall-shared";
+import { requestOrg } from "./tenant.js";
 
 // 16 random bytes, base64url — 22 chars, inside ROSTER_ID_RE's 16..64 window.
 // Unguessable but not secret: it travels in URL paths and will be logged.
@@ -19,16 +20,20 @@ function generateRosterId(): string {
 // Returns the verified handle, or null. Every roster route calls this first:
 // possession of a handle token is the floor, not the gate — registration is
 // open, so membership is what actually authorizes.
-async function auth(c: Context<{ Bindings: Env }>): Promise<string | null> {
+type Identity = { org: string; handle: string };
+
+async function auth(c: Context<{ Bindings: Env }>): Promise<Identity | null> {
+  const org = requestOrg(c.req);
   const handle = c.req.header("X-AgentCall-Handle") ?? "";
   const token = (c.req.header("Authorization") ?? "").replace(/^Bearer\s+/i, "");
-  return (await verifyHandleToken(c.env.DB, handle, token)) ? handle : null;
+  return org && (await verifyHandleToken(c.env.DB, org, handle, token)) ? { org, handle } : null;
 }
 
 export function mountRoster(app: Hono<{ Bindings: Env }>): void {
   app.post("/v1/roster", async (c) => {
-    const handle = await auth(c);
-    if (!handle) return c.json({ error: "unauthorized" }, 401);
+    const identity = await auth(c);
+    if (!identity) return c.json({ error: "unauthorized" }, 401);
+    const { org, handle } = identity;
     // Reuses REGISTER_RL with a distinct key prefix, the same technique
     // /v1/token/rotate uses: creating rosters should cost what registering
     // handles costs, so it cannot be used to cheaply fill D1 with rows.
@@ -37,11 +42,11 @@ export function mountRoster(app: Hono<{ Bindings: Env }>): void {
     }
     const roster_id = generateRosterId();
     const secret = generateToken();
-    await c.env.DB.prepare("INSERT INTO rosters (id, secret_hash, created_at) VALUES (?, ?, ?)")
-      .bind(roster_id, await sha256Hex(secret), Date.now()).run();
+    await c.env.DB.prepare("INSERT INTO rosters (id, secret_hash, created_at, org) VALUES (?, ?, ?, ?)")
+      .bind(roster_id, await sha256Hex(secret), Date.now(), org).run();
     // The creator is a member like anyone else — there is no owner role.
-    await c.env.DB.prepare("INSERT INTO roster_members (roster_id, handle, joined_at) VALUES (?, ?, ?)")
-      .bind(roster_id, handle, Date.now()).run();
+    await c.env.DB.prepare("INSERT INTO roster_members (roster_id, org, handle, joined_at) VALUES (?, ?, ?, ?)")
+      .bind(roster_id, org, handle, Date.now()).run();
     // The secret is returned exactly once and never stored in plaintext.
     return c.json({ roster_id, secret });
   });
@@ -52,8 +57,9 @@ export function mountRoster(app: Hono<{ Bindings: Env }>): void {
   const NOT_FOUND = { error: "not found" } as const;
 
   app.post("/v1/roster/:id/join", async (c) => {
-    const handle = await auth(c);
-    if (!handle) return c.json({ error: "unauthorized" }, 401);
+    const identity = await auth(c);
+    if (!identity) return c.json({ error: "unauthorized" }, 401);
+    const { org, handle } = identity;
 
     const id = c.req.param("id");
     // Shape-check before touching D1: a malformed id can never match a row,
@@ -68,8 +74,8 @@ export function mountRoster(app: Hono<{ Bindings: Env }>): void {
     const body = JoinRosterRequest.safeParse(await c.req.json().catch(() => null));
     if (!body.success) return c.json(NOT_FOUND, 404);
 
-    const row = await c.env.DB.prepare("SELECT secret_hash FROM rosters WHERE id = ?")
-      .bind(id).first<{ secret_hash: string }>();
+    const row = await c.env.DB.prepare("SELECT secret_hash FROM rosters WHERE id = ? AND org = ?")
+      .bind(id, org).first<{ secret_hash: string }>();
     // Hash the supplied secret even when the roster is missing, so the two
     // paths cost the same. Never log the secret or its digest.
     const supplied = await sha256Hex(body.data.secret);
@@ -78,8 +84,8 @@ export function mountRoster(app: Hono<{ Bindings: Env }>): void {
     // Past this point the caller has proved the secret, so revealing that the
     // roster exists and is full costs nothing.
     const already = await c.env.DB.prepare(
-      "SELECT 1 FROM roster_members WHERE roster_id = ? AND handle = ?",
-    ).bind(id, handle).first();
+      "SELECT 1 FROM roster_members WHERE roster_id = ? AND org = ? AND handle = ?",
+    ).bind(id, org, handle).first();
     if (!already) {
       const count = await c.env.DB.prepare("SELECT COUNT(*) AS n FROM roster_members WHERE roster_id = ?")
         .bind(id).first<{ n: number }>();
@@ -88,15 +94,16 @@ export function mountRoster(app: Hono<{ Bindings: Env }>): void {
       // membership check above and then race on the (roster_id, handle)
       // primary key. This endpoint documents itself as idempotent, so the
       // loser of that race must not 500.
-      await c.env.DB.prepare("INSERT OR IGNORE INTO roster_members (roster_id, handle, joined_at) VALUES (?, ?, ?)")
-        .bind(id, handle, Date.now()).run();
+      await c.env.DB.prepare("INSERT OR IGNORE INTO roster_members (roster_id, org, handle, joined_at) VALUES (?, ?, ?, ?)")
+        .bind(id, org, handle, Date.now()).run();
     }
     return c.json({ ok: true });
   });
 
   app.get("/v1/roster/:id/bundle", async (c) => {
-    const viewer = await auth(c);
-    if (!viewer) return c.json({ error: "unauthorized" }, 401);
+    const identity = await auth(c);
+    if (!identity) return c.json({ error: "unauthorized" }, 401);
+    const { org, handle: viewer } = identity;
 
     const id = c.req.param("id");
     if (!ROSTER_ID_RE.test(id)) return c.json({ error: "invalid roster id" }, 400);
@@ -111,16 +118,17 @@ export function mountRoster(app: Hono<{ Bindings: Env }>): void {
     // the roster exists, and a non-member gets the same NOT_FOUND an unknown
     // roster gets.
     const member = await c.env.DB.prepare(
-      "SELECT 1 FROM roster_members WHERE roster_id = ? AND handle = ?",
-    ).bind(id, viewer).first();
+      "SELECT 1 FROM roster_members WHERE roster_id = ? AND org = ? AND handle = ?",
+    ).bind(id, org, viewer).first();
     if (!member) return c.json(NOT_FOUND, 404);
 
     // One bounded join, never N queries. Bounded by MAX_ROSTER_MEMBERS,
     // which join enforces.
     const { results } = await c.env.DB.prepare(
       "SELECT c.handle, c.card_json, c.updated_at FROM roster_members m " +
-        "JOIN cards c ON c.handle = m.handle WHERE m.roster_id = ? ORDER BY c.handle",
-    ).bind(id).all<{ handle: string; card_json: string; updated_at: number }>();
+        "JOIN cards c ON c.org = m.org AND c.handle = m.handle " +
+        "WHERE m.roster_id = ? AND m.org = ? ORDER BY c.handle",
+    ).bind(id, org).all<{ handle: string; card_json: string; updated_at: number }>();
 
     const entries = [];
     let skipped = 0;
@@ -155,7 +163,7 @@ export function mountRoster(app: Hono<{ Bindings: Env }>): void {
 
     // Varies by caller (grants differ), so the ETag must include the viewer
     // and the response must never enter a shared cache.
-    const etag = `"${id}-${viewer}-${newest}-${entries.length}-${skipped}"`;
+    const etag = `"${id}-${org}-${viewer}-${newest}-${entries.length}-${skipped}"`;
     if (c.req.header("If-None-Match") === etag) {
       return new Response(null, { status: 304, headers: { ETag: etag, "Cache-Control": "private, no-store" } });
     }
