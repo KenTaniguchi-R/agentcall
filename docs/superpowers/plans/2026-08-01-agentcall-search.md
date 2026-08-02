@@ -2140,9 +2140,14 @@ import type { BundleEntryType } from "@benree/agentcall-shared";
 //
 // Applied at RENDER time, not at parse time, so the cache stays faithful to
 // what the relay actually served and matching runs on the real text.
+// Replace with a SPACE rather than deleting, matching sanitizeDetail in
+// packages/shared/src/protocol.ts — otherwise a stripped newline runs two
+// words together ("Handles auth.Also covers payroll."), and BundleTask
+// descriptions may legitimately contain newlines. Collapse the resulting
+// runs so a CRLF does not leave a double space.
 export function sanitize(text: string, max = 200): string {
-  const stripped = text.replace(/[\p{Cc}\p{Cf}]/gu, "");
-  return stripped.length > max ? stripped.slice(0, max) : stripped;
+  const clean = text.replace(/[\p{Cc}\p{Cf}]/gu, " ").replace(/ {2,}/g, " ");
+  return clean.length > max ? clean.slice(0, max) : clean;
 }
 
 export function toEntries(roster: string, host: string, entries: BundleEntryType[]): SearchEntry[] {
@@ -2166,8 +2171,19 @@ export interface RosterStatus {
   stale: boolean;
 }
 
+// Returns true when every roster failed to refresh — as opposed to refreshing
+// fine and simply matching nothing. The caller sets a non-zero exit code on
+// that, because otherwise a script or agent gating on exit status cannot tell
+// "nobody matched" from "the whole search path was unreachable", and both
+// print the same line. Partial failure stays exit 0: real results came back,
+// and the stale warnings already say what happened.
+export function allRostersFailed(membershipCount: number, succeededCount: number): boolean {
+  return membershipCount > 0 && succeededCount === 0;
+}
+
 export function renderResults(results: SearchResult[], rosters: RosterStatus[]): string {
   const lines: string[] = [];
+  const showRoster = rosters.length > 1;
   for (const r of rosters) {
     if (r.stale) {
       lines.push(`warning: roster "${r.name}" is ${Math.round(r.ageSeconds / 60)}m stale (relay unreachable)`);
@@ -2180,7 +2196,14 @@ export function renderResults(results: SearchResult[], rosters: RosterStatus[]):
     return lines.join("\n");
   }
   for (const r of results) {
-    lines.push(`${r.address}  ${sanitize(r.task, 64)}`);
+    // Name the roster only when the render spans more than one. With no
+    // --roster every joined roster merges into ONE ranking and every address
+    // is handle@<the same relay>, so without this there is no way to tell
+    // which roster a suggested colleague came from. Conditional so the common
+    // single-roster user doesn't get a redundant tag on every line. Test BOTH
+    // directions, or someone will make it unconditional without failing anything.
+    const tag = showRoster ? `[${sanitize(r.roster, 40)}] ` : "";
+    lines.push(`${tag}${r.address}  ${sanitize(r.task, 64)}`);
     lines.push(`  ${sanitize(r.description, 200)}`);
     lines.push(
       `  matched: ${r.matched.map((m) => `${sanitize(m.term, 40)} (${m.fields.join(", ")})`).join(" · ")}`,
