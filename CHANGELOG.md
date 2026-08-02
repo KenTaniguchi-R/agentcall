@@ -6,6 +6,13 @@ which are released together.
 
 ## Unreleased
 
+### Changed — verifiable npm releases
+
+- Every third-party GitHub Action is pinned to an immutable commit.
+- Published releases now build and test both packages from the tagged `main`
+  commit, publish through npm OIDC with keyless provenance, and attach the exact
+  tarballs, SHA-256 checksums, and a CycloneDX SBOM to the GitHub release.
+
 ### Changed — roster mutations emit complete audit evidence
 
 - Roster audit events now use stable `roster.*` names and record CRUD action,

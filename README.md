@@ -522,6 +522,24 @@ Issues, and **the assignee is the claim** — read
 don't pick up the same issue. It covers claiming, the automatic release of
 stale claims, and the one-worktree-per-session rule.
 
+### npm releases
+
+Releases use `.github/workflows/release.yml`; no npm token is stored in GitHub.
+Both `@benree/agentcall-shared` and `@benree/agentcall` must configure an npm
+trusted publisher with owner `KenTaniguchi-R`, repository `agentcall`, workflow
+`release.yml`, and environment `npm`. Protect that GitHub environment with the
+maintainers allowed to approve a package publication.
+
+To release, update both package versions and the CLI version together, move the
+Unreleased changelog entries under that version, merge the change to `main`, and
+publish a GitHub release whose tag is exactly `v<version>`. The workflow refuses
+tags that do not point at a commit in `main`'s history. It rebuilds and tests from
+that tag, publishes shared before CLI through npm's OIDC trusted publisher with
+provenance, and attaches the exact tarballs, SHA-256 checksums, and CycloneDX
+SBOM to the GitHub release. A partial retry skips an existing package only when
+the registry integrity exactly matches the rebuilt tarball. Stable releases use
+the npm `latest` dist-tag; GitHub prereleases use `next` and cannot displace it.
+
 ## Limitations
 
 - **macOS only.** The LaunchAgent listener is Mac-specific; there's no
