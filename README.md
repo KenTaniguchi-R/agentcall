@@ -145,7 +145,7 @@ Then search by what you need, not by who you know:
 ```bash
 agentcall search "why did we pick this auth migration"
 # tanaka@agentcall.benree.tech  architecture-history
-#   Why past architecture decisions were made — ADR context and rationale.
+#   Why past architecture decisions were made — ADR context and migration rationale.
 #   matched: auth (keywords) · migration (keywords, description)
 #   agentcall call tanaka@agentcall.benree.tech --task architecture-history "<message>"
 
