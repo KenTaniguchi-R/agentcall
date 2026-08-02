@@ -1,6 +1,6 @@
 import { createServer, type Server, type IncomingMessage, type ServerResponse } from "node:http";
 import { afterEach, describe, expect, it } from "vitest";
-import { registerHandle, getStatus, fetchCard, pushCard, rotateToken } from "../src/api.js";
+import { registerHandle, getStatus, fetchCard, pushCard, rotateToken, createRoster, joinRoster, fetchRosterBundle } from "../src/api.js";
 
 let server: Server;
 afterEach(() => {
@@ -192,7 +192,7 @@ describe("pushCard / fetchCard", () => {
     });
     await pushCard(relay, { handle: "ken", token: "tok" }, {
       description: "", agent_kind: "claude",
-      tasks: [{ id: "ask", name: "Ask", description: "d", examples: [] }],
+      tasks: [{ id: "ask", name: "Ask", description: "d", examples: [], keywords: [] }],
       default_offer: ["ask"], grants: {},
     });
     expect(seen.method).toBe("PUT");
@@ -204,7 +204,7 @@ describe("pushCard / fetchCard", () => {
   it("fetchCard parses and returns the card; 404 -> ApiError unknown_handle", async () => {
     const card = {
       handle: "ken", description: "", agent_kind: "claude",
-      tasks: [{ id: "ask", name: "Ask", description: "d", examples: [] }], updated_at: 1,
+      tasks: [{ id: "ask", name: "Ask", description: "d", examples: [], keywords: [] }], updated_at: 1,
     };
     const relay = await startServer((req, res) => {
       if (req.url === "/v1/card/ken") {
@@ -217,5 +217,50 @@ describe("pushCard / fetchCard", () => {
     });
     expect(await fetchCard(relay, "ken")).toMatchObject({ handle: "ken" });
     await expect(fetchCard(relay, "ghost")).rejects.toMatchObject({ code: "unknown_handle" });
+  });
+});
+
+describe("roster api", () => {
+  it("creates a roster and returns the secret once", async () => {
+    const relay = await serve(200, { roster_id: "a".repeat(22), secret: "s3cret-value-long" });
+    const r = await createRoster(relay, { handle: "ken", token: "t" });
+    expect(r).toEqual({ roster_id: "a".repeat(22), secret: "s3cret-value-long" });
+  });
+
+  // The relay deliberately returns byte-identical 404s for "no such roster"
+  // and "wrong secret", so the client message must not distinguish them
+  // either — otherwise a garbage-secret probe would make roster ids
+  // enumerable, defeating the relay-side protection.
+  it("maps a 404 join to a message that does not distinguish the two causes", async () => {
+    const relay = await serve(404, { error: "not found" });
+    await expect(joinRoster(relay, { handle: "ken", token: "t" }, "a".repeat(22), "wrong"))
+      .rejects.toThrow(/no such roster, or the secret is wrong/i);
+  });
+
+  it("maps a 409 join to a roster-full message", async () => {
+    const relay = await serve(409, { error: "roster full" });
+    await expect(joinRoster(relay, { handle: "ken", token: "t" }, "a".repeat(22), "s"))
+      .rejects.toThrow(/full/i);
+  });
+
+  it("returns the parsed bundle and its ETag", async () => {
+    const relay = await startServer((_req, res) => {
+      res.writeHead(200, { "content-type": "application/json", ETag: '"etag-1"' });
+      res.end(JSON.stringify({ roster_id: "a".repeat(22), entries: [], skipped: 0 }));
+    });
+    const out = await fetchRosterBundle(relay, { handle: "ken", token: "t" }, "a".repeat(22));
+    expect(out).not.toBe("not-modified");
+    expect((out as { etag?: string }).etag).toBe('"etag-1"');
+  });
+
+  // Must not attempt to parse a 304's (empty) body as a bundle: the caller
+  // is expected to keep serving its cached entries in that case.
+  it("reports not-modified on a 304 instead of parsing an empty body", async () => {
+    const relay = await startServer((_req, res) => {
+      res.writeHead(304);
+      res.end();
+    });
+    const out = await fetchRosterBundle(relay, { handle: "ken", token: "t" }, "a".repeat(22), '"etag-1"');
+    expect(out).toBe("not-modified");
   });
 });

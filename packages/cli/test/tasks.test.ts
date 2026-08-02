@@ -161,3 +161,36 @@ describe("FULL_ACCESS_ENVELOPE", () => {
     expect(FULL_ACCESS_ENVELOPE).toEqual({ caps: ["read", "write", "fetch", "exec"] });
   });
 });
+
+describe("keywords frontmatter", () => {
+  it("loads keywords from SKILL.md", () => {
+    const home = tempHome();
+    writeSkill(home, "adr", [
+      "---",
+      "description: Why past architecture decisions were made.",
+      "keywords: [auth, migration, adr]",
+      "---",
+      "body",
+    ].join("\n"));
+    const task = loadTasks(getPaths(home)).find((t) => t.id === "adr")!;
+    expect(task.keywords).toEqual(["auth", "migration", "adr"]);
+  });
+
+  it("defaults keywords to [] when the frontmatter omits them", () => {
+    const home = tempHome();
+    writeSkill(home, "plain", ["---", "description: A task.", "---", "body"].join("\n"));
+    expect(loadTasks(getPaths(home)).find((t) => t.id === "plain")!.keywords).toEqual([]);
+  });
+
+  it("skips a task whose keywords exceed the cap, without killing others", () => {
+    const home = tempHome();
+    writeSkill(home, "bad", [
+      "---", "description: A task.",
+      `keywords: [${Array.from({ length: 21 }, (_, i) => `k${i}`).join(", ")}]`,
+      "---", "body",
+    ].join("\n"));
+    const ids = loadTasks(getPaths(home), () => {}).map((t) => t.id);
+    expect(ids).toContain("ask");     // built-in survives
+    expect(ids).not.toContain("bad"); // one broken manifest never takes the rest offline
+  });
+});

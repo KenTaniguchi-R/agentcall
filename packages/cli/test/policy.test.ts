@@ -8,11 +8,11 @@ import { getPaths } from "../src/paths.js";
 
 const intro: Task = {
   id: "owner-introduction", name: "Intro", description: "Introduce the owner.",
-  examples: [], envelope: { caps: ["read"] }, skill: "",
+  examples: [], keywords: [], envelope: { caps: ["read"] }, skill: "",
 };
 const meet: Task = {
   id: "schedule-meeting", name: "Schedule", description: "Book a time.",
-  examples: [], envelope: { caps: ["read", "fetch"] }, skill: "",
+  examples: [], keywords: [], envelope: { caps: ["read", "fetch"] }, skill: "",
 };
 const TASKS = [ASK_TASK, intro, meet];
 

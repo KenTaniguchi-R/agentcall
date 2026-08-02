@@ -126,6 +126,73 @@ card automatically. Callers see your menu with `agentcall card <address>`.
 > actually been live-tested end to end; `codex` support is implemented and
 > unit-tested but hasn't been verified against a real call yet.
 
+## Finding who to ask
+
+`agentcall call` assumes you already know the address. In a company you often
+don't — that's what rosters and `agentcall search` are for.
+
+A **roster** is an opt-in group whose members can discover each other's
+published tasks. One person creates it and shares the id and secret:
+
+```bash
+agentcall roster create --as acme
+# prints an id and a join secret, shown once and not recoverable
+
+# everyone else:
+agentcall roster join <roster-id> --secret <secret> --as acme
+```
+
+Then search by what you need, not by who you know:
+
+```bash
+agentcall search "why did we pick this auth migration"
+# tanaka@agentcall.benree.tech  architecture-history
+#   Why past architecture decisions were made — ADR context and migration rationale.
+#   matched: auth (keywords) · migration (keywords, description)
+#   agentcall call tanaka@agentcall.benree.tech --task architecture-history "<message>"
+
+agentcall search "..." --json    # for your own agent to parse
+```
+
+Add `keywords` to a task's `SKILL.md` frontmatter to make it findable; they're
+weighted highest (`keywords` 3, task name 2, description 1 per matching word),
+and a result needs to clear a minimum score to be shown at all — a single
+keyword hit or a name match qualifies on its own, but one incidental word
+picked up from a description does not:
+
+```yaml
+---
+description: Why past architecture decisions were made.
+keywords: [auth, migration, adr]
+---
+```
+
+Search results are prefixed with `[roster-name]` only when more than one
+roster is in scope — with a single roster, or `--roster <name>`, the address
+alone is enough. If every joined roster fails to refresh (relay unreachable,
+no cache yet), `agentcall search` exits non-zero; a partial failure across
+several rosters still exits `0`, with the affected roster called out as stale
+in the output.
+
+**Matching happens on your machine.** The relay serves each member a
+per-caller-filtered index of what they've published *to you*; ranking that
+index against your query runs locally, so the query text itself is never sent
+anywhere. Refreshing a roster does tell the relay that your handle refreshed
+that roster at that time, so search *activity* isn't private — only the query
+is.
+
+**There is no way to remove a roster member and no way to rotate a roster's
+join secret.** If the secret leaks, abandon the roster and create a new one —
+membership lifecycle (expel, rotate, teardown) is deliberate follow-up work,
+not yet built. `agentcall roster forget` only drops your *local* record of
+having joined; it does not leave the roster, because there is no leave
+operation — your membership on the relay is unchanged. Someone who believes
+`forget` removed them from the roster is still a member.
+
+Results are hints, not permission: a task can appear in search and still be
+refused when you call it, because the callee's policy is what actually
+decides.
+
 ## Contacts
 
 Save addresses under a short name so you don't have to retype `handle@host`

@@ -1,6 +1,7 @@
 import { Hono } from "hono";
-import { CardUpload, RegisterRequest, RESERVED_HANDLES } from "@benree/agentcall-shared";
+import { CardUpload, RegisterRequest, RESERVED_HANDLES, visibleTasks } from "@benree/agentcall-shared";
 import { mountA2A } from "./a2a.js";
+import { mountRoster } from "./roster.js";
 import { generateToken, sha256Hex, verifyHandleToken } from "./auth.js";
 import { INSTALL_SH } from "./install-sh.js";
 
@@ -16,6 +17,9 @@ export type Env = {
   // namespace scrapeable for free and every probe waking a Durable Object at
   // the operator's expense.
   READ_RL: RateLimit;
+  // Roster join + bundle. Join verifies a shared secret; bundle returns up to
+  // MAX_ROSTER_MEMBERS records at once. Neither belongs under READ_RL.
+  ROSTER_RL: RateLimit;
 };
 // Not exported: workerd treats every named export of the entry module as a
 // potential WorkerEntrypoint and rejects non-handler values outright
@@ -25,6 +29,7 @@ const RELAY_HOST = "agentcall.benree.tech";
 
 const app = new Hono<{ Bindings: Env }>();
 mountA2A(app);
+mountRoster(app);
 
 async function handleExists(db: D1Database, handle: string): Promise<boolean> {
   return !!(await db.prepare("SELECT 1 FROM handles WHERE handle = ?").bind(handle).first());
@@ -138,17 +143,11 @@ app.get("/v1/card/:handle", async (c) => {
   }
 
   const upload = CardUpload.parse(JSON.parse(row.card_json));
-  // Own-property check, not a bare lookup: `grants` is a zod z.record object
-  // that inherits Object.prototype, and HANDLE_RE accepts "constructor" — so
-  // `grants[viewer]` would hand back the Object constructor (not iterable,
-  // 500s this endpoint) for a viewer with that handle against every callee.
-  const granted = viewer && Object.hasOwn(upload.grants, viewer) ? upload.grants[viewer]! : [];
-  const visible = new Set([...upload.default_offer, ...granted]);
   return c.json({
     handle,
     description: upload.description,
     agent_kind: upload.agent_kind,
-    tasks: upload.tasks.filter((t) => visible.has(t.id)),
+    tasks: visibleTasks(upload, viewer),
     updated_at: row.updated_at,
   });
 });

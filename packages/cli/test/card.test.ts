@@ -11,11 +11,11 @@ import type { Config } from "../src/config.js";
 const cfg: Config = { handle: "ken", token: "t", agent_kind: "claude", relay: "https://r" };
 const intro: Task = {
   id: "owner-introduction", name: "Intro", description: "Introduce the owner.",
-  examples: ["who is ken?"], envelope: { caps: ["read"] }, skill: "secret steps",
+  examples: ["who is ken?"], keywords: [], envelope: { caps: ["read"] }, skill: "secret steps",
 };
 const meet: Task = {
   id: "schedule-meeting", name: "Schedule", description: "Book a time.",
-  examples: [], envelope: { caps: ["read", "fetch"] }, skill: "",
+  examples: [], keywords: [], envelope: { caps: ["read", "fetch"] }, skill: "",
 };
 
 describe("buildCardUpload", () => {
@@ -32,7 +32,7 @@ describe("buildCardUpload", () => {
     const upload = buildCardUpload(cfg, policy, [ASK_TASK, intro, meet]);
     expect(upload).toMatchObject({ description: "Ken's agent", agent_kind: "claude", default_offer: ["ask", "owner-introduction"] });
     const introEntry = upload.tasks.find((t) => t.id === "owner-introduction")!;
-    expect(introEntry).toEqual({ id: "owner-introduction", name: "Intro", description: "Introduce the owner.", examples: ["who is ken?"] });
+    expect(introEntry).toEqual({ id: "owner-introduction", name: "Intro", description: "Introduce the owner.", examples: ["who is ken?"], keywords: [] });
     expect(JSON.stringify(upload)).not.toContain("secret steps");
     expect(JSON.stringify(upload)).not.toContain("caps");
   });
@@ -48,6 +48,16 @@ describe("buildCardUpload", () => {
     expect(upload.default_offer).toEqual(["ask"]);
     expect(upload.grants).toEqual({});
     expect(upload.tasks.map((t) => t.id)).toEqual(["ask"]);
+  });
+
+  it("publishes task keywords to the relay", () => {
+    const upload = buildCardUpload(
+      { handle: "ken", token: "t", agent_kind: "claude", relay: "https://r.test" },
+      { description: "d", default_offer: ["adr"], callers: {} },
+      [{ id: "adr", name: "ADR", description: "Why.", examples: [],
+         keywords: ["auth", "migration"], envelope: { caps: ["read"] }, skill: "" }],
+    );
+    expect(upload.tasks[0]!.keywords).toEqual(["auth", "migration"]);
   });
 });
 

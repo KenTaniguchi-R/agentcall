@@ -2,6 +2,9 @@ import { z } from "zod";
 
 export const HANDLE_RE = /^[a-z0-9][a-z0-9-]{1,30}$/;
 export const TASK_ID_RE = /^[a-z0-9][a-z0-9-]{0,63}$/;
+// Bounds derived from TASK_ID_RE: 1 (mandatory first char) + 63 (0-63 range) = 64.
+// Must stay consistent with TASK_ID_RE; drift is caught by test/protocol.test.ts.
+export const MAX_TASK_ID_LENGTH = 64;
 // Bounds the `offered` list on call_failed/call_error: without a cap, a
 // hostile listener could hand back thousands of entries (unbounded relay
 // payload); without the TASK_ID_RE constraint on each entry, an unvalidated
