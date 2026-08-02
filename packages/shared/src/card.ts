@@ -43,3 +43,18 @@ export const AgentCard = z.object({
 export type CardTaskType = z.infer<typeof CardTask>;
 export type CardUploadType = z.infer<typeof CardUpload>;
 export type AgentCardType = z.infer<typeof AgentCard>;
+
+// The single visibility rule: a viewer sees default_offer plus their own
+// grants, never the full ACL. Lives here rather than in the relay route
+// because two endpoints now apply it — GET /v1/card/:handle and the roster
+// bundle — and they must not drift.
+//
+// Own-property check, not a bare lookup: `grants` is a zod z.record object
+// that inherits Object.prototype, and HANDLE_RE accepts "constructor" — so
+// `grants[viewer]` would hand back the Object constructor (not iterable,
+// 500s the endpoint) for a viewer with that handle, against every callee.
+export function visibleTasks(upload: CardUploadType, viewer: string): CardTaskType[] {
+  const granted = viewer && Object.hasOwn(upload.grants, viewer) ? upload.grants[viewer]! : [];
+  const visible = new Set([...upload.default_offer, ...granted]);
+  return upload.tasks.filter((t) => visible.has(t.id));
+}

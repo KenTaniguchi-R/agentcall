@@ -1,5 +1,5 @@
 import { Hono } from "hono";
-import { CardUpload, RegisterRequest, RESERVED_HANDLES } from "@benree/agentcall-shared";
+import { CardUpload, RegisterRequest, RESERVED_HANDLES, visibleTasks } from "@benree/agentcall-shared";
 import { mountA2A } from "./a2a.js";
 import { mountRoster } from "./roster.js";
 import { generateToken, sha256Hex, verifyHandleToken } from "./auth.js";
@@ -143,17 +143,11 @@ app.get("/v1/card/:handle", async (c) => {
   }
 
   const upload = CardUpload.parse(JSON.parse(row.card_json));
-  // Own-property check, not a bare lookup: `grants` is a zod z.record object
-  // that inherits Object.prototype, and HANDLE_RE accepts "constructor" — so
-  // `grants[viewer]` would hand back the Object constructor (not iterable,
-  // 500s this endpoint) for a viewer with that handle against every callee.
-  const granted = viewer && Object.hasOwn(upload.grants, viewer) ? upload.grants[viewer]! : [];
-  const visible = new Set([...upload.default_offer, ...granted]);
   return c.json({
     handle,
     description: upload.description,
     agent_kind: upload.agent_kind,
-    tasks: upload.tasks.filter((t) => visible.has(t.id)),
+    tasks: visibleTasks(upload, viewer),
     updated_at: row.updated_at,
   });
 });
