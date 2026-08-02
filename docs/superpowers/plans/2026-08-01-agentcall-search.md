@@ -18,7 +18,7 @@
 - **Stage files explicitly** — `git add <file> <file>`. Never `git add -A` or `git add .`.
 - **`typecheck` covers `src` and `test`.** New test files are type-checked; a test that doesn't compile is a failure.
 - **No live network and no live `claude`/`codex` spawn in tests.** CLI tests mock `ws`/`fs`; relay tests drive routes through `SELF.fetch`.
-- **Relay rate-limit bindings must exist in both `apps/relay/wrangler.jsonc` and the `Env` type in `apps/relay/src/index.ts`.** Adding one in a single place fails at runtime, not at compile time.
+- **A relay rate-limit binding must exist in THREE places**, not two: `apps/relay/wrangler.jsonc` (`ratelimits`), the `Env` type in `apps/relay/src/index.ts`, and **`apps/relay/vitest.config.ts`**, which mirrors the bindings by hand for miniflare because the test tooling drops `wrangler.jsonc`'s `ratelimits` field entirely. Miss the third and `c.env.<BINDING>` is `undefined` at test time — every request through it 500s, and nothing fails at compile time. This bit Task 3, which added a binding two places and stayed green because its own route used a different one; the gap only surfaced in Task 4 when that binding got its first consumer.
 - **`RELAY_HOST` in `apps/relay/src/index.ts` is deliberately not exported** — workerd rejects non-handler named exports from the entry module. Do not export it.
 - Exact constant values, copied from the spec: `MAX_ROSTER_MEMBERS = 200`, `MAX_BUNDLE_TASKS_PER_CARD = 10`, `MAX_BUNDLE_BYTES = 4_500_000`, `MAX_KEYWORD_LENGTH = 40`, `MAX_TASK_KEYWORDS = 20`, `MAX_TASK_ID_LENGTH = 64`, cache TTL 15 minutes, default search limit 5, field weights `keywords: 3, name: 2, description: 1`.
 - **Bounds are named constants that the schemas themselves consume, never bare literals.** `MAX_KEYWORD_LENGTH` / `MAX_TASK_KEYWORDS` live in `packages/shared/src/card.ts`; `MAX_TASK_ID_LENGTH` lives in `packages/shared/src/protocol.ts` beside `TASK_ID_RE`, pinned to it by test. This exists so the bundle-size guard and the schema read one source — a literal in either place recreates the drift the guard is there to catch.
@@ -469,7 +469,7 @@ of blowing the response budget in production."
 
 **Files:**
 - Create: `apps/relay/migrations/0004_rosters.sql`, `apps/relay/src/roster.ts`
-- Modify: `apps/relay/wrangler.jsonc` (`ratelimits` array), `apps/relay/src/index.ts` (`Env`, `mountRoster`)
+- Modify: `apps/relay/wrangler.jsonc` (`ratelimits` array), `apps/relay/src/index.ts` (`Env`, `mountRoster`), **`apps/relay/vitest.config.ts`** (see below)
 - Test: `apps/relay/test/roster-create.test.ts`
 
 **Interfaces:**
@@ -729,7 +729,21 @@ describe("POST /v1/roster/:id/join", () => {
 
   it("400s on a malformed roster id rather than querying for it", async () => {
     const token = await registerHandle("rj4");
-    expect((await join("../etc/passwd", "rj4", token, "x")).status).toBe(400);
+    // NOT "../etc/passwd": URL dot-segment removal collapses "roster/../etc"
+    // to "etc" before a Request object exists, so that input never reaches
+    // this route at all — it would silently assert against Hono's no-route
+    // 404 and look like security coverage while testing nothing.
+    expect((await join("short!", "rj4", token, "x")).status).toBe(400);
+  });
+
+  it("400s on a percent-encoded traversal id, the form that actually reaches the route", async () => {
+    // %2E%2E%2Fetc survives URL parsing as a single path segment, and Hono
+    // decodes path params — so the handler really does see "../etc", which
+    // ROSTER_ID_RE rejects (its character class has no "." or "/").
+    const token = await registerHandle("rj4b");
+    const res = await join("%2E%2E%2Fetc", "rj4b", token, "x");
+    expect(res.status).toBe(400);
+    expect(await res.json()).toEqual({ error: "invalid roster id" });
   });
 
   it("is idempotent: rejoining does not duplicate membership", async () => {
