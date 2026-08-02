@@ -344,13 +344,27 @@ closures with **no end-to-end test** — that is
 "the seam where three bugs hid." Adding `--continue`/`--context` branching there makes it
 worse.
 
-Extract the `call` action into `packages/cli/src/commands/call.ts` as a plain testable
-function; `index.ts` keeps only the flag wiring. Scoped to the command being changed —
-this is not a general `index.ts` refactor.
+The `call` action belongs in `packages/cli/src/commands/call.ts` as a plain testable
+function, with `index.ts` keeping only the flag wiring.
 
-**Collision:** `2026-08-01-roster-lifecycle-design.md` Phase 1 also extracts CLI commands
-from `index.ts` and also claims to close #49. Whichever lands second rebases onto the
-first; they must not both invent a `commands/` convention. Per
+**This work is already owned by #48.** `2026-08-01-roster-lifecycle-design.md` Phase 1
+extracts all 26 commands into `packages/cli/src/commands/`, and its target layout names
+`call.ts` explicitly. It also defines the conventions — an injected
+`Deps = { paths, io: { log, error, ask } }` instead of global `console`, commands that
+throw, and a single `run()` wrapper in `index.ts` collapsing all 23 `process.exitCode = 1`
+assignments. It closes #49 by writing a test per extracted command.
+
+So **#23 does not extract anything.** It consumes the `commands/call.ts` that #48 Phase 1
+produces and adds `--continue`/`--context` to it. Two designs must not both invent a
+`commands/` convention, and #48's is the more considered one — it is driven by a measured
+count of what is untestable, and it has a verification rule (TDD per extracted command)
+that a drive-by extraction here would not.
+
+**Consequence for ordering:** #48 Phase 1 is a hard prerequisite, not a coordination note.
+If #23 must land first, it adds `--continue` to the existing inline closure and accepts
+that the call command stays untested until #48 Phase 1 reaches it — in which case the
+listener-side tests below carry the entire design, and the CLI table in *Testing* is
+deferred with it. Prefer landing after. Per
 [CONTRIBUTING.md](../../../CONTRIBUTING.md#one-worktree-per-session), one worktree per
 session.
 
@@ -397,7 +411,8 @@ overrides it; `--continue` with nothing stored errors and sends no frame.
 2. **Ordering against #44.** Contexts are per-line. Landing this before #44's Task 11 means
    writing `~/.agentcall/contexts.json` and moving it later; landing after means no move.
    Prefer after.
-3. **Ordering against #48 Phase 1** — the `commands/` extraction collision above.
+3. **#48 Phase 1 is a prerequisite** — it owns `commands/call.ts`. Decide whether to block
+   on it or land the listener half first with the CLI tests deferred. See *Code structure*.
 4. Whether `agentcall doctor` should report open contexts. Leaning no: doctor answers "can
    I answer calls", and an open context is not a health property.
 
@@ -414,7 +429,7 @@ overrides it; `--continue` with nothing stored errors and sends no frame.
 | `packages/cli/src/runner.ts` | resume arg on `buildSpawnSpec` for both kinds |
 | `packages/cli/src/prompt.ts` | threaded prompt variant |
 | `packages/cli/src/callClient.ts` | `contextId`; `context_unknown` HUMAN entry |
-| `packages/cli/src/commands/call.ts` | **new** — extracted action + `--continue`/`--context` |
-| `packages/cli/src/index.ts` | flag wiring only |
+| `packages/cli/src/commands/call.ts` | `--continue`/`--context` — the file itself comes from #48 Phase 1 |
+| `packages/cli/src/index.ts` | two option declarations |
 | `README.md` | remove the one-shot limitation; document `--continue` |
 | `CHANGELOG.md` | entry |
