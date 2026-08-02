@@ -90,6 +90,7 @@ needs proof-of-possession or another bounded renewal mechanism.
 Decided for AgentCall:
 
 - [Identity and address separation](../superpowers/specs/2026-08-02-identity-address-separation.md)
+- [Credential lifecycle](../superpowers/specs/2026-08-02-credential-lifecycle.md)
 
 ### A2A: protocol and signed Agent Cards
 
