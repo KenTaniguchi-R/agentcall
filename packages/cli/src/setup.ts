@@ -146,12 +146,7 @@ export async function runSetup(opts: SetupOpts): Promise<{ ready: boolean }> {
   // token already sits in config.json. If a usable config already exists
   // for the handle we'd otherwise register, skip registration entirely and
   // just re-do the local steps below, which are all idempotent anyway.
-  let existingCfg: Config | undefined;
-  try {
-    existingCfg = loadConfig(paths);
-  } catch {
-    existingCfg = undefined;
-  }
+  const existingCfg: Config | undefined = existsSync(paths.configFile) ? loadConfig(paths) : undefined;
   const requestedRelay = opts.relay?.replace(/\/+$/, "");
   if (
     existingCfg !== undefined &&

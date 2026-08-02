@@ -1,7 +1,8 @@
-import { chmodSync, existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from "node:fs";
+import { existsSync, readFileSync } from "node:fs";
 import { z } from "zod";
 import { BundleEntry, ROSTER_ID_RE } from "@benree/agentcall-shared";
 import { NAME_RE } from "./contacts.js";
+import { writeJsonAtomic } from "./json-store.js";
 import type { Paths } from "./paths.js";
 
 // Two stores with DELIBERATELY OPPOSITE corruption policies, kept in one file
@@ -36,18 +37,6 @@ const CachedBundle = z.object({
 });
 const CacheFile = z.object({ version: z.literal(1), rosters: z.record(z.string(), CachedBundle) });
 export type CachedBundle = z.infer<typeof CachedBundle>;
-
-// Temp-then-rename: a killed process can leave a partial .tmp behind, but the
-// real file is only ever replaced atomically, so a reader never sees a
-// half-written cache.
-function writeAtomic(file: string, dir: string, data: unknown): void {
-  mkdirSync(dir, { recursive: true, mode: 0o700 });
-  chmodSync(dir, 0o700);
-  const tmp = `${file}.tmp`;
-  writeFileSync(tmp, JSON.stringify(data, null, 2) + "\n", { mode: 0o600 });
-  chmodSync(tmp, 0o600);
-  renameSync(tmp, file);
-}
 
 export function loadMemberships(p: Paths): Membership[] {
   if (!existsSync(p.rostersFile)) return [];
@@ -94,7 +83,7 @@ export function saveMembership(p: Paths, m: Membership): void {
   }
   const rosters = existing.filter((r) => r.name.toLowerCase() !== m.name.toLowerCase());
   rosters.push(m);
-  writeAtomic(p.rostersFile, p.dir, { rosters });
+  writeJsonAtomic(p.rostersFile, { rosters });
 }
 
 export function forgetMembership(p: Paths, name: string): void {
@@ -103,7 +92,7 @@ export function forgetMembership(p: Paths, name: string): void {
   if (next.length === rosters.length) {
     throw new Error(`No roster named "${name}" — run \`agentcall roster list\`.`);
   }
-  writeAtomic(p.rostersFile, p.dir, { rosters: next });
+  writeJsonAtomic(p.rostersFile, { rosters: next });
 }
 
 export function loadCache(p: Paths): Record<string, CachedBundle> {
@@ -135,7 +124,7 @@ export function readCached(
 }
 
 export function writeCached(p: Paths, name: string, bundle: CachedBundle): void {
-  writeAtomic(p.rosterCacheFile, p.dir, { version: 1, rosters: { ...loadCache(p), [name]: bundle } });
+  writeJsonAtomic(p.rosterCacheFile, { version: 1, rosters: { ...loadCache(p), [name]: bundle } });
 }
 
 // Derived data: dropping an entry costs one refetch, never user data. Used
@@ -144,5 +133,5 @@ export function writeCached(p: Paths, name: string, bundle: CachedBundle): void 
 export function deleteCached(p: Paths, name: string): void {
   const rosters = { ...loadCache(p) };
   delete rosters[name];
-  writeAtomic(p.rosterCacheFile, p.dir, { version: 1, rosters });
+  writeJsonAtomic(p.rosterCacheFile, { version: 1, rosters });
 }

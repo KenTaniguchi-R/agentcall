@@ -1,4 +1,4 @@
-import { mkdirSync, mkdtempSync, statSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readFileSync, statSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
@@ -28,11 +28,38 @@ describe("config", () => {
     const p = getPaths(tempHome());
     expect(() => loadConfig(p)).toThrow(/agentcall setup/);
   });
+  it("names an invalid JSON config and explains how to recover", () => {
+    const p = getPaths(tempHome());
+    mkdirSync(p.dir, { recursive: true });
+    writeFileSync(p.configFile, "{\n");
+    expect(() => loadConfig(p)).toThrow(new RegExp(`corrupt.*${p.configFile}.*invalid JSON.*agentcall setup`, "i"));
+  });
+  it("rejects valid JSON when credential fields have the wrong shape", () => {
+    const p = getPaths(tempHome());
+    mkdirSync(p.dir, { recursive: true });
+    writeFileSync(p.configFile, JSON.stringify({ org: "acme", handle: 42, token: [], relay: false }));
+    expect(() => loadConfig(p)).toThrow(/corrupt.*config\.json.*handle.*token.*relay.*agentcall setup/i);
+  });
+  it("does not silently fall back to the public relay when relay is missing", () => {
+    const p = getPaths(tempHome());
+    mkdirSync(p.dir, { recursive: true });
+    writeFileSync(p.configFile, JSON.stringify({ org: "acme", handle: "ken", token: "secret" }));
+    expect(() => loadConfig(p)).toThrow(/corrupt.*config\.json.*relay.*agentcall setup/i);
+  });
+  it("preserves unknown fields across a load and save", () => {
+    const p = getPaths(tempHome());
+    mkdirSync(p.dir, { recursive: true });
+    writeFileSync(p.configFile, JSON.stringify({
+      org: "acme", handle: "ken", token: "secret", relay: "https://relay.example", future_option: true,
+    }));
+    saveConfig(p, loadConfig(p));
+    expect(JSON.parse(readFileSync(p.configFile, "utf8"))).toMatchObject({ future_option: true });
+  });
   it("rejects a config without an organization", () => {
     const p = getPaths(tempHome());
     mkdirSync(p.dir, { recursive: true });
     writeFileSync(p.configFile, JSON.stringify({ handle: "ken", token: "old", relay: "https://relay.example" }));
-    expect(() => loadConfig(p)).toThrow(/no organization.*setup --invite/i);
+    expect(() => loadConfig(p)).toThrow(/corrupt.*config\.json.*org.*setup --invite/i);
   });
   it("relayUrl: env > config > default", () => {
     const cfg = { org: "acme", handle: "k", token: "t", agent_kind: "claude" as const, relay: "https://custom.example" };
