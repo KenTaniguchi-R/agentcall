@@ -609,6 +609,12 @@ Issues, and **the assignee is the claim** — read
 don't pick up the same issue. It covers claiming, the automatic release of
 stale claims, and the one-worktree-per-session rule.
 
+Designing enterprise, security, or A2A behavior? Start with the living
+[reference implementation index](./docs/research/reference-implementations.md),
+which names the primary sources, reusable invariants, and precedents already
+adopted in AgentCall. Dated files under `docs/superpowers/` remain historical
+records rather than current guidance.
+
 ### npm releases
 
 Releases use `.github/workflows/release.yml`; no npm token is stored in GitHub.

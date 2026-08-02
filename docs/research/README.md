@@ -1,7 +1,12 @@
 # Research
 
-Market and competitive research for agentcall. **These are research notes, not
-decisions.** No implementation follows from them without a separate call.
+The [reference implementation index](./reference-implementations.md) is living,
+current design guidance for enterprise, security, and A2A work. Update it when a
+reference or its adoption changes.
+
+The dated files below are market and competitive research for agentcall. **They
+are research notes, not decisions.** No implementation follows from them without
+a separate call.
 
 Docs #1–6 date from 2026-07-31 and were produced together; read them as one body of
 work rather than six independent studies. #7 is a later addition and is the only one

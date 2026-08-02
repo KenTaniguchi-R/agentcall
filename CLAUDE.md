@@ -39,6 +39,11 @@ Two standing constraints that aren't any single issue's property:
   the A2A track is actively changing. Coordinate — and use one worktree per session, per
   [CONTRIBUTING.md](./CONTRIBUTING.md#one-worktree-per-session).
 
+Before designing work in `area:enterprise`, `area:security`, or `area:a2a`, read
+the living [reference implementation index](./docs/research/reference-implementations.md).
+It records the external precedents we follow, the boundaries we do not copy, and
+the AgentCall implementations that have adopted them.
+
 Everything under `docs/superpowers/` is a **historical** design/implementation
 record, dated and never revised — useful for *why* a decision was made, wrong about
 *what the code does now*. Each file carries a banner saying so. Don't derive current
