@@ -74,16 +74,40 @@ describe("POST /v1/recovery/redeem", () => {
   });
 
   it("returns byte-identical 401s for every failure mode", async () => {
-    const reg = await registerFull("rd-oracle");
-    await env.DB.prepare("UPDATE handles SET recovery_hash = NULL WHERE handle = ?").bind("rd-oracle").run();
+    // Genuinely distinct branches: "rd-oracle-live" keeps the recovery_hash
+    // register minted (so the redeem below fails on a hash mismatch — wrong
+    // code), while "rd-oracle-never" has it forced to NULL (never-issued).
+    // Comparing two NULLed handles instead — as an earlier version of this
+    // test did — exercises the same branch twice and proves nothing about
+    // the wrong-code path.
+    await registerHandle("rd-oracle-live");
+    await registerHandle("rd-oracle-never");
+    await env.DB.prepare("UPDATE handles SET recovery_hash = NULL WHERE handle = ?").bind("rd-oracle-never").run();
 
-    const wrongCode = await redeem("rd-oracle", generateRecoveryCode(), "rd-o1");
-    const unknownHandle = await redeem("no-such-handle", generateRecoveryCode(), "rd-o2");
+    const wrongCode = await redeem("rd-oracle-live", generateRecoveryCode(), "rd-o1");
+    const neverIssued = await redeem("rd-oracle-never", generateRecoveryCode(), "rd-o2");
 
     expect(wrongCode.status).toBe(401);
-    expect(unknownHandle.status).toBe(401);
-    expect(await wrongCode.text()).toBe(await unknownHandle.text());
-    void reg;
+    expect(neverIssued.status).toBe(401);
+    expect(await wrongCode.text()).toBe(await neverIssued.text());
+  });
+
+  // The rate limiter charges the IP key only, never the handle key: redeem
+  // is unauthenticated, so a handle-keyed limit would let a stranger grind a
+  // victim's handle budget from many IPs and hold it permanently 429'd,
+  // denying the owner their own recovery. Each wrong guess below comes from
+  // its own fresh IP (so the IP key never trips either), well past
+  // RECOVER_RL's 3/60s — if the handle key were still charged, the handle
+  // would already be locked out and the legitimate redeem at the end would
+  // 429 instead of succeeding.
+  it("does not consume the handle-key budget, so a legitimate redeem still succeeds after many wrong-code attempts", async () => {
+    const reg = await registerFull("rd-nokey");
+    for (let i = 0; i < 5; i++) {
+      const res = await redeem("rd-nokey", generateRecoveryCode(), `rd-nokey-attacker-${i}`);
+      expect(res.status).toBe(401);
+    }
+    const legit = await redeem("rd-nokey", reg.recovery_code, "rd-nokey-owner");
+    expect(legit.status).toBe(200);
   });
 
   it("400s on a malformed code without touching the database", async () => {

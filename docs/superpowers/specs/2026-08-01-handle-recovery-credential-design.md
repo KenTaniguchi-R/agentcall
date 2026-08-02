@@ -178,17 +178,36 @@ handle that never issued a code redeemable by anyone.
 
 ### Rate limiting
 
-A new `RECOVER_RL` binding, limited on **both** keys per request:
+A new `RECOVER_RL` binding, `{ limit: 3, period: 60 }`. Cloudflare's ratelimit
+bindings accept only a 10s or 60s `period` (documented in `apps/relay/wrangler.jsonc`),
+so an hourly window is not available at this layer — 3/min is the tightest useful cap
+the binding supports, against `REGISTER_RL`'s 5/min. At 120 bits the brute-force math
+is already hopeless; the limit exists so the endpoint cannot be used as a cheap
+DO-waking or enumeration oracle.
 
-- `handle:<handle>` — stops one handle being ground down from many IPs
-- `ip:<ip>` — stops one IP grinding many handles
+**Amendment (post-implementation, fix round 1 on #52):** the design as originally
+written below called for `issue`, `state`, and `redeem` all to charge **both** keys —
+`handle:<handle>` and `ip:<ip>` — on every request. An adversarial review of the
+implementation caught that this is wrong for `redeem` specifically, and the human
+partner ruled on the fix. This is a deliberate amendment, not a typo fix — the
+original "both keys, every route" text was the approved design at the time, and it
+was incomplete.
 
-`{ limit: 3, period: 60 }`, checked on **both** keys per request. Cloudflare's
-ratelimit bindings accept only a 10s or 60s `period` (documented in
-`apps/relay/wrangler.jsonc`), so an hourly window is not available at this layer —
-3/min is the tightest useful cap the binding supports, against `REGISTER_RL`'s 5/min.
-At 120 bits the brute-force math is already hopeless; the limit exists so the endpoint
-cannot be used as a cheap DO-waking or enumeration oracle.
+- **`/v1/recovery/issue` and `/v1/recovery/state` still charge both keys.** They are
+  token-authenticated: anyone who can reach them already holds the token, so charging
+  `handle:<handle>` costs a legitimate caller nothing, and it still stops a botnet
+  grinding one handle's budget from many IPs.
+- **`/v1/recovery/redeem` charges the IP key only.** Redeem is *not*
+  token-authenticated — that is the entire point of the endpoint, since the token is
+  what got lost. Charging `handle:<handle>` there meant any stranger, with no
+  credential at all, could send 3 redeem attempts per minute for a victim's handle
+  from a handful of IPs and hold that handle permanently 429'd, denying the owner
+  their own recovery at exactly the moment they need it. The per-handle key exists to
+  stop credential grinding, but the recovery code is 120 bits — grinding it is already
+  infeasible, so that key was buying essentially nothing on redeem while creating a
+  targeted denial-of-recovery. The per-IP key alone still bounds abuse volume, and it
+  is still charged *before* any existence check, so a 429 continues to reveal nothing
+  about whether the handle exists.
 
 Rate-limit tests must give each test its own synthetic `cf-connecting-ip` and its own
 handle, the way `apps/relay/test/register.test.ts` already does. That file's burst
@@ -270,7 +289,10 @@ directly, `packages/cli` with mocked fetch.
 - `issue` replaces the previous code — the old one no longer redeems
 - `issue` requires a valid token
 - `register` returns a code and sets `recovery_hash`
-- `RECOVER_RL` trips on both the handle key and the IP key
+- `RECOVER_RL` trips on both the handle key and the IP key for `issue` and `state`
+- redeem does **not** charge the handle key (amendment above): many wrong-code
+  attempts against one handle from distinct IPs never block a legitimate redeem of
+  that same handle
 
 **cli**
 - `recovery redeem` writes a valid `config.json` with no prior config present
