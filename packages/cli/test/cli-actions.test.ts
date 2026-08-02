@@ -4,10 +4,23 @@ import { mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { WebSocketServer } from "ws";
 import { runCli } from "../src/index.js";
 import { getPaths } from "../src/paths.js";
 import { saveConfig } from "../src/config.js";
 import { loadMemberships, readCached, saveMembership, writeCached } from "../src/rosters.js";
+import { loadOutbound, rememberOutbound } from "../src/contextsOut.js";
+
+vi.mock("../src/contacts.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../src/contacts.js")>();
+  return {
+    ...actual,
+    resolveAddress: (...args: Parameters<typeof actual.resolveAddress>) =>
+      args[1] === "local-sota"
+        ? { ok: true as const, handle: "sota", host: "local.test", address: "sota@local.test" }
+        : actual.resolveAddress(...args),
+  };
+});
 
 // These tests cross the Commander seam. They assert wiring: argument parsing,
 // stream routing, exit status, relay requests, and durable state. Business
@@ -72,6 +85,32 @@ function startRelay(
     servers.push(server);
     server.listen(0, "127.0.0.1", () => {
       resolve(`http://127.0.0.1:${(server.address() as { port: number }).port}`);
+    });
+  });
+}
+
+function startCallRelay(
+  onFrame: (frame: Record<string, unknown>, ws: import("ws").WebSocket) => void,
+): Promise<{ relay: string; connections: () => number }> {
+  return new Promise((resolve) => {
+    const server = createServer((_req, res) => {
+      res.writeHead(404);
+      res.end();
+    });
+    const wss = new WebSocketServer({ server, path: "/v1/ws" });
+    let connectionCount = 0;
+    wss.on("connection", (ws) => {
+      connectionCount += 1;
+      ws.on("message", (raw) => {
+        if (String(raw) !== "ping") onFrame(JSON.parse(String(raw)), ws);
+      });
+    });
+    servers.push(server);
+    server.listen(0, "127.0.0.1", () => {
+      resolve({
+        relay: `http://127.0.0.1:${(server.address() as { port: number }).port}`,
+        connections: () => connectionCount,
+      });
     });
   });
 }
@@ -194,6 +233,85 @@ describe.sequential("CLI command actions", () => {
     const offline = await runCommand(testHome, ["search", "typescript", "--offline"]);
     expect(offline.code).toBe(1);
     expect(offline.stderr).toMatch(/never been fetched/);
+  });
+
+  it("rejects --continue with no stored conversation before opening a WebSocket", async () => {
+    const callRelay = await startCallRelay(() => {});
+    const testHome = home();
+    seedConfig(testHome, callRelay.relay);
+
+    const out = await runCommand(testHome, ["call", "local-sota", "follow up", "--continue"]);
+
+    expect(out.code).toBe(1);
+    expect(out.stdout).toBe("");
+    expect(out.stderr).toMatch(/No open conversation/);
+    expect(callRelay.connections()).toBe(0);
+  });
+
+  it("rejects --continue with --context before opening a WebSocket", async () => {
+    const callRelay = await startCallRelay(() => {});
+    const testHome = home();
+    seedConfig(testHome, callRelay.relay);
+
+    const out = await runCommand(testHome, [
+      "call", "local-sota", "follow up", "--continue", "--context", "ctx_AAAAAAAAAAAAAAAAAAAAAA",
+    ]);
+
+    expect(out.code).toBe(1);
+    expect(out.stdout).toBe("");
+    expect(out.stderr).toMatch(/--continue or --context/);
+    expect(callRelay.connections()).toBe(0);
+  });
+
+  it("rejects a --task that conflicts with the continued conversation before opening a WebSocket", async () => {
+    const callRelay = await startCallRelay(() => {});
+    const testHome = home();
+    const paths = getPaths(testHome);
+    seedConfig(testHome, callRelay.relay);
+    rememberOutbound(paths, {
+      relay: callRelay.relay, from: "ken", to: "sota", task: "resolved-task",
+      context_id: "ctx_AAAAAAAAAAAAAAAAAAAAAA", at: 1,
+    });
+
+    const out = await runCommand(testHome, [
+      "call", "local-sota", "follow up", "--continue", "--task", "other-task",
+    ]);
+
+    expect(out.code).toBe(1);
+    expect(out.stdout).toBe("");
+    expect(out.stderr).toMatch(/conversation is on task.*resolved-task.*not.*other-task/i);
+    expect(callRelay.connections()).toBe(0);
+  });
+
+  it("stores a returned context and continues it with the resolved task while keeping stdout parseable", async () => {
+    const frames: Record<string, unknown>[] = [];
+    const contextId = "ctx_AAAAAAAAAAAAAAAAAAAAAA";
+    const callRelay = await startCallRelay((frame, ws) => {
+      frames.push(frame);
+      ws.send(JSON.stringify({
+        type: "call_reply", call_id: `call-${frames.length}`, text: `reply-${frames.length}`,
+        task: "resolved-task", context_id: contextId,
+      }));
+    });
+    const testHome = home();
+    const paths = getPaths(testHome);
+    seedConfig(testHome, callRelay.relay);
+
+    const first = await runCommand(testHome, ["call", "local-sota", "hello", "--json"]);
+    expect(first.code).toBe(0);
+    expect(JSON.parse(first.stdout)).toMatchObject({ text: "reply-1", task: "resolved-task", context_id: contextId });
+    expect(first.stderr).toMatch(/conversation open.*--continue/);
+    expect(loadOutbound(paths)).toMatchObject([{
+      relay: callRelay.relay, from: "ken", to: "sota", task: "resolved-task", context_id: contextId,
+    }]);
+
+    const second = await runCommand(testHome, ["call", "local-sota", "follow up", "--continue", "--json"]);
+    expect(second.code).toBe(0);
+    expect(JSON.parse(second.stdout)).toMatchObject({ text: "reply-2" });
+    expect(frames).toHaveLength(2);
+    expect(frames[1]).toMatchObject({
+      type: "call_request", to: "sota", message: "follow up", task: "resolved-task", context_id: contextId,
+    });
   });
 });
 
