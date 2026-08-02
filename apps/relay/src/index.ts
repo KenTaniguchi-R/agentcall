@@ -2,7 +2,7 @@ import { Hono } from "hono";
 import { CardUpload, RegisterRequest, RESERVED_HANDLES, visibleTasks } from "@benree/agentcall-shared";
 import { mountA2A } from "./a2a.js";
 import { mountRoster } from "./roster.js";
-import { generateToken, sha256Hex, verifyHandleToken } from "./auth.js";
+import { generateToken, generateRecoveryCode, normalizeRecoveryCode, sha256Hex, verifyHandleToken } from "./auth.js";
 import { INSTALL_SH } from "./install-sh.js";
 
 export { HandleDO } from "./do.js";
@@ -45,14 +45,18 @@ app.post("/v1/register", async (c) => {
   const { handle, agent_kind } = body.data;
   if ((RESERVED_HANDLES as readonly string[]).includes(handle)) return c.json({ error: "handle reserved" }, 400);
   const token = generateToken();
+  const recoveryCode = generateRecoveryCode();
   try {
     await c.env.DB.prepare(
-      "INSERT INTO handles (handle, token_hash, agent_kind, created_at) VALUES (?, ?, ?, ?)",
-    ).bind(handle, await sha256Hex(token), agent_kind ?? null, Date.now()).run();
+      "INSERT INTO handles (handle, token_hash, agent_kind, created_at, recovery_hash) VALUES (?, ?, ?, ?, ?)",
+    ).bind(
+      handle, await sha256Hex(token), agent_kind ?? null, Date.now(),
+      await sha256Hex(normalizeRecoveryCode(recoveryCode)!),
+    ).run();
   } catch {
     return c.json({ error: "handle taken" }, 409);
   }
-  return c.json({ token, address: `${handle}@${RELAY_HOST}` });
+  return c.json({ token, address: `${handle}@${RELAY_HOST}`, recovery_code: recoveryCode });
 });
 
 // Presence is caller-only. Anonymous, this endpoint was an oracle: 404-vs-200

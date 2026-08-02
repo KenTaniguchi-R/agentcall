@@ -55,6 +55,27 @@ describe("POST /v1/register", () => {
     const sixth = await register({ handle: "rl-reg-6th", agent_kind: "claude" }, ip);
     expect(sixth.status).toBe(429);
   });
+
+  it("returns a recovery code and stores its hash", async () => {
+    const res = await register({ handle: "reco", agent_kind: "claude" }, "203.0.113.40");
+    expect(res.status).toBe(200);
+    const json = await res.json<{ token: string; address: string; recovery_code: string }>();
+    expect(json.recovery_code.startsWith("agcr_")).toBe(true);
+
+    const row = await env.DB.prepare(
+      "SELECT recovery_hash, recovery_redeemed_at FROM handles WHERE handle = ?",
+    ).bind("reco").first<{ recovery_hash: string | null; recovery_redeemed_at: number | null }>();
+    // The hash is stored, never the code itself.
+    expect(row?.recovery_hash).toHaveLength(64);
+    expect(row?.recovery_hash).not.toContain(json.recovery_code);
+    expect(row?.recovery_redeemed_at).toBeNull();
+  });
+
+  it("issues a different recovery code per handle", async () => {
+    const a = await (await register({ handle: "reco-a" }, "203.0.113.41")).json<{ recovery_code: string }>();
+    const b = await (await register({ handle: "reco-b" }, "203.0.113.42")).json<{ recovery_code: string }>();
+    expect(a.recovery_code).not.toBe(b.recovery_code);
+  });
 });
 
 // A leaked token used to be permanent: register was the only write to the
