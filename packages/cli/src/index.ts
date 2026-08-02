@@ -166,9 +166,8 @@ program
       console.log("Card published.");
       return;
     }
-    let cfg;
-    try { cfg = loadConfig(paths); } catch { cfg = undefined; }
-    const parsed = resolveAddress(paths, target, relayUrl(cfg), cfg?.org);
+    const cfg = loadConfig(paths);
+    const parsed = resolveAddress(paths, target, relayUrl(cfg), cfg.org);
     if (!parsed.ok) {
       console.error(`${parsed.error} (or 'push')`);
       process.exitCode = 1;
@@ -176,9 +175,9 @@ program
     }
     try {
       const card = await fetchCard(
-        cfg ? relayUrl(cfg) : relayUrl(undefined),
+        relayUrl(cfg),
         parsed.handle,
-        cfg ? { org: cfg.org, handle: cfg.handle, token: cfg.token } : { org: parsed.host.split(".")[0] },
+        { org: cfg.org, handle: cfg.handle, token: cfg.token },
       );
       console.log(`${card.handle} (${card.agent_kind})${card.description ? ` — ${card.description}` : ""}`);
       for (const t of card.tasks) {
