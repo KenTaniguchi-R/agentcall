@@ -21,6 +21,7 @@ import { allRostersFailed, DEFAULT_SEARCH_LIMIT, rank, renderResults, sanitize, 
 import { refreshRoster } from "./searchRefresh.js";
 import { ask } from "./tty.js";
 import { renderPolicyReport } from "./policy-report.js";
+import { sanitizeTerminalOutput, stringifyTerminalSafeJson } from "@benree/agentcall-shared";
 
 export function createProgram(): Command {
 const program = new Command();
@@ -188,7 +189,7 @@ program
         // the existing "ringing..." / "answered" convention.
         console.error("conversation open — add --continue to follow up");
       }
-      console.log(o.json ? JSON.stringify(reply) : reply.text);
+      console.log(o.json ? stringifyTerminalSafeJson(reply) : sanitizeTerminalOutput(reply.text));
     } catch (e) {
       console.error(e instanceof CallError ? `Call failed (${e.code}): ${e.message}` : String(e));
       process.exitCode = 1;
@@ -313,10 +314,11 @@ program
         parsed.handle,
         { org: cfg.org, handle: cfg.handle, token: cfg.token },
       );
-      console.log(`${card.handle} (${card.agent_kind})${card.description ? ` — ${card.description}` : ""}`);
+      const description = sanitizeTerminalOutput(card.description);
+      console.log(`${card.handle} (${card.agent_kind})${description ? ` — ${description}` : ""}`);
       for (const t of card.tasks) {
-        console.log(`  ${t.id} — ${t.description}`);
-        for (const ex of t.examples) console.log(`      e.g. ${ex}`);
+        console.log(`  ${t.id} — ${sanitizeTerminalOutput(t.description)}`);
+        for (const ex of t.examples) console.log(`      e.g. ${sanitizeTerminalOutput(ex)}`);
       }
       console.log(`\nCall with: agentcall call ${target} --task <id> "<message>"`);
     } catch (e) {

@@ -522,6 +522,61 @@ describe.sequential("CLI command actions", () => {
       type: "call_request", to: "sota", message: "follow up", task: "resolved-task", context_id: contextId,
     });
   });
+
+  it("neutralizes terminal controls and bidi overrides in displayed reply text", async () => {
+    const hostile = "line one\n\tline two\u001b[2J\rFAKE\u009b31m\u202espoof";
+    const callRelay = await startCallRelay((_frame, ws) => {
+      ws.send(JSON.stringify({ type: "call_reply", call_id: "call-1", text: hostile }));
+    });
+    const testHome = home();
+    seedConfig(testHome, callRelay.relay);
+
+    const out = await runCommand(testHome, ["call", "local-sota", "hello"]);
+
+    expect(out.code).toBe(0);
+    expect(out.stdout).toContain("line one\n\tline two");
+    expect(out.stdout).toContain("FAKE");
+    expect(out.stdout).not.toMatch(/[\u0000-\u0008\u000b-\u001f\u007f-\u009f\u061c\u200e\u200f\u202a-\u202e\u2066-\u2069]/u);
+  });
+
+  it("preserves the exact reply payload under --json", async () => {
+    const hostile = "line one\n\u001b[2J\rFAKE\u009b31m\u202espoof";
+    const callRelay = await startCallRelay((_frame, ws) => {
+      ws.send(JSON.stringify({ type: "call_reply", call_id: "call-1", text: hostile }));
+    });
+    const testHome = home();
+    seedConfig(testHome, callRelay.relay);
+
+    const out = await runCommand(testHome, ["call", "local-sota", "hello", "--json"]);
+
+    expect(out.code).toBe(0);
+    expect(JSON.parse(out.stdout).text).toBe(hostile);
+    expect(out.stdout).not.toMatch(/[\u0000-\u001f\u007f-\u009f\u061c\u200e\u200f\u202a-\u202e\u2066-\u2069]/u);
+  });
+
+  it("neutralizes terminal controls in peer-authored card text", async () => {
+    const relay = await startRelay((url, method) => ({
+      status: url === "/v1/card/sota" && method === "GET" ? 200 : 404,
+      body: {
+        handle: "sota", agent_kind: "claude", description: "safe\u001b[2J\u202espoof",
+        tasks: [{
+          id: "ask", name: "Ask", description: "answer\rFAKE",
+          examples: ["normal\u009b31mexample"], keywords: [],
+        }],
+        updated_at: 1,
+      },
+    }));
+    const testHome = home();
+    seedConfig(testHome, relay);
+
+    const out = await runCommand(testHome, ["card", "local-sota"]);
+
+    expect(out.code).toBe(0);
+    expect(out.stdout).toContain("spoof");
+    expect(out.stdout).toContain("FAKE");
+    expect(out.stdout).toContain("example");
+    expect(out.stdout).not.toMatch(/[\u0000-\u0008\u000b-\u001f\u007f-\u009f\u061c\u200e\u200f\u202a-\u202e\u2066-\u2069]/u);
+  });
 });
 
 describe("published CLI entry", () => {
