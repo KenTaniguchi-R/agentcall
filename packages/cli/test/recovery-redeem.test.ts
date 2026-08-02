@@ -19,7 +19,7 @@ describe("runRecoveryRedeem", () => {
     const lines: string[] = [];
     const result = await runRecoveryRedeem(
       { code: "agcr_OLD", handle: "alice", relay: "https://relay.example" },
-      { paths, log: (l) => lines.push(l), redeemFn: fakeRedeem, isLaunchAgentInstalledFn: () => false, writeRecovery: () => {} },
+      { paths, log: (l) => lines.push(l), redeemFn: fakeRedeem, writeRecovery: () => {} },
     );
     expect(result.ok).toBe(true);
     const cfg = loadConfig(paths);
@@ -75,22 +75,20 @@ describe("runRecoveryRedeem", () => {
     expect(lines.join("\n")).toMatch(/ken/);
   });
 
-  it("preserves agent_kind and workdir on a same-handle redeem (normal re-key)", async () => {
+  it("preserves agent_kind and workdir on a same-handle redeem (normal re-key), and never touches the LaunchAgent", async () => {
     const paths = freshPaths();
     saveConfig(paths, {
       handle: "ken", token: "old-tok", agent_kind: "claude", workdir: "/some/dir", relay: "https://relay.example",
     });
-    let restarted = false;
+    const lines: string[] = [];
+    const printed: string[] = [];
     const result = await runRecoveryRedeem(
       { code: "agcr_OLD", handle: "ken", relay: "https://relay.example" },
       {
         paths,
+        log: (l) => lines.push(l),
         redeemFn: async () => ({ token: "new-tok", recovery_code: "agcr_NEW-NEW-NEW-NEW-NEW-NEW", address: "ken@relay.test" }),
-        isLaunchAgentInstalledFn: () => true,
-        installLaunchAgentFn: () => {
-          restarted = true;
-        },
-        writeRecovery: () => {},
+        writeRecovery: (s) => printed.push(s),
       },
     );
     expect(result.ok).toBe(true);
@@ -98,7 +96,12 @@ describe("runRecoveryRedeem", () => {
     expect(cfg).toEqual({
       handle: "ken", token: "new-tok", agent_kind: "claude", workdir: "/some/dir", relay: "https://relay.example",
     });
-    expect(restarted).toBe(true);
+    // No LaunchAgent restart attempt of any kind — just the same honest
+    // "go restart it yourself" hint every user gets, agent_kind or not.
+    expect(lines.join("\n")).toMatch(/Restart `agentcall listen`/);
+    // And, the whole point of the fix: the new recovery code still reaches
+    // the user even though this redeem had an agent_kind set.
+    expect(printed.join("\n")).toContain("agcr_NEW-NEW-NEW-NEW-NEW-NEW");
   });
 
   it("softens the old-token message so it does not imply an already-connected caller is locked out", async () => {
@@ -120,5 +123,26 @@ describe("runRecoveryRedeem", () => {
       { paths, redeemFn: fakeRedeem, writeRecovery: () => {} },
     );
     expect(readFileSync(paths.configFile, "utf8")).not.toContain("agcr_");
+  });
+
+  it("always reaches printRecoveryCode on a successful redeem — the config save and the token-burn on " +
+    "the relay are both already irreversible by this point, so nothing after them may throw and swallow " +
+    "the new code", async () => {
+    const paths = freshPaths();
+    // Same-handle redeem with agent_kind set: the exact shape that used to
+    // route through the now-deleted LaunchAgent restart before reaching
+    // printRecoveryCode.
+    saveConfig(paths, { handle: "ken", token: "old-tok", agent_kind: "claude", relay: "https://relay.example" });
+    const printed: string[] = [];
+    const result = await runRecoveryRedeem(
+      { code: "agcr_OLD", handle: "ken", relay: "https://relay.example" },
+      {
+        paths,
+        redeemFn: async () => ({ token: "new-tok", recovery_code: "agcr_ORDER-CHECK", address: "ken@relay.test" }),
+        writeRecovery: (s) => printed.push(s),
+      },
+    );
+    expect(result.ok).toBe(true);
+    expect(printed.join("\n")).toContain("agcr_ORDER-CHECK");
   });
 });

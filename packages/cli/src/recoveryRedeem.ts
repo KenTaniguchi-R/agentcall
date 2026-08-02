@@ -1,6 +1,5 @@
 import { loadConfig, normalizeRelay, relayUrl, saveConfig, type Config } from "./config.js";
 import { redeemRecoveryCode, ApiError } from "./api.js";
-import { installLaunchAgent, isLaunchAgentInstalled } from "./launchd.js";
 import { printRecoveryCode } from "./recoveryPrint.js";
 import type { Paths } from "./paths.js";
 
@@ -23,8 +22,6 @@ export interface RecoveryRedeemDeps {
   redeemFn?: typeof redeemRecoveryCode;
   loadConfigFn?: typeof loadConfig;
   saveConfigFn?: typeof saveConfig;
-  isLaunchAgentInstalledFn?: typeof isLaunchAgentInstalled;
-  installLaunchAgentFn?: typeof installLaunchAgent;
   writeRecovery?: (s: string) => void;
 }
 
@@ -103,13 +100,13 @@ export async function runRecoveryRedeem(opts: RecoveryRedeemOpts, deps: Recovery
         "token keeps its existing, open session until it disconnects on its own.",
     );
     if (next.agent_kind) {
-      const isInstalled = deps.isLaunchAgentInstalledFn ?? isLaunchAgentInstalled;
-      if (isInstalled(deps.paths)) {
-        (deps.installLaunchAgentFn ?? installLaunchAgent)(deps.paths);
-        log("Background listener restarted with the new token.");
-      } else {
-        log("Restart `agentcall listen` so it picks up the new token.");
-      }
+      // Deliberately does not touch the LaunchAgent here: restarting it was
+      // tried and reverted (see git history) — it ran before this point and
+      // could throw (e.g. `launchctl bootstrap` failing over SSH with no Aqua
+      // session), which meant the token was already saved and the old
+      // recovery code already burned on the relay, but the new recovery code
+      // below was never printed. Nothing below this comment may throw.
+      log("Restart `agentcall listen` (or your background listener) to pick up the new token.");
     } else {
       log("Re-run `agentcall setup` to make this install callable again.");
     }
