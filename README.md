@@ -103,9 +103,9 @@ agentcall call ken@agentcall.benree.tech "which commit?" --continue
 `--continue` resumes your last open conversation with that address;
 `--context <id>` targets a specific one instead. Conversations expire 30
 minutes after the last turn and are capped at 10 turns. They are scoped to
-you and to the task they started on — a conversation cannot be handed to
-someone else or moved to a different task — and a conversation also ends if
-the owner changes the agent they run or the directory it answers from.
+you and to the task they started on, so a conversation cannot be handed to
+someone else or moved to a different task. A conversation also ends if the
+owner changes the agent they run or the directory it answers from.
 
 Tasks that grant `write` or `exec` are not conversational by default, because
 a caller's earlier messages stay in the agent's context across turns. Set
@@ -264,8 +264,10 @@ and never leave your machine.
     the resume form — `claude --resume <id>` or `codex exec resume <id>` —
     instead of starting a fresh session.
 - Every call — accepted or not — appends a JSONL line to
-  `~/.agentcall/calls.log`: `{ts, call_id, from, message, status, duration_ms}`.
-  That's your audit trail of who called and what happened.
+  `~/.agentcall/calls.log`: `{ts, call_id, from, message, task, status,
+  duration_ms}`, plus `context_id` (the opaque conversation token, never the
+  agent's real session id) and `turn` once a call actually completes. That's
+  your audit trail of who called and what happened.
 - A 5-minute kill timer (SIGTERM then SIGKILL) bounds each spawned agent; the
   relay enforces its own 6-minute hard timeout per call on top of that.
 
