@@ -63,6 +63,9 @@ export async function registerHandle(
   );
   if (res.status === 404) throw new ApiError("This invite is invalid, expired, or already used.", "invite_invalid");
   if (res.status === 409) throw new ApiError(`Handle "${handle}" is already taken.`, "handle_taken");
+  if (res.status === 503) {
+    throw new ApiError("Registration is temporarily unavailable. Try again shortly.", "network");
+  }
   if (!res.ok) throw new ApiError(`Registration failed (${res.status}).`, "invalid");
   return RegisterResponse.parse(await res.json());
 }
