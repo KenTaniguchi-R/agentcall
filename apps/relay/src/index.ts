@@ -2,6 +2,7 @@ import { Hono } from "hono";
 import { CardUpload, RegisterRequest, RESERVED_HANDLES, visibleTasks } from "@benree/agentcall-shared";
 import { mountA2A } from "./a2a.js";
 import { mountRoster } from "./roster.js";
+import { mountRecovery } from "./recovery.js";
 import { generateToken, generateRecoveryCode, normalizeRecoveryCode, sha256Hex, verifyHandleToken } from "./auth.js";
 import { INSTALL_SH } from "./install-sh.js";
 
@@ -33,6 +34,7 @@ const RELAY_HOST = "agentcall.benree.tech";
 const app = new Hono<{ Bindings: Env }>();
 mountA2A(app);
 mountRoster(app);
+mountRecovery(app);
 
 async function handleExists(db: D1Database, handle: string): Promise<boolean> {
   return !!(await db.prepare("SELECT 1 FROM handles WHERE handle = ?").bind(handle).first());

@@ -19,6 +19,7 @@ export default defineWorkersConfig(async () => {
               CARD_RL: { namespace_id: "1002", simple: { limit: 20, period: 60 } },
               READ_RL: { namespace_id: "1003", simple: { limit: 60, period: 60 } },
               ROSTER_RL: { namespace_id: "1004", simple: { limit: 10, period: 60 } },
+              RECOVER_RL: { namespace_id: "1005", simple: { limit: 3, period: 60 } },
             },
           },
         },
