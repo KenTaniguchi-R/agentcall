@@ -1,11 +1,12 @@
 import { rmSync } from "node:fs";
 import { Command } from "commander";
 import { getPaths } from "./paths.js";
-import { loadConfig, saveConfig, relayUrl, normalizeRelay, assertCallableConfig } from "./config.js";
+import { loadConfig, saveConfig, relayUrl, assertCallableConfig } from "./config.js";
 import { callAgent, CallError } from "./callClient.js";
-import { getStatus, fetchCard, rotateToken, createRoster, joinRoster, issueRecoveryCode, redeemRecoveryCode, ApiError } from "./api.js";
+import { getStatus, fetchCard, rotateToken, createRoster, joinRoster, issueRecoveryCode, ApiError } from "./api.js";
 import { startListener } from "./listener.js";
 import { runSetup } from "./setup.js";
+import { runRecoveryRedeem } from "./recoveryRedeem.js";
 import { printRecoveryCode } from "./recoveryPrint.js";
 import { installLaunchAgent, isLaunchAgentInstalled, uninstallLaunchAgent } from "./launchd.js";
 import { publishCard } from "./card.js";
@@ -511,21 +512,13 @@ recovery
   .argument("<code>", "the agcr_... code you saved")
   .requiredOption("--handle <handle>", "the handle to recover")
   .option("--relay <url>", "relay the handle is registered on")
-  .action(async (code: string, opts: { handle: string; relay?: string }) => {
-    const paths = getPaths();
-    // Deliberately does NOT loadConfig: the whole point is that there may be
-    // no config to load. An existing one is overwritten only on success.
-    const relay = normalizeRelay(opts.relay ?? relayUrl());
-    try {
-      const out = await redeemRecoveryCode(relay, opts.handle, code);
-      saveConfig(paths, { handle: opts.handle, token: out.token, relay });
-      console.log(`Recovered ${out.address}. Wrote ${paths.configFile}.`);
-      console.log("Your previous token is now dead. Re-run `agentcall setup` to make this install callable again.");
-      printRecoveryCode(out.recovery_code);
-    } catch (e) {
-      console.error(e instanceof ApiError ? e.message : String(e));
-      process.exitCode = 1;
-    }
+  .option("--force", "overwrite this machine's config even though it belongs to a different handle")
+  .action(async (code: string, opts: { handle: string; relay?: string; force?: boolean }) => {
+    const { ok } = await runRecoveryRedeem(
+      { code, handle: opts.handle, relay: opts.relay, force: opts.force },
+      { paths: getPaths() },
+    );
+    if (!ok) process.exitCode = 1;
   });
 
 program

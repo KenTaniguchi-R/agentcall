@@ -140,11 +140,27 @@ handle before is simply locked out. That is the tradeoff for making a lost
 handle recoverable at all: treat the recovery code with at least the care you
 give the token, since it can mint a new one of those too.
 
-**Redeeming restores the credential, not your agent configuration.** The
-`config.json` that `recovery redeem` writes has only `handle`, `token`, and
-`relay` — no `agent_kind`, no `workdir` — so the install can place outbound
-calls immediately but cannot *answer* calls until you re-run `agentcall
-setup` to pick an agent and working directory again.
+**Redeeming a token only invalidates the credential, not any session already
+in progress.** Authentication happens once, at WebSocket upgrade — so if
+someone else holds an open listener socket with the old token (a leaked
+token being actively abused, say), redeeming does not disconnect them. They
+keep receiving calls until that socket closes on its own. (`/v1/token/rotate`
+has the identical gap.) If you suspect active misuse, also restart your own
+listener (`agentcall uninstall` then `agentcall setup`, or just kill and
+relaunch it) so any other holder's connection is dropped.
+
+**What `recovery redeem` writes to `config.json` depends on what was already
+there.** If this machine's config is missing, or already belongs to the
+handle you're recovering, `agent_kind` and `workdir` carry over (or start
+absent, if there was nothing to carry over) and the install keeps whatever
+ability to answer calls it already had. If the config belongs to a
+*different* handle, `recovery redeem` refuses by default — overwriting it
+would silently kill that other handle's token and, if a background listener
+is installed for it, make it crash-loop. Pass `--force` to proceed anyway;
+doing so replaces the config outright with a caller-only one for the
+recovered handle (no `agent_kind`, no `workdir`), so the install can place
+outbound calls immediately but cannot *answer* calls until you re-run
+`agentcall setup` to pick an agent and working directory again.
 
 Plain calls (no `--task`) run the built-in read-only `ask` task. To offer more:
 
