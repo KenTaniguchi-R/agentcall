@@ -1,7 +1,7 @@
 import { existsSync, mkdirSync, readFileSync, statSync, writeFileSync, chmodSync } from "node:fs";
 import { isAbsolute } from "node:path";
 import type { AgentKind } from "@benree/agentcall-shared";
-import type { Paths } from "./paths.js";
+import type { LinePaths, Paths } from "./paths.js";
 
 export interface Config {
   handle: string;
@@ -28,6 +28,24 @@ export function assertCallableConfig(cfg: Config): asserts cfg is CallableConfig
   }
 }
 
+// Line-scoped counterpart of Config, above. Additive: Config and everything
+// that consumes it are left untouched until Task 12 deletes the legacy half.
+export interface LineConfig {
+  handle: string;
+  token: string;
+  relay: string;
+  /** Absent = answer-incapable. The line can still call out. */
+  agent_kind?: AgentKind;
+  workdir?: string;
+}
+export type CallableLineConfig = LineConfig & { agent_kind: AgentKind };
+
+export function assertCallableLine(cfg: LineConfig): asserts cfg is CallableLineConfig {
+  if (!cfg.agent_kind) {
+    throw new Error("This line is caller-only — re-run `agentcall line add` with an agent to make it callable.");
+  }
+}
+
 export const DEFAULT_RELAY = "https://agentcall.benree.tech";
 
 export interface Workdir {
@@ -49,6 +67,22 @@ export interface Workdir {
 // call into a cryptic spawn ENOENT.
 export function resolveWorkdir(cfg: Config, p: Paths): Workdir {
   if (cfg.workdir === undefined) return { dir: p.publicDir, confined: true };
+  if (!isAbsolute(cfg.workdir)) {
+    throw new Error(`config.json workdir must be an absolute path, got "${cfg.workdir}".`);
+  }
+  if (!existsSync(cfg.workdir)) {
+    throw new Error(`config.json workdir "${cfg.workdir}" does not exist.`);
+  }
+  if (!statSync(cfg.workdir).isDirectory()) {
+    throw new Error(`config.json workdir "${cfg.workdir}" is not a directory.`);
+  }
+  return { dir: cfg.workdir, confined: false };
+}
+
+// Same logic as resolveWorkdir, but for a LinePaths and defaulting to
+// p.shareDir (the line's authored public folder) instead of p.publicDir.
+export function resolveLineWorkdir(cfg: LineConfig, p: LinePaths): Workdir {
+  if (cfg.workdir === undefined) return { dir: p.shareDir, confined: true };
   if (!isAbsolute(cfg.workdir)) {
     throw new Error(`config.json workdir must be an absolute path, got "${cfg.workdir}".`);
   }
