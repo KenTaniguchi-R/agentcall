@@ -7,13 +7,19 @@ actual state of enterprise agent adoption, and what stops deals?
 (market map) · [enterprise-pivot-research](./2026-07-31-enterprise-pivot-research.md)
 (competitor and design rationale)
 
+> **Amended 2026-08-02.** MCP Tunnels now owns the simple “reach an agent behind a
+> firewall” sentence. The open position is narrower: governed, person-scoped delegation
+> to the callee's own agent, with caller-specific pre-prompt policy and audit evidence.
+> See [the MCP positioning decision](../superpowers/specs/2026-08-02-mcp-positioning-design.md).
+
 ---
 
 ## Verdict
 
 **Painkiller, not vitamin — but the go-to-market is harder than the technology.**
 
-- The pain is documented, quantified, and no product owns the positioning
+- The pain is documented and quantified; the defensible position is governed,
+  person-scoped delegation, not private-network reachability
 - agentcall's architecture is structurally advantaged on the legal/privacy axis, which
   turns out to matter more than expected
 - Enterprise agent selling is brutal: 47% of pilots die, 17-month pilot stagnation,
@@ -40,7 +46,7 @@ Interruption cost research (Gloria Mark, CHI) shows interrupted workers complete
 in similar time but with significantly higher stress, frustration, time pressure and
 effort — the speed-up is real but unsustainable.
 
-### Nobody owns this positioning
+### Nobody owns the governed-delegation position
 
 No product has become synonymous with interruption reduction the way Slack owns async
 communication. The closest proof point is Slack/TOYOTA L&F (5,618 hrs/year saved), but
