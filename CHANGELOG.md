@@ -6,6 +6,13 @@ which are released together.
 
 ## Unreleased
 
+### Documentation — living reference implementation index
+
+- Enterprise, security, and A2A designs now start from a discoverable living
+  index of the external systems and specifications AgentCall follows, including
+  the exact invariants to reuse, boundaries not to copy, and local designs or
+  implementations where each precedent has already landed.
+
 ### Security verification — malformed Codex requirements fail closed
 
 - The Codex read-floor verifier now requires malformed machine-wide
