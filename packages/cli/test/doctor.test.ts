@@ -248,17 +248,49 @@ describe("runDoctor", () => {
     expect(out).toMatch(/wasn't you|was not you/i);
   });
 
-  it("stays quiet when a code is issued and unredeemed", async () => {
+  // A CLI built before this branch discarded the recovery_code from the
+  // register response, so a handle can have `issued: true` on the relay
+  // while its owner never actually saw a code. Staying quiet here used to
+  // read as "you're covered" when doctor genuinely cannot tell — it only
+  // knows a hash exists, not whether anyone kept the code it hashed.
+  it("says it cannot confirm the code was kept when issued and unredeemed, but stays green", async () => {
     const p = freshPaths();
     saveConfig(p, { handle: "ken", token: "t", agent_kind: "claude", relay: "https://relay.example" });
     const lines: string[] = [];
-    await runDoctor({
+    const code = await runDoctor({
       ...baseDeps,
       paths: p,
       log: (l) => lines.push(l),
       getRecoveryStateFn: async () => ({ issued: true, redeemed_at: null }),
     });
-    expect(lines.join("\n")).not.toMatch(/agentcall recovery issue/);
+    expect(code).toBe(0);
+    const out = lines.join("\n");
+    expect(out).toMatch(/! recovery code/);
+    expect(out).toMatch(/cannot tell|can't tell|does not know|doesn't know/i);
+    expect(out).toMatch(/agentcall recovery issue/);
+  });
+
+  // getRecoveryState is charged against the relay's recovery rate limit
+  // (RECOVER_RL), the same budget `recovery issue`/`redeem` spend. A few
+  // doctor runs inside a minute can 429 it, and swallowing that silently
+  // used to make a throttled doctor look identical to a healthy one —
+  // hiding exactly the warning the previous test covers.
+  it("reports (rather than silently drops) a recovery-state check that fails, e.g. a 429", async () => {
+    const p = freshPaths();
+    saveConfig(p, { handle: "ken", token: "t", agent_kind: "claude", relay: "https://relay.example" });
+    const lines: string[] = [];
+    const code = await runDoctor({
+      ...baseDeps,
+      paths: p,
+      log: (l) => lines.push(l),
+      getRecoveryStateFn: async () => {
+        throw new Error("Could not read recovery state (429)");
+      },
+    });
+    expect(code).toBe(0);
+    const out = lines.join("\n");
+    expect(out).toMatch(/! recovery code/);
+    expect(out).toMatch(/could not|couldn't|unable/i);
   });
 
   // Regression guard: every relay-talking dep in baseDeps (getStatusFn,

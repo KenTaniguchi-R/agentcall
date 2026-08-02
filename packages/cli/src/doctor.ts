@@ -117,9 +117,29 @@ export async function runDoctor(deps: DoctorDeps): Promise<number> {
         detail: `redeemed on ${when}`,
         hint: "if that wasn't you, run `agentcall recovery issue` now",
       });
+    } else {
+      // issued && not redeemed: a hash exists on the relay, but that is not
+      // proof the owner ever received or kept the code it hashes — a CLI
+      // built before this branch discarded `recovery_code` from the register
+      // response, so this state is silently true for every handle registered
+      // between the Worker deploy and the owner's CLI upgrade. Staying quiet
+      // here reads as "you are covered", which doctor cannot actually claim.
+      report({
+        name: "recovery code",
+        ok: true,
+        warn: true,
+        detail:
+          "issued on the relay, but this tool cannot tell whether you ever received or kept it — run " +
+          "`agentcall recovery issue` for a fresh one if you don't have it saved",
+      });
     }
-  } catch {
-    /* an unreachable relay is already reported by the status check above */
+  } catch (e) {
+    // getRecoveryState spends the same relay rate-limit budget as `recovery
+    // issue`/`redeem` (RECOVER_RL), so a handful of doctor runs inside a
+    // minute can 429 it. Swallowing that silently used to make a throttled
+    // doctor look identical to a healthy one — hiding exactly the warning
+    // the branch above exists to surface. Report it instead; no retry.
+    report({ name: "recovery code", ok: true, warn: true, detail: `could not be checked — ${short(e)}` });
   }
 
   // Falls back to publicDir when workdir didn't resolve: per the ladder
