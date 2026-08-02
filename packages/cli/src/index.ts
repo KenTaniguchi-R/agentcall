@@ -15,7 +15,8 @@ import { buildCardReport } from "./lint.js";
 import { runDoctor } from "./doctor.js";
 import { loadContacts, addContact, removeContact, resolveAddress } from "./contacts.js";
 import { DEFAULT_SEARCH_LIMIT } from "./search.js";
-import { ExitOnly, realDeps, rosterCreate, rosterForget, rosterJoin, rosterList } from "./commands/roster.js";
+import { ExitOnly, realDeps } from "./commands/deps.js";
+import { rosterCreate, rosterForget, rosterJoin, rosterList } from "./commands/roster.js";
 import { search } from "./commands/search.js";
 
 export function createProgram(): Command {

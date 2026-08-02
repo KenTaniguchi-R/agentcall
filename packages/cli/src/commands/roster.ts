@@ -1,31 +1,7 @@
-import { ask } from "../tty.js";
-import { getPaths, type Paths } from "../paths.js";
 import { loadConfig, relayUrl } from "../config.js";
 import { createRoster, joinRoster } from "../api.js";
 import { forgetMembership, loadMemberships, saveMembership } from "../rosters.js";
-
-// One injected I/O surface for every command. Injected rather than calling
-// console directly because vitest runs files in parallel and a process-wide
-// console spy is shared mutable state between suites.
-export type Io = {
-  log(s: string): void;
-  error(s: string): void;
-  ask(q: string): Promise<string>;
-};
-export type Deps = { paths: Paths; io: Io };
-
-export function realDeps(): Deps {
-  return {
-    paths: getPaths(),
-    io: { log: (s) => console.log(s), error: (s) => console.error(s), ask },
-  };
-}
-
-// Thrown by a command that must exit non-zero WITHOUT printing anything —
-// the failure has already been reported to the user by other means. search
-// uses it for the every-roster-failed case, which prints per-roster errors
-// in its loop and then needs exit 1 without a redundant summary line.
-export class ExitOnly extends Error {}
+import type { Deps } from "./deps.js";
 
 export async function rosterCreate(d: Deps, o: { as: string }): Promise<void> {
   const cfg = loadConfig(d.paths);

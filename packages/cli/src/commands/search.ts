@@ -2,7 +2,7 @@ import { loadConfig, relayUrl } from "../config.js";
 import { loadMemberships } from "../rosters.js";
 import { allRostersFailed, rank, renderResults, sanitize, toEntries, type RosterStatus, type SearchEntry } from "../search.js";
 import { refreshRoster } from "../searchRefresh.js";
-import { ExitOnly, type Deps } from "./roster.js";
+import { ExitOnly, type Deps } from "./deps.js";
 
 export async function search(
   d: Deps,

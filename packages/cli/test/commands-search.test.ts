@@ -2,7 +2,7 @@ import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { beforeEach, afterEach, describe, expect, it, vi } from "vitest";
-import { ExitOnly, type Deps, type Io } from "../src/commands/roster.js";
+import { ExitOnly, type Deps, type Io } from "../src/commands/deps.js";
 import { saveConfig } from "../src/config.js";
 import { saveMembership } from "../src/rosters.js";
 import { getPaths } from "../src/paths.js";
