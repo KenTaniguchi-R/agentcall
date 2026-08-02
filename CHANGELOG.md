@@ -6,6 +6,19 @@ which are released together.
 
 ## Unreleased
 
+### Fixed — doctor detects Codex policies that suppress tool telemetry
+
+- `agentcall doctor` now queries Codex's read-only `hooks/list` endpoint with
+  the exact production hook and trust overrides. It succeeds only when
+  AgentCall's session hook is present, enabled, and trusted; no additional
+  model call or effective-config dump is required.
+- `allow_managed_hooks_only = true`, hook normalization drift, disabled hooks,
+  malformed responses, and app-server failures now make doctor exit nonzero
+  with an actionable diagnostic instead of silently claiming telemetry.
+- AgentCall still does not install an administrator-managed guard. An
+  administrator who requires managed-only hooks must leave that setting unset
+  until a managed installation flow ships.
+
 ### Fixed — the Codex guard now runs without trusting foreign hooks
 
 - Codex spawns now supply the exact trusted hash for AgentCall's inline
@@ -20,7 +33,8 @@ which are released together.
   `PreToolUse` are recorded, but the hook does not enforce a read boundary and
   non-hooked routes such as `view_image` remain absent from `tools.log`. An
   administrator setting `allow_managed_hooks_only = true` disables this session
-  hook; managed-hook installation or detection remains future work.
+  hook; doctor now detects that condition, while managed-hook installation
+  remains future work.
 
 ### Added — readable effective capability policy
 

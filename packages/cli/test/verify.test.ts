@@ -1,4 +1,4 @@
-import { mkdirSync, mkdtempSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readdirSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
@@ -9,6 +9,7 @@ import { ASK_TASK } from "../src/tasks.js";
 import {
   checkAgentBinary,
   checkCodexAuth,
+  checkCodexGuard,
   checkGuard,
   checkRelaySelfCall,
   checkAgentSpawn,
@@ -16,10 +17,27 @@ import {
   formatCheck,
   guardDenied,
   HINTS,
+  runCodexGuardProbe,
   VERIFY_PROMPT,
   VERIFY_TIMEOUT_MS,
   verifyAgent,
 } from "../src/verify.js";
+
+const trustedCodexHookList = JSON.stringify({
+  id: 2,
+  result: {
+    data: [{
+      cwd: "/work",
+      hooks: [{
+        key: "/<session-flags>/config.toml:pre_tool_use:0:0",
+        enabled: true,
+        trustStatus: "trusted",
+      }],
+      warnings: [],
+      errors: [],
+    }],
+  },
+});
 
 describe("classifyAgentFailure", () => {
   it("maps claude auth errors to the /login hint", () => {
@@ -163,6 +181,144 @@ describe("checkAgentSpawn", () => {
     expect(c.ok).toBe(false);
     expect(c.hint).toBe(HINTS.claudeAuth);
     expect(c.detail).toContain("Invalid API key");
+  });
+});
+
+describe("checkCodexGuard", () => {
+  it("passes only when hooks/list reports AgentCall's exact session hook enabled and trusted", async () => {
+    const calls: Array<{ args: string[]; input: string; cwd: string }> = [];
+    const check = await checkCodexGuard("/work", async (args, input, cwd) => {
+      calls.push({ args, input, cwd });
+      return trustedCodexHookList;
+    });
+
+    expect(check).toMatchObject({ name: "codex tool telemetry", ok: true });
+    expect(calls).toHaveLength(1);
+    expect(calls[0]!.args[0]).toBe("app-server");
+    expect(calls[0]!.args.some((arg) => arg.startsWith("hooks.PreToolUse="))).toBe(true);
+    expect(calls[0]!.args.some((arg) => arg.startsWith("hooks.state="))).toBe(true);
+    expect(calls[0]!.input).toContain('"method":"hooks/list"');
+    expect(calls[0]!.input).toContain('"cwds":["/work"]');
+    expect(calls[0]!.cwd).toBe("/work");
+  });
+
+  it("fails when managed-only policy removes the session hook", async () => {
+    const output = JSON.stringify({ id: 2, result: { data: [{ cwd: "/work", hooks: [] }] } });
+    const check = await checkCodexGuard("/work", async () => output);
+    expect(check).toMatchObject({ name: "codex tool telemetry", ok: false });
+    expect(check.detail).toContain("session hook is absent");
+    expect(check.hint).toContain("allow_managed_hooks_only");
+  });
+
+  it("does not accept a trusted hook result for a different working directory", async () => {
+    const output = JSON.stringify({
+      id: 2,
+      result: { data: [{ cwd: "/other", hooks: [{
+        key: "/<session-flags>/config.toml:pre_tool_use:0:0",
+        enabled: true,
+        trustStatus: "trusted",
+      }] }] },
+    });
+    const check = await checkCodexGuard("/work", async () => output);
+    expect(check.ok).toBe(false);
+    expect(check.detail).toContain("session hook is absent");
+  });
+
+  it.each([
+    [{ enabled: false, trustStatus: "trusted" }, "disabled"],
+    [{ enabled: true, trustStatus: "modified" }, "modified"],
+    [{ enabled: true, trustStatus: "untrusted" }, "untrusted"],
+  ])("fails when the exact session hook is not executable: %j", async (state, detail) => {
+    const output = JSON.stringify({
+      id: 2,
+      result: { data: [{ cwd: "/work", hooks: [{
+        key: "/<session-flags>/config.toml:pre_tool_use:0:0", ...state,
+      }] }] },
+    });
+    const check = await checkCodexGuard("/work", async () => output);
+    expect(check.ok).toBe(false);
+    expect(check.detail).toContain(detail);
+  });
+
+  it("fails closed on app-server errors and malformed responses", async () => {
+    expect((await checkCodexGuard("/work", async () => "not json")).ok).toBe(false);
+    expect(await checkCodexGuard("/work", async () => { throw new Error("app-server failed"); }))
+      .toMatchObject({ ok: false, detail: "app-server failed" });
+  });
+});
+
+describe("runCodexGuardProbe", () => {
+  it("handles split JSON, kills the process group, and removes the isolated CODEX_HOME", async () => {
+    const root = mkdtempSync(join(tmpdir(), "codex-guard-transport-"));
+    const helperMarker = join(root, "helper-survived");
+    const helper = `setTimeout(() => require("node:fs").writeFileSync(${JSON.stringify(helperMarker)}, "x"), 300)`;
+    const script = [
+      `require("node:child_process").spawn(process.execPath, ["-e", ${JSON.stringify(helper)}], { stdio: "ignore" })`,
+      "const response = JSON.stringify({ id: 2, codexHome: process.env.CODEX_HOME })",
+      "process.stdout.write(response.slice(0, 7))",
+      "setTimeout(() => process.stdout.write(response.slice(7)), 10)",
+      "setInterval(() => {}, 1000)",
+    ].join(";");
+    try {
+      const output = await runCodexGuardProbe(
+        process.execPath, ["-e", script], "request\n", root,
+        { tempRoot: root, timeoutMs: 1_000, killGraceMs: 50 },
+      );
+      const response = JSON.parse(output) as { id: number; codexHome: string };
+      expect(response.id).toBe(2);
+      expect(response.codexHome.startsWith(root)).toBe(true);
+      expect(existsSync(response.codexHome)).toBe(false);
+      await new Promise((resolve) => setTimeout(resolve, 400));
+      expect(existsSync(helperMarker), "a helper escaped the app-server process group").toBe(false);
+      expect(readdirSync(root)).toEqual([]);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it("times out a non-responsive child and removes its isolated home", async () => {
+    const root = mkdtempSync(join(tmpdir(), "codex-guard-timeout-"));
+    try {
+      await expect(runCodexGuardProbe(
+        process.execPath, ["-e", "setInterval(() => {}, 1000)"], "request\n", root,
+        { tempRoot: root, timeoutMs: 50, killGraceMs: 25 },
+      )).rejects.toThrow("timed out");
+      expect(readdirSync(root)).toEqual([]);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it("bounds stdout, terminates the child, and removes its isolated home", async () => {
+    const root = mkdtempSync(join(tmpdir(), "codex-guard-overflow-"));
+    try {
+      await expect(runCodexGuardProbe(
+        process.execPath,
+        ["-e", 'process.stdout.write("x".repeat(2048)); setInterval(() => {}, 1000)'],
+        "request\n", root,
+        { tempRoot: root, maxOutputBytes: 1024, timeoutMs: 1_000, killGraceMs: 25 },
+      )).rejects.toThrow("exceeded 1024 bytes");
+      expect(readdirSync(root)).toEqual([]);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it("fails on early close or spawn error and removes each isolated home", async () => {
+    const root = mkdtempSync(join(tmpdir(), "codex-guard-errors-"));
+    try {
+      await expect(runCodexGuardProbe(
+        process.execPath, ["-e", ""], "request\n", root,
+        { tempRoot: root, timeoutMs: 1_000, killGraceMs: 25 },
+      )).rejects.toThrow("before hooks/list responded");
+      await expect(runCodexGuardProbe(
+        "/definitely/missing-agentcall-codex", [], "request\n", root,
+        { tempRoot: root, timeoutMs: 1_000, killGraceMs: 25 },
+      )).rejects.toThrow();
+      expect(readdirSync(root)).toEqual([]);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
   });
 });
 

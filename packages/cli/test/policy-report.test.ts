@@ -87,6 +87,7 @@ describe("renderPolicyReport", () => {
     expect(report).toContain("shell tool attempts are recorded by an observe-only hook");
     expect(report).toContain("unless managed-only hooks are required");
     expect(report).toContain("Other Codex releases or allow_managed_hooks_only=true may silently skip that hook");
+    expect(report).toContain("Run agentcall doctor to verify the exact Codex session hook");
     expect(report).toContain("non-hooked read routes remain unrecorded");
     expect(report).not.toContain("shell actions are recorded, not blocked");
   });
