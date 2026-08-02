@@ -48,6 +48,24 @@ conversation bindings follow it — each is scoped to one line and takes
 `--line <name>` (defaulting to the primary line), so a machine can hold lines in
 two organizations without either seeing the other's memberships, invites, or
 open conversations.
+
+### Documentation — bounded credential lifecycle
+
+- The future identity cutover now includes 90-day client credentials that
+  exchange for one-hour opaque access tokens, with automatic refresh/rotation,
+  a 24-hour maximum overlap, parent-child revocation, and access-token-bounded
+  WebSocket sessions.
+- Normal rotation proves the replacement before revoking the old credential;
+  recovery instead atomically revokes D1 credential state, then idempotently
+  evicts live sessions. Client secrets remain reveal-once and hard expiry never
+  silently extends through a child token or WebSocket.
+- Subject-owned Durable Objects will serialize WebSocket admission and
+  revocation so outbound caller sockets cannot escape eviction in a callee's
+  object. Recovery successors remain out-of-band and never share AgentCall's
+  normal credential store.
+- `last_used_at` is a coarsened liveness signal updated at most hourly, not a
+  per-request D1 write, audit trail, or automatic reclaim authority. The
+  obsolete `handles` row receives no temporary lifecycle fields before #154.
 ### Documentation — identity and address separation
 
 - Agent identity is now decided as an opaque, organization-scoped lifetime

@@ -196,6 +196,13 @@ a machine has more than one: `rotate`, `card`, `task new`, and the six policy
 verbs (`allow`/`revoke`/`block`/`unblock`/`offer`/`unoffer`) all accept it. Omit
 it and these default to the primary line.
 
+Current relay tokens do not expire, cannot be listed or individually revoked,
+and have no last-used timestamp; rotation is the immediate hard swap described
+above. The decided zero-user credential cutover will replace this with
+90-day client credentials, one-hour access tokens, bounded overlap, revocation,
+and coarse liveness tracking. See the
+[credential lifecycle decision](docs/superpowers/specs/2026-08-02-credential-lifecycle.md).
+
 ```bash
 # Check your own install is healthy
 agentcall doctor
