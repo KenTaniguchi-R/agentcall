@@ -55,6 +55,18 @@ export interface SearchResult extends SearchEntry {
 
 export const DEFAULT_SEARCH_LIMIT = 5;
 
+// A result must clear this to be shown. With weights keywords:3, name:2,
+// description:1, that means a curated hit (a keyword, or the task name)
+// qualifies on its own, and two corroborating description terms qualify —
+// but a SINGLE incidental word in prose does not.
+//
+// This exists because of a real over-firing case: a colleague whose CI task
+// description merely mentioned "deploy" and "test" was routed for the
+// queries "deploy the worker to production" and "fix the failing test",
+// neither of which they can help with. One low-weight term in prose is not
+// evidence, and a tool that answers those gets muted.
+export const MIN_SCORE = 2;
+
 // Plain codepoint comparison rather than localeCompare: tie-break order must
 // be identical on every machine, and localeCompare is locale-dependent.
 const cmp = (a: string, b: string) => (a < b ? -1 : a > b ? 1 : 0);
@@ -82,7 +94,7 @@ export function rank(query: string, entries: SearchEntry[], limit = DEFAULT_SEAR
       for (const f of fields) score += WEIGHTS[f];
       matched.push({ term, fields });
     }
-    if (score > 0) scored.push({ ...e, score, matched });
+    if (score >= MIN_SCORE) scored.push({ ...e, score, matched });
   }
 
   scored.sort(

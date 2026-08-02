@@ -41,10 +41,25 @@ describe("rank", () => {
   });
 
   it("weights keywords above name above description", () => {
-    const results = rank("payroll", [
-      entry({ handle: "c", task: "in-description", description: "Handles payroll.", name: "N" }),
-      entry({ handle: "a", task: "in-keywords", keywords: ["payroll"], name: "N", description: "D" }),
-      entry({ handle: "b", task: "in-name", name: "Payroll", description: "D" }),
+    // Handles are deliberately anti-correlated with field priority
+    // (z=keywords, m=name, a=description): the expected order is z, m, a,
+    // which the handle tie-break alone could never produce. If it passed
+    // with alphabetically-correlated handles instead, a weight collapse to
+    // {keywords:1, name:1, description:1} would slip through unnoticed —
+    // the tie-break would still sort a, b, c into the right order.
+    //
+    // Two query terms, not one: MIN_SCORE (2) filters out a lone
+    // description hit (weight 1) entirely, so a single-term "payroll"
+    // query can no longer put a description-only entry in the results at
+    // all. Matching both "payroll" and "salary" within one field lets each
+    // entry clear the floor via legitimate corroboration (distinct terms,
+    // not repetition of one) while keeping the field-isolation design: each
+    // entry still matches both terms in exactly one field, so the strict
+    // 6 > 4 > 2 ordering still comes from WEIGHTS alone.
+    const results = rank("payroll salary", [
+      entry({ handle: "a", task: "in-description", description: "Handles payroll and salary.", name: "N" }),
+      entry({ handle: "z", task: "in-keywords", keywords: ["payroll", "salary"], name: "N", description: "D" }),
+      entry({ handle: "m", task: "in-name", name: "Payroll Salary", description: "D" }),
     ]);
     expect(results.map((r) => r.task)).toEqual(["in-keywords", "in-name", "in-description"]);
   });
@@ -84,6 +99,20 @@ describe("rank", () => {
     expect(rank("the and of", [entry({ keywords: ["payroll"] })])).toEqual([]);
   });
 
+  it("a single incidental description term is not enough to route someone", () => {
+    // Pins MIN_SCORE so a later edit can't silently drop it. A lone
+    // description hit (weight 1) must not surface a colleague on its own —
+    // this is the exact shape of the real over-firing case (a CI card's
+    // prose happened to contain "deploy" and "test").
+    const descriptionOnly = entry({ handle: "raj", task: "ci-pipeline", keywords: ["ci"], name: "CI pipeline",
+                                     description: "Answers questions about the deploy and test pipeline." });
+    expect(rank("deploy", [descriptionOnly])).toEqual([]);
+
+    // A lone keyword hit (weight 3) clears the floor on its own and still routes.
+    const keywordHit = entry({ handle: "tanaka", task: "adr", keywords: ["deploy"] });
+    expect(rank("deploy", [keywordHit])[0]!.handle).toBe("tanaka");
+  });
+
   // The discipline that decides whether this tool survives contact with
   // users. Every one of these is ordinary coding vocabulary that must NOT
   // suggest a colleague. Adapted from Composio's bare-verb test.
@@ -100,6 +129,13 @@ describe("rank", () => {
               description: "Why past architecture decisions were made." }),
       entry({ handle: "mia", task: "payroll", keywords: ["payroll", "salary"], name: "Payroll",
               description: "Answers payroll questions." }),
+      // A card whose prose incidentally contains ordinary coding vocabulary.
+      // Without this, the block above only proves "no shared token → no
+      // match," which the "quantum tunnelling" test already covers — it
+      // never exercises the real boundary: a description that happens to
+      // contain a query word.
+      entry({ handle: "raj", task: "ci-pipeline", keywords: ["ci"], name: "CI pipeline",
+              description: "Answers questions about the deploy and test pipeline." }),
     ];
     expect(rank(query, roster)).toEqual([]);
   });
