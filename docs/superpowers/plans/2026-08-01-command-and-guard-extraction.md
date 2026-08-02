@@ -692,9 +692,32 @@ reporting no matches."
 
 ---
 
-### Task 4: `commands/contacts.ts`
+### Task 4: `commands/deps.ts` extraction, then `commands/contacts.ts`
+
+**Do the `deps.ts` move FIRST, as its own commit, before touching contacts.**
+
+Task 2 put `Deps`, `Io`, and `realDeps` in `commands/roster.ts` because it was the first command module; Task 3's fix round added `ExitOnly` there too. That was right for two files and is wrong for seven — every remaining command module would import its core types from a sibling *command*, which reads as a dependency on roster functionality that does not exist. It also makes `roster.ts` un-deletable: if the roster commands ever move or split, the shared types move with them by accident.
+
+Move them to `packages/cli/src/commands/deps.ts`:
+
+```ts
+// The shared surface every command module depends on. Deliberately NOT in
+// roster.ts: it was the first command extracted, not the owner of these
+// types, and six sibling modules importing from it would imply a
+// dependency on roster functionality that does not exist.
+export type Io = { log(s: string): void; error(s: string): void; ask(q: string): Promise<string> };
+export type Deps = { paths: Paths; io: Io };
+export function realDeps(): Deps { /* moved verbatim from roster.ts */ }
+export class ExitOnly extends Error { /* keep its comment verbatim */ }
+```
+
+Update the imports in `commands/roster.ts`, `commands/search.ts`, and `index.ts`. Commit that alone, verify the suite is unchanged at 637, then proceed to the contacts extraction below in a second commit.
+
+Cost check, for the record: two command modules to migrate now, six if this waits until Task 7.
 
 **Files:**
+- Create: `packages/cli/src/commands/deps.ts`
+- Modify: `packages/cli/src/commands/roster.ts`, `packages/cli/src/commands/search.ts` (imports only)
 - Create: `packages/cli/src/commands/contacts.ts`
 - Modify: `packages/cli/src/index.ts:193-242`
 - Test: `packages/cli/test/commands-contacts.test.ts`
