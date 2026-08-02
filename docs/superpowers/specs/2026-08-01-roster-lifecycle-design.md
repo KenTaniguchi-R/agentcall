@@ -381,8 +381,11 @@ token itself, a byte-wise early exit leaks nothing usable — but that argument 
 be written into the code as a comment, or the next reader will "restore" the
 in-Worker compare and reintroduce the race.
 
-**These two races are defects in `main`, not in this design.** They should be filed
-separately so they can be fixed without waiting on the lifecycle work.
+**These two races are defects in `main`, not in this design.** They are filed as
+[#58](https://github.com/KenTaniguchi-R/agentcall/issues/58) so they can be fixed
+without waiting on the lifecycle work. If #58 lands first, Phase 3 inherits the
+conditional `INSERT ... SELECT` and only has to rename `secret_hash` to
+`join_secret_hash` inside it.
 
 ### Shared schemas
 
