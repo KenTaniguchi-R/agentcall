@@ -176,6 +176,7 @@ export function decide(
   home: string,
   realpath: (p: string) => string,
   guardRoot: string = DEFAULT_PACKAGE_ROOT,
+  allowedRoot?: string,
 ): GuardVerdict {
   const { tool_name: tool, tool_input: args, cwd } = input;
   if (args === null || typeof args !== "object" || Array.isArray(args)) {
@@ -183,6 +184,8 @@ export function decide(
   }
   const denied = deniedPaths(home, realpath, [guardRoot]);
   const canon = (p: string) => canonical(p, cwd, home, realpath);
+  const allowed = allowedRoot === undefined ? undefined : canon(allowedRoot);
+  const outsideAllowed = (target: string) => allowed !== undefined && !isInside(target, allowed);
   const reached = (t: string, withAncestors: boolean) =>
     denied.find((d) => isInside(t, d) || (withAncestors && isAncestorOf(t, d)));
 
@@ -216,7 +219,10 @@ export function decide(
     const target = canon(raw);
     if (basenameDenied(target)) return { allow: false, rule: "denied-basename", detail: target };
     const hit = reached(target, false);
-    return hit ? { allow: false, rule: "inside-denied-path", detail: target } : { allow: true };
+    if (hit) return { allow: false, rule: "inside-denied-path", detail: target };
+    return outsideAllowed(target)
+      ? { allow: false, rule: "outside-allowed-root", detail: target }
+      : { allow: true };
   }
 
   if (SCANNING_ROOT.has(tool) || tool === "Glob") {
@@ -231,6 +237,7 @@ export function decide(
     const root = canon(rawRoot);
     if (basenameDenied(root)) return { allow: false, rule: "denied-basename", detail: root };
     if (reached(root, true)) return { allow: false, rule: "root-reaches-denied-path", detail: root };
+    if (outsideAllowed(root)) return { allow: false, rule: "outside-allowed-root", detail: root };
 
     const selectorKey = SELECTOR_KEY[tool];
     const selector = selectorKey === undefined ? undefined : args[selectorKey];
@@ -252,7 +259,10 @@ export function decide(
     if (prefix === "") return { allow: true };
     const selectorRoot = canon(isAbsolute(expandHome(prefix, home)) ? prefix : join(rawRoot, prefix));
     const hit = reached(selectorRoot, true);
-    return hit ? { allow: false, rule: "root-reaches-denied-path", detail: selectorRoot } : { allow: true };
+    if (hit) return { allow: false, rule: "root-reaches-denied-path", detail: selectorRoot };
+    return outsideAllowed(selectorRoot)
+      ? { allow: false, rule: "outside-allowed-root", detail: selectorRoot }
+      : { allow: true };
   }
 
   // Unclassified tool. Deny — an argument shape this function has never seen
@@ -266,6 +276,7 @@ export interface GuardDeps {
   now: () => string;
   realpath: (p: string) => string;
   appendLine: (file: string, line: string) => void;
+  allowedRoot?: string;
 }
 
 export type GuardOutput = { exitCode: number; stdout: string; stderr: string };
@@ -299,7 +310,7 @@ export function runGuard(raw: string, deps: GuardDeps, mode: GuardMode = "enforc
   // any exit other than 0 or 2 as a non-blocking error — so a full disk or a
   // read-only home would silently turn the guard off. Fail closed instead.
   try {
-    const verdict = decide(input, deps.paths.home, deps.realpath);
+    const verdict = decide(input, deps.paths.home, deps.realpath, undefined, deps.allowedRoot);
     const ts = deps.now();
     const write = (file: string, obj: Record<string, unknown>) =>
       deps.appendLine(file, JSON.stringify({ ts, ...obj }));

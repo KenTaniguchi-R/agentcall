@@ -117,6 +117,12 @@ export function startListener(deps: ListenerDeps): { stop(): void } {
         return;
       }
       const task = resolution.task;
+      const taskWorkdir = {
+        dir: task.workdir ?? workdir.dir,
+        // Claude's file-shaped tools are bounded by AGENTCALL_ALLOWED_ROOT.
+        // Codex has no equivalent read boundary, so do not claim confinement.
+        confined: deps.config.agent_kind === "claude",
+      };
 
       // Task resolution above ran on the verified `from` and local files only
       // (see policy.ts's CaMeL invariant). context_id is caller-controlled, so
@@ -141,7 +147,7 @@ export function startListener(deps: ListenerDeps): { stop(): void } {
         binding = threadingAvailable
           ? admitContext(contexts, {
               context_id, caller: from, task: task.id,
-              agent_kind: deps.config.agent_kind, workdir: workdir.dir, now,
+              agent_kind: deps.config.agent_kind, workdir: taskWorkdir.dir, now,
             })
           : undefined;
         // One code for every failure — expired, not yours, wrong task, wrong
@@ -176,8 +182,8 @@ export function startListener(deps: ListenerDeps): { stop(): void } {
         try {
           const out = await run(
             deps.config.agent_kind,
-            buildPrompt(deps.config.handle, from, message, task, workdir, binding !== undefined),
-            workdir.dir,
+            buildPrompt(deps.config.handle, from, message, task, taskWorkdir, binding !== undefined),
+            taskWorkdir.dir,
             timeoutMs,
             undefined,
             task.envelope,
@@ -209,7 +215,7 @@ export function startListener(deps: ListenerDeps): { stop(): void } {
               caller: from,
               task: task.id,
               agent_kind: deps.config.agent_kind,
-              workdir: workdir.dir,
+              workdir: taskWorkdir.dir,
               turns: (binding?.turns ?? 0) + 1,
               created_at: binding?.created_at ?? now,
               last_used_at: now,

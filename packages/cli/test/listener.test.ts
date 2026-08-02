@@ -78,7 +78,7 @@ describe("startListener workdir", () => {
     ).toThrow(/does not exist/i);
   });
 
-  it("spawns in the configured workdir and drops the confinement line from the prompt", async () => {
+  it("spawns in the configured workdir and tells Claude the guard confines it there", async () => {
     const home = mkdtempSync(join(tmpdir(), "agentcall-l-"));
     const paths = getPaths(home);
     const project = join(home, "code", "api");
@@ -102,7 +102,7 @@ describe("startListener workdir", () => {
     await done;
     expect(seen.workdir).toBe(project);
     expect(seen.prompt).toContain(project);
-    expect(seen.prompt).not.toMatch(/do not access anything outside it/i);
+    expect(seen.prompt).toMatch(/do not access anything outside it/i);
   });
 });
 
@@ -311,23 +311,26 @@ describe("startListener task resolution", () => {
   });
 
   it("runs a granted task with its envelope and timeout, echoing task in call_result", async () => {
-    const seen: { prompt?: string; timeout?: number; envelope?: unknown } = {};
+    const seen: { prompt?: string; workdir?: string; timeout?: number; envelope?: unknown } = {};
     let paths!: ReturnType<typeof getPaths>;
     const relayReady = new Promise<WsSocket>((resolveWs) => {
       void fakeRelay((ws) => resolveWs(ws)).then((url) => {
         const deps = baseDeps(url);
         paths = deps.paths;
+        const taskWorkdir = join(paths.home, "code", "calendar");
+        mkdirSync(taskWorkdir, { recursive: true });
         seedTask(deps.paths, "schedule-meeting", [
           "description: d",
           "tools: [read, fetch]",
           "network: [calendar.google.com]",
           "timeout_s: 60",
+          `workdir: ${taskWorkdir}`,
         ], "check the calendar\n");
         seedPolicy(deps.paths, { default_offer: ["ask"], callers: { shusaku: { offer: ["schedule-meeting"] } } });
         stopper = startListener({
           ...deps,
-          run: async (_k, prompt, _p, timeoutMs, _spec, envelope) => {
-            seen.prompt = prompt; seen.timeout = timeoutMs; seen.envelope = envelope;
+          run: async (_k, prompt, workdir, timeoutMs, _spec, envelope) => {
+            seen.prompt = prompt; seen.workdir = workdir; seen.timeout = timeoutMs; seen.envelope = envelope;
             return { text: "booked" };
           },
         });
@@ -339,6 +342,8 @@ describe("startListener task resolution", () => {
     const [, , result] = await expectFrames;
     expect(result).toMatchObject({ type: "call_result", call_id: "c3", text: "booked", task: "schedule-meeting" });
     expect(seen.prompt).toContain("check the calendar");
+    expect(seen.prompt).toContain(join(paths.home, "code", "calendar"));
+    expect(seen.workdir).toBe(join(paths.home, "code", "calendar"));
     expect(seen.timeout).toBe(60_000);
     expect(seen.envelope).toEqual({ caps: ["read", "fetch"] });
     const audit = readFileSync(paths.callsLog, "utf8").trim().split("\n").map((l) => JSON.parse(l));

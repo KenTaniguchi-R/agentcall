@@ -29,6 +29,7 @@ try {
       mkdirSync(dirname(file), { recursive: true });
       appendFileSync(file, line + "\n");
     },
+    allowedRoot: process.env.AGENTCALL_ALLOWED_ROOT,
   }, mode);
 
   if (out.stdout) process.stdout.write(out.stdout);

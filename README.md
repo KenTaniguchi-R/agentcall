@@ -312,9 +312,23 @@ Restart the listener afterwards — it resolves `workdir` once at startup, and
 refuses to start if the path is relative, missing, or not a directory.
 `agentcall doctor` reports the resolved path (or the reason it failed).
 
-When `workdir` is set, the prompt stops telling the agent to stay inside it —
-you pointed it at that directory on purpose. Note this was only ever an
-instruction, never a boundary; see below.
+Individual tasks can narrow this further with an absolute `workdir` in their
+`SKILL.md` frontmatter. It overrides the install-global directory for that task:
+
+```yaml
+---
+description: Explain decisions in the payments service.
+tools: [read]
+workdir: /Users/ken/code/payments-api
+---
+```
+
+Relative, missing, and non-directory task workdirs make that task invalid and
+it is not offered. For a Claude answering agent, file-shaped tools are guarded
+to the resolved task directory. This is a real boundary for `Read`, `Write`,
+`Edit`, `Glob`, `Grep`, and `LS`, including canonicalized paths and symlinks.
+It is not a boundary for `exec`, and Codex has no equivalent read boundary;
+see the residual risks below.
 
 ## Security model (v1, explicit)
 
@@ -341,8 +355,9 @@ instruction, never a boundary; see below.
     On a Claude answering agent using `Read`/`Write`/`Edit`/`Glob`/`Grep`, the
     tool guard below refuses the credential paths it covers. Capability
     scoping bounds *what kind* of action is possible, not *where*.
-  - The working directory is a prompt instruction, not an enforced boundary.
-    An agent granted `read` can read outside it regardless of `workdir`.
+  - A Claude answering agent's file-shaped tools are confined to the resolved
+    task workdir. A task granted `exec` can still read outside it through shell
+    commands, and a Codex answering agent is not confined for reads at all.
   - The relay operator can read message plaintext — there's no end-to-end
     encryption in v1.
   - A caller's prompt could induce the agent to read and echo back the
@@ -374,7 +389,8 @@ instruction, never a boundary; see below.
 they run. File reads, writes, searches, and listings that reach credential paths
 (`~/.ssh`, `~/.aws`, `.env`, Keychains, `~/.agentcall`, `~/.claude`, `~/.codex`), the guard's own
 installed code, `~/AgentCall/tasks`, `~/Library/LaunchAgents`, and shell startup files
-are refused, and every tool call reaching the guard is recorded to
+are refused. For Claude, file-shaped tools outside the resolved task workdir are
+also refused, and every tool call reaching the guard is recorded to
 `~/.agentcall/tools.log`. `agentcall doctor` verifies the guard is in force: it asks a
 real `claude` spawn to read a canary `.env` and requires the denial to appear in the
 log. When the model refuses that read on its own the guard is never consulted and the
