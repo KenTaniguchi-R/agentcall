@@ -49,11 +49,18 @@ there is no time-based cleanup job.
 | `roster_members` | Roster/organization/handle membership, join time, and admitting key prefix. Personal relationship and provenance data. | Until leave, expulsion, key-based eviction, or roster deletion. |
 | `roster_events` | Append-only mutation event/action, roster/organization, actor and target identities/types, source IP/country, human-readable description, time. Security audit evidence and personal data. | Indefinite, including after roster deletion. The per-roster 10,000-event counter gates member-driven join/leave churn; administrator and system events remain appendable for recovery and are not bounded by that counter. The counter is not a row-count ceiling. |
 
+The current operational and future deletion rules for both event ledgers are
+defined in the [audit retention policy](./audit-retention.md). In particular,
+the repository has no automated expiry or supported erasure path today;
+count-bounding `org_events` is a capacity control, not a retention period.
+
 Cloudflare also maintains `d1_migrations`, which records applied migration
 filenames and is operational metadata rather than end-user data. D1 Time Travel,
-Cloudflare backups, account audit logs, and exported SQL backups create copies
-with their own vendor/operator retention; this repository does not configure a
-deletion schedule for those copies.
+Cloudflare backups, and exported SQL backups may create copies of table rows
+with their own vendor/operator retention. Cloudflare account audit logs are
+separate operational records that may independently contain personal metadata.
+This repository does not configure a deletion schedule for any of those
+surfaces.
 
 ## Durable Object inventory
 

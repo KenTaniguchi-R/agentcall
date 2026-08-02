@@ -732,6 +732,14 @@ managed policy is present so IT can pin the deployed version.
   contain viewer, target, time, source IP/country, and allow/deny outcome for
   abuse detection and security review evidence. They deliberately omit the
   target's online/offline state.
+- **Hosted audit events have no supported expiry or erasure workflow.** Roster
+  audit rows are retained indefinitely; organization audit rows keep the newest
+  10,000 events per organization but have no time-based window. There is no
+  customer deletion/export endpoint or scheduled cleanup, roster deletion
+  deliberately preserves its evidence, and the service cannot guarantee
+  end-to-end erasure across D1 and backup copies. See the
+  [audit retention policy](./docs/security/audit-retention.md) for the current
+  operator posture and the export-before-expiry requirements.
 - **Handles can't be released.** `agentcall rotate` replaces a token, but
   there's no way to give a handle back: the Durable Object is addressed by
   handle name, so a re-registered handle would inherit the previous owner's

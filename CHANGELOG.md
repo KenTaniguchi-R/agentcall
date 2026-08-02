@@ -6,6 +6,13 @@ which are released together.
 
 ## Unreleased
 
+### Audit retention policy
+
+- Documented that roster audit events are retained indefinitely and
+  organization audit events are count-bounded but have no time-based expiry.
+  Automated deletion remains blocked on verifiable export, bounded cleanup,
+  backup handling, and legal-hold policy in the admin/audit-export track.
+
 ### Bounded call rate-limit retention
 
 - Handle Durable Objects now sweep expired per-caller rate-limit keys on the
