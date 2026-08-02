@@ -1,5 +1,5 @@
 import { env, SELF } from "cloudflare:test";
-import { beforeAll, describe, expect, it } from "vitest";
+import { beforeAll, describe, expect, it, vi } from "vitest";
 import app from "../src/index.js";
 import { fixedRateLimit, registerHandle, wsAuth } from "./helpers.js";
 
@@ -69,6 +69,29 @@ describe("GET /v1/a2a/:handle/agent-card.json", () => {
     // The handle is already the leading path segment of `url`; `tenant`
     // would double-specify it, so it must be absent.
     expect(card.supportedInterfaces[0].tenant).toBeUndefined();
+  });
+
+  it("treats a stored card that no longer validates as an unavailable agent", async () => {
+    await registerHandle("legacy-card");
+    await env.DB.prepare("INSERT INTO cards (org, handle, card_json, updated_at) VALUES (?, ?, ?, ?)")
+      .bind("acme", "legacy-card", JSON.stringify({ description: "stale" }), 1).run();
+    const log = vi.spyOn(console, "error").mockImplementation(() => {});
+    try {
+      const invalid = await SELF.fetch(`${ORIGIN}/v1/a2a/legacy-card/agent-card.json`, {
+        headers: viewerHeaders(),
+      });
+      const missing = await SELF.fetch(`${ORIGIN}/v1/a2a/nobody/agent-card.json`, {
+        headers: viewerHeaders(),
+      });
+      expect(invalid.status).toBe(404);
+      expect(invalid.headers.get("content-type")).toBe("application/a2a+json");
+      expect(await invalid.text()).toBe(await missing.text());
+      expect(log).toHaveBeenCalledWith("invalid stored card", {
+        org: "acme", handle: "legacy-card", error: "ZodError",
+      });
+    } finally {
+      log.mockRestore();
+    }
   });
 
   it("never exposes grants or agent_kind", async () => {

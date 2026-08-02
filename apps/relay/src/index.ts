@@ -6,6 +6,7 @@ import { constantTimeEqual, generateToken, sha256Hex } from "./auth.js";
 import { authenticateRequest, identityKey, registrationAddressHost } from "./tenant.js";
 import { sharedRosterIds } from "./groups.js";
 import { checkLimit, NATIVE_CARD, NATIVE_READ, REGISTER, type RateLimitEnv } from "./ratelimit/index.js";
+import { parseStoredCard } from "./stored-card.js";
 
 export { HandleDO } from "./do.js";
 export { RateLimiterDO } from "./ratelimit/do.js";
@@ -197,7 +198,8 @@ app.get("/v1/card/:handle", async (c) => {
     .bind(org, handle).first<{ card_json: string; updated_at: number }>();
   if (!row) return c.json({ error: "no card" }, 404);
 
-  const upload = CardUpload.parse(JSON.parse(row.card_json));
+  const upload = parseStoredCard(row.card_json, org, handle);
+  if (!upload) return c.json({ error: "no card" }, 404);
   return c.json({
     handle,
     description: upload.description,

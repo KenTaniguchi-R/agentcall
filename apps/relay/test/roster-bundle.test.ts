@@ -1,5 +1,5 @@
 import { SELF } from "cloudflare:test";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { registerHandle, wsAuth } from "./helpers.js";
 
 const card = (tasks: unknown[], defaultOffer: string[], grants: Record<string, string[]> = {}) => ({
@@ -126,11 +126,19 @@ describe("GET /v1/roster/:id/bundle", () => {
     const db = (await import("cloudflare:test")).env.DB;
     await db.prepare("INSERT INTO cards (org, handle, card_json, updated_at) VALUES (?, ?, ?, ?)")
       .bind("acme", "b8bad", "{not json", Date.now()).run();
-    const res = await getBundle(r.roster_id, "b8own", r.ownerToken);
-    expect(res.status).toBe(200);
-    const body = await res.json<any>();
-    expect(body.entries.map((e: any) => e.handle)).toEqual(["b8good"]);
-    expect(body.skipped).toBe(1);
+    const log = vi.spyOn(console, "error").mockImplementation(() => {});
+    try {
+      const res = await getBundle(r.roster_id, "b8own", r.ownerToken);
+      expect(res.status).toBe(200);
+      const body = await res.json<any>();
+      expect(body.entries.map((e: any) => e.handle)).toEqual(["b8good"]);
+      expect(body.skipped).toBe(1);
+      expect(log).toHaveBeenCalledWith("invalid stored card", {
+        org: "acme", handle: "b8bad", error: "SyntaxError",
+      });
+    } finally {
+      log.mockRestore();
+    }
   });
 
   it("304s an unchanged bundle and forbids shared caching", async () => {
