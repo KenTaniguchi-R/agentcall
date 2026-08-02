@@ -1,7 +1,7 @@
 # Audit retention policy
 
 Last verified: 2026-08-02 against repository migration
-`0009_org_invite_lifecycle.sql`.
+`0010_roster_audit_budget_recovery.sql`.
 
 This document is the current retention contract for the hosted relay's D1
 security-audit ledgers. It describes implemented behavior, not a compliance
@@ -19,6 +19,23 @@ descriptions, and timestamps. They can therefore contain personal data and
 security evidence. The hosted service cannot currently promise a tenant-level,
 person-level, or time-based erasure request. That is a product/compliance
 blocker for an organization that requires one.
+
+## Accepted target — not implemented
+
+The [subject-erasure and retention decision](../superpowers/specs/2026-08-02-subject-erasure-and-retention-design.md)
+commits the hosted product to a 400-day default for structured audit events and a
+30-day ordinary maximum for source IP/country evidence. Only an explicitly authorized
+legal/incident hold may exceed the network-evidence limit; that is reported as a held
+exception, never configured as a longer ordinary window. Subject-bearing fields move out of
+free-form descriptions and behind per-subject erasure keys. Network evidence moves to
+a deletable short-retention sidecar. An authorized erasure can therefore destroy
+readable identity evidence and delete subject-linked network evidence without editing
+the append-only event. Pseudonymous event fields remain personal data and still expire
+normally.
+
+Automatic expiry remains gated on the export, checkpoint, hold, backup, bounded-batch,
+and failure-visibility requirements below. Until those ship, the current behavior in
+the table above remains authoritative.
 
 There is no Worker cron, scheduled D1 cleanup, or relay API for audit expiry.
 The relay operator may perform exceptional time-based D1 maintenance, but that

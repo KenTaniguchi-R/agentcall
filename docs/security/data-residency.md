@@ -1,7 +1,7 @@
 # Cloud data map and residency decision
 
 Last verified: 2026-08-02 against production metadata, repository migration
-`0009_org_invite_lifecycle.sql`, and Cloudflare documentation current on that date.
+`0010_roster_audit_budget_recovery.sql`, and Cloudflare documentation current on that date.
 
 This is the living inventory for data persisted or processed by AgentCall's
 hosted relay. Update it whenever a migration, Durable Object storage key,
@@ -30,6 +30,26 @@ object IDs while leaving identity, credential, membership, audit, analytics,
 request-processing, and logging data outside the claim. A regional offering
 must be a planned new deployment or migration covering every row below and the
 non-database surfaces, not a one-line `.jurisdiction()` change.
+
+## Accepted lifecycle direction — not implemented
+
+AgentCall has committed to a supported subject-erasure path and bounded retention;
+indefinite retention is current behavior, not the target policy. The accepted
+[subject-erasure and retention design](../superpowers/specs/2026-08-02-subject-erasure-and-retention-design.md)
+chooses:
+
+- a disclosed, potentially personal but identity-unlinked address quarantine that is
+  hard-deleted after 30 days, then organization-authorized reclaim onto a fresh
+  `agent_id` and Durable Object;
+- immediate deletion of subject-owned active data and inbound policy references;
+- crypto-shredding of readable identity fields in append-only audit events, with
+  source IP/country moved to a deletable 30-day sidecar;
+- a 400-day audit-event default and 30-day ordinary maximum for audit network evidence;
+- explicit pending/held results for Analytics Engine, logs, Time Travel, backups, or
+  legal holds that prevent verified completion.
+
+None of that workflow exists yet. The tables below continue to describe deployed
+behavior. Do not promise erasure, expiry, or an SLA from the accepted design alone.
 
 ## D1 inventory
 

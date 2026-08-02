@@ -6,6 +6,17 @@ which are released together.
 
 ## Unreleased
 
+### Documentation — subject erasure and bounded retention decision
+
+- Committed AgentCall to a supported subject-erasure workflow rather than treating
+  indefinite relay retention as a permanent product policy.
+- Separated erasure from handle reclaim: erasure starts a disclosed, identity-unlinked
+  address quarantine that hard-expires after 30 days; safe reuse binds a fresh identity.
+- Chose crypto-shredding for subject-bearing audit evidence, a 400-day event default,
+  and 30-day network-evidence retention, while keeping every promise explicitly
+  unshipped until identity ownership, export, legal holds, analytics, and backup gates
+  are implemented.
+
 ### Documentation — positioning after MCP Tunnels and EMA
 
 - Reframed AgentCall around governed, person-scoped delegation rather than

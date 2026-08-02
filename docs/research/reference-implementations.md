@@ -64,6 +64,7 @@ Applied in AgentCall:
 
 - [`apps/relay/src/events.ts`](../../apps/relay/src/events.ts)
 - [Roster lifecycle design](../superpowers/specs/2026-08-01-roster-lifecycle-design.md)
+- [Subject erasure and retention](../superpowers/specs/2026-08-02-subject-erasure-and-retention-design.md)
 - [`apps/relay/src/presence.ts`](../../apps/relay/src/presence.ts), where status
   reads deliberately use Analytics Engine rather than the mutation audit ledger
 
