@@ -114,6 +114,12 @@ organization's handles or published tasks. The generic relay card at
 `/.well-known/agent-card.json` remains public because it contains no tenant or
 employee data.
 
+Per-handle Agent Cards are not signed today. Their authenticity therefore
+depends on the relay that serves them; clients have no end-to-end proof that a
+card came from the named endpoint agent. The dated
+[agent identity compatibility decision](./docs/superpowers/specs/2026-08-02-agent-identity-compatibility.md)
+constrains the planned signing work without claiming that it is implemented.
+
 ### Following up
 
 A reply can leave the conversation open, letting you ask a follow-up without
