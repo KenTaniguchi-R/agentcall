@@ -392,8 +392,10 @@ describe("startListener line name propagation", () => {
   // Task 7 made the PreToolUse guard fail closed without AGENTCALL_LINE: no
   // env var, no tool call succeeds, for every task on that call. If
   // listener.ts:139's `deps.paths.name` ever regresses back to the old
-  // hardcoded `""`, every answered call on every line dies at its first tool
-  // use — silently, with the generic DENY_REASON, no path, no rule name. That
+  // hardcoded `""` — or `run`'s nine positional arguments get reordered,
+  // which is a live risk given how many there are — every answered call on
+  // every line dies at its first tool use, silently, with the generic
+  // DENY_REASON that deliberately gives no path and no rule name. That
   // failure mode is too silent to trust to "the two halves of this chain are
   // each covered by their own unit test" (runner.test.ts's "AGENTCALL_LINE
   // propagation" proves buildSpawnSpec maps a given lineName into
@@ -402,7 +404,7 @@ describe("startListener line name propagation", () => {
   // wiring between them silently rots. This goes through startListener end
   // to end and lands the assertion on the actual env var a spawned process
   // would see, not on an intermediate string.
-  it("threads the real line name through to AGENTCALL_LINE on the spawned process", async () => {
+  it("regressing this breaks the PreToolUse guard fail-closed on every answered call: line name must reach AGENTCALL_LINE", async () => {
     const paths = getLinePaths(freshMachine(), "sales");
     const captured: {
       kind?: "claude" | "codex"; prompt?: string; workdir?: string;
@@ -423,10 +425,18 @@ describe("startListener line name propagation", () => {
     });
     const ws = await relayReady;
     const done = frames(ws, 3); // accepted, started, result
+    // call_id "c1" is deliberately NOT the line name ("sales") and not equal
+    // to any other captured value (kind is "claude", envelope is an object) —
+    // that's what makes the assertion below able to catch a positional-
+    // argument swap, not just an empty string. See the "would this catch an
+    // argument-order shift" check below the assertions.
     ws.send(JSON.stringify({ type: "incoming_call", call_id: "c1", from: "shusaku", message: "hi" }));
     await done;
 
-    expect(captured.lineName).toBe("sales");
+    // Compared against `paths.name`, the actual source of truth this test is
+    // exercising — not a second literal hand-typed to match it, which would
+    // let a wrong-but-internally-consistent value slip through undetected.
+    expect(captured.lineName).toBe(paths.name);
 
     // Re-derive a spawn spec from exactly what the listener handed run(...),
     // through the real buildSpawnSpec — same as runAgent itself would do —
@@ -436,7 +446,7 @@ describe("startListener line name propagation", () => {
       captured.kind!, captured.prompt!, captured.workdir!, () => "/fake/claude",
       captured.envelope as never, captured.callId!, captured.lineName!,
     );
-    expect(spec.env?.AGENTCALL_LINE).toBe("sales");
+    expect(spec.env?.AGENTCALL_LINE).toBe(paths.name);
   });
 });
 
