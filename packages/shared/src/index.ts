@@ -5,3 +5,4 @@ export * from "./invite.js";
 export * from "./a2a/errors.js";
 export * from "./a2a/version.js";
 export * from "./a2a/card.js";
+export * from "./canonical.js";
