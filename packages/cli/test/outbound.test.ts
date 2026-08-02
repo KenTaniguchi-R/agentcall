@@ -55,4 +55,31 @@ describe("pickOutboundLine", () => {
     saveLineConfig(getLinePaths(m, "home"), { handle: "ken", token: "t", relay: "https://a.example/" });
     expect(pickOutboundLine(m, A).name).toBe("home");
   });
+
+  it("gracefully degrades when resolvePrimary throws: several candidates, no primary recorded", () => {
+    saveLineConfig(getLinePaths(m, "w1"), { handle: "k1", token: "t", relay: B });
+    saveLineConfig(getLinePaths(m, "w2"), { handle: "k2", token: "t", relay: B });
+    // deliberately NOT calling savePerson(), so resolvePrimary will throw
+    expect(() => pickOutboundLine(m, B)).toThrow(/--as/);
+  });
+
+  it("rejects --as with mismatched relay, naming both hosts", () => {
+    saveLineConfig(getLinePaths(m, "home"), { handle: "ken", token: "t", relay: A });
+    saveLineConfig(getLinePaths(m, "work"), { handle: "ken-w", token: "t", relay: B });
+    let error: Error | undefined;
+    try {
+      pickOutboundLine(m, B, { as: "home" });
+    } catch (e) {
+      error = e as Error;
+    }
+    expect(error).toBeDefined();
+    // Check that error message names BOTH the line's relay (a.example) AND the destination relay (b.example)
+    expect(error!.message).toMatch(/a\.example/);
+    expect(error!.message).toMatch(/b\.example/);
+  });
+
+  it("rejects --as when the named line doesn't exist", () => {
+    saveLineConfig(getLinePaths(m, "home"), { handle: "ken", token: "t", relay: A });
+    expect(() => pickOutboundLine(m, A, { as: "nonexistent" })).toThrow(/No line named "nonexistent"/);
+  });
 });
