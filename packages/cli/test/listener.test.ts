@@ -500,6 +500,66 @@ describe("listener contexts", () => {
     expect(loadContexts(paths)[0]!.turns).toBe(4);
   });
 
+  // Regression: the roll-forward block used to be gated on `out.session_id`,
+  // so a resumed turn whose agent returned none left the binding at its old
+  // turn count with its TTL sliding from the last successful write. A caller
+  // could then resume forever, pinned below MAX_CONTEXT_TURNS. Reachable for
+  // real: parseCodexJsonl's non-JSON fallback returns session_id: undefined.
+  it("still counts a resumed turn when the agent returns no session id, so the cap holds", async () => {
+    const first = await oneCall(
+      { message: "turn ten", context_id: SEEDED_CTX },
+      { seed: seedBinding({ turns: MAX_CONTEXT_TURNS - 1 }), run: async () => ({ text: "ok" }) },
+    );
+    const rolled = loadContexts(first.paths)[0]!;
+    expect(rolled.turns).toBe(MAX_CONTEXT_TURNS);
+    // The session id it had nothing to replace with is kept, not clobbered
+    // with undefined — it is still the right one to resume next time.
+    expect(rolled.agent_session_id).toBe("real-agent-session");
+
+    // oneCall owns the module-level relay/listener handles, so the first pair
+    // has to be torn down here rather than in afterEach, which only ever sees
+    // the second.
+    stopper?.stop();
+    await new Promise<void>((r) => httpServer.close(() => r()));
+
+    let spawned = false;
+    const { frames: f } = await oneCall(
+      { message: "turn eleven", context_id: SEEDED_CTX },
+      {
+        frameCount: 1,
+        run: async () => { spawned = true; return { text: "should not happen" }; },
+        // The rolled-forward binding, re-homed into the second call's tmp root
+        // so the refusal can only come from the turn cap and not from a
+        // workdir mismatch.
+        seed: (p) => saveContexts(p, [{ ...rolled, workdir: p.publicDir }]),
+      },
+    );
+    expect(f[0]).toMatchObject({ type: "call_failed", code: "context_unknown" });
+    expect(spawned).toBe(false);
+  });
+
+  // contexts.ts's invariant: the real agent_session_id never reaches an audit
+  // log. A stale binding makes `claude --resume <id>` print that id in its own
+  // error text, which runAgent folds into the AgentRunError message.
+  it("scrubs the real session id out of an audited failure", async () => {
+    const { paths } = await oneCall(
+      { message: "resume a dead session", context_id: SEEDED_CTX },
+      {
+        seed: seedBinding(),
+        run: async () => {
+          throw new AgentRunError(
+            "agent exited 1: No conversation found with session ID: real-agent-session",
+            "agent_error",
+          );
+        },
+      },
+    );
+    const line = JSON.parse(readFileSync(paths.callsLog, "utf8").trim().split("\n").at(-1)!);
+    expect(line).toMatchObject({ status: "agent_error" });
+    expect(line.error).not.toContain("real-agent-session");
+    expect(line.error).toContain("<session>");
+  });
+
   it("keeps the same context id across a resumed turn rather than minting a second", async () => {
     const { frames: f, paths } = await oneCall(
       { message: "again", context_id: SEEDED_CTX },

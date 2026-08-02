@@ -165,12 +165,23 @@ export function startListener(deps: ListenerDeps): { stop(): void } {
 
           // Mint on a fresh threadable call; roll the existing binding forward
           // on a resumed one. The agent's session id can change between turns,
-          // so it is re-read from the output rather than assumed stable.
+          // so it is re-read from the output rather than assumed stable — but
+          // an ABSENT one must not stop an admitted resume from rolling
+          // forward. parseCodexJsonl's non-JSON fallback yields no session id at
+          // all, and gating this whole block on `out.session_id` left such a
+          // turn at its old `turns` with its TTL sliding from the last
+          // successful write — an unbounded conversation pinned below
+          // MAX_CONTEXT_TURNS. On a resume the previously bound session id is
+          // still the right one to resume next time, so it is kept. A FRESH
+          // call with no session id still mints nothing: there is no session to
+          // resume. `||`, not `??`: an empty session id is no session id, and
+          // the binding schema requires a non-empty one.
+          const sessionId = out.session_id || binding?.agent_session_id;
           let contextId: string | undefined;
-          if (threadingAvailable && out.session_id) {
+          if (threadingAvailable && sessionId !== undefined) {
             const next = {
               context_id: binding?.context_id ?? mintContextId(),
-              agent_session_id: out.session_id,
+              agent_session_id: sessionId,
               caller: from,
               task: task.id,
               agent_kind: deps.config.agent_kind,
@@ -202,9 +213,18 @@ export function startListener(deps: ListenerDeps): { stop(): void } {
             return;
           }
           send({ type: "call_failed", call_id, code, detail: "The agent hit an internal error while answering." });
+          // The agent's own error text can echo the session id back at us: a
+          // stale binding makes `claude --resume <id>` print that id, and
+          // runAgent folds the child's stderr/stdout into its message. Scrubbed
+          // before the slice, because contexts.ts's invariant is that the real
+          // agent_session_id never reaches an audit log — nothing leaves the
+          // machine, but calls.log is what gets pasted into a bug report.
+          const err = binding
+            ? String(e).replaceAll(binding.agent_session_id, "<session>")
+            : String(e);
           audit({
             call_id, from, message: message.slice(0, 500), task: task.id, status: code,
-            duration_ms: Date.now() - started, error: String(e).slice(0, 2000),
+            duration_ms: Date.now() - started, error: err.slice(0, 2000),
           });
         }
       });
