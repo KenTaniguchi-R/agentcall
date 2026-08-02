@@ -104,7 +104,8 @@ agentcall call ken@agentcall.benree.tech "which commit?" --continue
 `--context <id>` targets a specific one instead. Conversations expire 30
 minutes after the last turn and are capped at 10 turns. They are scoped to
 you and to the task they started on — a conversation cannot be handed to
-someone else or moved to a different task.
+someone else or moved to a different task — and a conversation also ends if
+the owner changes the agent they run or the directory it answers from.
 
 Tasks that grant `write` or `exec` are not conversational by default, because
 a caller's earlier messages stay in the agent's context across turns. Set
@@ -259,6 +260,9 @@ and never leave your machine.
   - Codex: `codex exec --sandbox read-only|workspace-write --cd <workdir>`.
     Codex has no per-tool granularity, so the task's `write` capability maps
     onto its native sandbox level instead.
+  - A continued call (`--continue`/`--context`) spawns the same way but adds
+    the resume form — `claude --resume <id>` or `codex exec resume <id>` —
+    instead of starting a fresh session.
 - Every call — accepted or not — appends a JSONL line to
   `~/.agentcall/calls.log`: `{ts, call_id, from, message, status, duration_ms}`.
   That's your audit trail of who called and what happened.
