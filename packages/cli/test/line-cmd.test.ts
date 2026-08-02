@@ -246,6 +246,25 @@ describe("removeLine", () => {
     expect(() => removeLine(m, "codex", { confirm: false, uninstallFn: () => {} })).toThrow(/--yes/);
   });
 
+  // Regression: the confirmation message used to always say "abandons the
+  // handle" — falling back to the literal string "?" for an orphan that
+  // never held one — which is misleading for a directory that never
+  // finished registration in the first place.
+  it("still requires confirmation for an orphaned directory, with an honest message (no handle to abandon)", () => {
+    mkdirSync(getLinePaths(m, "half").dir, { recursive: true });
+    saveLineConfig(getLinePaths(m, "claude"), base);
+    savePerson(m, { primary_line: "claude" });
+    expect(() => removeLine(m, "half", { confirm: false, uninstallFn: () => {} })).toThrow(/--yes/);
+    try {
+      removeLine(m, "half", { confirm: false, uninstallFn: () => {} });
+    } catch (e) {
+      const msg = String(e instanceof Error ? e.message : e);
+      expect(msg).not.toContain("abandons the handle");
+      expect(msg).not.toContain(`"?"`);
+      expect(msg).toContain("never finished registration");
+    }
+  });
+
   it("removes an orphaned line directory", () => {
     mkdirSync(getLinePaths(m, "half").dir, { recursive: true });
     saveLineConfig(getLinePaths(m, "claude"), base);

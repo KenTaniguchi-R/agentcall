@@ -165,6 +165,43 @@ describe("checkAgentSpawn", () => {
     expect(c.hint).toBe(HINTS.claudeAuth);
     expect(c.detail).toContain("Invalid API key");
   });
+
+  // Regression for the doctor-probe orphan-line bug: this spawn runs under
+  // GUARD_PROBE_LINE ("doctor-probe"), a synthetic name with no real line
+  // behind it — same as the two guard probes in this file, which each
+  // mkdtemp their own AGENTCALL_HOME for exactly this reason (see
+  // defaultGuardProbe/defaultGuardBinaryProbe below). checkAgentSpawn never
+  // got that treatment because before per-line directories existed there was
+  // nothing to orphan. Without it: buildSpawnSpec spreads the REAL
+  // process.env with no AGENTCALL_HOME override, so if the probed agent
+  // calls any tool, guard.ts's toolsLog write (enforce AND observe mode)
+  // mkdirSync's a real ~/.agentcall/lines/doctor-probe/ with no config.json —
+  // an orphan `listLines` reports forever after, which makes `doctor` fail
+  // "config" and exit 1 on every future run, including future doctor runs
+  // meant to diagnose it.
+  //
+  // A real agent spawn is not exercised here (no live claude/codex in CI —
+  // see CLAUDE.md's TDD section), so this asserts the narrowest observable
+  // proxy: the SpawnSpec actually handed to runFn carries a redirected
+  // AGENTCALL_HOME, distinct from whatever the ambient process.env has (or
+  // doesn't have). Before the fix, checkAgentSpawn passed no specOverride at
+  // all (runFn's 5th argument was `undefined`), so this fails against the
+  // current code — there is no spec to inspect.
+  it("spawns under a throwaway AGENTCALL_HOME so a real ~/.agentcall/lines/doctor-probe is never created", async () => {
+    const seenSpecs: Array<{ env?: NodeJS.ProcessEnv } | undefined> = [];
+    await checkAgentSpawn("claude", fakeWorkdir, async (_kind, _prompt, _workdir, _timeoutMs, specOverride) => {
+      seenSpecs.push(specOverride);
+      return { text: "OK" };
+    });
+    expect(seenSpecs).toHaveLength(1);
+    const spec = seenSpecs[0];
+    expect(spec).toBeDefined();
+    expect(spec!.env?.AGENTCALL_HOME).toBeTruthy();
+    expect(spec!.env?.AGENTCALL_HOME).not.toBe(process.env.AGENTCALL_HOME);
+    // The line name the spawn's guard is wired up under must still be
+    // GUARD_PROBE_LINE, unaffected by the AGENTCALL_HOME redirection.
+    expect(spec!.env?.AGENTCALL_LINE).toBe(GUARD_PROBE_LINE);
+  });
 });
 
 describe("verifyAgent", () => {

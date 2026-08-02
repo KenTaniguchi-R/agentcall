@@ -172,9 +172,17 @@ export function removeLine(m: MachinePaths, name: string, opts: RemoveLineOpts =
     throw new Error(`"${name}" is the primary line. Promote another first: agentcall line primary <name>`);
   }
   if (!opts.confirm) {
+    // target.config is only ever set alongside target.ok (see listLines) —
+    // an orphan directory (no config.json, or one that failed to parse) never
+    // held a handle, so the "abandons a handle permanently" warning would be
+    // false for it: nothing was ever registered, so nothing is at stake but
+    // local files.
     throw new Error(
-      `Removing "${name}" abandons the handle "${target.config?.handle ?? "?"}" permanently — handle release is ` +
-        `not implemented, so nobody (including you) can ever register it again. Re-run with --yes to confirm.`,
+      target.config
+        ? `Removing "${name}" abandons the handle "${target.config.handle}" permanently — handle release is ` +
+          `not implemented, so nobody (including you) can ever register it again. Re-run with --yes to confirm.`
+        : `Removing "${name}" discards its local files — it never finished registration (no usable config.json), ` +
+          `so there's no handle at stake. Re-run with --yes to confirm.`,
     );
   }
 

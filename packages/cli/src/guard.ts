@@ -54,7 +54,9 @@ const DENIED_DIRS = [
   // over-denies (fails safe), while removing it would leave genuine content
   // from a previous install unprotected. The per-line entries below cover
   // AgentCall/<line>/tasks; this covers the pre-multi-line AgentCall/tasks
-  // that may still be sitting there regardless.
+  // that may still be sitting there regardless. This is also the reason
+  // "tasks" and "public" are reserved line names — see RESERVED_LINE_NAMES in
+  // lineName.ts for the other half of this.
   "AgentCall/tasks",
   // AgentCall/<line>/tasks, one directory per line, has no single
   // home-relative entry that can name them all — see runGuard, which

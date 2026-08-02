@@ -5,7 +5,7 @@ import { join } from "node:path";
 import { callAgent } from "./callClient.js";
 import { relayUrl, type LineConfig } from "./config.js";
 import { getLinePaths, getMachinePaths } from "./paths.js";
-import { AgentRunError, guardEntryPath, guardSettingsJson, runAgent, type AgentKind } from "./runner.js";
+import { AgentRunError, buildSpawnSpec, guardEntryPath, guardSettingsJson, runAgent, type AgentKind } from "./runner.js";
 import { resolveAgentBin } from "./bin.js";
 import { ASK_TASK } from "./tasks.js";
 
@@ -110,7 +110,22 @@ export async function checkAgentSpawn(
     // runAgent's lineName is a required argument specifically so this call
     // can't silently fall back to the old "" default (which fails the guard
     // closed on every tool call).
-    await runFn(kind, VERIFY_PROMPT, workdir, VERIFY_TIMEOUT_MS, undefined, ASK_TASK.envelope, "unknown", undefined, GUARD_PROBE_LINE);
+    //
+    // AGENTCALL_HOME is redirected to a throwaway temp dir for the same
+    // reason defaultGuardProbe/defaultGuardBinaryProbe redirect it further
+    // down this file: buildSpawnSpec otherwise spreads the REAL process.env
+    // unchanged, and if the probed agent calls any tool, guard.ts writes
+    // toolsLog unconditionally (enforce AND observe mode), whose parent
+    // directory guard-entry.ts mkdirSync's into existence — creating a real
+    // ~/.agentcall/lines/doctor-probe/ with no config.json. That orphan
+    // makes `listLines`/`doctor` report a broken "config" check forever
+    // after, on every subsequent run including the one meant to diagnose it.
+    // The spec is built explicitly (rather than left to runAgent's own
+    // default) so this override can be applied before the spawn happens.
+    const home = mkdtempSync(join(tmpdir(), "agentcall-doctor-probe-"));
+    const spec = buildSpawnSpec(kind, VERIFY_PROMPT, workdir, resolveAgentBin, ASK_TASK.envelope, "unknown", GUARD_PROBE_LINE);
+    spec.env = { ...spec.env, AGENTCALL_HOME: home };
+    await runFn(kind, VERIFY_PROMPT, workdir, VERIFY_TIMEOUT_MS, spec, ASK_TASK.envelope, "unknown", undefined, GUARD_PROBE_LINE);
     return { name: "agent run", ok: true };
   } catch (e) {
     return { name: "agent run", ok: false, detail: short(e), hint: classifyAgentFailure(kind, e) };
