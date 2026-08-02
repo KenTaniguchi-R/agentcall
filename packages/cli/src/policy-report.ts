@@ -107,7 +107,8 @@ export function renderPolicyReport(
       "  Codex only enforces the write boundary with a read-only or workspace-write sandbox;",
       "  fetch and exec are not separate Codex controls, and read access is not confined to the working directory.",
       "  Codex can execute shell commands whether or not a task declares exec.",
-      "  Those shell actions are not currently recorded because the Codex hook does not run.",
+      "  On verified codex-cli 0.146.0, shell tool attempts are recorded by an observe-only hook unless managed-only hooks are required.",
+      "  Other Codex releases or allow_managed_hooks_only=true may silently skip that hook; non-hooked read routes remain unrecorded.",
     );
   }
 

@@ -6,6 +6,22 @@ which are released together.
 
 ## Unreleased
 
+### Fixed — the Codex guard now runs without trusting foreign hooks
+
+- Codex spawns now supply the exact trusted hash for AgentCall's inline
+  `PreToolUse` hook. The trust grant is scoped to that synthetic session-hook
+  key; AgentCall does not use `--dangerously-bypass-hook-trust`, so unrelated
+  user, project, plugin, and managed hooks do not inherit execution trust.
+- The normalized hash and whole-table `hooks.state` override are pinned to
+  codex-cli 0.146.0. A live env-gated regression proves the AgentCall hook runs
+  on a real tool call while an unrelated `$CODEX_HOME/hooks.json` hook remains
+  untrusted. A Codex normalization change fails closed by skipping the hook.
+- Codex telemetry remains observe-only and incomplete: tool attempts that emit
+  `PreToolUse` are recorded, but the hook does not enforce a read boundary and
+  non-hooked routes such as `view_image` remain absent from `tools.log`. An
+  administrator setting `allow_managed_hooks_only = true` disables this session
+  hook; managed-hook installation or detection remains future work.
+
 ### Added — readable effective capability policy
 
 - `agentcall policy` renders the composed user and administrator policy as a
@@ -196,29 +212,6 @@ rather than a `fix:`.
   `Operation not permitted (os error 1)`. That is the C.2 read floor, which is
   *not* shipped — `agentcall` neither installs nor currently requires it.
   `scripts/verify-codex-deny-read-p2.sh` is the repeatable check.
-
-### Known issue — the Codex guard is registered but never runs (unfixed)
-
-- **Codex spawns produce no `tools.log` telemetry at all.** Codex gates hook
-  execution on *persisted trust* (`HookStateToml` carries a `trusted_hash`), and
-  the guard hook is supplied inline via `-c`, which has never been trusted — so
-  Codex skips it silently, with no warning on stdout or stderr and no change to
-  the exit code. Verified against codex-cli 0.146.0 by controlled A/B on the
-  exact `buildSpawnSpec` output. **The observe-mode guard described below has
-  therefore never recorded anything on the Codex side.**
-- `--dangerously-bypass-hook-trust` makes the guard run, and was tried and then
-  **backed out**. It is a *blanket* bypass: it grants execution to every
-  untrusted hook from every surviving config layer, not just agentcall's own.
-  `--ignore-user-config` does not contain it — Codex replaces the ignored
-  `config.toml` with an *empty user layer* rather than dropping the layer, and
-  loads `hooks.json` per-layer independently, so `$CODEX_HOME/hooks.json` still
-  runs. Confirmed by planting one: it executed. Hook commands run outside the
-  tool sandbox, so this is host-level execution.
-- The narrower fix is to trust only our own hook by supplying
-  `hooks.state.<id>.trusted_hash` inline (SHA-256 over the normalized hook
-  identity). It fails closed on mismatch but couples us to an undocumented
-  hashing scheme. **Not yet decided** — see
-  `docs/superpowers/specs/2026-08-01-codex-read-floor-design.md`.
 
 ### Fixed — the guard's fail-closed paths could fail open (security-relevant)
 
