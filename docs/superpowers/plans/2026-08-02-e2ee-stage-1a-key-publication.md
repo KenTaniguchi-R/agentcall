@@ -1329,7 +1329,7 @@ Add to the imports at the top of `packages/cli/src/api.ts`:
 ```ts
 import {
   EncryptionKeyRecord, IdentityRecord, HPKE_SUITE, MAX_ENCRYPTION_KEY_VALIDITY_MS,
-  encryptionKeyTranscript, keyIdFor, signTranscript,
+  encryptionKeyTranscript, fromBase64Url, keyIdFor, signTranscript,
   type EncryptionKeyRecordType, type IdentityRecordType,
 } from "@benree/agentcall-shared";
 import type { StoredKeys } from "./keys.js";
@@ -1338,14 +1338,12 @@ import type { StoredKeys } from "./keys.js";
 Append to the end of `packages/cli/src/api.ts`:
 
 ```ts
+// Uses fromBase64Url from @benree/agentcall-shared (Task 3) rather than
+// re-implementing the decode: one base64url implementation in the codebase.
 async function importIdentityPrivateKey(pkcs8B64url: string): Promise<CryptoKey> {
-  const padded = pkcs8B64url.replace(/-/g, "+").replace(/_/g, "/")
-    + "=".repeat((4 - (pkcs8B64url.length % 4)) % 4);
-  const binary = atob(padded);
-  const bytes = new Uint8Array(binary.length);
-  for (let i = 0; i < binary.length; i++) bytes[i] = binary.charCodeAt(i);
   return crypto.subtle.importKey(
-    "pkcs8", bytes as BufferSource, { name: "ECDSA", namedCurve: "P-256" }, false, ["sign"],
+    "pkcs8", fromBase64Url(pkcs8B64url) as BufferSource,
+    { name: "ECDSA", namedCurve: "P-256" }, false, ["sign"],
   );
 }
 
