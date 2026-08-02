@@ -19,7 +19,7 @@ jobs:
   check:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
         with:
           # Need the base branch to diff against.
           fetch-depth: 0
@@ -43,6 +43,9 @@ jobs:
           fi
           echo "INVARIANTS_BASE=$base" >> "$GITHUB_ENV"
           echo "Comparing $base...HEAD"
+
+      - name: Third-party actions are immutable
+        run: ruby scripts/verify-action-pins.rb
 
       - name: Protocol frames must live in packages/shared
         run: |
