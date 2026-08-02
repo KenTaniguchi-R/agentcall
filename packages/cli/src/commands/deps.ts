@@ -2,6 +2,15 @@
 // roster.ts: that was the first command extracted, not the owner of these
 // types, and six sibling modules importing from it would imply a dependency
 // on roster functionality that does not exist.
+//
+// Error-handling contract for every command action (enforced by run() in
+// index.ts, not here — see index.ts:16-31): throw a plain Error and run()
+// prints the bare message and sets exit 1; throw ExitOnly and run() sets
+// exit 1 and prints nothing, because the failure was already reported some
+// other way; set process.exitCode yourself ONLY when the exit code run()
+// can't express (i.e. not 0 or 1) is needed, and say why at that call site —
+// status (exit 2 on offline) and doctor (forwards runDoctor's arbitrary
+// code) are the only two sanctioned instances of this third case.
 import { ask } from "../tty.js";
 import { getPaths, type Paths } from "../paths.js";
 

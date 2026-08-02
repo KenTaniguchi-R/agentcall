@@ -6,6 +6,17 @@ which are released together.
 
 ## Unreleased
 
+### Changed — command error output dropped the `Error: ` prefix
+
+Every command's error output is now the bare failure message, whatever the
+command. Before the CLI command actions were extracted into
+`packages/cli/src/commands/*.ts` behind a shared `run()` wrapper, only the
+subset of commands with no local `try`/`catch` printed through a path that
+added an `Error: ` prefix — the rest printed the bare message already. That
+inconsistency is gone, but the direction it resolved in means anyone
+scripting against agentcall's stderr and grepping for `^Error: ` will start
+missing every match after upgrading, silently.
+
 ### Fixed — `doctor`'s tool-guard check called healthy installs broken
 
 The check asked a real `claude` spawn to read a canary `.env` and required a

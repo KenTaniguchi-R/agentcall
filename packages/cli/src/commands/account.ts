@@ -1,6 +1,6 @@
 import { rmSync } from "node:fs";
 import { loadConfig, saveConfig, relayUrl, assertCallableConfig } from "../config.js";
-import { rotateToken, ApiError } from "../api.js";
+import { rotateToken } from "../api.js";
 import { startListener } from "../listener.js";
 import { runSetup } from "../setup.js";
 import { installLaunchAgent, isLaunchAgentInstalled, uninstallLaunchAgent } from "../launchd.js";
@@ -60,23 +60,18 @@ export function listen(d: Deps): void {
 
 export async function rotate(d: Deps): Promise<void> {
   const cfg = loadConfig(d.paths);
-  try {
-    const { token } = await rotateToken(relayUrl(cfg), { handle: cfg.handle, token: cfg.token });
-    saveConfig(d.paths, { ...cfg, token });
-    d.io.log(`Token rotated for ${cfg.handle}. The old token no longer works.`);
-    // The background listener read the old token at startup and holds it in
-    // memory, so without a restart it reconnects with a dead credential and
-    // 401s forever. Only restart a listener that's actually installed —
-    // installLaunchAgent would otherwise create one the owner opted out of.
-    if (isLaunchAgentInstalled(d.paths)) {
-      installLaunchAgent(d.paths);
-      d.io.log("Background listener restarted with the new token.");
-    } else if (cfg.agent_kind) {
-      d.io.log("Restart `agentcall listen` so it picks up the new token.");
-    }
-  } catch (e) {
-    d.io.error(e instanceof ApiError ? e.message : String(e));
-    process.exitCode = 1;
+  const { token } = await rotateToken(relayUrl(cfg), { handle: cfg.handle, token: cfg.token });
+  saveConfig(d.paths, { ...cfg, token });
+  d.io.log(`Token rotated for ${cfg.handle}. The old token no longer works.`);
+  // The background listener read the old token at startup and holds it in
+  // memory, so without a restart it reconnects with a dead credential and
+  // 401s forever. Only restart a listener that's actually installed —
+  // installLaunchAgent would otherwise create one the owner opted out of.
+  if (isLaunchAgentInstalled(d.paths)) {
+    installLaunchAgent(d.paths);
+    d.io.log("Background listener restarted with the new token.");
+  } else if (cfg.agent_kind) {
+    d.io.log("Restart `agentcall listen` so it picks up the new token.");
   }
 }
 

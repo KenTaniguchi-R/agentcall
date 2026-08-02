@@ -41,8 +41,12 @@ beforeEach(() => {
   saveConfig(paths, { handle: "ken", token: "tok", relay: "https://r.test" });
   vi.mocked(callAgent).mockReset();
   vi.mocked(getStatus).mockReset();
+  process.exitCode = undefined;
 });
-afterEach(() => rmSync(dir, { recursive: true, force: true }));
+afterEach(() => {
+  rmSync(dir, { recursive: true, force: true });
+  process.exitCode = undefined;
+});
 
 describe("call", () => {
   it("prints the reply text on a successful call", async () => {
@@ -92,7 +96,6 @@ describe("status", () => {
 
     expect(deps.io.lines).toEqual(["online"]);
     expect(process.exitCode).toBe(0);
-    process.exitCode = undefined;
   });
 
   it("prints offline and sets exit code 2 (not 1) when the agent is unreachable", async () => {
@@ -102,7 +105,6 @@ describe("status", () => {
 
     expect(deps.io.lines).toEqual(["offline"]);
     expect(process.exitCode).toBe(2);
-    process.exitCode = undefined;
   });
 
   it("throws (for run() to set exit 1) rather than swallowing an ApiError itself", async () => {

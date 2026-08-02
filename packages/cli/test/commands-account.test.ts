@@ -148,14 +148,11 @@ describe("rotate", () => {
     ]);
   });
 
-  it("catches an ApiError itself and sets exit 1, rather than throwing for run() to handle", async () => {
+  it("throws (for run() to set exit 1) rather than swallowing an ApiError itself", async () => {
     saveConfig(deps.paths, { handle: "ken", token: "old", relay: "https://r.test", agent_kind: "claude" });
     vi.mocked(rotateToken).mockRejectedValue(new ApiError("relay unreachable", "network"));
 
-    await expect(rotate(deps)).resolves.toBeUndefined();
-
-    expect(deps.io.errors).toEqual(["relay unreachable"]);
-    expect(process.exitCode).toBe(1);
+    await expect(rotate(deps)).rejects.toThrow("relay unreachable");
   });
 });
 

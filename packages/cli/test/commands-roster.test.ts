@@ -1,7 +1,7 @@
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { beforeEach, afterEach, describe, expect, it, vi } from "vitest";
+import { beforeEach, afterEach, describe, expect, it } from "vitest";
 import { rosterForget, rosterList } from "../src/commands/roster.js";
 import type { Deps, Io } from "../src/commands/deps.js";
 import { saveMembership } from "../src/rosters.js";
