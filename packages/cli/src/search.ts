@@ -15,7 +15,7 @@ const FIELDS: SearchField[] = ["keywords", "name", "description"];
 // signal in a question; adding domain words here would silently suppress real
 // matches, so this list should stay boring.
 const STOPWORDS = new Set([
-  "a", "about", "an", "and", "any", "are", "as", "at", "be", "but", "by", "can", "do",
+  "a", "about", "an", "and", "any", "are", "as", "at", "be", "but", "by", "can", "did", "do",
   "does", "for", "from", "get", "has", "have", "how", "i", "if", "in", "is", "it", "its", "me",
   "my", "of", "on", "or", "our", "should", "so", "than", "that", "the", "their", "them", "then",
   "there", "these", "they", "this", "to", "up", "us", "was", "we", "were", "what", "when",
