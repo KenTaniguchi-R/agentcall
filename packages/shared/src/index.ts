@@ -1,4 +1,5 @@
 export * from "./protocol.js";
+export * from "./recovery.js";
 export * from "./card.js";
 export * from "./roster.js";
 export * from "./a2a/errors.js";
