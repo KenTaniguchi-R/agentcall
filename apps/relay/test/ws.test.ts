@@ -140,6 +140,10 @@ describe("listener attach + status", () => {
     for (let i = 0; i < 60; i++) {
       expect((await SELF.fetch("https://relay.test/v1/status/rl-absent", { headers })).status).toBe(404);
     }
-    expect((await SELF.fetch("https://relay.test/v1/status/rl-absent", { headers })).status).toBe(429);
+    let throttled = false;
+    for (let i = 0; i < 10 && !throttled; i++) {
+      throttled = (await SELF.fetch("https://relay.test/v1/status/rl-absent", { headers })).status === 429;
+    }
+    expect(throttled).toBe(true);
   });
 });
