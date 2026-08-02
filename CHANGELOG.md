@@ -6,6 +6,14 @@ which are released together.
 
 ## Unreleased
 
+### Security verification — malformed Codex requirements fail closed
+
+- The Codex read-floor verifier now requires malformed machine-wide
+  requirements to stop startup with the exact fatal configuration-loader
+  diagnostic; an unrelated crash can no longer count as a successful denial. A
+  targeted `--malformed-only` mode
+  and signal-safe restoration keep the root-only experiment bounded.
+
 ### Changed — presence is roster-scoped and auditable
 
 - Handles can read their own presence or that of a peer in a shared roster.
