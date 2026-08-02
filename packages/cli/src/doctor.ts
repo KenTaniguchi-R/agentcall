@@ -1,14 +1,14 @@
 import { execFileSync } from "node:child_process";
-import { existsSync } from "node:fs";
 import { getStatus } from "./api.js";
 import { callAgent } from "./callClient.js";
-import { loadConfig, relayUrl, resolveWorkdir, type Config, type Workdir } from "./config.js";
+import { relayUrl, resolveLineWorkdir, type LineConfig, type Workdir } from "./config.js";
 import { LAUNCH_LABEL } from "./launchd.js";
-import type { Paths } from "./paths.js";
+import { resolveLine } from "./lineContext.js";
+import type { LinePaths, MachinePaths } from "./paths.js";
 import { checkGuard, checkRelaySelfCall, formatCheck, short, verifyAgent, type GuardBinaryProbeFn, type GuardProbeFn, type VerifyCheck, type VerifyFns } from "./verify.js";
 
 export interface DoctorDeps {
-  paths: Paths;
+  machine: MachinePaths;
   // Test seams — production callers should leave these as the defaults.
   verifyFns?: VerifyFns;
   getStatusFn?: typeof getStatus;
@@ -39,9 +39,12 @@ export async function runDoctor(deps: DoctorDeps): Promise<number> {
     log(formatCheck(c));
   };
 
-  let cfg: Config;
+  let cfg: LineConfig;
+  let paths: LinePaths;
   try {
-    cfg = loadConfig(deps.paths);
+    const ctx = resolveLine(deps.machine);
+    cfg = ctx.config;
+    paths = ctx.paths;
   } catch (e) {
     report({ name: "config", ok: false, detail: short(e), hint: "run `agentcall setup` first" });
     return 1;
@@ -58,10 +61,10 @@ export async function runDoctor(deps: DoctorDeps): Promise<number> {
   // listener that won't stay up.
   let workdir: Workdir | undefined;
   try {
-    workdir = resolveWorkdir(cfg, deps.paths);
+    workdir = resolveLineWorkdir(cfg, paths);
     report({ name: "workdir", ok: true, detail: workdir.dir });
   } catch (e) {
-    report({ name: "workdir", ok: false, detail: short(e), hint: "fix or remove `workdir` in ~/.agentcall/config.json" });
+    report({ name: "workdir", ok: false, detail: short(e), hint: "fix or remove `workdir` in ~/.agentcall/lines/<line>/config.json" });
   }
 
   if (deps.isDarwin ?? process.platform === "darwin") {
@@ -93,10 +96,10 @@ export async function runDoctor(deps: DoctorDeps): Promise<number> {
     report({ name: "relay status", ok: false, detail: short(e) });
   }
 
-  // Falls back to publicDir when workdir didn't resolve: per the ladder
+  // Falls back to shareDir when workdir didn't resolve: per the ladder
   // semantics above, a static-check failure reports itself but must not stop
   // the agent checks from running.
-  const agentChecks = await verifyAgent(cfg.agent_kind, workdir?.dir ?? deps.paths.publicDir, deps.verifyFns);
+  const agentChecks = await verifyAgent(cfg.agent_kind, workdir?.dir ?? paths.shareDir, deps.verifyFns);
   for (const c of agentChecks) report(c);
   const agentOk = agentChecks.every((c) => c.ok);
 

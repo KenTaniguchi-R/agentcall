@@ -2,22 +2,22 @@ import { mkdtempSync, statSync, writeFileSync, mkdirSync, readFileSync } from "n
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
-import { getPaths } from "../src/paths.js";
+import { getMachinePaths } from "../src/paths.js";
 import { loadContacts, saveContacts, addContact, removeContact, NAME_RE, resolveAddress } from "../src/contacts.js";
 
 function tempHome() { return mkdtempSync(join(tmpdir(), "agentcall-ct-")); }
 
 describe("contacts store", () => {
   it("paths derives contactsFile from home", () => {
-    expect(getPaths("/tmp/fakehome").contactsFile).toBe("/tmp/fakehome/.agentcall/contacts.json");
+    expect(getMachinePaths("/tmp/fakehome").contactsFile).toBe("/tmp/fakehome/.agentcall/contacts.json");
   });
 
   it("missing file loads as an empty book", () => {
-    expect(loadContacts(getPaths(tempHome()))).toEqual({ contacts: [] });
+    expect(loadContacts(getMachinePaths(tempHome()))).toEqual({ contacts: [] });
   });
 
   it("round-trips and sets 0600/0700 perms", () => {
-    const p = getPaths(tempHome());
+    const p = getMachinePaths(tempHome());
     const book = { contacts: [{ name: "ken", address: "ken@agentcall.benree.tech", note: "coworker" }] };
     saveContacts(p, book);
     expect(loadContacts(p)).toEqual(book);
@@ -26,14 +26,14 @@ describe("contacts store", () => {
   });
 
   it("corrupt file throws an error naming the path", () => {
-    const p = getPaths(tempHome());
+    const p = getMachinePaths(tempHome());
     mkdirSync(p.dir, { recursive: true });
     writeFileSync(p.contactsFile, "{not json");
     expect(() => loadContacts(p)).toThrow(p.contactsFile);
   });
 
   it("addContact adds, then upserts case-insensitively", () => {
-    const p = getPaths(tempHome());
+    const p = getMachinePaths(tempHome());
     expect(addContact(p, "Ken", "ken@agentcall.benree.tech", "coworker")).toBe("added");
     expect(addContact(p, "ken", "ken2@agentcall.benree.tech")).toBe("updated");
     const { contacts } = loadContacts(p);
@@ -42,14 +42,14 @@ describe("contacts store", () => {
   });
 
   it("upsert without --note preserves the existing note", () => {
-    const p = getPaths(tempHome());
+    const p = getMachinePaths(tempHome());
     addContact(p, "ken", "ken@agentcall.benree.tech", "coworker, owns relay infra");
     addContact(p, "ken", "ken2@agentcall.benree.tech");
     expect(loadContacts(p).contacts[0].note).toBe("coworker, owns relay infra");
   });
 
   it("rejects invalid names and invalid addresses without writing", () => {
-    const p = getPaths(tempHome());
+    const p = getMachinePaths(tempHome());
     expect(() => addContact(p, "ken@home", "ken@agentcall.benree.tech")).toThrow(/Invalid contact name/);
     expect(() => addContact(p, "-ken", "ken@agentcall.benree.tech")).toThrow(/Invalid contact name/);
     expect(() => addContact(p, "ken", "not-an-address")).toThrow(/handle@host/);
@@ -62,7 +62,7 @@ describe("contacts store", () => {
   });
 
   it("removeContact deletes case-insensitively and rejects unknown names", () => {
-    const p = getPaths(tempHome());
+    const p = getMachinePaths(tempHome());
     addContact(p, "ken", "ken@agentcall.benree.tech");
     removeContact(p, "KEN");
     expect(loadContacts(p)).toEqual({ contacts: [] });
@@ -70,7 +70,7 @@ describe("contacts store", () => {
   });
 
   it("preserves unknown top-level keys across a load + save round-trip", () => {
-    const p = getPaths(tempHome());
+    const p = getMachinePaths(tempHome());
     mkdirSync(p.dir, { recursive: true });
     writeFileSync(
       p.contactsFile,
@@ -88,20 +88,20 @@ describe("contacts store", () => {
 
 describe("resolveAddress", () => {
   it("passes a full address through unchanged", () => {
-    const p = getPaths(tempHome());
+    const p = getMachinePaths(tempHome());
     expect(resolveAddress(p, "ken@agentcall.benree.tech")).toEqual({
       ok: true, handle: "ken", host: "agentcall.benree.tech", address: "ken@agentcall.benree.tech",
     });
   });
 
   it("rejects a malformed @-containing address", () => {
-    const r = resolveAddress(getPaths(tempHome()), "ken@");
+    const r = resolveAddress(getMachinePaths(tempHome()), "ken@");
     expect(r.ok).toBe(false);
     if (!r.ok) expect(r.error).toContain("handle@host");
   });
 
   it("resolves a saved name case-insensitively", () => {
-    const p = getPaths(tempHome());
+    const p = getMachinePaths(tempHome());
     addContact(p, "Ken", "ken@agentcall.benree.tech", "coworker");
     expect(resolveAddress(p, "ken")).toEqual({
       ok: true, handle: "ken", host: "agentcall.benree.tech", address: "ken@agentcall.benree.tech",
@@ -109,7 +109,7 @@ describe("resolveAddress", () => {
   });
 
   it("unknown name errors and suggests contacts list", () => {
-    const r = resolveAddress(getPaths(tempHome()), "nobody");
+    const r = resolveAddress(getMachinePaths(tempHome()), "nobody");
     expect(r.ok).toBe(false);
     if (!r.ok) {
       expect(r.error).toContain('No contact named "nobody"');
@@ -123,7 +123,7 @@ describe("resolveAddress", () => {
   // warning rather than a rejection because the relay hands out a hardcoded
   // RELAY_HOST, so a self-hosted or local-dev relay can never match.
   it("warns when the address host is not the relay the call will actually go to", () => {
-    const p = getPaths(tempHome());
+    const p = getMachinePaths(tempHome());
     const r = resolveAddress(p, "ken@agentcall.benree.tech", "https://relay.example.com");
     expect(r.ok).toBe(true);
     if (r.ok) {
@@ -133,21 +133,21 @@ describe("resolveAddress", () => {
   });
 
   it("does not warn when the address host matches the relay", () => {
-    const p = getPaths(tempHome());
+    const p = getMachinePaths(tempHome());
     const r = resolveAddress(p, "ken@agentcall.benree.tech", "https://agentcall.benree.tech");
     expect(r.ok).toBe(true);
     if (r.ok) expect(r.warning).toBeUndefined();
   });
 
   it("does not warn when no relay is supplied", () => {
-    const p = getPaths(tempHome());
+    const p = getMachinePaths(tempHome());
     const r = resolveAddress(p, "ken@agentcall.benree.tech");
     expect(r.ok).toBe(true);
     if (r.ok) expect(r.warning).toBeUndefined();
   });
 
   it("warns for a contact-book hit too, naming the contact's address", () => {
-    const p = getPaths(tempHome());
+    const p = getMachinePaths(tempHome());
     addContact(p, "ken", "ken@agentcall.benree.tech");
     const r = resolveAddress(p, "ken", "http://127.0.0.1:8787");
     expect(r.ok).toBe(true);
@@ -155,14 +155,14 @@ describe("resolveAddress", () => {
   });
 
   it("an unparseable relay URL is ignored rather than blocking the call", () => {
-    const p = getPaths(tempHome());
+    const p = getMachinePaths(tempHome());
     const r = resolveAddress(p, "ken@agentcall.benree.tech", "not a url");
     expect(r.ok).toBe(true);
     if (r.ok) expect(r.warning).toBeUndefined();
   });
 
   it("rejects a stored contact whose address is invalid (hand-edited file)", () => {
-    const p = getPaths(tempHome());
+    const p = getMachinePaths(tempHome());
     mkdirSync(p.dir, { recursive: true });
     writeFileSync(p.contactsFile, JSON.stringify({ contacts: [{ name: "bad", address: "not-an-address" }] }));
     const r = resolveAddress(p, "bad");

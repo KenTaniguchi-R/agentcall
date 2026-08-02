@@ -3,7 +3,7 @@ import { mkdtempSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { callAgent } from "./callClient.js";
-import { relayUrl, type Config } from "./config.js";
+import { relayUrl, type LineConfig } from "./config.js";
 import { getLinePaths, getMachinePaths } from "./paths.js";
 import { AgentRunError, guardEntryPath, guardSettingsJson, runAgent, type AgentKind } from "./runner.js";
 import { resolveAgentBin } from "./bin.js";
@@ -146,7 +146,7 @@ export async function verifyAgent(kind: AgentKind, workdir: string, fns: VerifyF
 // keychain) — a direct checkAgentSpawn from an interactive shell can pass
 // while this fails. Works under the default policy because the built-in
 // "ask" task always exists.
-export async function checkRelaySelfCall(cfg: Config, callFn: typeof callAgent = callAgent): Promise<VerifyCheck> {
+export async function checkRelaySelfCall(cfg: LineConfig, callFn: typeof callAgent = callAgent): Promise<VerifyCheck> {
   try {
     await callFn({
       relay: relayUrl(cfg),

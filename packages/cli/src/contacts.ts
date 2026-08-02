@@ -1,7 +1,7 @@
 import { existsSync, mkdirSync, readFileSync, writeFileSync, chmodSync } from "node:fs";
 import { z } from "zod";
 import { parseAddress } from "@benree/agentcall-shared";
-import type { Paths } from "./paths.js";
+import type { MachinePaths } from "./paths.js";
 
 // Never matches anything containing "@", so a contact name can never be
 // mistaken for a handle@host address during resolution.
@@ -26,7 +26,7 @@ export type ContactsFile = z.infer<typeof ContactsFileSchema>;
 // Missing file -> empty book (nothing saved yet). Malformed file -> THROW
 // naming the path: the file is user data, silently resetting it would lose
 // every saved contact.
-export function loadContacts(p: Paths): ContactsFile {
+export function loadContacts(p: MachinePaths): ContactsFile {
   if (!existsSync(p.contactsFile)) return { contacts: [] };
   try {
     return ContactsFileSchema.parse(JSON.parse(readFileSync(p.contactsFile, "utf8")));
@@ -35,8 +35,8 @@ export function loadContacts(p: Paths): ContactsFile {
   }
 }
 
-// 0600/0700 like saveConfig: notes are personal data.
-export function saveContacts(p: Paths, file: ContactsFile): void {
+// 0600/0700 like saveLineConfig: notes are personal data.
+export function saveContacts(p: MachinePaths, file: ContactsFile): void {
   mkdirSync(p.dir, { recursive: true, mode: 0o700 });
   chmodSync(p.dir, 0o700);
   writeFileSync(p.contactsFile, JSON.stringify(file, null, 2) + "\n", { mode: 0o600 });
@@ -46,7 +46,7 @@ export function saveContacts(p: Paths, file: ContactsFile): void {
 const byName = (contacts: Contact[], name: string) =>
   contacts.findIndex((c) => c.name.toLowerCase() === name.toLowerCase());
 
-export function addContact(p: Paths, name: string, address: string, note?: string): "added" | "updated" {
+export function addContact(p: MachinePaths, name: string, address: string, note?: string): "added" | "updated" {
   if (!NAME_RE.test(name)) {
     throw new Error(`Invalid contact name "${name}" — start with a letter or digit, then letters, digits, ".", "_", "-" (no @).`);
   }
@@ -68,7 +68,7 @@ export function addContact(p: Paths, name: string, address: string, note?: strin
   return "updated";
 }
 
-export function removeContact(p: Paths, name: string): void {
+export function removeContact(p: MachinePaths, name: string): void {
   const file = loadContacts(p);
   const idx = byName(file.contacts, name);
   if (idx === -1) {
@@ -114,7 +114,7 @@ function relayHostWarning(address: string, host: string, relay?: string): string
 // three commands cannot drift: "@" means a literal address, anything else is
 // a contact-book lookup. `relay` is the URL the caller will actually dial;
 // pass it so the host check above applies uniformly to all three.
-export function resolveAddress(p: Paths, arg: string, relay?: string): Resolved {
+export function resolveAddress(p: MachinePaths, arg: string, relay?: string): Resolved {
   if (arg.includes("@")) {
     const parsed = parseAddress(arg);
     if (!parsed) return { ok: false, error: `Invalid address: ${arg} (expected handle@host)` };

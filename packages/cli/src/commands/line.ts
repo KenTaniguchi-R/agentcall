@@ -22,9 +22,7 @@ export interface AddLineOpts {
   warn?: (line: string) => void;
   // Test seams. publishCardFn returns Promise<unknown> rather than
   // typeof publishCard's Promise<CardUploadType> so a test double can return
-  // undefined without constructing a full card upload. publishCard's second
-  // parameter is structural (policyFile/tasksDir/cardSnapshotFile), so
-  // LinePaths satisfies it directly — no line-scoped variant needed.
+  // undefined without constructing a full card upload.
   register?: typeof registerHandle;
   publishCardFn?: (cfg: LineConfig, p: LinePaths) => Promise<unknown>;
   installLaunchAgentFn?: typeof installLaunchAgent;

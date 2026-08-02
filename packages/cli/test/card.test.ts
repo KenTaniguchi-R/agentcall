@@ -3,12 +3,12 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 import { buildCardUpload, publishCard } from "../src/card.js";
-import { getLinePaths, getMachinePaths, getPaths } from "../src/paths.js";
+import { getLinePaths, getMachinePaths } from "../src/paths.js";
 import { ASK_TASK, type Task } from "../src/tasks.js";
 import type { Policy } from "../src/policy.js";
-import type { Config } from "../src/config.js";
+import type { LineConfig } from "../src/config.js";
 
-const cfg: Config = { handle: "ken", token: "t", agent_kind: "claude", relay: "https://r" };
+const cfg: LineConfig = { handle: "ken", token: "t", agent_kind: "claude", relay: "https://r" };
 const intro: Task = {
   id: "owner-introduction", name: "Intro", description: "Introduce the owner.",
   examples: ["who is ken?"], envelope: { caps: ["read"] }, skill: "secret steps",
@@ -53,14 +53,11 @@ describe("buildCardUpload", () => {
 
 describe("publishCard", () => {
   function tempPaths() {
-    const p = getPaths(mkdtempSync(join(tmpdir(), "agentcall-pub-")));
+    const root = mkdtempSync(join(tmpdir(), "agentcall-pub-"));
+    const p = getLinePaths(getMachinePaths(root, root), "claude");
     mkdirSync(p.dir, { recursive: true });
     return p;
   }
-
-  it("exposes the snapshot path on Paths", () => {
-    expect(getPaths("/tmp/fakehome").cardSnapshotFile).toBe("/tmp/fakehome/.agentcall/card.pushed.json");
-  });
 
   it("pushes the built upload and writes the snapshot", async () => {
     const p = tempPaths();
@@ -76,20 +73,5 @@ describe("publishCard", () => {
     const p = tempPaths();
     await expect(publishCard(cfg, p, async () => { throw new Error("relay down"); })).rejects.toThrow("relay down");
     expect(() => readFileSync(p.cardSnapshotFile, "utf8")).toThrow();
-  });
-
-  // publishCard's second parameter is structural (policyFile/tasksDir/
-  // cardSnapshotFile), not the legacy `Paths` — so a per-line install
-  // (LinePaths, from getLinePaths) satisfies it too, with no separate
-  // line-scoped function needed. This is what `agentcall line add` relies on.
-  it("also accepts LinePaths, for multi-line installs", async () => {
-    const root = mkdtempSync(join(tmpdir(), "agentcall-pub-line-"));
-    const p = getLinePaths(getMachinePaths(root, root), "claude");
-    mkdirSync(p.dir, { recursive: true });
-    let pushed: unknown;
-    const upload = await publishCard(cfg, p, async (_relay, _auth, u) => { pushed = u; });
-    expect(pushed).toEqual(upload);
-    const snap = JSON.parse(readFileSync(p.cardSnapshotFile, "utf8"));
-    expect(snap).toEqual(upload);
   });
 });

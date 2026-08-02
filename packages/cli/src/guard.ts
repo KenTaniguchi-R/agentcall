@@ -46,14 +46,15 @@ const DENIED_DIRS = [
   ".claude",      // executable configuration; cf. CVE-2025-59536
   ".codex",       // auth.json, plus a config.toml that routinely holds API keys
   "Library/LaunchAgents",  // how the listener itself gets launched
-  // Legacy flat layout, retained until Task 12 migrates or deletes it — NOT
-  // superseded by runGuard's per-line enumeration below. Production code
-  // still reads and writes this exact path today (card.ts, index.ts,
-  // lint.ts), setup.ts still creates it with real SKILL.md files on every
-  // already-set-up machine, and between Task 8 (guard goes live) and Task 12
-  // it remains real, writable, and advertised by `agentcall card push`. The
-  // per-line entries below cover AgentCall/<line>/tasks; this covers the
-  // pre-multi-line AgentCall/tasks that still exists on disk regardless.
+  // Legacy flat layout. As of Task 12, nothing in this codebase reads or
+  // writes this path anymore — card.ts, index.ts, and lint.ts all moved to
+  // the per-line AgentCall/<line>/tasks layout, and setup.ts no longer
+  // creates it. It stays denied because it may still exist on disk, holding
+  // real SKILL.md files from an install made before Task 12: a stale entry
+  // over-denies (fails safe), while removing it would leave genuine content
+  // from a previous install unprotected. The per-line entries below cover
+  // AgentCall/<line>/tasks; this covers the pre-multi-line AgentCall/tasks
+  // that may still be sitting there regardless.
   "AgentCall/tasks",
   // AgentCall/<line>/tasks, one directory per line, has no single
   // home-relative entry that can name them all — see runGuard, which

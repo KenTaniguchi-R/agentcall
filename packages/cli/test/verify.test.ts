@@ -3,7 +3,7 @@ import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { describe, expect, it } from "vitest";
 import { runGuard } from "../src/guard.js";
-import { getLinePaths, getMachinePaths, getPaths } from "../src/paths.js";
+import { getLinePaths, getMachinePaths } from "../src/paths.js";
 import { AgentRunError } from "../src/runner.js";
 import { ASK_TASK } from "../src/tasks.js";
 import {
@@ -140,7 +140,7 @@ describe("checkCodexAuth", () => {
   });
 });
 
-const fakeWorkdir = getPaths("/tmp/agentcall-verify-test-home").publicDir;
+const fakeWorkdir = getLinePaths(getMachinePaths("/tmp/agentcall-verify-test-home"), "line").shareDir;
 
 describe("checkAgentSpawn", () => {
   it("passes when runFn resolves, without asserting reply text", async () => {

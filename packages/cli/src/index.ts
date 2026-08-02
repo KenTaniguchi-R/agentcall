@@ -1,14 +1,13 @@
 import { rmSync } from "node:fs";
 import { Command } from "commander";
 import type { AgentKind } from "@benree/agentcall-shared";
-import { getPaths, getMachinePaths } from "./paths.js";
-import { loadConfig, saveConfig, relayUrl } from "./config.js";
+import { getMachinePaths } from "./paths.js";
+import { assertCallableLine, relayUrl } from "./config.js";
 import { callAgent, CallError } from "./callClient.js";
-import { getStatus, fetchCard, rotateToken, ApiError } from "./api.js";
+import { getStatus, fetchCard, ApiError } from "./api.js";
 import { startAllListeners } from "./listenAll.js";
 import { runSetup } from "./setup.js";
-import { launchPathDirs } from "./launchPath.js";
-import { installLaunchAgent, isLaunchAgentInstalled, uninstallLaunchAgent } from "./launchd.js";
+import { uninstallLaunchAgent } from "./launchd.js";
 import { publishCard } from "./card.js";
 import { loadPolicy, savePolicy } from "./policy.js";
 import { loadTasks, scaffoldTask } from "./tasks.js";
@@ -16,6 +15,9 @@ import { execVerb, type Verb } from "./verbs.js";
 import { buildCardReport } from "./lint.js";
 import { runDoctor } from "./doctor.js";
 import { loadContacts, addContact, removeContact, resolveAddress } from "./contacts.js";
+import { resolveLine } from "./lineContext.js";
+import type { LineContext } from "./lineContext.js";
+import { rotateLine } from "./commands/rotate.js";
 
 const program = new Command();
 program.name("agentcall").description("Call other people's coding agents").version("0.4.0");
@@ -61,11 +63,22 @@ program
   .option("--json", "print the full reply envelope instead of just the text")
   .option("--task <id>", "task from the callee's card to perform (see: agentcall card <address>)")
   .action(async (address: string, messageParts: string[], o: { json?: boolean; task?: string }) => {
-    const paths = getPaths();
-    // Config is loaded before resolution so the address can be checked against
-    // the relay this call will actually dial (see resolveAddress).
-    const cfg = loadConfig(paths);
-    const parsed = resolveAddress(paths, address, relayUrl(cfg));
+    const machine = getMachinePaths();
+    // The line is resolved before address resolution so the address can be
+    // checked against the relay this call will actually dial (see
+    // resolveAddress). Every line lives on one machine's `--line` selection
+    // today; picking a line by the DESTINATION's relay is pickOutboundLine's
+    // job (Task 14).
+    let ctx: LineContext;
+    try {
+      ctx = resolveLine(machine);
+    } catch (e) {
+      console.error(String(e instanceof Error ? e.message : e));
+      process.exitCode = 1;
+      return;
+    }
+    const cfg = ctx.config;
+    const parsed = resolveAddress(machine, address, relayUrl(cfg));
     if (!parsed.ok) {
       console.error(parsed.error);
       process.exitCode = 1;
@@ -96,12 +109,20 @@ program
   .description("check whether a handle's agent is currently online")
   .argument("<address>", "contact name or handle@host to check")
   .action(async (address: string) => {
-    const paths = getPaths();
-    // Presence is caller-only on the relay, so status now needs credentials —
+    const machine = getMachinePaths();
+    // Presence is caller-only on the relay, so status needs credentials —
     // this used to fall back to the default relay with no config at all.
-    const cfg = loadConfig(paths);
+    let ctx: LineContext;
+    try {
+      ctx = resolveLine(machine);
+    } catch (e) {
+      console.error(String(e instanceof Error ? e.message : e));
+      process.exitCode = 1;
+      return;
+    }
+    const cfg = ctx.config;
     const cfgRelay = relayUrl(cfg);
-    const parsed = resolveAddress(paths, address, cfgRelay);
+    const parsed = resolveAddress(machine, address, cfgRelay);
     if (!parsed.ok) {
       console.error(parsed.error);
       process.exitCode = 1;
@@ -122,23 +143,31 @@ program
   .command("doctor")
   .description("verify this install can answer calls: binary, auth, agent spawn, listener, relay self-call")
   .action(async () => {
-    process.exitCode = await runDoctor({ paths: getPaths() });
+    process.exitCode = await runDoctor({ machine: getMachinePaths() });
   });
 
 program
   .command("card")
   .description("show your own card with problems, another agent's menu, or publish yours (push)")
   .argument("[target]", "contact name or handle@host to fetch, 'push' to publish, or omit to review your own card")
-  .action(async (target?: string) => {
-    const paths = getPaths();
+  .option("--line <name>", "line to use (defaults to the primary line)")
+  .action(async (target: string | undefined, o: { line?: string }) => {
+    const machine = getMachinePaths();
     if (target === undefined) {
-      const cfg = loadConfig(paths);
-      if (!cfg.agent_kind) {
-        console.error("This handle is caller-only (no agent configured) — no card to review.");
+      let ctx: LineContext;
+      try {
+        ctx = resolveLine(machine, { line: o.line });
+      } catch (e) {
+        console.error(String(e instanceof Error ? e.message : e));
         process.exitCode = 1;
         return;
       }
-      const report = buildCardReport(cfg, paths);
+      if (!ctx.config.agent_kind) {
+        console.error("This line is caller-only (no agent configured) — no card to review.");
+        process.exitCode = 1;
+        return;
+      }
+      const report = buildCardReport(ctx.config, ctx.paths);
       for (const line of report.menu) console.log(line);
       if (report.problems.length > 0) {
         console.log("\nProblems:");
@@ -152,19 +181,26 @@ program
       return;
     }
     if (target === "push") {
-      const cfg = loadConfig(paths);
-      if (!cfg.agent_kind) {
-        console.error("This handle is caller-only (no agent configured) and has nothing to publish a card for.");
+      let ctx: LineContext;
+      try {
+        ctx = resolveLine(machine, { line: o.line });
+      } catch (e) {
+        console.error(String(e instanceof Error ? e.message : e));
         process.exitCode = 1;
         return;
       }
-      await publishCard(cfg, paths);
+      if (!ctx.config.agent_kind) {
+        console.error("This line is caller-only (no agent configured) and has nothing to publish a card for.");
+        process.exitCode = 1;
+        return;
+      }
+      await publishCard(ctx.config, ctx.paths);
       console.log("Card published.");
       return;
     }
-    let cfg;
-    try { cfg = loadConfig(paths); } catch { cfg = undefined; }
-    const parsed = resolveAddress(paths, target, relayUrl(cfg));
+    let ctx: LineContext | undefined;
+    try { ctx = resolveLine(machine, { line: o.line }); } catch { ctx = undefined; }
+    const parsed = resolveAddress(machine, target, relayUrl(ctx?.config));
     if (!parsed.ok) {
       console.error(`${parsed.error} (or 'push')`);
       process.exitCode = 1;
@@ -173,9 +209,9 @@ program
     if (parsed.warning) console.error(parsed.warning);
     try {
       const card = await fetchCard(
-        cfg ? relayUrl(cfg) : relayUrl(undefined),
+        ctx ? relayUrl(ctx.config) : relayUrl(undefined),
         parsed.handle,
-        cfg ? { handle: cfg.handle, token: cfg.token } : undefined,
+        ctx ? { handle: ctx.config.handle, token: ctx.config.token } : undefined,
       );
       console.log(`${card.handle} (${card.agent_kind})${card.description ? ` — ${card.description}` : ""}`);
       for (const t of card.tasks) {
@@ -198,7 +234,7 @@ contacts
   .option("--note <note>", "who they are and what to ask them about")
   .action((name: string, address: string, o: { note?: string }) => {
     try {
-      const result = addContact(getPaths(), name, address, o.note);
+      const result = addContact(getMachinePaths(), name, address, o.note);
       console.log(`${result === "added" ? "Added" : "Updated"} ${name} -> ${address}`);
     } catch (e) {
       console.error(String(e instanceof Error ? e.message : e));
@@ -211,7 +247,7 @@ contacts
   .option("--json", "print the raw contacts array")
   .action((o: { json?: boolean }) => {
     try {
-      const sorted = [...loadContacts(getPaths()).contacts].sort((a, b) => a.name.localeCompare(b.name));
+      const sorted = [...loadContacts(getMachinePaths()).contacts].sort((a, b) => a.name.localeCompare(b.name));
       if (o.json) {
         console.log(JSON.stringify(sorted));
         return;
@@ -232,7 +268,7 @@ contacts
   .argument("<name>", "contact name to delete")
   .action((name: string) => {
     try {
-      removeContact(getPaths(), name);
+      removeContact(getMachinePaths(), name);
       console.log(`Removed ${name}.`);
     } catch (e) {
       console.error(String(e instanceof Error ? e.message : e));
@@ -240,30 +276,34 @@ contacts
     }
   });
 
-function policyVerbAction(verb: Verb) {
-  return async (a: string, b?: string) => {
-    const paths = getPaths();
-    const cfg = loadConfig(paths);
-    if (!cfg.agent_kind) {
-      console.error("This handle is caller-only (no agent configured) — there is no card or policy to manage.");
-      process.exitCode = 1;
-      return;
-    }
+// Shared by allow/revoke/block/unblock/offer/unoffer: resolve exactly once
+// (never once for policy and once for credentials — see LineContext), then
+// require the line be callable before touching its policy or card.
+async function runPolicyVerb(verb: Verb, a: string, b: string | undefined, opts: { line?: string }): Promise<void> {
+  const machine = getMachinePaths();
+  let ctx: LineContext;
+  try {
+    ctx = resolveLine(machine, { line: opts.line });
+    assertCallableLine(ctx.config);
+  } catch (e) {
+    console.error(String(e instanceof Error ? e.message : e));
+    process.exitCode = 1;
+    return;
+  }
+  try {
+    const { policy, lines } = execVerb(loadPolicy(ctx.paths), loadTasks(ctx.paths), verb, a, b);
+    savePolicy(ctx.paths, policy);
+    for (const line of lines) console.log(line);
     try {
-      const { policy, lines } = execVerb(loadPolicy(paths), loadTasks(paths), verb, a, b);
-      savePolicy(paths, policy);
-      for (const line of lines) console.log(line);
-      try {
-        await publishCard(cfg, paths);
-        console.log("Card updated.");
-      } catch (e) {
-        console.error(`Warning: policy saved locally, but the card push failed (${String(e)}). Run \`agentcall card push\` later.`);
-      }
+      await publishCard(ctx.config, ctx.paths);
+      console.log("Card updated.");
     } catch (e) {
-      console.error(String(e instanceof Error ? e.message : e));
-      process.exitCode = 1;
+      console.error(`Warning: policy saved locally, but the card push failed (${String(e)}). Run \`agentcall card push\` later.`);
     }
-  };
+  } catch (e) {
+    console.error(String(e instanceof Error ? e.message : e));
+    process.exitCode = 1;
+  }
 }
 
 const task = program.command("task").description("manage the tasks your agent offers");
@@ -271,10 +311,18 @@ task
   .command("new")
   .description("scaffold a new task (does not publish it)")
   .argument("<id>", "task id: lowercase kebab-case, becomes the directory name")
-  .action((id: string) => {
-    const paths = getPaths();
+  .option("--line <name>", "line to use (defaults to the primary line)")
+  .action((id: string, o: { line?: string }) => {
+    let ctx: LineContext;
     try {
-      const file = scaffoldTask(paths, id);
+      ctx = resolveLine(getMachinePaths(), { line: o.line });
+    } catch (e) {
+      console.error(String(e instanceof Error ? e.message : e));
+      process.exitCode = 1;
+      return;
+    }
+    try {
+      const file = scaffoldTask(ctx.paths, id);
       console.log(`Created ${file}\nEdit it, then:`);
       console.log(`  agentcall card                      # check it validates`);
       console.log(`  agentcall offer ${id}    # offer to everyone, or:`);
@@ -286,17 +334,23 @@ task
   });
 
 program.command("allow").description("grant a caller an extra task (and republish your card)")
-  .argument("<handle>").argument("<task-id>").action(policyVerbAction("allow"));
+  .argument("<handle>").argument("<task-id>").option("--line <name>", "line to use (defaults to the primary line)")
+  .action((handle: string, taskId: string, o: { line?: string }) => runPolicyVerb("allow", handle, taskId, o));
 program.command("revoke").description("remove a caller's task grant")
-  .argument("<handle>").argument("<task-id>").action(policyVerbAction("revoke"));
+  .argument("<handle>").argument("<task-id>").option("--line <name>", "line to use (defaults to the primary line)")
+  .action((handle: string, taskId: string, o: { line?: string }) => runPolicyVerb("revoke", handle, taskId, o));
 program.command("block").description("refuse all calls from a handle")
-  .argument("<handle>").action(policyVerbAction("block"));
+  .argument("<handle>").option("--line <name>", "line to use (defaults to the primary line)")
+  .action((handle: string, o: { line?: string }) => runPolicyVerb("block", handle, undefined, o));
 program.command("unblock").description("lift a block")
-  .argument("<handle>").action(policyVerbAction("unblock"));
+  .argument("<handle>").option("--line <name>", "line to use (defaults to the primary line)")
+  .action((handle: string, o: { line?: string }) => runPolicyVerb("unblock", handle, undefined, o));
 program.command("offer").description("offer a task to any registered caller")
-  .argument("<task-id>").action(policyVerbAction("offer"));
+  .argument("<task-id>").option("--line <name>", "line to use (defaults to the primary line)")
+  .action((taskId: string, o: { line?: string }) => runPolicyVerb("offer", taskId, undefined, o));
 program.command("unoffer").description("stop offering a task publicly")
-  .argument("<task-id>").action(policyVerbAction("unoffer"));
+  .argument("<task-id>").option("--line <name>", "line to use (defaults to the primary line)")
+  .action((taskId: string, o: { line?: string }) => runPolicyVerb("unoffer", taskId, undefined, o));
 
 program
   .command("listen")
@@ -320,29 +374,22 @@ program
 
 program
   .command("rotate")
-  .description("replace this install's relay token (use if it may have leaked)")
-  .action(async () => {
-    const paths = getPaths();
-    const cfg = loadConfig(paths);
+  .description("replace a line's relay token (use if it may have leaked)")
+  .option("--line <name>", "line to rotate (defaults to the primary line)")
+  .action(async (o: { line?: string }) => {
+    let ctx: LineContext;
     try {
-      const { token } = await rotateToken(relayUrl(cfg), { handle: cfg.handle, token: cfg.token });
-      saveConfig(paths, { ...cfg, token });
-      console.log(`Token rotated for ${cfg.handle}. The old token no longer works.`);
-      // The background listener read the old token at startup and holds it in
-      // memory, so without a restart it reconnects with a dead credential and
-      // 401s forever. Only restart a listener that's actually installed —
-      // installLaunchAgent would otherwise create one the owner opted out of.
-      const machine = getMachinePaths();
-      if (isLaunchAgentInstalled(machine)) {
-        // Same PATH-derivation every other installLaunchAgent call site
-        // uses now — omitting it here would rewrite the plist with an empty
-        // extraPathDirs and silently drop any nvm/fnm-resolved agent/npx
-        // dirs the previous install had.
-        installLaunchAgent(machine, undefined, launchPathDirs(machine));
-        console.log("Background listener restarted with the new token.");
-      } else if (cfg.agent_kind) {
-        console.log("Restart `agentcall listen` so it picks up the new token.");
-      }
+      ctx = resolveLine(getMachinePaths(), { line: o.line });
+    } catch (e) {
+      console.error(String(e instanceof Error ? e.message : e));
+      process.exitCode = 1;
+      return;
+    }
+    try {
+      // The multi-line listener (Task 8) re-reads each line's config.json on
+      // every reconnect, so a running listener — foreground or under launchd —
+      // picks up the new token on its own; no restart needed here.
+      await rotateLine(ctx);
     } catch (e) {
       console.error(e instanceof ApiError ? e.message : String(e));
       process.exitCode = 1;
@@ -354,9 +401,9 @@ program
   .description("remove the background listener")
   .option("--purge", "also delete ~/.agentcall (config, token, logs)")
   .action((o: { purge?: boolean }) => {
-    const paths = getPaths();
-    uninstallLaunchAgent(getMachinePaths());
-    if (o.purge) rmSync(paths.dir, { recursive: true, force: true });
+    const machine = getMachinePaths();
+    uninstallLaunchAgent(machine);
+    if (o.purge) rmSync(machine.dir, { recursive: true, force: true });
     console.log("agentcall listener removed." + (o.purge ? " Config purged." : ""));
   });
 

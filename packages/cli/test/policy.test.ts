@@ -4,7 +4,11 @@ import { dirname, join } from "node:path";
 import { describe, expect, it } from "vitest";
 import { DEFAULT_POLICY, loadPolicy, offeredFor, resolveTask, savePolicy, type Policy } from "../src/policy.js";
 import { ASK_TASK, type Task } from "../src/tasks.js";
-import { getPaths } from "../src/paths.js";
+import { getLinePaths, getMachinePaths } from "../src/paths.js";
+
+function linePaths(home: string) {
+  return getLinePaths(getMachinePaths(home, home), "line");
+}
 
 const intro: Task = {
   id: "owner-introduction", name: "Intro", description: "Introduce the owner.",
@@ -45,18 +49,18 @@ describe("Object.prototype-named callers", () => {
 
 describe("loadPolicy", () => {
   it("returns DEFAULT_POLICY when the file doesn't exist", () => {
-    const p = getPaths(mkdtempSync(join(tmpdir(), "agentcall-pol-")));
+    const p = linePaths(mkdtempSync(join(tmpdir(), "agentcall-pol-")));
     expect(loadPolicy(p)).toEqual(DEFAULT_POLICY);
     expect(DEFAULT_POLICY.default_offer).toEqual(["ask"]);
   });
   it("throws on a malformed policy file (fail closed, never silently default)", () => {
-    const p = getPaths(mkdtempSync(join(tmpdir(), "agentcall-pol-")));
+    const p = linePaths(mkdtempSync(join(tmpdir(), "agentcall-pol-")));
     mkdirSync(dirname(p.policyFile), { recursive: true });
     writeFileSync(p.policyFile, "{not json");
     expect(() => loadPolicy(p)).toThrow();
   });
   it("accepts +-prefixed offer entries (spec syntax) by stripping the prefix", () => {
-    const p = getPaths(mkdtempSync(join(tmpdir(), "agentcall-pol-")));
+    const p = linePaths(mkdtempSync(join(tmpdir(), "agentcall-pol-")));
     mkdirSync(dirname(p.policyFile), { recursive: true });
     writeFileSync(p.policyFile, JSON.stringify({
       default_offer: ["ask"], callers: { ken: { offer: ["+schedule-meeting"] } },
@@ -124,7 +128,7 @@ describe("resolveTask", () => {
 
 describe("savePolicy", () => {
   it("round-trips through loadPolicy", () => {
-    const p = getPaths(mkdtempSync(join(tmpdir(), "agentcall-pol-")));
+    const p = linePaths(mkdtempSync(join(tmpdir(), "agentcall-pol-")));
     mkdirSync(dirname(p.policyFile), { recursive: true });
     const pol: Policy = { description: "x", default_offer: ["ask"], callers: { ken: { offer: ["a-task"], block: false } } };
     savePolicy(p, pol);

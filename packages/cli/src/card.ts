@@ -4,7 +4,8 @@ import { pushCard } from "./api.js";
 import { relayUrl } from "./config.js";
 import { loadPolicy } from "./policy.js";
 import { loadTasks } from "./tasks.js";
-import type { Config } from "./config.js";
+import type { LineConfig } from "./config.js";
+import type { LinePaths } from "./paths.js";
 import type { Policy } from "./policy.js";
 import type { Task } from "./tasks.js";
 
@@ -15,7 +16,7 @@ const stripPlus = (id: string) => id.replace(/^\+/, "");
 // enforcement detail that stays on the callee's machine; the card and the
 // enforcement both derive from the same SKILL.md frontmatter, so they cannot
 // disagree.
-export function buildCardUpload(cfg: Config, policy: Policy, tasks: Task[]): CardUploadType {
+export function buildCardUpload(cfg: LineConfig, policy: Policy, tasks: Task[]): CardUploadType {
   // A card only exists for a callee. Caller-only handles (no agent_kind, a
   // config shape added by caller-only setup) have nothing to advertise —
   // every call site already guards on agent_kind, so reaching here without
@@ -46,22 +47,16 @@ export function buildCardUpload(cfg: Config, policy: Policy, tasks: Task[]): Car
   };
 }
 
-// Structural, not `Paths`: publishCard only ever reads policyFile/tasksDir
-// (via loadPolicy/loadTasks, already narrowed to HasPolicyFile/HasTasksDir
-// for the same reason) and writes cardSnapshotFile. Both the legacy `Paths`
-// and the per-line `LinePaths` carry all three, so a named type here would
-// force a choice between the two shapes for no reason — this accepts
-// whichever the caller has, exactly like HasPolicyFile/HasTasksDir do.
-interface HasCardPaths { policyFile: string; tasksDir: string; cardSnapshotFile: string }
-
 // Single path for every card publish (setup, `card push`, policy verbs, and
 // multi-line `agentcall line add`): build from local policy+tasks, push,
 // then record what was pushed so `agentcall card` can detect staleness
 // without any relay round-trip. The snapshot is written only after a
 // successful push — a failed push must keep the old snapshot so staleness
-// detection stays truthful.
+// detection stays truthful. `cfg` and `p` must come from the same
+// `LineContext` — pairing one line's config with another's paths would
+// publish a card built from the wrong policy/tasks under the wrong handle.
 export async function publishCard(
-  cfg: Config, p: HasCardPaths, push: typeof pushCard = pushCard,
+  cfg: LineConfig, p: LinePaths, push: typeof pushCard = pushCard,
 ): Promise<CardUploadType> {
   const upload = buildCardUpload(cfg, loadPolicy(p), loadTasks(p));
   await push(relayUrl(cfg), { handle: cfg.handle, token: cfg.token }, upload);

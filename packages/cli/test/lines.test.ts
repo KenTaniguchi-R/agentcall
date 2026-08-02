@@ -45,6 +45,14 @@ describe("saveLineConfig / loadLineConfig", () => {
     expect(statSync(l.configFile).mode & 0o777).toBe(0o600);
     expect(statSync(l.dir).mode & 0o777).toBe(0o700);
   });
+
+  it("round-trips a caller-only line (no agent_kind)", () => {
+    const l = getLinePaths(m, "caller");
+    const callerOnly = { handle: "solo", token: "t", relay: "https://r.example" };
+    saveLineConfig(l, callerOnly);
+    expect(loadLineConfig(l)).toEqual(callerOnly);
+    expect(loadLineConfig(l).agent_kind).toBeUndefined();
+  });
 });
 
 describe("listLines", () => {

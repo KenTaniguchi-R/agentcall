@@ -8,12 +8,11 @@ import {
   parseClaudeJson, parseCodexJsonl, runAgent, truncateUtf8, type AgentKind, type SpawnSpec,
 } from "../src/runner.js";
 import { resolveAgentBin } from "../src/bin.js";
-import { getPaths } from "../src/paths.js";
+import { getLinePaths, getMachinePaths } from "../src/paths.js";
 import { ASK_TASK, FULL_ACCESS_ENVELOPE, type Envelope, type Task } from "../src/tasks.js";
 
-const p = getPaths("/tmp/fakehome");
-// runAgent/buildSpawnSpec take the resolved working directory, not Paths.
-const WORKDIR = p.publicDir;
+// runAgent/buildSpawnSpec take the resolved working directory, not a paths object.
+const WORKDIR = getLinePaths(getMachinePaths("/tmp/fakehome"), "line").shareDir;
 
 // Both buildSpawnSpec and runAgent take lineName as a REQUIRED trailing
 // argument in production (see runner.ts) — no default, on purpose, so the

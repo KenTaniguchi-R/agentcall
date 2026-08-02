@@ -6,7 +6,7 @@ import { listLines } from "./lines.js";
 import { resolveLine } from "./lineContext.js";
 import { getMachinePaths } from "./paths.js";
 import { ask as ttyAsk } from "./tty.js";
-import { relayUrl, resolveLineWorkdir, type Config } from "./config.js";
+import { relayUrl, resolveLineWorkdir, type LineConfig } from "./config.js";
 import { defaultResolveBin } from "./launchPath.js";
 import { appendSnippet } from "./snippet.js";
 import { installLaunchAgent } from "./launchd.js";
@@ -82,7 +82,7 @@ async function decideCallable(
   opts: SetupOpts,
   hasBin: (name: string) => boolean,
   ask: (q: string) => Promise<string>,
-  reusedCfg: Config | undefined,
+  reusedCfg: LineConfig | undefined,
 ): Promise<boolean> {
   if (opts.callerOnly) return false;
   if (reusedCfg?.agent_kind) return true;
