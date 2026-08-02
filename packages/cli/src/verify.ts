@@ -4,7 +4,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { callAgent } from "./callClient.js";
 import { relayUrl, type Config } from "./config.js";
-import { AgentRunError, guardSettingsJson, runAgent, type AgentKind } from "./runner.js";
+import { AgentRunError, guardEntryPath, guardSettingsJson, runAgent, type AgentKind } from "./runner.js";
 import { resolveAgentBin } from "./bin.js";
 import { ASK_TASK } from "./tasks.js";
 
@@ -12,6 +12,11 @@ import { ASK_TASK } from "./tasks.js";
 export interface VerifyCheck {
   name: string;
   ok: boolean;
+  // A check that could not be proven either way. Prints like a failure so it
+  // isn't mistaken for a pass, but leaves `ok` true: doctor's exit code is a
+  // claim about the install, and "the model wouldn't cooperate with a probe"
+  // is not something the owner can fix.
+  warn?: boolean;
   detail?: string;
   hint?: string;
 }
@@ -78,8 +83,10 @@ export function checkCodexAuth(execFn: ExecFn = defaultExec): VerifyCheck {
 }
 
 export function formatCheck(c: VerifyCheck): string {
-  const head = `${c.ok ? "✓" : "✗"} ${c.name}${c.detail ? ` — ${c.detail}` : ""}`;
-  return !c.ok && c.hint ? `${head}\n  fix: ${c.hint}` : head;
+  const head = `${!c.ok ? "✗" : c.warn ? "!" : "✓"} ${c.name}${c.detail ? ` — ${c.detail}` : ""}`;
+  // "fix:" would be a lie under a warning — there is nothing broken to fix.
+  if (!c.hint || (c.ok && !c.warn)) return head;
+  return `${head}\n  ${c.ok ? "note" : "fix"}: ${c.hint}`;
 }
 
 export const VERIFY_PROMPT = "Reply with exactly: OK";
@@ -165,7 +172,21 @@ export const GUARD_CANARY = "AGENTCALL-GUARD-CANARY";
 export interface GuardProbeResult { output: string; home: string }
 export type GuardProbeFn = (settings: string) => Promise<GuardProbeResult>;
 
-const GUARD_HINT = "run `pnpm build` in packages/cli so dist/guard-entry.js exists, then re-run doctor";
+// The guard did not stop something it is supposed to stop. Both reinstall
+// forms are named because doctor runs in two very different places: a global
+// npm install (the overwhelming majority) and a checkout of this repo, where
+// dist/ can simply be stale. The old text named only the second and read as
+// nonsense to everyone else.
+const GUARD_BROKEN_HINT =
+  "reinstall the CLI (`npm i -g @benree/agentcall`), or in a checkout of this repo run `pnpm build` in " +
+  "packages/cli so dist/guard-entry.js is current — then re-run doctor";
+
+// Nothing to fix: the model declined the probe's read on its own, so the guard
+// was never consulted. The direct probe below has already confirmed the guard
+// denies when it IS consulted.
+const GUARD_UNVERIFIED_HINT =
+  "this is not an install problem — the guard denied a direct probe, it simply never got asked during the " +
+  "spawn probe. Re-running doctor may resolve it; a real call is unaffected.";
 
 // Spawns a real `claude -p` against a canary `.env` file and asserts the read
 // is refused. Live on the user's machine; always mocked in CI.
@@ -188,6 +209,43 @@ const defaultGuardProbe: GuardProbeFn = async (settings) => {
   return { output, home };
 };
 
+// True iff stdout is the deny payload runGuard emits. Anything else — an
+// allow (empty), a crash, unparseable text — is not a denial.
+export function guardDenied(stdout: string): boolean {
+  try {
+    return (JSON.parse(stdout) as { hookSpecificOutput?: { permissionDecision?: string } })
+      .hookSpecificOutput?.permissionDecision === "deny";
+  } catch {
+    return false;
+  }
+}
+
+// Invokes guard-entry.js directly with a synthetic PreToolUse payload for a
+// protected read. No model, no agent spawn, ~33ms: this answers "does the
+// guard deny?" deterministically, which the spawn probe cannot, because the
+// spawn probe depends on the model choosing to attempt the read at all.
+//
+// It deliberately does NOT answer "is the guard wired into the spawn" — that
+// remains the spawn probe's job. The two together are what let checkGuard
+// tell a broken guard apart from an uncooperative model.
+export type GuardBinaryProbeFn = () => Promise<boolean>;
+
+const defaultGuardBinaryProbe: GuardBinaryProbeFn = async () => {
+  // A temp AGENTCALL_HOME keeps the probe's denial out of the owner's real
+  // calls.log — that log is an audit trail of actual calls, not of doctor.
+  const home = mkdtempSync(join(tmpdir(), "agentcall-guardbin-"));
+  const stdout = execFileSync(process.execPath, [guardEntryPath()], {
+    input: JSON.stringify({ tool_name: "Read", tool_input: { file_path: join(home, ".env") }, cwd: home }),
+    // Forced, not inherited: AGENTCALL_GUARD_MODE=observe in the ambient
+    // environment would make the guard allow, and the probe would then report
+    // a working guard as broken.
+    env: { ...process.env, AGENTCALL_HOME: home, AGENTCALL_GUARD_MODE: "enforce" },
+    encoding: "utf8",
+    stdio: ["pipe", "pipe", "pipe"],
+  });
+  return guardDenied(stdout);
+};
+
 function deniedInLog(home: string): boolean {
   try {
     return readFileSync(join(home, ".agentcall", "calls.log"), "utf8")
@@ -198,26 +256,54 @@ function deniedInLog(home: string): boolean {
   }
 }
 
+// The model's own words, trimmed to one line, so an unverified run is
+// diagnosable from the terminal instead of requiring a repro.
+function firstLine(output: string): string {
+  const line = output.split("\n").map((l) => l.trim()).find(Boolean) ?? "";
+  return line.length > 140 ? `${line.slice(0, 140)}…` : line;
+}
+
 // Doctor-only: proves the PreToolUse guard is actually wired into a real
-// claude spawn, not just present in the settings JSON. Absence of the canary
-// in the transcript is not sufficient on its own — the model could have
-// declined to call Read for unrelated reasons — so this also requires a
-// tool_denied record in the probe's calls.log as positive evidence the guard
-// ran and fired.
-export async function checkGuard(probe: GuardProbeFn = defaultGuardProbe): Promise<VerifyCheck> {
+// claude spawn, not just present in the settings JSON.
+//
+// The spawn probe has THREE outcomes, not two, and conflating the last two is
+// what made this check report healthy installs as broken:
+//
+//   canary in the output   -> the guard did not stop a read it must stop. Fail.
+//   tool_denied logged     -> the guard ran and fired. Pass.
+//   neither                -> the model never called Read, so the guard was
+//                             never consulted. UNKNOWN, not failed.
+//
+// The third case is not hypothetical and not fixable by prompt wording: the
+// canary was `.ssh/id_rsa` until the model started refusing it on principle,
+// `.env` inherited the same fate on other models/versions, and claude's own
+// built-in protections can deny a protected read before hooks are consulted
+// (a deny suppresses the hook — see guardSettingsJson in runner.ts). So the
+// third case is settled by a source that has no opinions: invoking
+// guard-entry.js directly. If the guard denies there, the install is fine and
+// this run merely proved nothing; if it doesn't, the guard is genuinely broken.
+export async function checkGuard(
+  probe: GuardProbeFn = defaultGuardProbe,
+  binaryProbe: GuardBinaryProbeFn = defaultGuardBinaryProbe,
+): Promise<VerifyCheck> {
   try {
     const { output, home } = await probe(guardSettingsJson());
     if (output.includes(GUARD_CANARY)) {
       return { name: "tool guard", ok: false,
-               detail: "canary was readable — the guard is not in force", hint: GUARD_HINT };
+               detail: "canary was readable — the guard is not in force", hint: GUARD_BROKEN_HINT };
     }
-    // Absence of the canary proves nothing on its own: the model may have
-    // declined to call Read, answered something unrelated, or failed. Require
-    // positive evidence that the guard ran AND denied.
-    return deniedInLog(home)
-      ? { name: "tool guard", ok: true }
+    if (deniedInLog(home)) return { name: "tool guard", ok: true };
+
+    // A direct probe that throws is a guard that cannot run at all — which is
+    // a broken install, not an unknown one.
+    const denies = await binaryProbe().catch(() => false);
+    return denies
+      ? { name: "tool guard", ok: true, warn: true,
+          detail: `wired, but unverified this run — the model declined the probe's read: "${firstLine(output)}"`,
+          hint: GUARD_UNVERIFIED_HINT }
       : { name: "tool guard", ok: false,
-          detail: "no denial was recorded — the guard did not run", hint: GUARD_HINT };
+          detail: "the guard did not deny a protected read when invoked directly",
+          hint: GUARD_BROKEN_HINT };
   } catch (e) {
     return { name: "tool guard", ok: false, detail: short(e),
              hint: "the guard probe could not run; check that `claude` resolves on the listener's PATH" };

@@ -104,7 +104,9 @@ agentcall doctor
 ```
 
 `agentcall doctor` verifies your install can answer calls (auth, agent spawn,
-listener, relay self-call) — run it whenever calls to you start failing.
+listener, relay self-call) — run it whenever calls to you start failing. `✓` is a
+pass and `✗` is a failure with a fix; a `!` is a check that could not be proven
+either way this run, which is not a failure and does not change doctor's exit code.
 
 Plain calls (no `--task`) run the built-in read-only `ask` task. To offer more:
 
@@ -257,7 +259,11 @@ they run. File reads, writes, searches, and listings that reach credential paths
 (`~/.ssh`, `~/.aws`, `.env`, Keychains, `~/.agentcall`, `~/.claude`, `~/.codex`), the guard's own
 installed code, `~/AgentCall/tasks`, `~/Library/LaunchAgents`, and shell startup files
 are refused, and every tool call reaching the guard is recorded to
-`~/.agentcall/tools.log`. `agentcall doctor` verifies the guard is in force.
+`~/.agentcall/tools.log`. `agentcall doctor` verifies the guard is in force: it asks a
+real `claude` spawn to read a canary `.env` and requires the denial to appear in the
+log. When the model refuses that read on its own the guard is never consulted and the
+run proves nothing, so doctor falls back to invoking the guard directly and reports
+`!` — unverified, not broken.
 
 Two limits, stated plainly:
 

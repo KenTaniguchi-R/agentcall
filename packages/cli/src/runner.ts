@@ -42,8 +42,12 @@ export const GUARD_TIMEOUT_S = 30;
 // Single quotes with the standard '\'' escape are the safe POSIX form.
 const shellQuote = (s: string) => `'${s.replaceAll("'", `'\\''`)}'`;
 
+// Exported so doctor's direct probe invokes the exact file the spawn wires up,
+// rather than a second path expression that could drift from this one.
+export const guardEntryPath = () => fileURLToPath(new URL("./guard-entry.js", import.meta.url));
+
 const guardCommand = () =>
-  `${shellQuote(process.execPath)} ${shellQuote(fileURLToPath(new URL("./guard-entry.js", import.meta.url)))}`;
+  `${shellQuote(process.execPath)} ${shellQuote(guardEntryPath())}`;
 
 export function guardSettingsJson(): string {
   return JSON.stringify({

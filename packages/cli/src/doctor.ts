@@ -5,7 +5,7 @@ import { callAgent } from "./callClient.js";
 import { loadConfig, relayUrl, resolveWorkdir, type Config, type Workdir } from "./config.js";
 import { LAUNCH_LABEL } from "./launchd.js";
 import type { Paths } from "./paths.js";
-import { checkGuard, checkRelaySelfCall, formatCheck, short, verifyAgent, type GuardProbeFn, type VerifyCheck, type VerifyFns } from "./verify.js";
+import { checkGuard, checkRelaySelfCall, formatCheck, short, verifyAgent, type GuardBinaryProbeFn, type GuardProbeFn, type VerifyCheck, type VerifyFns } from "./verify.js";
 
 export interface DoctorDeps {
   paths: Paths;
@@ -17,6 +17,7 @@ export interface DoctorDeps {
   isDarwin?: boolean;
   log?: (line: string) => void;
   guardFn?: GuardProbeFn;
+  guardBinaryFn?: GuardBinaryProbeFn;
 }
 
 const defaultLaunchctlList = () =>
@@ -28,7 +29,8 @@ const defaultLaunchctlList = () =>
 // verify) and caller-only (nothing to verify, and that's fine — exit 0).
 // The relay-status result gates only the relay self-call; the verifyAgent
 // ladder stops itself at its first failure. Returns the process exit code:
-// 0 iff every check printed as ✓.
+// 0 iff no check printed as ✗ — a `!` warning is a check that could not be
+// proven, not one that failed, and does not turn the run red.
 export async function runDoctor(deps: DoctorDeps): Promise<number> {
   const log = deps.log ?? console.log;
   const checks: VerifyCheck[] = [];
@@ -102,7 +104,7 @@ export async function runDoctor(deps: DoctorDeps): Promise<number> {
   // spawns claude to probe it. Gated on agentOk because probing through a
   // broken agent tests nothing.
   if (cfg.agent_kind === "claude" && agentOk) {
-    report(await checkGuard(deps.guardFn));
+    report(await checkGuard(deps.guardFn, deps.guardBinaryFn));
   }
 
   if (agentOk && online) {

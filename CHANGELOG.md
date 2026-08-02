@@ -4,6 +4,28 @@ All notable changes to agentcall are recorded here. Versions apply to both
 `@benree/agentcall` (the CLI) and `@benree/agentcall-shared` (protocol schemas),
 which are released together.
 
+## Unreleased
+
+### Fixed — `doctor`'s tool-guard check called healthy installs broken
+
+The check asked a real `claude` spawn to read a canary `.env` and required a
+`tool_denied` record as proof the guard fired. That proof only exists if the model
+actually attempts the read — and on some models and versions it declines on its own,
+or claude's own built-in protection denies the read first (which suppresses the hook
+entirely). A fresh, correct install then reported `✗ tool guard — no denial was
+recorded`, under a fix hint (`run pnpm build in packages/cli`) that means nothing to
+anyone who installed from npm.
+
+The check now separates "the guard did not stop a protected read" from "the guard was
+never asked". The inconclusive case is settled by invoking `guard-entry.js` directly
+with a synthetic `PreToolUse` payload — no model involved, ~50ms — and reports `!`
+with the model's own words, leaving doctor's exit code at 0. A genuinely broken guard
+still fails, and the reinstall hint now names both `npm i -g @benree/agentcall` and
+the in-checkout `pnpm build`.
+
+`VerifyCheck` gained a `warn` flag; `formatCheck` renders it as `!` with a `note:`
+rather than a `fix:`.
+
 ## 0.4.0 — 2026-08-01
 
 ### Known issue — Codex reaches the filesystem without the shell, and unrecorded (unfixed)

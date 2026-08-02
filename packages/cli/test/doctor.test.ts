@@ -38,6 +38,9 @@ const baseDeps = {
   // that on a real machine, and every test below with agent_kind "claude"
   // would otherwise fall through to it and hang/burn credentials in CI.
   guardFn: async () => ({ output: "blocked", home: homeWithDenial() }),
+  // Same reasoning for the direct probe: its default spawns node against the
+  // built dist/guard-entry.js, which does not exist when vitest runs from src.
+  guardBinaryFn: async () => true,
 };
 
 describe("runDoctor", () => {
@@ -168,6 +171,24 @@ describe("runDoctor", () => {
     const code = await runDoctor({ ...baseDeps, paths: p, log: (l) => lines.push(l) });
     expect(code).toBe(0);
     expect(lines.join("\n")).toContain("✓ tool guard");
+  });
+
+  // An unprovable guard row must not turn a healthy install's doctor run red:
+  // the model declining the probe's read is a fact about the model, and the
+  // owner has nothing to fix.
+  it("keeps exit 0 when the guard check can only warn", async () => {
+    const p = freshPaths();
+    saveConfig(p, { handle: "ken", token: "t", agent_kind: "claude", relay: "https://relay.example" });
+    const lines: string[] = [];
+    const code = await runDoctor({
+      ...baseDeps,
+      paths: p,
+      guardFn: async () => ({ output: "I'd rather not read .env", home: mkdtempSync(join(tmpdir(), "empty-")) }),
+      guardBinaryFn: async () => true,
+      log: (l) => lines.push(l),
+    });
+    expect(code).toBe(0);
+    expect(lines.join("\n")).toContain("! tool guard");
   });
 
   it("does not run the tool guard check for a codex install", async () => {
