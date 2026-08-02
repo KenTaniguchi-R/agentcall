@@ -14,7 +14,7 @@ that carries a backlog. #8 records the protocol and positioning implications of 
 tunnels and Enterprise-Managed Authorization. #9 is the exception to the
 "not decisions" rule above — an approved decision followed it the same day, and it
 carries a forward amendment saying which of its recommendations that decision
-rejected.
+rejected. #10 asks the build-or-buy question the other nine leave implicit.
 
 ## Reading order
 
@@ -34,8 +34,9 @@ produced in. Later research revised earlier conclusions, so the production order
 | 7 | [cotal-enterprise-installability](./2026-08-01-cotal-enterprise-installability.md) | Which tool does an enterprise actually install — and what has to be true for it to be ours? |
 | 8 | [mcp-tunnels-ema-positioning](./2026-08-02-mcp-tunnels-ema-positioning.md) | What did MCP tunnels and EMA actually ship, and where should MCP sit beside A2A? |
 | 9 | [agentcall-onboarding-comparables](./2026-08-03-agentcall-onboarding-comparables.md) | How do adjacent tools get a stranger to a first result, and where do they introduce accounts, administrators, and invitations? |
+| 10 | [buy-vs-build-third-party-landscape](./2026-08-02-buy-vs-build-third-party-landscape.md) | Which parts of that gap does someone else already sell — and do we pass a security review? |
 
-Seven notes on the sequence:
+Eight notes on the sequence:
 
 - **#3 predates two decisions made the same day.** `agent-coordination-landscape` was
   written before the sandbox was dropped and before Q&A-first was chosen. Its
@@ -69,6 +70,11 @@ Seven notes on the sequence:
   senior-time recovery, and preserve the narrower no-retained-call-corpus/no-connected-
   system-indexing distinction. The absolute “we do not ingest employee data” line is
   retired. See the [GTM sequencing decision](../superpowers/specs/2026-08-03-gtm-sequencing-design.md).
+- **#10 asks whether any of this needs building.** #1–#9 establish a gap and assume we
+  fill it. #10 walks the third-party landscape for the pieces that are already for sale,
+  and applies the test that decides it either way: whether a bought component survives
+  the enterprise security review we are selling into. It sits last because it is only
+  answerable once #1–#9 have said what the parts are.
 
 ## The five findings that matter
 
