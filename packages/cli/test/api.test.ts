@@ -208,7 +208,7 @@ describe("pushCard / fetchCard", () => {
     await pushCard(relay, { org: "acme", handle: "ken", token: "tok" }, {
       description: "", agent_kind: "claude",
       tasks: [{ id: "ask", name: "Ask", description: "d", examples: [], keywords: [] }],
-      default_offer: ["ask"], grants: {},
+      default_offer: ["ask"], grants: {}, group_grants: {}, blocked: [],
     });
     expect(seen.method).toBe("PUT");
     expect(seen.url).toBe("/v1/card");

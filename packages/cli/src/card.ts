@@ -29,13 +29,25 @@ export function buildCardUpload(cfg: LineConfig, policy: Policy, tasks: Task[]):
   const defaultOffer = policy.default_offer.map(stripPlus).filter(exists);
 
   const grants: Record<string, string[]> = {};
+  const blocked: string[] = [];
   for (const [caller, entry] of Object.entries(policy.callers)) {
-    if (entry.block) continue;
+    if (entry.block) {
+      blocked.push(caller);
+      continue;
+    }
     const ids = entry.offer.map(stripPlus).filter(exists);
     if (ids.length > 0) grants[caller] = ids;
   }
 
-  const referenced = new Set([...defaultOffer, ...Object.values(grants).flat()]);
+  const groupGrants: Record<string, string[]> = {};
+  for (const entry of Object.values(policy.groups)) {
+    const ids = entry.offer.map(stripPlus).filter(exists);
+    if (ids.length === 0) continue;
+    const existing = groupGrants[entry.roster_id] ?? [];
+    groupGrants[entry.roster_id] = [...new Set([...existing, ...ids])];
+  }
+
+  const referenced = new Set([...defaultOffer, ...Object.values(grants).flat(), ...Object.values(groupGrants).flat()]);
   return {
     description: policy.description,
     agent_kind: cfg.agent_kind,
@@ -44,6 +56,8 @@ export function buildCardUpload(cfg: LineConfig, policy: Policy, tasks: Task[]):
       .map(({ id, name, description, examples, keywords }) => ({ id, name, description, examples, keywords })),
     default_offer: defaultOffer,
     grants,
+    group_grants: groupGrants,
+    blocked,
   };
 }
 

@@ -318,6 +318,31 @@ describe("startListener task resolution", () => {
     expect(spawned).toBe(false);
   });
 
+  it("runs a task granted by a locally recognized relay-attested group", async () => {
+    const rosterId = "g".repeat(22);
+    let spawned = false;
+    const relayReady = new Promise<WsSocket>((resolveWs) => {
+      void fakeRelay((ws) => resolveWs(ws)).then((url) => {
+        const deps = baseDeps(url);
+        seedTask(deps.paths, "schedule-meeting", ["description: d"]);
+        seedPolicy(deps.paths, {
+          default_offer: ["ask"], callers: {},
+          groups: { eng: { roster_id: rosterId, offer: ["schedule-meeting"] } },
+        });
+        stopper = startListener({ ...deps, run: async () => { spawned = true; return { text: "booked" }; } });
+      });
+    });
+    const ws = await relayReady;
+    const expectFrames = frames(ws, 3);
+    ws.send(JSON.stringify({
+      type: "incoming_call", call_id: "cg1", from: "stranger", groups: [rosterId],
+      message: "book", task: "schedule-meeting",
+    }));
+    const [, , result] = await expectFrames;
+    expect(spawned).toBe(true);
+    expect(result).toMatchObject({ type: "call_result", call_id: "cg1", task: "schedule-meeting" });
+  });
+
   it("runs a granted task with its envelope and timeout, echoing task in call_result", async () => {
     const seen: { prompt?: string; workdir?: string; timeout?: number; envelope?: unknown } = {};
     let paths!: LinePaths;

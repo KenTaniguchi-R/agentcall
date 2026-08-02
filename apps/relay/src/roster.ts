@@ -240,10 +240,17 @@ export function mountRoster(app: Hono<{ Bindings: Env }>): void {
     // One bounded join, never N queries. Bounded by MAX_ROSTER_MEMBERS,
     // which join enforces.
     const { results } = await c.env.DB.prepare(
-      "SELECT c.handle, c.card_json, c.updated_at FROM roster_members m " +
+      "SELECT c.handle, c.card_json, c.updated_at, GROUP_CONCAT(DISTINCT viewer_membership.roster_id) AS shared_rosters " +
+        "FROM roster_members m " +
         "JOIN cards c ON c.org = m.org AND c.handle = m.handle " +
-        "WHERE m.roster_id = ? AND m.org = ? ORDER BY c.handle",
-    ).bind(id, org).all<{ handle: string; card_json: string; updated_at: number }>();
+        "LEFT JOIN roster_members shared ON shared.org = m.org AND shared.handle = m.handle " +
+        "LEFT JOIN roster_members viewer_membership ON viewer_membership.org = shared.org " +
+          "AND viewer_membership.roster_id = shared.roster_id AND viewer_membership.handle = ? " +
+        "WHERE m.roster_id = ? AND m.org = ? " +
+        "GROUP BY c.handle, c.card_json, c.updated_at ORDER BY c.handle",
+    ).bind(viewer, id, org).all<{
+      handle: string; card_json: string; updated_at: number; shared_rosters: string | null;
+    }>();
 
     const entries = [];
     let skipped = 0;
@@ -257,7 +264,7 @@ export function mountRoster(app: Hono<{ Bindings: Env }>): void {
         skipped++;
         continue;
       }
-      const visible = visibleTasks(upload, viewer);
+      const visible = visibleTasks(upload, viewer, row.shared_rosters?.split(",") ?? []);
       // Zero visible tasks means omitted entirely, not an empty entry: an
       // entry carrying a handle would disclose membership. This endpoint is
       // a search index, not an org directory.

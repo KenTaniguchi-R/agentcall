@@ -39,6 +39,10 @@ export const MAX_CONTEXT_TURNS = 10;
 // Bounds the callee's on-disk binding store so inbound calls can never drive an
 // unbounded local write. Least-recently-used entries are evicted past this.
 export const MAX_CONTEXTS = 100;
+// A caller can share many rosters with a callee, but the attestation rides on
+// every inbound call. Bound it at the protocol edge so neither a pathological
+// account nor a compromised relay can hand the listener unbounded policy input.
+export const MAX_CALLER_GROUPS = 50;
 export const RELAY_CALL_TIMEOUT_MS = 360_000;
 export const AGENT_TIMEOUT_MS = 300_000;
 // Was 10, raised when multi-turn landed. A threaded turn spawns a full agent,
@@ -90,6 +94,10 @@ export const IncomingCall = z.object({
   call_id: z.string(),
   from: z.string(),
   message: z.string(),
+  // Relay-attested opaque roster ids. The caller never sends this field: the
+  // relay derives the caller/callee intersection during websocket admission.
+  // Missing defaults to no groups, which fails closed with an older relay.
+  groups: z.array(z.string().regex(/^[A-Za-z0-9_-]{16,64}$/)).max(MAX_CALLER_GROUPS).default([]),
   context_id: z.string().regex(CONTEXT_ID_RE).optional(),
   task: z.string().regex(TASK_ID_RE).optional(),
 });

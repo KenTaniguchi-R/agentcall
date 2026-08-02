@@ -4,6 +4,7 @@ import { mountA2A } from "./a2a.js";
 import { mountRoster } from "./roster.js";
 import { constantTimeEqual, generateToken, sha256Hex } from "./auth.js";
 import { authenticateRequest, identityKey, registrationAddressHost } from "./tenant.js";
+import { sharedRosterIds } from "./groups.js";
 
 export { HandleDO } from "./do.js";
 
@@ -179,7 +180,7 @@ app.get("/v1/card/:handle", async (c) => {
     handle,
     description: upload.description,
     agent_kind: upload.agent_kind,
-    tasks: visibleTasks(upload, viewer),
+    tasks: visibleTasks(upload, viewer, await sharedRosterIds(c.env.DB, org, viewer, handle)),
     updated_at: row.updated_at,
   });
 });
@@ -192,12 +193,17 @@ app.get("/v1/ws", async (c) => {
   const { org, handle } = identity;
 
   let target: string;
+  let groups: string[] = [];
   if (role === "listen") {
     target = handle;
   } else if (role === "call") {
     const to = c.req.query("to") ?? "";
     if (!(await handleExists(c.env.DB, org, to))) return c.json({ error: "unknown handle" }, 404);
     target = to;
+    // The caller cannot supply a policy selector. Group attestation is the
+    // relay's observation that both identities are currently live members of
+    // the same roster, taken before the DO accepts the caller socket.
+    groups = await sharedRosterIds(c.env.DB, org, handle, target);
   } else {
     return c.json({ error: "bad role" }, 400);
   }
@@ -205,6 +211,7 @@ app.get("/v1/ws", async (c) => {
   const stub = c.env.HANDLE_DO.get(c.env.HANDLE_DO.idFromName(identityKey(org, target)));
   const fwd = new Request(`https://do/ws?role=${role}&test_timeout_ms=${c.req.query("test_timeout_ms") ?? ""}`, c.req.raw);
   fwd.headers.set("X-Verified-From", handle);
+  fwd.headers.set("X-Verified-Groups", JSON.stringify(groups));
   return stub.fetch(fwd);
 });
 

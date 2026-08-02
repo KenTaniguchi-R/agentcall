@@ -51,6 +51,8 @@ const UPLOAD = CardUpload.parse({
   // With two, a grant-order implementation would produce ask, payroll, adr —
   // distinct from the card-order ask, adr, payroll both tests assert below.
   grants: { mia: ["payroll", "adr"] },
+  group_grants: { ["g".repeat(22)]: ["adr"] },
+  blocked: ["blocked-user"],
 });
 
 describe("visibleTasks", () => {
@@ -62,6 +64,19 @@ describe("visibleTasks", () => {
   });
   it("never leaks a task granted to someone else", () => {
     expect(visibleTasks(UPLOAD, "bob").map((t) => t.id)).toEqual(["ask"]);
+  });
+  it("unions only relay-attested group grants", () => {
+    expect(visibleTasks(UPLOAD, "bob", ["g".repeat(22)]).map((t) => t.id)).toEqual(["ask", "adr"]);
+    expect(visibleTasks(UPLOAD, "bob", ["x".repeat(22)]).map((t) => t.id)).toEqual(["ask"]);
+  });
+  it("lets an individual block outrank defaults and group grants", () => {
+    expect(visibleTasks(UPLOAD, "blocked-user", ["g".repeat(22)])).toEqual([]);
+  });
+  it("rejects more than the bounded number of group grants", () => {
+    const group_grants = Object.fromEntries(Array.from(
+      { length: 51 }, (_, i) => [`${String(i).padStart(2, "0")}${"g".repeat(20)}`, ["ask"]],
+    ));
+    expect(CardUpload.safeParse({ ...UPLOAD, group_grants }).success).toBe(false);
   });
   it("returns tasks in card order, not grant order", () => {
     // mia's grants are ["payroll", "adr"] — grant order. A buggy

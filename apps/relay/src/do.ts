@@ -5,7 +5,7 @@ import {
   type ErrorCodeType,
 } from "@benree/agentcall-shared";
 
-type CallerAttachment = { kind: "caller"; from: string; call_id?: string; timeoutMs?: number };
+type CallerAttachment = { kind: "caller"; from: string; groups: string[]; call_id?: string; timeoutMs?: number };
 type ListenerAttachment = { kind: "listener" };
 type CallRecord = { call_id: string; from: string; deadline: number };
 
@@ -48,6 +48,11 @@ export class HandleDO extends DurableObject {
         return new Response("bad role", { status: 400 });
       }
       const from = req.headers.get("X-Verified-From") ?? "";
+      let groups: string[] = [];
+      try {
+        const parsed = JSON.parse(req.headers.get("X-Verified-Groups") ?? "[]");
+        if (Array.isArray(parsed) && parsed.every((value) => typeof value === "string")) groups = parsed;
+      } catch { /* malformed internal attestation fails closed to no groups */ }
       const testTimeout = Number(url.searchParams.get("test_timeout_ms") || "") || undefined;
       const pair = new WebSocketPair();
       const client = pair[0];
@@ -58,7 +63,7 @@ export class HandleDO extends DurableObject {
         server.serializeAttachment({ kind: "listener" } satisfies ListenerAttachment);
       } else {
         this.ctx.acceptWebSocket(server, ["caller"]);
-        server.serializeAttachment({ kind: "caller", from, timeoutMs: testTimeout } satisfies CallerAttachment);
+        server.serializeAttachment({ kind: "caller", from, groups, timeoutMs: testTimeout } satisfies CallerAttachment);
       }
       return new Response(null, { status: 101, webSocket: client });
     }
@@ -116,7 +121,7 @@ export class HandleDO extends DurableObject {
       await this.scheduleNextAlarm();
       this.send(ws, { type: "call_status", state: "ringing" });
       this.send(listener, {
-        type: "incoming_call", call_id, from: att.from,
+        type: "incoming_call", call_id, from: att.from, groups: att.groups,
         message: frame.message, context_id: frame.context_id, task: frame.task,
       });
       return;

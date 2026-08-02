@@ -19,6 +19,7 @@ const meet: Task = {
   examples: [], keywords: [], envelope: { caps: ["read", "fetch"] }, threadable: true, skill: "",
 };
 const TASKS = [ASK_TASK, intro, meet];
+const ENG = "e".repeat(22);
 
 const policy: Policy = {
   description: "",
@@ -27,6 +28,7 @@ const policy: Policy = {
     ken: { offer: ["schedule-meeting"], block: false },
     spammer: { offer: [], block: true },
   },
+  groups: { eng: { roster_id: ENG, offer: ["schedule-meeting"] } },
 };
 
 // HANDLE_RE accepts "constructor", and a zod z.record / JSON.parse object
@@ -79,6 +81,16 @@ describe("offeredFor", () => {
   it("returns 'blocked' for blocked callers", () => {
     expect(offeredFor(policy, "spammer")).toBe("blocked");
   });
+  it("unions grants from relay-attested groups", () => {
+    expect(offeredFor(policy, "stranger", [ENG])).toEqual(["ask", "owner-introduction", "schedule-meeting"]);
+  });
+  it("ignores unknown and un-attested groups", () => {
+    expect(offeredFor(policy, "stranger", ["x".repeat(22)])).toEqual(["ask", "owner-introduction"]);
+    expect(offeredFor(policy, "stranger")).toEqual(["ask", "owner-introduction"]);
+  });
+  it("lets an individual block outrank an attested group grant", () => {
+    expect(offeredFor(policy, "spammer", [ENG])).toBe("blocked");
+  });
 });
 
 describe("resolveTask", () => {
@@ -88,6 +100,12 @@ describe("resolveTask", () => {
   it("explicit granted task resolves", () => {
     const r = resolveTask(policy, TASKS, "ken", "schedule-meeting");
     expect(r).toMatchObject({ ok: true, task: { id: "schedule-meeting" } });
+  });
+  it("explicit group-granted task resolves only with relay attestation", () => {
+    expect(resolveTask(policy, TASKS, "stranger", "schedule-meeting", [ENG]))
+      .toMatchObject({ ok: true, task: { id: "schedule-meeting" } });
+    expect(resolveTask(policy, TASKS, "stranger", "schedule-meeting"))
+      .toMatchObject({ ok: false, code: "task_not_offered" });
   });
   it("explicit existing-but-ungranted task -> task_not_offered with the caller's menu", () => {
     expect(resolveTask(policy, TASKS, "stranger", "schedule-meeting")).toEqual({
@@ -103,23 +121,23 @@ describe("resolveTask", () => {
     expect(resolveTask(policy, TASKS, "stranger")).toMatchObject({ ok: true, task: { id: "ask" } });
   });
   it("no task requested, single non-ask offer -> that task", () => {
-    const p: Policy = { description: "", default_offer: ["owner-introduction"], callers: {} };
+    const p: Policy = { description: "", default_offer: ["owner-introduction"], callers: {}, groups: {} };
     expect(resolveTask(p, TASKS, "x")).toMatchObject({ ok: true, task: { id: "owner-introduction" } });
   });
   it("no task requested, multiple offers, no ask -> task_not_offered (caller must pick)", () => {
-    const p: Policy = { description: "", default_offer: ["owner-introduction", "schedule-meeting"], callers: {} };
+    const p: Policy = { description: "", default_offer: ["owner-introduction", "schedule-meeting"], callers: {}, groups: {} };
     expect(resolveTask(p, TASKS, "x")).toEqual({
       ok: false, code: "task_not_offered", offered: ["owner-introduction", "schedule-meeting"],
     });
   });
   it("offered ids with no matching task on disk are dropped from the menu", () => {
-    const p: Policy = { description: "", default_offer: ["ask", "deleted-task"], callers: {} };
+    const p: Policy = { description: "", default_offer: ["ask", "deleted-task"], callers: {}, groups: {} };
     expect(resolveTask(p, TASKS, "x", "deleted-task")).toEqual({
       ok: false, code: "task_unknown", offered: ["ask"],
     });
   });
   it("invite-only policy (empty default_offer, no callers) -> task_not_offered with an empty menu", () => {
-    const p: Policy = { description: "", default_offer: [], callers: {} };
+    const p: Policy = { description: "", default_offer: [], callers: {}, groups: {} };
     expect(resolveTask(p, TASKS, "x")).toEqual({
       ok: false, code: "task_not_offered", offered: [],
     });
@@ -130,7 +148,10 @@ describe("savePolicy", () => {
   it("round-trips through loadPolicy", () => {
     const p = linePaths(mkdtempSync(join(tmpdir(), "agentcall-pol-")));
     mkdirSync(dirname(p.policyFile), { recursive: true });
-    const pol: Policy = { description: "x", default_offer: ["ask"], callers: { ken: { offer: ["a-task"], block: false } } };
+    const pol: Policy = {
+      description: "x", default_offer: ["ask"], callers: { ken: { offer: ["a-task"], block: false } },
+      groups: { eng: { roster_id: ENG, offer: ["a-task"] } },
+    };
     savePolicy(p, pol);
     expect(loadPolicy(p)).toEqual(pol);
   });

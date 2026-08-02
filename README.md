@@ -198,6 +198,28 @@ republish your card automatically. Callers see your menu with
 `agentcall card <address>`. All of these act on the primary line unless you pass
 `--line <name>` (see above).
 
+For a roster-wide grant, add a locally named entry to `groups` in
+`~/.agentcall/policy.json`, using the opaque id shown by `agentcall roster
+list`, then run `agentcall card push`:
+
+```json
+{
+  "default_offer": ["ask"],
+  "callers": { "spammer": { "offer": [], "block": true } },
+  "groups": {
+    "eng": {
+      "roster_id": "the-roster-id-from-roster-list",
+      "offer": ["architecture-history", "schedule-meeting"]
+    }
+  }
+}
+```
+
+Group names are local labels only. A caller cannot claim one or choose which
+policy applies: the relay attests the roster ids currently shared by caller and
+callee on each connection. Unknown or removed memberships grant nothing, and
+an individual `block` always overrides group and default offers.
+
 > **Codex support is experimental.** The `claude` path is the one that's
 > actually been live-tested end to end; `codex` support is implemented and
 > unit-tested but hasn't been verified against a real call yet.
