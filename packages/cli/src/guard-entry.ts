@@ -18,6 +18,8 @@ import { getLinePaths, getMachinePaths } from "./paths.js";
 // silently downgrade the guard to watching.
 const mode = process.env.AGENTCALL_GUARD_MODE === "observe" ? "observe" : "enforce";
 
+const machine = getMachinePaths();
+
 // The guard runs as a subprocess of the answering agent and has no other way
 // to learn which line's call it is policing. Without it, tool events would be
 // audited against the wrong line — so an absent or malformed value fails
@@ -26,10 +28,22 @@ const mode = process.env.AGENTCALL_GUARD_MODE === "observe" ? "observe" : "enfor
 // failure, so it is not eligible for observe mode's fail-open treatment.
 const lineName = process.env.AGENTCALL_LINE ?? "";
 if (!LINE_NAME_RE.test(lineName)) {
+  // The one event that means "the guard is unwired" must not be the one
+  // event that leaves no audit trace. There is no LinePaths to log against —
+  // that is exactly the problem — so this goes to the line-independent
+  // listenerLog instead, the only log reachable without already knowing
+  // which line. Best-effort: a log write failing here must not change the
+  // exit code, since the fail-closed exit below is what actually blocks.
+  try {
+    mkdirSync(dirname(machine.listenerLog), { recursive: true });
+    appendFileSync(machine.listenerLog, JSON.stringify({
+      ts: new Date().toISOString(), type: "guard_unwired",
+      call_id: process.env.AGENTCALL_CALL_ID ?? "unknown",
+    }) + "\n");
+  } catch { /* the exit below still fails closed regardless */ }
   process.stderr.write(FAIL_CLOSED_REASON + "\n");
   process.exit(2);
 }
-const machine = getMachinePaths();
 
 try {
   let raw = "";

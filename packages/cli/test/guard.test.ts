@@ -1,4 +1,4 @@
-import { mkdirSync, mkdtempSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
@@ -581,46 +581,67 @@ describe("runGuard — observe mode", () => {
 // runGuard's own extraDeniedRoots computation (lineTaskDirs) reads
 // deps.line.machine.linesDir off disk, so these are the only tests that
 // exercise that enumeration rather than a hand-passed array.
-describe("runGuard — enumerates every line's tasksDir from disk", () => {
-  function realMachine() {
-    const root = mkdtempSync(join(tmpdir(), "agentcall-guard-lines-"));
-    return getMachinePaths(root, root);
+// Unlike harness()'s synthetic HOME, these use real mkdtempSync directories,
+// so lineTaskDirs' readdirSync actually runs — this is the only describe
+// block that exercises the on-disk enumeration itself, rather than a
+// hand-passed extraDeniedRoots array. Critically, stateRoot and userHome are
+// two DIFFERENT real directories in every test here, simulating a redirected
+// AGENTCALL_HOME: the acting line's own on-disk state lives under stateRoot,
+// exactly as it would with AGENTCALL_HOME set, while the lines being
+// enumerated for denial live under userHome, the real machine home. A version
+// of runGuard that enumerated deps.line.machine directly (stateRoot-rooted)
+// would find nothing here and silently ALLOW every write below — that is
+// exactly the regression this block exists to catch.
+describe("runGuard — enumerates every line's tasksDir from the real home, not a redirected state root", () => {
+  function splitHomes() {
+    return {
+      stateRoot: mkdtempSync(join(tmpdir(), "agentcall-guard-state-")),
+      userHome: mkdtempSync(join(tmpdir(), "agentcall-guard-home-")),
+    };
   }
 
-  it("denies another line's tasks directory, including a line with no config.json", () => {
-    const machine = realMachine();
-    const healthy = getLinePaths(machine, "healthy");
-    mkdirSync(healthy.dir, { recursive: true });
-    writeFileSync(healthy.configFile, JSON.stringify({ handle: "h", token: "t", relay: "https://r.example" }));
-    // Never finished setup — no config.json — and per lineTaskDirs' contract
-    // that must not exempt its tasksDir from being denied.
-    const unfinished = getLinePaths(machine, "unfinished");
-    mkdirSync(unfinished.dir, { recursive: true });
-
-    const acting = getLinePaths(machine, "acting");
-    const deps: GuardDeps = {
+  function actingDeps(stateRoot: string, userHome: string): GuardDeps {
+    const acting = getLinePaths(getMachinePaths(stateRoot, userHome), "acting");
+    return {
       line: acting, callId: "call-1", now: () => "2026-08-01T00:00:00.000Z",
       realpath: (p) => p, appendLine: () => {},
     };
+  }
 
-    for (const other of [healthy, unfinished]) {
-      const out = runGuard(
-        payload("Write", { file_path: join(other.tasksDir, "ask", "SKILL.md") }),
-        deps,
-      );
-      const decision = JSON.parse(out.stdout);
-      expect(decision.hookSpecificOutput.permissionDecision).toBe("deny");
-    }
+  it("denies another line's tasks directory under the real home, including a line with no config.json", () => {
+    const { stateRoot, userHome } = splitHomes();
+    // The REAL machine — rooted at userHome for both fields — is what
+    // lineTaskDirs must enumerate from, not deps.line.machine (which sits
+    // under the redirected stateRoot below and has no lines under it at all).
+    const realMachine = getMachinePaths(userHome, userHome);
+    const other = getLinePaths(realMachine, "other-line");
+    // Never finished setup — no config.json — and per lineTaskDirs' contract
+    // that must not exempt its tasksDir from being denied.
+    mkdirSync(other.dir, { recursive: true });
+
+    const out = runGuard(
+      payload("Write", { file_path: join(other.tasksDir, "ask", "SKILL.md") }),
+      actingDeps(stateRoot, userHome),
+    );
+    const decision = JSON.parse(out.stdout);
+    expect(decision.hookSpecificOutput.permissionDecision).toBe("deny");
+  });
+
+  // Legacy flat layout, pre-dating per-line: still real and writable on
+  // every already-set-up machine until Task 12, so it must stay denied
+  // independently of the per-line enumeration above.
+  it("denies the legacy flat AgentCall/tasks directory under the real home", () => {
+    const { stateRoot, userHome } = splitHomes();
+    const legacyTask = join(userHome, "AgentCall", "tasks", "ask", "SKILL.md");
+    const out = runGuard(payload("Write", { file_path: legacyTask }), actingDeps(stateRoot, userHome));
+    const decision = JSON.parse(out.stdout);
+    expect(decision.hookSpecificOutput.permissionDecision).toBe("deny");
   });
 
   it("still allows writing to the acting line's own share directory", () => {
-    const machine = realMachine();
-    const acting = getLinePaths(machine, "acting");
-    const deps: GuardDeps = {
-      line: acting, callId: "call-1", now: () => "2026-08-01T00:00:00.000Z",
-      realpath: (p) => p, appendLine: () => {},
-    };
-    const out = runGuard(payload("Write", { file_path: join(acting.shareDir, "notes.md") }), deps);
+    const { stateRoot, userHome } = splitHomes();
+    const deps = actingDeps(stateRoot, userHome);
+    const out = runGuard(payload("Write", { file_path: join(deps.line.shareDir, "notes.md") }), deps);
     expect(out.stdout).toBe("");
     expect(out.exitCode).toBe(0);
   });

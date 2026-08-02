@@ -1,7 +1,7 @@
 import { basename, dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
 import { fileURLToPath } from "node:url";
 import { lineTaskDirs } from "./lineTaskDirs.js";
-import type { LinePaths } from "./paths.js";
+import { getMachinePaths, type LinePaths } from "./paths.js";
 
 export type GuardInput = {
   tool_name: string;
@@ -46,10 +46,19 @@ const DENIED_DIRS = [
   ".claude",      // executable configuration; cf. CVE-2025-59536
   ".codex",       // auth.json, plus a config.toml that routinely holds API keys
   "Library/LaunchAgents",  // how the listener itself gets launched
-  // Deliberately NOT here: "AgentCall/tasks". Under the per-line layout
-  // tasks live at AgentCall/<line>/tasks, one directory per line, so no
-  // single home-relative entry can name them all — see runGuard, which
-  // enumerates every line's tasksDir and passes it in as an extra denied root.
+  // Legacy flat layout, retained until Task 12 migrates or deletes it — NOT
+  // superseded by runGuard's per-line enumeration below. Production code
+  // still reads and writes this exact path today (card.ts, index.ts,
+  // lint.ts), setup.ts still creates it with real SKILL.md files on every
+  // already-set-up machine, and between Task 8 (guard goes live) and Task 12
+  // it remains real, writable, and advertised by `agentcall card push`. The
+  // per-line entries below cover AgentCall/<line>/tasks; this covers the
+  // pre-multi-line AgentCall/tasks that still exists on disk regardless.
+  "AgentCall/tasks",
+  // AgentCall/<line>/tasks, one directory per line, has no single
+  // home-relative entry that can name them all — see runGuard, which
+  // enumerates every line's tasksDir and passes it in as an extra denied
+  // root, alongside this legacy path.
 ];
 
 // Home-relative single files.
@@ -312,8 +321,17 @@ export function runGuard(raw: string, deps: GuardDeps, mode: GuardMode = "enforc
     // listLines: this runs on every tool call, and listLines readFileSync's
     // and zod-parses every line's config.json just to build a LineSummary
     // this call only ever wants the tasksDir out of.
-    const taskRoots = lineTaskDirs(deps.line.machine);
-    const verdict = decide(input, deps.line.machine.userHome, deps.realpath, undefined, taskRoots);
+    //
+    // Enumerated from a machine rooted at userHome — NOT deps.line.machine as
+    // given: deps.line.machine.linesDir sits under stateRoot, the exact
+    // AGENTCALL_HOME-redirectable value defect (a) exists to keep out of
+    // decide(). Passing deps.line.machine through unchanged would enumerate
+    // an empty (or nonexistent) redirected state dir, silently deny nothing,
+    // and leave the real machine's per-line task directories wide open —
+    // defect (a) fixed for .ssh and quietly reopened for tasks.
+    const userHome = deps.line.machine.userHome;
+    const taskRoots = lineTaskDirs(getMachinePaths(userHome, userHome));
+    const verdict = decide(input, userHome, deps.realpath, undefined, taskRoots);
     const ts = deps.now();
     const write = (file: string, obj: Record<string, unknown>) =>
       deps.appendLine(file, JSON.stringify({ ts, ...obj }));

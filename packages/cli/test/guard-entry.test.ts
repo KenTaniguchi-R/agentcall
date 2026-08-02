@@ -16,6 +16,10 @@ const ENTRY = join(process.cwd(), "dist", "guard-entry.js");
 const LINE = "test-line";
 const logPath = (home: string, file: "tools.log" | "calls.log") =>
   join(home, ".agentcall", "lines", LINE, file);
+// Line-independent: MachinePaths.listenerLog, not under any line's directory.
+// It's the only log reachable before a line name is known, which is exactly
+// the situation the "no AGENTCALL_LINE" fail-closed path is in.
+const listenerLogPath = (home: string) => join(home, ".agentcall", "listener.log");
 
 type Run = { status: number; stdout: string; stderr: string };
 
@@ -161,7 +165,12 @@ describe("guard-entry as a real process", () => {
 // against the wrong line, or the wrong line's tasksDir denial not applying,
 // is a worse failure mode than blocking the tool call.
 describe("guard-entry requires AGENTCALL_LINE", () => {
-  it("fails closed and writes no log when AGENTCALL_LINE is absent", () => {
+  // The single event that means "the guard is unwired" must not be the one
+  // event that leaves no trace: there's no per-line tools.log to write to
+  // (there's no line), but the line-independent listenerLog is reachable and
+  // records a guard_unwired entry so this failure mode is diagnosable rather
+  // than silent.
+  it("fails closed, writes no per-line log, but records guard_unwired in listenerLog", () => {
     const home = mkdtempSync(join(tmpdir(), "guard-"));
     const r = runWithoutLine(
       JSON.stringify({ tool_name: "Read", tool_input: { file_path: join(home, "a.ts") }, cwd: home }),
@@ -170,9 +179,11 @@ describe("guard-entry requires AGENTCALL_LINE", () => {
     expect(r.status).toBe(2);
     expect(r.stderr.trim()).not.toBe("");
     expect(() => readFileSync(logPath(home, "tools.log"), "utf8")).toThrow();
+    const listenerLog = readFileSync(listenerLogPath(home), "utf8").trim();
+    expect(JSON.parse(listenerLog)).toMatchObject({ type: "guard_unwired", call_id: "call-abc" });
   });
 
-  it("fails closed on a malformed line name", () => {
+  it("fails closed and records guard_unwired on a malformed line name too", () => {
     const home = mkdtempSync(join(tmpdir(), "guard-"));
     const r = run(
       { tool_name: "Read", tool_input: { file_path: join(home, "a.ts") }, cwd: home },
@@ -181,6 +192,8 @@ describe("guard-entry requires AGENTCALL_LINE", () => {
     );
     expect(r.status).toBe(2);
     expect(r.stderr.trim()).not.toBe("");
+    const listenerLog = readFileSync(listenerLogPath(home), "utf8").trim();
+    expect(JSON.parse(listenerLog)).toMatchObject({ type: "guard_unwired" });
   });
 
   // Unconditional on mode: a missing AGENTCALL_LINE is a wiring bug, not an
