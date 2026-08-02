@@ -11,7 +11,7 @@ import { runSetup } from "./setup.js";
 import { uninstallLaunchAgent } from "./launchd.js";
 import { publishCard } from "./card.js";
 import { loadPolicy, savePolicy } from "./policy.js";
-import { loadLineConfig, readyLines } from "./lines.js";
+import { assertValidLineName, loadLineConfig, readyLines } from "./lines.js";
 import { loadTasks, scaffoldTask } from "./tasks.js";
 import { execVerb, type Verb } from "./verbs.js";
 import { buildCardReport } from "./lint.js";
@@ -376,6 +376,19 @@ line
         process.exitCode = 1;
         return;
       }
+      // Validated here too, not just inside addLine: addLine's own check
+      // never burns a handle (see its "Validate BEFORE the network call"
+      // comment), but it runs AFTER the handle prompt below — so
+      // `agentcall line add "Bad Name"` would ask the owner to choose a
+      // handle and only then reject the name, wasting a prompt on a doomed
+      // command. Failing fast here is a UX fix, not a safety one.
+      try {
+        assertValidLineName(name);
+      } catch (e) {
+        console.error(String(e instanceof Error ? e.message : e));
+        process.exitCode = 1;
+        return;
+      }
       const handle = o.handle ?? (await ttyAsk(`Choose a handle for "${name}" (e.g. ${name}): `)).trim();
       if (!handle) {
         console.error("A handle is required.");
@@ -404,7 +417,8 @@ line
 line
   .command("list")
   .description("list the addresses this machine holds, which is primary, and whether each is online")
-  .action(async () => {
+  .option("--json", "print the full row data (name, address, relay, state, primary) as JSON")
+  .action(async (o: { json?: boolean }) => {
     const machine = getMachinePaths();
     // listLinesReport's presence callback is synchronous (it's a pure report
     // over what's already on disk), so the network round-trip has to happen
@@ -425,6 +439,10 @@ line
       }
     }
     const rows = listLinesReport(machine, (cfg: LineConfig) => online.get(cfg.handle) ?? false);
+    if (o.json) {
+      console.log(JSON.stringify(rows));
+      return;
+    }
     if (rows.length === 0) {
       console.log("No lines yet. Run `agentcall setup` to create the first one.");
       return;
