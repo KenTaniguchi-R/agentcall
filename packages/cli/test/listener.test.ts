@@ -444,9 +444,10 @@ describe("startListener line name propagation", () => {
     // subprocess actually reads, not on the intermediate lineName string.
     //
     // `toBe`, not `toContain`/`toMatch`, and this is load-bearing: the
-    // default workdir (position 3, `captured.workdir`) resolves to
+    // default workdir (position 2, `captured.workdir`, 0-based like the
+    // buildSpawnSpec positions cited below) resolves to
     // `<stateRoot>/AgentCall/sales/public` — which CONTAINS "sales" as a path
-    // segment. A 3<->9 argument swap (workdir <-> lineName) would only be
+    // segment. A 2<->8 argument swap (workdir <-> lineName) would only be
     // caught because `toBe` requires exact equality; a looser matcher would
     // let that specific swap through undetected, since the swapped-in
     // workdir string still contains the line name as a substring.

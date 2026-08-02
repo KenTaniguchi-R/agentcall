@@ -35,8 +35,10 @@ export function defaultResolveBin(name: string): string | null {
 // agentKind only) silently drops coverage the moment a second line runs a
 // different agent — this derives it fresh from machine state instead, so
 // every installLaunchAgent call site (setup -> addLine, addLine directly,
-// removeLine's reinstall, `agentcall rotate`) gets the same, complete answer
-// without having to individually track what's already installed.
+// removeLine's reinstall) gets the same, complete answer without having to
+// individually track what's already installed. `agentcall rotate` used to be
+// a call site too; Task 12 removed rotate's own installLaunchAgent call, so
+// only commands/line.ts's addLine and removeLine remain.
 export function launchPathDirs(
   m: MachinePaths, resolveBin: (name: string) => string | null = defaultResolveBin,
 ): string[] {

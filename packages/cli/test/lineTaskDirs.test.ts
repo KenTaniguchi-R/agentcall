@@ -47,7 +47,11 @@ describe("lineTaskDirs", () => {
     expect(lineTaskDirs(m)).toEqual([corrupt.tasksDir]);
   });
 
-  it("enumerates every line, healthy and broken alike, sorted the same way listLines is", () => {
+  // Order-independent on purpose: lineTaskDirs has no .sort() of its own
+  // (unlike listLines, which sorts by name) — readdirSync's order is
+  // filesystem-dependent, so this compares both sides sorted rather than
+  // asserting any particular order out of lineTaskDirs itself.
+  it("enumerates every line, healthy and broken alike, regardless of order", () => {
     const m = freshMachine();
     const a = getLinePaths(m, "a-line");
     const b = getLinePaths(m, "b-broken");

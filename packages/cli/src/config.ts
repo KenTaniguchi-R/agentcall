@@ -29,8 +29,8 @@ export interface Workdir {
   dir: string;
   /**
    * Whether the prompt should tell the agent to stay inside `dir`. True only
-   * for the default ~/AgentCall/public share folder — an owner who points
-   * workdir at a real project did so precisely so the agent would use it.
+   * for the default ~/AgentCall/<line>/public share folder — an owner who
+   * points workdir at a real project did so precisely so the agent would use it.
    *
    * Note this has never been an enforced boundary since the OS sandbox was
    * removed; it is an instruction the model can decline either way.

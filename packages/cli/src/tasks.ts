@@ -135,10 +135,10 @@ Describe how your agent should perform it. This text is given to the
 agent verbatim when a caller invokes the task.
 `;
 
-// Creates ~/AgentCall/tasks/<id>/SKILL.md from the template and returns the
-// file path. Never overwrites; never touches policy — a scaffolded task is
-// invisible to callers until the owner runs `agentcall offer <id>` or
-// `agentcall allow <handle> <id>` (create ≠ publish).
+// Creates ~/AgentCall/<line>/tasks/<id>/SKILL.md from the template and
+// returns the file path. Never overwrites; never touches policy — a
+// scaffolded task is invisible to callers until the owner runs
+// `agentcall offer <id>` or `agentcall allow <handle> <id>` (create ≠ publish).
 export function scaffoldTask(p: LinePaths, id: string): string {
   if (!TASK_ID_RE.test(id)) {
     throw new Error(`"${id}" is not a valid task id: lowercase letters, digits, and hyphens, starting with a letter or digit.`);
