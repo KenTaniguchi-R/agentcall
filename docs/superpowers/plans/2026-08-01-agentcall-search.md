@@ -2093,12 +2093,30 @@ describe("renderResults", () => {
   });
 
   it("emits no escape sequences even when a card contains them", () => {
+    // The payload goes in `description` and `task` because those are what the
+    // human renderer actually prints. `name` is deliberately NOT rendered --
+    // the output shows the task id, which is what `--task` needs -- so name
+    // earns its place by being scored, not displayed. The --json path does
+    // emit `name`, and sanitizes it there.
     const evil = rank("payroll", [
-      { roster: "acme", handle: "x", address: "x@relay.test", task: "t",
-        name: "[31mPayroll", description: "d", keywords: ["payroll"] },
+      { roster: "acme", handle: "x", address: "x@relay.test",
+        task: "\u001b[31mpayroll-report", name: "Payroll",
+        description: "\u001b[2Jwiped", keywords: ["payroll"] },
     ]);
-    // eslint-disable-next-line no-control-regex
-    expect(renderResults(evil, [{ name: "acme", ageSeconds: 1, stale: false }])).not.toMatch(/[ -]/);
+    const output = renderResults(evil, [{ name: "acme", ageSeconds: 1, stale: false }]);
+    const lines = output.split("\n");
+    // No control character WITHIN any line: ESC, CR, BEL and friends. Do NOT
+    // assert /\p{Cc}/u against the whole string -- that category includes
+    // U+000A, so it matches the renderer's own structural newlines and the
+    // assertion could never pass on correct multi-line output.
+    for (const line of lines) expect(line).not.toMatch(/\p{Cc}/u);
+    // And no EXTRA lines. sanitize() strips control characters from field
+    // content, so a callee cannot smuggle a newline in to forge a result line
+    // or paint over real output. Splitting on "\n" alone would hide exactly
+    // that, which is why the line count is asserted too.
+    // Compute this from the fixture rather than guessing; it is the assertion
+    // that makes an injected newline detectable.
+    expect(lines).toHaveLength(5);
   });
 });
 ```
