@@ -156,7 +156,8 @@ Plain calls (no `--task`) run the built-in read-only `ask` task. To offer more:
 
     agentcall task new schedule-meeting   # scaffold ~/AgentCall/tasks/<id>/SKILL.md
     # edit the SKILL.md (YAML frontmatter: description, tools, timeout_s, ...)
-    agentcall card                        # review your card + catch problems
+    agentcall lint                        # validate tasks, policy tests, and card
+    agentcall card                        # same review plus your rendered card
     agentcall offer schedule-meeting      # offer to everyone, or:
     agentcall allow ken schedule-meeting  # grant to one caller
     agentcall block spammer               # refuse a caller entirely
@@ -187,6 +188,32 @@ Group names are local labels only. A caller cannot claim one or choose which
 policy applies: the relay attests the roster ids currently shared by caller and
 callee on each connection. Unknown or removed memberships grant nothing, and
 an individual `block` always overrides group and default offers.
+
+Put reachability assertions beside the user policy so an accidental edit is
+rejected before it is saved or published:
+
+```json
+{
+  "default_offer": ["ask"],
+  "callers": {
+    "ken": { "offer": ["schedule-meeting"] },
+    "stranger": { "offer": [], "block": true }
+  },
+  "tests": [
+    { "caller": "ken", "accept": ["schedule-meeting"], "deny": ["exec"] },
+    { "caller": "stranger", "deny": ["*"] },
+    { "caller": "mia", "groups": ["eng"], "accept": ["architecture-history"] }
+  ]
+}
+```
+
+`caller` is the bare relay-verified handle. `groups` names local policy groups;
+the evaluator translates them to the roster ids the relay would attest.
+`accept` entries must be offered, `deny` entries must not be offered, and
+`deny: ["*"]` means the caller must receive an empty menu. Run `agentcall lint`
+in CI or after hand edits. A failed assertion makes lint exit nonzero, prevents
+CLI policy verbs from changing the last known-good file, and prevents the
+listener from starting. Hot edits are also rechecked before every call.
 
 > **Codex support is experimental.** The `claude` path is the one that's
 > actually been live-tested end to end; `codex` support is implemented and
@@ -383,7 +410,8 @@ not writable by ordinary users.
 {
   "version": 1,
   "allowed_tasks": ["ask", "schedule-meeting"],
-  "blocked_callers": ["contractor-bot"]
+  "blocked_callers": ["contractor-bot"],
+  "tests": [{ "caller": "contractor-bot", "deny": ["*"] }]
 }
 ```
 
@@ -393,6 +421,11 @@ to deny every task. `blocked_callers` is added to the user's own blocks and
 cannot be undone in `~/.agentcall/policy.json`. CLI policy commands continue to
 edit only that user file, while listener enforcement and card publication use
 the effective, administrator-filtered policy.
+
+User and managed `tests` both evaluate after the two layers are composed. This
+lets a user notice when an administrator ceiling removes an expected grant and
+lets IT prove that a mandatory block survived user configuration. Managed tests
+cannot be removed from the user file.
 
 The combined user and managed block set is limited to 200 distinct callers,
 matching the relay card protocol. Exceeding it fails policy loading so local

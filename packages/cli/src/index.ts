@@ -9,7 +9,7 @@ import { startListener } from "./listener.js";
 import { runSetup } from "./setup.js";
 import { installLaunchAgent, isLaunchAgentInstalled, uninstallLaunchAgent } from "./launchd.js";
 import { publishCard } from "./card.js";
-import { loadPolicy, loadUserPolicy, savePolicy } from "./policy.js";
+import { loadPolicy, loadUserPolicy, savePolicy, validatePolicy } from "./policy.js";
 import { loadTasks, scaffoldTask } from "./tasks.js";
 import { execVerb, type Verb } from "./verbs.js";
 import { buildCardReport } from "./lint.js";
@@ -189,6 +189,32 @@ program
     process.exitCode = await runDoctor({ paths: getPaths() });
   });
 
+const reviewOwnCard = () => {
+  const paths = getPaths();
+  const cfg = loadConfig(paths);
+  if (!cfg.agent_kind) {
+    console.error("This handle is caller-only (no agent configured) — no policy or card to review.");
+    process.exitCode = 1;
+    return;
+  }
+  const report = buildCardReport(cfg, paths);
+  for (const line of report.menu) console.log(line);
+  if (report.problems.length > 0) {
+    console.log("\nProblems:");
+    for (const p of report.problems) console.log(`  ✗ ${p}`);
+  }
+  if (report.notices.length > 0) {
+    console.log("\nNotes:");
+    for (const n of report.notices) console.log(`  ! ${n}`);
+  }
+  if (report.problems.length > 0) process.exitCode = 1;
+};
+
+program
+  .command("lint")
+  .description("validate tasks, effective policy assertions, and the published card")
+  .action(reviewOwnCard);
+
 program
   .command("card")
   .description("show your own card with problems, another agent's menu, or publish yours (push)")
@@ -196,23 +222,7 @@ program
   .action(async (target?: string) => {
     const paths = getPaths();
     if (target === undefined) {
-      const cfg = loadConfig(paths);
-      if (!cfg.agent_kind) {
-        console.error("This handle is caller-only (no agent configured) — no card to review.");
-        process.exitCode = 1;
-        return;
-      }
-      const report = buildCardReport(cfg, paths);
-      for (const line of report.menu) console.log(line);
-      if (report.problems.length > 0) {
-        console.log("\nProblems:");
-        for (const p of report.problems) console.log(`  ✗ ${p}`);
-      }
-      if (report.notices.length > 0) {
-        console.log("\nNotes:");
-        for (const n of report.notices) console.log(`  ! ${n}`);
-      }
-      if (report.problems.length > 0) process.exitCode = 1;
+      reviewOwnCard();
       return;
     }
     if (target === "push") {
@@ -618,6 +628,7 @@ function policyVerbAction(verb: Verb) {
       // Mutations edit user intent, never the administrator-filtered view.
       // Enforcement and card publication apply the managed ceiling separately.
       const { policy, lines } = execVerb(loadUserPolicy(paths), loadTasks(paths), verb, a, b);
+      validatePolicy(paths, policy);
       savePolicy(paths, policy);
       for (const line of lines) console.log(line);
       try {
