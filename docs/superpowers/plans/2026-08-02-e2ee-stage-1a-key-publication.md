@@ -371,7 +371,7 @@ export * from "./keys.js";
 - [ ] **Step 4: Run test to verify it passes**
 
 Run: `pnpm -C packages/shared vitest run test/keys.test.ts`
-Expected: PASS, 13 tests.
+Expected: PASS, 14 tests.
 
 - [ ] **Step 5: Commit**
 
