@@ -97,6 +97,13 @@ caller-only, so the relay authenticates status checks rather than serving
 anyone who asks (an anonymous endpoint let anybody enumerate handles and poll
 whether your Mac was awake).
 
+Remote card reads also require a completed setup. The relay authenticates the
+viewer before looking up either the native card or the per-agent A2A card, so
+an anonymous or wrong-tenant probe cannot use 404 responses to enumerate an
+organization's handles or published tasks. The generic relay card at
+`/.well-known/agent-card.json` remains public because it contains no tenant or
+employee data.
+
 ```bash
 # Replace your relay token if it may have leaked
 agentcall rotate

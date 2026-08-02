@@ -2,9 +2,9 @@ import { Hono } from "hono";
 import { CardUpload, RegisterRequest, RESERVED_HANDLES, visibleTasks } from "@benree/agentcall-shared";
 import { mountA2A } from "./a2a.js";
 import { mountRoster } from "./roster.js";
-import { generateToken, sha256Hex, verifyHandleToken } from "./auth.js";
+import { generateToken, sha256Hex } from "./auth.js";
 import { INSTALL_SH } from "./install-sh.js";
-import { identityKey, registrationAddressHost, requestOrg } from "./tenant.js";
+import { authenticateRequest, identityKey, registrationAddressHost } from "./tenant.js";
 
 export { HandleDO } from "./do.js";
 
@@ -13,8 +13,8 @@ export type Env = {
   HANDLE_DO: DurableObjectNamespace;
   REGISTER_RL: RateLimit;
   CARD_RL: RateLimit;
-  // Shared ceiling for the two cheap read endpoints (status + card GET),
-  // keyed by source IP. Neither was throttled at all, which left the handle
+  // Shared ceiling for status and the two card representations, keyed by
+  // source IP. They were previously unbounded, which left the handle
   // namespace scrapeable for free and every probe waking a Durable Object at
   // the operator's expense.
   READ_RL: RateLimit;
@@ -72,10 +72,9 @@ app.post("/v1/register", async (c) => {
 // for an operation a human runs once in a blue moon, and the distinct key
 // prefix keeps it from sharing a budget with actual registrations.
 app.post("/v1/token/rotate", async (c) => {
-  const handle = c.req.header("X-AgentCall-Handle") ?? "";
-  const org = requestOrg(c.req);
-  const token = (c.req.header("Authorization") ?? "").replace(/^Bearer\s+/i, "");
-  if (!org || !(await verifyHandleToken(c.env.DB, org, handle, token))) return c.json({ error: "unauthorized" }, 401);
+  const identity = await authenticateRequest(c.env.DB, c.req);
+  if (!identity) return c.json({ error: "unauthorized" }, 401);
+  const { org, handle } = identity;
   if (!(await c.env.REGISTER_RL.limit({ key: `rotate:${org}:${handle}` })).success) {
     return c.json({ error: "rate limited" }, 429);
   }
@@ -88,10 +87,9 @@ app.post("/v1/token/rotate", async (c) => {
 });
 
 app.get("/v1/status/:handle", async (c) => {
-  const viewer = c.req.header("X-AgentCall-Handle") ?? "";
-  const org = requestOrg(c.req);
-  const token = (c.req.header("Authorization") ?? "").replace(/^Bearer\s+/i, "");
-  if (!org || !(await verifyHandleToken(c.env.DB, org, viewer, token))) return c.json({ error: "unauthorized" }, 401);
+  const identity = await authenticateRequest(c.env.DB, c.req);
+  if (!identity) return c.json({ error: "unauthorized" }, 401);
+  const { org } = identity;
   const ip = c.req.header("cf-connecting-ip") ?? "unknown";
   if (!(await c.env.READ_RL.limit({ key: ip })).success) return c.json({ error: "rate limited" }, 429);
   const handle = c.req.param("handle");
@@ -101,10 +99,9 @@ app.get("/v1/status/:handle", async (c) => {
 });
 
 app.put("/v1/card", async (c) => {
-  const handle = c.req.header("X-AgentCall-Handle") ?? "";
-  const org = requestOrg(c.req);
-  const token = (c.req.header("Authorization") ?? "").replace(/^Bearer\s+/i, "");
-  if (!org || !(await verifyHandleToken(c.env.DB, org, handle, token))) return c.json({ error: "unauthorized" }, 401);
+  const identity = await authenticateRequest(c.env.DB, c.req);
+  if (!identity) return c.json({ error: "unauthorized" }, 401);
+  const { org, handle } = identity;
   if (!(await c.env.CARD_RL.limit({ key: `${org}:${handle}` })).success) return c.json({ error: "rate limited" }, 429);
   const body = CardUpload.safeParse(await c.req.json().catch(() => null));
   if (!body.success) return c.json({ error: "invalid card" }, 400);
@@ -116,30 +113,15 @@ app.put("/v1/card", async (c) => {
 });
 
 app.get("/v1/card/:handle", async (c) => {
-  // Throttled before anything else, unlike /v1/status above: card reads stay
-  // deliberately anonymous (the extended-card view below is designed for an
-  // unauthenticated viewer), so a per-IP cost ceiling is the only thing
-  // bounding someone scraping the whole handle namespace through them.
+  const identity = await authenticateRequest(c.env.DB, c.req);
+  if (!identity) return c.json({ error: "unauthorized" }, 401);
+  const { org, handle: viewer } = identity;
   const ip = c.req.header("cf-connecting-ip") ?? "unknown";
   if (!(await c.env.READ_RL.limit({ key: ip })).success) return c.json({ error: "rate limited" }, 429);
   const handle = c.req.param("handle");
-  const org = requestOrg(c.req);
-  if (!org) return c.json({ error: "no card" }, 404);
   const row = await c.env.DB.prepare("SELECT card_json, updated_at FROM cards WHERE org = ? AND handle = ?")
     .bind(org, handle).first<{ card_json: string; updated_at: number }>();
   if (!row) return c.json({ error: "no card" }, 404);
-
-  // Optional caller auth selects the extended view (A2A "extended agent
-  // card" pattern): the viewer sees default_offer plus their own grants,
-  // never the full ACL. Present-but-invalid credentials are rejected
-  // rather than silently downgraded to the public view.
-  let viewer = "";
-  const viewerHandle = c.req.header("X-AgentCall-Handle") ?? "";
-  const token = (c.req.header("Authorization") ?? "").replace(/^Bearer\s+/i, "");
-  if (viewerHandle || token) {
-    if (!(await verifyHandleToken(c.env.DB, org, viewerHandle, token))) return c.json({ error: "unauthorized" }, 401);
-    viewer = viewerHandle;
-  }
 
   const upload = CardUpload.parse(JSON.parse(row.card_json));
   return c.json({
@@ -154,10 +136,9 @@ app.get("/v1/card/:handle", async (c) => {
 app.get("/v1/ws", async (c) => {
   if (c.req.header("Upgrade")?.toLowerCase() !== "websocket") return c.json({ error: "expected websocket" }, 426);
   const role = c.req.query("role");
-  const handle = c.req.header("X-AgentCall-Handle") ?? "";
-  const org = requestOrg(c.req);
-  const token = (c.req.header("Authorization") ?? "").replace(/^Bearer\s+/i, "");
-  if (!org || !(await verifyHandleToken(c.env.DB, org, handle, token))) return c.json({ error: "unauthorized" }, 401);
+  const identity = await authenticateRequest(c.env.DB, c.req);
+  if (!identity) return c.json({ error: "unauthorized" }, 401);
+  const { org, handle } = identity;
 
   let target: string;
   if (role === "listen") {

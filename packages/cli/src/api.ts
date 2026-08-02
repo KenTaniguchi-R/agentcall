@@ -186,12 +186,11 @@ export async function fetchRosterBundle(
 }
 
 export async function fetchCard(
-  relay: string, handle: string, context: { org: string; handle?: string; token?: string },
+  relay: string, handle: string, auth: Auth,
   opts: { timeoutMs?: number } = {},
 ): Promise<AgentCardType> {
-  const headers: Record<string, string> = { "X-AgentCall-Org": context.org };
-  if (context.handle && context.token) Object.assign(headers, authHeaders(context as Auth));
-  const res = await relayFetch(relay, `/v1/card/${handle}`, { headers }, opts.timeoutMs ?? RELAY_TIMEOUT_MS);
+  const res = await relayFetch(relay, `/v1/card/${handle}`, { headers: authHeaders(auth) }, opts.timeoutMs ?? RELAY_TIMEOUT_MS);
+  if (res.status === 401) throw new ApiError("Your credentials were rejected. Re-run `agentcall setup`.", "invalid");
   if (res.status === 404) throw new ApiError(`No card published for "${handle}".`, "unknown_handle");
   if (!res.ok) throw new ApiError(`Card fetch failed (${res.status}).`, "network");
   return AgentCard.parse(await res.json());

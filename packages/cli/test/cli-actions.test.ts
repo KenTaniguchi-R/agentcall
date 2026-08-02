@@ -101,6 +101,12 @@ describe.sequential("CLI command actions", () => {
     expect(out.stderr).toMatch(/agentcall setup/);
   });
 
+  it("requires setup before fetching another agent's card", async () => {
+    const out = await runCommand(home(), ["card", "ken@acme.agentcall.benree.tech"]);
+    expect(out.code).toBe(1);
+    expect(out.stderr).toMatch(/agentcall setup/);
+  });
+
   it("captures Commander validation failures without exiting the process", async () => {
     const out = await runCommand(home(), ["roster", "join", A]);
     expect(out.code).toBe(1);

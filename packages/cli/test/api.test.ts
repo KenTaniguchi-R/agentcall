@@ -207,6 +207,9 @@ describe("pushCard / fetchCard", () => {
       tasks: [{ id: "ask", name: "Ask", description: "d", examples: [], keywords: [] }], updated_at: 1,
     };
     const relay = await startServer((req, res) => {
+      expect(req.headers.authorization).toBe("Bearer tok");
+      expect(req.headers["x-agentcall-org"]).toBe("acme");
+      expect(req.headers["x-agentcall-handle"]).toBe("viewer");
       if (req.url === "/v1/card/ken") {
         res.writeHead(200, { "content-type": "application/json" });
         res.end(JSON.stringify(card));
@@ -215,8 +218,15 @@ describe("pushCard / fetchCard", () => {
         res.end(JSON.stringify({ error: "no card" }));
       }
     });
-    expect(await fetchCard(relay, "ken", { org: "acme" })).toMatchObject({ handle: "ken" });
-    await expect(fetchCard(relay, "ghost", { org: "acme" })).rejects.toMatchObject({ code: "unknown_handle" });
+    const auth = { org: "acme", handle: "viewer", token: "tok" };
+    expect(await fetchCard(relay, "ken", auth)).toMatchObject({ handle: "ken" });
+    await expect(fetchCard(relay, "ghost", auth)).rejects.toMatchObject({ code: "unknown_handle" });
+  });
+
+  it("maps rejected card credentials to the setup recovery message", async () => {
+    const relay = await serve(401, { error: "unauthorized" });
+    await expect(fetchCard(relay, "ken", { org: "acme", handle: "viewer", token: "bad" }))
+      .rejects.toMatchObject({ message: expect.stringMatching(/agentcall setup/) });
   });
 });
 

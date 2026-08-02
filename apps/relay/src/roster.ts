@@ -1,14 +1,14 @@
-import type { Context, Hono } from "hono";
+import type { Hono } from "hono";
 // Type-only, so the index -> roster -> index cycle is erased at compile time
 // and never exists at runtime. Do not turn this into a value import — the
 // same rule a2a.ts follows.
 import type { Env } from "./index.js";
-import { constantTimeEqual, generateToken, sha256Hex, verifyHandleToken } from "./auth.js";
+import { constantTimeEqual, generateToken, sha256Hex } from "./auth.js";
 import {
   CardUpload, JoinRosterRequest, MAX_BUNDLE_TASKS_PER_CARD, MAX_ROSTER_MEMBERS,
   ROSTER_ID_RE, visibleTasks,
 } from "@benree/agentcall-shared";
-import { requestOrg } from "./tenant.js";
+import { authenticateRequest } from "./tenant.js";
 
 // 16 random bytes, base64url — 22 chars, inside ROSTER_ID_RE's 16..64 window.
 // Unguessable but not secret: it travels in URL paths and will be logged.
@@ -17,21 +17,9 @@ function generateRosterId(): string {
   return btoa(String.fromCharCode(...bytes)).replaceAll("+", "-").replaceAll("/", "_").replaceAll("=", "");
 }
 
-// Returns the verified handle, or null. Every roster route calls this first:
-// possession of a handle token is the floor, not the gate — registration is
-// open, so membership is what actually authorizes.
-type Identity = { org: string; handle: string };
-
-async function auth(c: Context<{ Bindings: Env }>): Promise<Identity | null> {
-  const org = requestOrg(c.req);
-  const handle = c.req.header("X-AgentCall-Handle") ?? "";
-  const token = (c.req.header("Authorization") ?? "").replace(/^Bearer\s+/i, "");
-  return org && (await verifyHandleToken(c.env.DB, org, handle, token)) ? { org, handle } : null;
-}
-
 export function mountRoster(app: Hono<{ Bindings: Env }>): void {
   app.post("/v1/roster", async (c) => {
-    const identity = await auth(c);
+    const identity = await authenticateRequest(c.env.DB, c.req);
     if (!identity) return c.json({ error: "unauthorized" }, 401);
     const { org, handle } = identity;
     // Reuses REGISTER_RL with a distinct key prefix, the same technique
@@ -57,7 +45,7 @@ export function mountRoster(app: Hono<{ Bindings: Env }>): void {
   const NOT_FOUND = { error: "not found" } as const;
 
   app.post("/v1/roster/:id/join", async (c) => {
-    const identity = await auth(c);
+    const identity = await authenticateRequest(c.env.DB, c.req);
     if (!identity) return c.json({ error: "unauthorized" }, 401);
     const { org, handle } = identity;
 
@@ -101,7 +89,7 @@ export function mountRoster(app: Hono<{ Bindings: Env }>): void {
   });
 
   app.get("/v1/roster/:id/bundle", async (c) => {
-    const identity = await auth(c);
+    const identity = await authenticateRequest(c.env.DB, c.req);
     if (!identity) return c.json({ error: "unauthorized" }, 401);
     const { org, handle: viewer } = identity;
 
