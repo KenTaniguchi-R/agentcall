@@ -3,7 +3,7 @@
 Call another person's coding agent (Claude Code or Codex) on their Mac, across the
 public internet, like a phone call. Install with one command, get an address
 (`ken@acme.agentcall.benree.tech`), share it. When someone calls your address, your Mac
-spawns a one-shot agent that answers, even while you're away.
+spawns an agent that answers, even while you're away.
 
 ## How a call works
 
@@ -34,8 +34,8 @@ understands `call_answer`, so it never emits `call_status answered` today; the
 caller-facing `answered` status is dark until the relay picks up the new
 frames.
 
-Non-goals for v1: store-and-forward, multi-turn conversations (that's v1.5),
-non-macOS platforms, anonymous callers, payment/reputation.
+Non-goals for v1: store-and-forward, non-macOS platforms, anonymous callers,
+payment/reputation.
 
 ## Install
 
@@ -103,6 +103,28 @@ an anonymous or wrong-tenant probe cannot use 404 responses to enumerate an
 organization's handles or published tasks. The generic relay card at
 `/.well-known/agent-card.json` remains public because it contains no tenant or
 employee data.
+
+### Following up
+
+A reply can leave the conversation open, letting you ask a follow-up without
+restating the question:
+
+```bash
+agentcall call ken@acme.agentcall.benree.tech "why did CI fail?"
+# ... answer ...
+agentcall call ken@acme.agentcall.benree.tech "which commit?" --continue
+```
+
+`--continue` resumes your last open conversation with that address;
+`--context <id>` targets a specific one instead. Conversations expire 30
+minutes after the last turn and are capped at 10 turns. They are scoped to
+you and to the task they started on, so a conversation cannot be handed to
+someone else or moved to a different task. A conversation also ends if the
+owner changes the agent they run or the directory it answers from.
+
+Tasks that grant `write` or `exec` are not conversational by default, because
+a caller's earlier messages stay in the agent's context across turns. Set
+`threadable: true` in a task's `SKILL.md` frontmatter to opt in.
 
 ```bash
 # Replace your relay token if it may have leaked
@@ -253,9 +275,14 @@ and never leave your machine.
   - Codex: `codex exec --sandbox read-only|workspace-write --cd <workdir>`.
     Codex has no per-tool granularity, so the task's `write` capability maps
     onto its native sandbox level instead.
+  - A continued call (`--continue`/`--context`) spawns the same way but adds
+    the resume form — `claude --resume <id>` or `codex exec resume <id>` —
+    instead of starting a fresh session.
 - Every call — accepted or not — appends a JSONL line to
-  `~/.agentcall/calls.log`: `{ts, call_id, from, message, status, duration_ms}`.
-  That's your audit trail of who called and what happened.
+  `~/.agentcall/calls.log`: `{ts, call_id, from, message, task, status,
+  duration_ms}`, plus `context_id` (the opaque conversation token, never the
+  agent's real session id) and `turn` once a call actually completes. That's
+  your audit trail of who called and what happened.
 - A 5-minute kill timer (SIGTERM then SIGKILL) bounds each spawned agent; the
   relay enforces its own 6-minute hard timeout per call on top of that.
 
@@ -422,10 +449,6 @@ stale claims, and the one-worktree-per-session rule.
 
 - **macOS only.** The LaunchAgent listener is Mac-specific; there's no
   Linux/Windows callee support yet.
-- **One-shot calls only.** No multi-turn conversations yet — each call is a
-  single message in, single reply out. The protocol already carries an
-  optional `session_id` so `agentcall call --continue` can thread through
-  `--resume` in v1.5, but that's not implemented yet.
 - **The relay operator sees message plaintext.** Calls are relayed through a
   single shared Cloudflare Worker (Ryusei-hosted); there's no end-to-end
   encryption, so treat call content as visible to the relay operator.
@@ -438,3 +461,10 @@ stale claims, and the one-worktree-per-session rule.
 - **No OS-level isolation of the answering agent.** See the security model
   section above — this is a deliberate trade, and it is the main reason to be
   selective about who gets your address.
+- **One caller can monopolise your agent.** Calls are answered strictly one at
+  a time — a second concurrent call gets `busy` — and a single call may run up
+  to five minutes before it times out. The hourly cap of 30 calls per caller
+  does not bound that: 30 × 5 minutes is more listener time than the hour
+  contains, so a caller making sustained long-running calls can keep everyone
+  else out. The remedy is `agentcall block <handle>`, which is the same posture
+  as the rest of this — you gave that person your address.

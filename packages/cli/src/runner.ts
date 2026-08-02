@@ -4,6 +4,11 @@ import { AGENT_TIMEOUT_MS, MAX_REPLY_BYTES } from "@benree/agentcall-shared";
 import { resolveAgentBin } from "./bin.js";
 import { CAPS, FULL_ACCESS_ENVELOPE, type Cap, type Envelope } from "./tasks.js";
 
+// Gated on the codex-resume-sandbox probe. See that test and Task 5 of the
+// multi-turn plan: if `-c sandbox_mode` does not confine a resumed session,
+// threading codex would let a read-only task write to disk, so it stays off.
+export const CODEX_THREADING_ENABLED = true;
+
 export type AgentKind = "claude" | "codex";
 export interface SpawnSpec { cmd: string; args: string[]; cwd: string; env?: NodeJS.ProcessEnv }
 export interface AgentOutput { text: string; session_id?: string }
@@ -107,13 +112,19 @@ export function claudeAllowedTools(envelope: Envelope): string {
 export function buildSpawnSpec(
   kind: AgentKind, prompt: string, workdir: string, resolveBin: (kind: AgentKind) => string = resolveAgentBin,
   envelope: Envelope = FULL_ACCESS_ENVELOPE, callId: string = "unknown",
+  // The REAL agent session id, resolved from a context binding by the listener.
+  // A caller-supplied context id must never reach this parameter.
+  resume?: string,
 ): SpawnSpec {
   if (kind === "claude") {
     return {
       cmd: resolveBin(kind),
-      args: ["-p", prompt, "--output-format", "json",
+      args: [
+        ...(resume ? ["--resume", resume] : []),
+        "-p", prompt, "--output-format", "json",
         "--permission-mode", "dontAsk", "--allowedTools", claudeAllowedTools(envelope),
-        "--settings", guardSettingsJson()],
+        "--settings", guardSettingsJson(),
+      ],
       cwd: workdir,
       env: { ...process.env, AGENTCALL_CALL_ID: callId },
     };
@@ -123,6 +134,22 @@ export function buildSpawnSpec(
   // --allowedTools, and now the only thing confining its writes. Note it does
   // NOT confine reads: `codex exec --sandbox read-only` still reads ~/.ssh.
   const sandbox = envelope.caps.includes("write") ? "workspace-write" : "read-only";
+  if (resume) {
+    // `codex exec resume` accepts neither --sandbox nor --cd (verified against
+    // the installed CLI, 2026-08-01). --sandbox is the ONLY thing confining
+    // codex's writes, so the envelope rides the -c config override instead;
+    // packages/cli/test/codex-resume-sandbox.probe.test.ts is what proves that
+    // override is actually honoured. The working directory is inherited from
+    // the recorded session, which is why the context binding pins workdir and
+    // refuses a resume when it changed.
+    return {
+      cmd: resolveBin(kind),
+      args: ["exec", "resume", resume, "--ignore-user-config", "--skip-git-repo-check",
+        "--json", "-c", guardCodexConfigArg(), "-c", `sandbox_mode="${sandbox}"`, prompt],
+      cwd: workdir,
+      env: { ...process.env, AGENTCALL_CALL_ID: callId, AGENTCALL_GUARD_MODE: "observe" },
+    };
+  }
   return {
     cmd: resolveBin(kind),
     // --ignore-user-config drops the owner's ~/.codex: their MCP servers,
@@ -184,8 +211,12 @@ export function truncateUtf8(text: string, maxBytes: number): string {
 export function runAgent(
   kind: AgentKind, prompt: string, workdir: string, timeoutMs: number = AGENT_TIMEOUT_MS, specOverride?: SpawnSpec,
   envelope: Envelope = FULL_ACCESS_ENVELOPE, callId: string = "unknown", signal?: AbortSignal,
+  // Note for a later cleanup (not done here): runAgent now takes nine
+  // positional parameters and should become an options object. That belongs
+  // with the #49 work in #48 Phase 1, not in this change.
+  resume?: string,
 ): Promise<AgentOutput> {
-  const spec = specOverride ?? buildSpawnSpec(kind, prompt, workdir, resolveAgentBin, envelope, callId);
+  const spec = specOverride ?? buildSpawnSpec(kind, prompt, workdir, resolveAgentBin, envelope, callId, resume);
   return new Promise<AgentOutput>((resolve, reject) => {
     // detached: true makes the child its own process group leader, so any
     // grandchildren it forks share its process group unless they detach

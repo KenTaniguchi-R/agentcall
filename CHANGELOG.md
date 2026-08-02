@@ -6,6 +6,31 @@ which are released together.
 
 ## Unreleased
 
+### Added — multi-turn calls: `agentcall call --continue`
+
+- **`agentcall call <address> "..." --continue`** follows up on your last
+  conversation with that address instead of starting a fresh one, reusing the
+  answering agent's session. `--context <id>` targets a specific conversation
+  by id rather than "the last one". Conversations expire 30 minutes after
+  their last turn and are capped at 10 turns; a conversation is scoped to the
+  caller and to the task it started on, and cannot be handed to someone else
+  or moved to another task.
+- **`threadable` in a task's `SKILL.md` frontmatter** opts a task into
+  `--continue`. Tasks granting `write` or `exec` are not conversational by
+  default — a caller's earlier messages persist in the agent's context across
+  turns, which is a materially worse risk against those capabilities than
+  against a read-only one — but read-only tasks default to threadable.
+
+### Changed — `session_id` is now an opaque callee-minted `context_id`
+
+- The protocol's `session_id` field is renamed `context_id` and no longer
+  carries the answering agent's real session id — that value never leaves the
+  callee's machine. `context_id` is instead a token the callee mints and
+  hands the caller back, which the callee looks up against its own local
+  binding store on the next turn.
+- `RATE_LIMIT_PER_HOUR` raised from 10 to 30, so a normal multi-turn
+  conversation doesn't consume a caller's entire hourly budget.
+
 ### Fixed — `doctor`'s tool-guard check called healthy installs broken
 
 The check asked a real `claude` spawn to read a canary `.env` and required a

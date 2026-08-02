@@ -1,6 +1,7 @@
-import { readFileSync } from "node:fs";
+import { chmodSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { isAbsolute, join } from "node:path";
+import { dirname, isAbsolute, join } from "node:path";
+import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
 import { buildPrompt } from "../src/prompt.js";
 import {
@@ -25,7 +26,7 @@ describe("buildPrompt", () => {
   it("embeds the task name, id, and SKILL.md content when a non-ask task is given", () => {
     const task: Task = {
       id: "schedule-meeting", name: "Schedule a meeting", description: "Book a time.",
-      examples: [], keywords: [], envelope: { caps: ["read"] },
+      examples: [], keywords: [], envelope: { caps: ["read"] }, threadable: true,
       skill: "# Steps\nCheck the calendar first.",
     };
     const out = buildPrompt("ken", "shusaku", "next tue?", task);
@@ -287,6 +288,59 @@ describe("runAgent (with a fake agent binary)", () => {
   }, 15_000);
 });
 
+// runAgent forwards nine positionals to buildSpawnSpec. `callId` and `resume`
+// are adjacent and both `string | undefined`, so transposing them typechecks
+// cleanly and would hand the call id to `--resume` — a wrong value landing next
+// to the flag that decides which session gets resumed. Every other runAgent
+// test passes a specOverride, which skips buildSpawnSpec entirely, so nothing
+// pins that forwarding. This drives the real path (resolveAgentBin included)
+// against a fake `claude` that records its argv and env instead of answering.
+describe("runAgent -> buildSpawnSpec forwarding", () => {
+  // Durable (not under $TMPDIR): preferDurableBin deliberately skips ephemeral
+  // dirs, so a fake planted in os.tmpdir() would be passed over. Same trick as
+  // test/bin.test.ts.
+  const binDir = join(dirname(fileURLToPath(import.meta.url)), "..", ".tmp", `runner-${process.pid}-bin`);
+  const capture = join(binDir, "spawn.txt");
+  const q = (s: string) => JSON.stringify(s); // sh-safe: these paths have no quotes
+
+  it("passes resume to --resume and callId to AGENTCALL_CALL_ID, not the reverse", async () => {
+    const realPath = process.env.PATH;
+    try {
+      mkdirSync(binDir, { recursive: true });
+      const fake = join(binDir, "claude");
+      writeFileSync(fake, [
+        "#!/bin/sh",
+        `: > ${q(capture)}`,
+        `for a in "$@"; do printf '%s\\n' "$a" >> ${q(capture)}; done`,
+        `printf 'ENV_CALL_ID=%s\\n' "$AGENTCALL_CALL_ID" >> ${q(capture)}`,
+        `printf '%s\\n' '{"type":"result","result":"ok","session_id":"s"}'`,
+        "",
+      ].join("\n"));
+      chmodSync(fake, 0o755);
+      // ONLY the fake dir, so resolveAgentBin cannot fall through to a real
+      // claude install on the developer's PATH.
+      process.env.PATH = binDir;
+
+      // A real, existing cwd: the spawn inherits it, and a missing one fails
+      // as ENOENT against the command itself. (WORKDIR is a path fixture under
+      // a home that was never created.)
+      const out = await runAgent(
+        "claude", "PROMPT", tmpdir(), 10_000, undefined, { caps: ["read"] },
+        "call-id-not-a-session", undefined, "session-id-not-a-call",
+      );
+      expect(out.text).toBe("ok");
+
+      const argv = readFileSync(capture, "utf8").split("\n");
+      expect(argv[argv.indexOf("--resume") + 1]).toBe("session-id-not-a-call");
+      expect(argv).toContain("ENV_CALL_ID=call-id-not-a-session");
+      expect(argv).not.toContain("call-id-not-a-session"); // never in argv at all
+    } finally {
+      if (realPath !== undefined) process.env.PATH = realPath;
+      rmSync(binDir, { recursive: true, force: true });
+    }
+  }, 15_000);
+});
+
 describe("envelope-scoped spawn spec", () => {
   const READ_ONLY: Envelope = { caps: ["read"] };
 
@@ -396,6 +450,73 @@ describe("guard hook wiring", () => {
   it("keeps the prompt last, after the -c override", () => {
     const spec = buildSpawnSpec("codex", "PROMPT", WORKDIR, () => "/bin/codex");
     expect(spec.args.at(-1)).toBe("PROMPT");
+  });
+});
+
+describe("buildSpawnSpec resume (claude)", () => {
+  const bin = () => "/usr/bin/claude";
+
+  it("adds --resume with the agent session id", () => {
+    const spec = buildSpawnSpec("claude", "hi", "/w", bin, { caps: ["read"] }, "c1", "sess-abc");
+    const i = spec.args.indexOf("--resume");
+    expect(i).toBeGreaterThan(-1);
+    expect(spec.args[i + 1]).toBe("sess-abc");
+  });
+
+  it("omits --resume when no session is given", () => {
+    const spec = buildSpawnSpec("claude", "hi", "/w", bin, { caps: ["read"] }, "c1");
+    expect(spec.args).not.toContain("--resume");
+  });
+
+  // The envelope is re-applied per spawn, so a resumed session cannot inherit
+  // capabilities from the turn that created it.
+  it("still carries the full envelope and guard on a resumed spawn", () => {
+    const spec = buildSpawnSpec("claude", "hi", "/w", bin, { caps: ["read"] }, "c1", "sess-abc");
+    expect(spec.args).toContain("--allowedTools");
+    expect(spec.args).toContain("--permission-mode");
+    expect(spec.args).toContain("dontAsk");
+    expect(spec.args).toContain("--settings");
+    expect(spec.args[spec.args.indexOf("--allowedTools") + 1]).toBe("Read,Grep,Glob,LS");
+  });
+
+  it("keeps the prompt as the -p value", () => {
+    const spec = buildSpawnSpec("claude", "follow up", "/w", bin, { caps: ["read"] }, "c1", "sess-abc");
+    expect(spec.args[spec.args.indexOf("-p") + 1]).toBe("follow up");
+  });
+});
+
+describe("buildSpawnSpec resume (codex)", () => {
+  const bin = () => "/usr/bin/codex";
+
+  it("uses the resume subcommand with the session id", () => {
+    const spec = buildSpawnSpec("codex", "hi", "/w", bin, { caps: ["read"] }, "c1", "sess-abc");
+    expect(spec.args.slice(0, 3)).toEqual(["exec", "resume", "sess-abc"]);
+  });
+
+  // resume has no --sandbox, so the envelope rides the config override instead.
+  // Without this the resumed session keeps whatever sandbox it was created with.
+  it("re-applies the envelope through -c sandbox_mode", () => {
+    const ro = buildSpawnSpec("codex", "hi", "/w", bin, { caps: ["read"] }, "c1", "sess-abc");
+    expect(ro.args).toContain(`sandbox_mode="read-only"`);
+    const rw = buildSpawnSpec("codex", "hi", "/w", bin, { caps: ["read", "write"] }, "c1", "sess-abc");
+    expect(rw.args).toContain(`sandbox_mode="workspace-write"`);
+  });
+
+  it("never passes --sandbox or --cd on a resume, which the subcommand rejects", () => {
+    const spec = buildSpawnSpec("codex", "hi", "/w", bin, { caps: ["read"] }, "c1", "sess-abc");
+    expect(spec.args).not.toContain("--sandbox");
+    expect(spec.args).not.toContain("--cd");
+  });
+
+  it("keeps --ignore-user-config and the guard on a resumed spawn", () => {
+    const spec = buildSpawnSpec("codex", "hi", "/w", bin, { caps: ["read"] }, "c1", "sess-abc");
+    expect(spec.args).toContain("--ignore-user-config");
+    expect(spec.args.some((a) => a.startsWith("hooks.PreToolUse="))).toBe(true);
+  });
+
+  it("puts the prompt last", () => {
+    const spec = buildSpawnSpec("codex", "follow up", "/w", bin, { caps: ["read"] }, "c1", "sess-abc");
+    expect(spec.args.at(-1)).toBe("follow up");
   });
 });
 

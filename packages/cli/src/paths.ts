@@ -7,6 +7,8 @@ export interface Paths {
   tasksDir: string; policyFile: string; cardSnapshotFile: string;
   contactsFile: string;
   rostersFile: string; rosterCacheFile: string;
+  contextsFile: string;
+  contextsOutFile: string;
 }
 
 export function getPaths(home: string = process.env.AGENTCALL_HOME ?? os.homedir()): Paths {
@@ -24,5 +26,7 @@ export function getPaths(home: string = process.env.AGENTCALL_HOME ?? os.homedir
     contactsFile: join(dir, "contacts.json"),
     rostersFile: join(dir, "rosters.json"),
     rosterCacheFile: join(dir, "roster-cache.json"),
+    contextsFile: join(dir, "contexts.json"),
+    contextsOutFile: join(dir, "contexts-out.json"),
   };
 }

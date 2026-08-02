@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { MAX_DETAIL_LENGTH, RELAY_CALL_TIMEOUT_MS } from "@benree/agentcall-shared";
+import { MAX_DETAIL_LENGTH, RELAY_CALL_TIMEOUT_MS, RATE_LIMIT_PER_HOUR } from "@benree/agentcall-shared";
 import { registerHandle, wsAuth, openWs, nextFrame, closed } from "./helpers.js";
 import { clampTimeoutMs, truncateUtf8Bytes } from "../src/do.js";
 
@@ -23,8 +23,9 @@ describe("call flow", () => {
     listener.send(JSON.stringify({ type: "call_answer", call_id: incoming.call_id }));
     expect(await nextFrame(caller)).toMatchObject({ type: "call_status", state: "answered" });
 
-    listener.send(JSON.stringify({ type: "call_result", call_id: incoming.call_id, text: "4", session_id: "s1" }));
-    expect(await nextFrame(caller)).toMatchObject({ type: "call_reply", text: "4", session_id: "s1" });
+    const ctxId = "ctx_AAAAAAAAAAAAAAAAAAAAAA";
+    listener.send(JSON.stringify({ type: "call_result", call_id: incoming.call_id, text: "4", context_id: ctxId }));
+    expect(await nextFrame(caller)).toMatchObject({ type: "call_reply", text: "4", context_id: ctxId });
     expect((await closed(caller)).code).toBe(1000);
   });
 
@@ -77,19 +78,19 @@ describe("call flow", () => {
 
   it("charges the per-hour rate limit for oversized frames too, not just accepted ones", async () => {
     const { callerToken } = await setupPair("ovr-rl-callee", "ovr-rl-caller");
-    for (let i = 0; i < 10; i++) {
+    for (let i = 0; i < RATE_LIMIT_PER_HOUR; i++) {
       const c = await openWs("/v1/ws?role=call&to=ovr-rl-callee", wsAuth("ovr-rl-caller", callerToken));
       c.send(JSON.stringify({ type: "call_request", to: "ovr-rl-callee", message: "x".repeat(65_000) }));
       expect(await nextFrame(c)).toMatchObject({ type: "call_error", code: "message_too_large" });
     }
-    const eleventh = await openWs("/v1/ws?role=call&to=ovr-rl-callee", wsAuth("ovr-rl-caller", callerToken));
-    eleventh.send(JSON.stringify({ type: "call_request", to: "ovr-rl-callee", message: "one too many" }));
-    expect(await nextFrame(eleventh)).toMatchObject({ type: "call_error", code: "rate_limited" });
+    const overLimit = await openWs("/v1/ws?role=call&to=ovr-rl-callee", wsAuth("ovr-rl-caller", callerToken));
+    overLimit.send(JSON.stringify({ type: "call_request", to: "ovr-rl-callee", message: "one too many" }));
+    expect(await nextFrame(overLimit)).toMatchObject({ type: "call_error", code: "rate_limited" });
   });
 
-  it("rate limits the 11th call in an hour", async () => {
+  it("rate limits one call past the hourly limit", async () => {
     const { callerToken, listener } = await setupPair("rl-callee", "rl-caller");
-    for (let i = 0; i < 10; i++) {
+    for (let i = 0; i < RATE_LIMIT_PER_HOUR; i++) {
       const c = await openWs("/v1/ws?role=call&to=rl-callee", wsAuth("rl-caller", callerToken));
       c.send(JSON.stringify({ type: "call_request", to: "rl-callee", message: `call ${i}` }));
       await nextFrame(c); // ringing
@@ -97,9 +98,9 @@ describe("call flow", () => {
       listener.send(JSON.stringify({ type: "call_result", call_id: inc.call_id, text: "ok" }));
       await nextFrame(c); // reply
     }
-    const eleventh = await openWs("/v1/ws?role=call&to=rl-callee", wsAuth("rl-caller", callerToken));
-    eleventh.send(JSON.stringify({ type: "call_request", to: "rl-callee", message: "one too many" }));
-    expect(await nextFrame(eleventh)).toMatchObject({ type: "call_error", code: "rate_limited" });
+    const overLimit = await openWs("/v1/ws?role=call&to=rl-callee", wsAuth("rl-caller", callerToken));
+    overLimit.send(JSON.stringify({ type: "call_request", to: "rl-callee", message: "one too many" }));
+    expect(await nextFrame(overLimit)).toMatchObject({ type: "call_error", code: "rate_limited" });
   });
 
   it("times out a call whose listener never replies", async () => {

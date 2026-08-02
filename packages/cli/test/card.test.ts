@@ -11,11 +11,11 @@ import type { Config } from "../src/config.js";
 const cfg: Config = { org: "acme", handle: "ken", token: "t", agent_kind: "claude", relay: "https://r" };
 const intro: Task = {
   id: "owner-introduction", name: "Intro", description: "Introduce the owner.",
-  examples: ["who is ken?"], keywords: [], envelope: { caps: ["read"] }, skill: "secret steps",
+  examples: ["who is ken?"], keywords: [], envelope: { caps: ["read"] }, threadable: true, skill: "secret steps",
 };
 const meet: Task = {
   id: "schedule-meeting", name: "Schedule", description: "Book a time.",
-  examples: [], keywords: [], envelope: { caps: ["read", "fetch"] }, skill: "",
+  examples: [], keywords: [], envelope: { caps: ["read", "fetch"] }, threadable: true, skill: "",
 };
 
 describe("buildCardUpload", () => {
@@ -55,7 +55,7 @@ describe("buildCardUpload", () => {
       { org: "acme", handle: "ken", token: "t", agent_kind: "claude", relay: "https://r.test" },
       { description: "d", default_offer: ["adr"], callers: {} },
       [{ id: "adr", name: "ADR", description: "Why.", examples: [],
-         keywords: ["auth", "migration"], envelope: { caps: ["read"] }, skill: "" }],
+         keywords: ["auth", "migration"], envelope: { caps: ["read"] }, threadable: true, skill: "" }],
     );
     expect(upload.tasks[0]!.keywords).toEqual(["auth", "migration"]);
   });
