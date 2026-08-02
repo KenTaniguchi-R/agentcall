@@ -23,6 +23,20 @@ async function handleExists(db: D1Database, org: string, handle: string): Promis
   return !!(await db.prepare("SELECT 1 FROM handles WHERE org = ? AND handle = ?").bind(org, handle).first());
 }
 
+function registrationDatabaseFailure(error: unknown) {
+  const message = error instanceof Error ? error.message : "";
+  let kind = "unknown";
+  if (/no such (?:table|column)|has no column named|database schema/i.test(message)) kind = "schema";
+  else if (/constraint failed|SQLITE_CONSTRAINT/i.test(message)) kind = "constraint";
+  else if (/timeout|timed out|connection|network|unavailable|internal error/i.test(message)) kind = "unavailable";
+  // Do not log the raw D1 message: wrappers may include SQL or bound values.
+  console.error("registration database failure", {
+    name: error instanceof Error ? error.name : "UnknownError",
+    kind,
+  });
+  return { error: "registration temporarily unavailable" } as const;
+}
+
 app.post("/v1/register", async (c) => {
   const ip = c.req.header("cf-connecting-ip") ?? "unknown";
   if (!(await checkLimit(c.env, ip, REGISTER))) return c.json({ error: "rate limited" }, 429);
@@ -30,27 +44,44 @@ app.post("/v1/register", async (c) => {
   if (!body.success) return c.json({ error: "invalid request" }, 400);
   const { invite, handle, agent_kind } = body.data;
   const inviteHash = await sha256Hex(invite);
-  const inviteRow = await c.env.DB.prepare(
-    "SELECT org FROM invites WHERE token_hash = ? AND used_at IS NULL AND expires_at > ?",
-  ).bind(inviteHash, Date.now()).first<{ org: string }>();
+  let inviteRow: { org: string } | null;
+  try {
+    inviteRow = await c.env.DB.prepare(
+      "SELECT org FROM invites WHERE token_hash = ? AND used_at IS NULL AND expires_at > ?",
+    ).bind(inviteHash, Date.now()).first<{ org: string }>();
+  } catch (error) {
+    return c.json(registrationDatabaseFailure(error), 503, { "Retry-After": "5" });
+  }
   if (!inviteRow) return c.json({ error: "invalid invite" }, 404);
   const org = inviteRow.org;
   const token = generateToken();
   try {
     const now = Date.now();
+    const tokenHash = await sha256Hex(token);
     const results = await c.env.DB.batch([
       c.env.DB.prepare(
         "INSERT INTO handles (org, handle, token_hash, agent_kind, created_at) " +
           "SELECT org, ?, ?, ?, ? FROM invites " +
-          "WHERE token_hash = ? AND used_at IS NULL AND expires_at > ?",
-      ).bind(handle, await sha256Hex(token), agent_kind ?? null, now, inviteHash, now),
+          "WHERE token_hash = ? AND used_at IS NULL AND expires_at > ? " +
+          "ON CONFLICT(org, handle) DO NOTHING",
+      ).bind(handle, tokenHash, agent_kind ?? null, now, inviteHash, now),
       c.env.DB.prepare(
-        "UPDATE invites SET used_at = ?, used_by = ? WHERE token_hash = ? AND used_at IS NULL",
-      ).bind(now, handle, inviteHash),
+        "UPDATE invites SET used_at = ?, used_by = ? " +
+          "WHERE token_hash = ? AND used_at IS NULL AND EXISTS (" +
+          "SELECT 1 FROM handles WHERE org = invites.org AND handle = ? AND token_hash = ?)",
+      ).bind(now, handle, inviteHash, handle, tokenHash),
     ]);
-    if ((results[0].meta.changes ?? 0) !== 1) return c.json({ error: "invalid invite" }, 404);
-  } catch {
-    return c.json({ error: "handle taken" }, 409);
+    if ((results[0].meta.changes ?? 0) !== 1) {
+      if (await handleExists(c.env.DB, org, handle)) return c.json({ error: "handle taken" }, 409);
+      return c.json({ error: "invalid invite" }, 404);
+    }
+    if ((results[1].meta.changes ?? 0) !== 1) throw new Error("registration invite update invariant failed");
+  } catch (error) {
+    return c.json(
+      registrationDatabaseFailure(error),
+      503,
+      { "Retry-After": "5" },
+    );
   }
   return c.json({ org, token, address: `${handle}@${registrationAddressHost(org, c.req.url)}` });
 });

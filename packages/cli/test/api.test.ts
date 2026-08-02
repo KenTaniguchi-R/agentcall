@@ -67,6 +67,13 @@ describe("api client", () => {
     const relay = await serve(409, { error: "handle taken" });
     await expect(registerHandle(relay, "valid-invite", "ken", "claude")).rejects.toMatchObject({ code: "handle_taken" });
   });
+  it("maps a temporarily unavailable registration service to a retryable network error", async () => {
+    const relay = await serve(503, { error: "registration temporarily unavailable" });
+    await expect(registerHandle(relay, "valid-invite", "ken", "claude")).rejects.toMatchObject({
+      code: "network",
+      message: expect.stringMatching(/temporarily unavailable.*try again/i),
+    });
+  });
   it("maps an invalid, expired, or consumed invite to invite_invalid", async () => {
     const relay = await serve(404, { error: "invalid invite" });
     await expect(registerHandle(relay, "invalid-invite", "ken", "claude"))
