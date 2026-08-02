@@ -1,4 +1,6 @@
-import { HANDLE_RE, RESERVED_HANDLES, AgentCard, type AgentCardType, type CardUploadType } from "@benree/agentcall-shared";
+import {
+  HANDLE_RE, RESERVED_HANDLES, AgentCard, type AgentCardType, type AgentKind, type CardUploadType,
+} from "@benree/agentcall-shared";
 
 export class ApiError extends Error {
   constructor(message: string, public code: "handle_taken" | "invalid" | "unknown_handle" | "network") {
@@ -38,7 +40,7 @@ async function relayFetch(relay: string, path: string, init: RequestInit, timeou
 }
 
 export async function registerHandle(
-  relay: string, handle: string, agentKind?: "claude" | "codex", opts: { timeoutMs?: number } = {},
+  relay: string, handle: string, agentKind?: AgentKind, opts: { timeoutMs?: number } = {},
 ): Promise<{ token: string; address: string }> {
   assertValidHandle(handle);
   const res = await relayFetch(

@@ -1,12 +1,13 @@
 import { existsSync, mkdirSync, readFileSync, statSync, writeFileSync, chmodSync } from "node:fs";
 import { isAbsolute } from "node:path";
+import type { AgentKind } from "@benree/agentcall-shared";
 import type { Paths } from "./paths.js";
 
 export interface Config {
   handle: string;
   token: string;
   // Absent = caller-only: this install can call others but is not callable.
-  agent_kind?: "claude" | "codex";
+  agent_kind?: AgentKind;
   relay: string;
   // Absolute path the answering agent runs in. Absent = ~/AgentCall/public.
   // Deliberately not prompted for during setup: "which directory should your
@@ -17,7 +18,7 @@ export interface Config {
   workdir?: string;
 }
 
-export type CallableConfig = Config & { agent_kind: "claude" | "codex" };
+export type CallableConfig = Config & { agent_kind: AgentKind };
 
 // Guards commands that spawn the local agent: a caller-only install has no
 // agent_kind and cannot answer calls.

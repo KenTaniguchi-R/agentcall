@@ -122,10 +122,14 @@ export const ListenerToRelayFrame = z.discriminatedUnion("type", [
 export const RelayToCallerFrame = z.discriminatedUnion("type", [CallStatus, CallReply, CallError]);
 export const RelayToListenerFrame = z.discriminatedUnion("type", [IncomingCall, CancelCall]);
 
+export const AGENT_KINDS = ["claude", "codex"] as const;
+export type AgentKind = (typeof AGENT_KINDS)[number];
+export const AgentKindSchema = z.enum(AGENT_KINDS);
+
 export const RegisterRequest = z.object({
   handle: z.string().regex(HANDLE_RE),
   // Absent = caller-only: the handle can call others but is not callable.
-  agent_kind: z.enum(["claude", "codex"]).optional(),
+  agent_kind: AgentKindSchema.optional(),
 });
 export const RegisterResponse = z.object({ token: z.string(), address: z.string() });
 

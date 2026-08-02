@@ -2,6 +2,7 @@ import { execFileSync } from "node:child_process";
 import { existsSync, mkdirSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { dirname, join } from "node:path";
+import type { AgentKind } from "@benree/agentcall-shared";
 import { getPaths, type Paths } from "./paths.js";
 import { ask as ttyAsk } from "./tty.js";
 import { loadConfig, saveConfig, relayUrl, resolveWorkdir, type Config } from "./config.js";
@@ -21,7 +22,7 @@ const LAUNCHD_PATH_DIRS = ["/opt/homebrew/bin", "/usr/local/bin"];
 
 export interface SetupOpts {
   handle?: string;
-  agent?: "claude" | "codex";
+  agent?: AgentKind;
   yes?: boolean;
   snippet?: boolean;
   relay?: string;
@@ -62,7 +63,7 @@ function defaultResolveBin(name: string): string | null {
 
 async function detectAgentKind(
   opts: SetupOpts, hasBin: (name: string) => boolean, ask: (q: string) => Promise<string>,
-): Promise<"claude" | "codex"> {
+): Promise<AgentKind> {
   if (opts.agent) {
     if (opts.agent !== "claude" && opts.agent !== "codex") {
       throw new Error(`--agent must be "claude" or "codex", got "${opts.agent}"`);
@@ -172,7 +173,7 @@ export async function runSetup(opts: SetupOpts): Promise<{ ready: boolean }> {
   // On reuse the saved agent_kind is what actually gets spawned (see
   // listener.ts), so skip detection entirely — it may prompt ("Which should
   // agentcall use?") and its answer would be ignored anyway.
-  let agentKind: "claude" | "codex" | undefined;
+  let agentKind: AgentKind | undefined;
   if (callable) {
     agentKind = reusedCfg?.agent_kind ?? (await detectAgentKind(opts, hasBinFn, ask));
     warnIfOutsideLaunchdPath(agentKind, resolveBinFn);

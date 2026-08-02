@@ -4,6 +4,7 @@ import {
   HANDLE_RE, RESERVED_HANDLES, MAX_MESSAGE_BYTES, MAX_SESSION_ID_LENGTH, parseAddress, safeParseFrame,
   RegisterRequest, CallReply, IncomingCall, CallError, MAX_DETAIL_LENGTH, sanitizeDetail,
   CallAccepted, CallStarted, CancelCall, CallCancelled, CallNotCancelled, RelayToListenerFrame,
+  AGENT_KINDS, AgentKindSchema,
 } from "../src/index.js";
 
 describe("handle rules", () => {
@@ -132,6 +133,17 @@ describe("RegisterRequest", () => {
   });
   it("still rejects invalid agent kinds", () => {
     expect(RegisterRequest.safeParse({ handle: "ken", agent_kind: "vim" }).success).toBe(false);
+  });
+});
+
+describe("AgentKind", () => {
+  it("exposes the known agent kinds", () => {
+    expect(AGENT_KINDS).toEqual(["claude", "codex"]);
+  });
+
+  it("accepts a known kind and rejects an unknown one", () => {
+    expect(AgentKindSchema.parse("codex")).toBe("codex");
+    expect(AgentKindSchema.safeParse("hermes").success).toBe(false);
   });
 });
 
