@@ -97,6 +97,27 @@ describe("GET /v1/card/:handle", () => {
     const card = await res.json<{ tasks: { id: string }[] }>();
     expect(card.tasks.map((t) => t.id)).toEqual(["ask"]);
   });
+  it("projects relay-attested group grants and lets an individual block override them", async () => {
+    const target = await registerHandle("group-card");
+    const created = await (await SELF.fetch("https://relay.test/v1/roster", {
+      method: "POST", headers: wsAuth("group-card", target),
+    })).json<{ roster_id: string; join_secret: string }>();
+    const viewer = await registerHandle("group-viewer");
+    await SELF.fetch(`https://relay.test/v1/roster/${created.roster_id}/join`, {
+      method: "POST", headers: { "content-type": "application/json", ...wsAuth("group-viewer", viewer) },
+      body: JSON.stringify({ join_secret: created.join_secret }),
+    });
+    const grouped = {
+      ...UPLOAD, grants: {}, group_grants: { [created.roster_id]: ["schedule-meeting"] }, blocked: [],
+    };
+    await putCard("group-card", target, grouped);
+    let res = await SELF.fetch("https://relay.test/v1/card/group-card", { headers: wsAuth("group-viewer", viewer) });
+    expect((await res.json<{ tasks: { id: string }[] }>()).tasks.map((task) => task.id).sort())
+      .toEqual(["ask", "schedule-meeting"]);
+    await putCard("group-card", target, { ...grouped, blocked: ["group-viewer"] });
+    res = await SELF.fetch("https://relay.test/v1/card/group-card", { headers: wsAuth("group-viewer", viewer) });
+    expect((await res.json<{ tasks: { id: string }[] }>()).tasks).toEqual([]);
+  });
   // HANDLE_RE accepts "constructor", and the parsed card's `grants` object
   // inherits Object.prototype — so an unguarded `grants[viewer]` lookup yields
   // the Object constructor, which is not iterable and 500s the whole endpoint

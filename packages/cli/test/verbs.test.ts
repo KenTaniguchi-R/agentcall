@@ -8,7 +8,7 @@ const meet: Task = {
   examples: [], keywords: [], envelope: { caps: ["read"] }, threadable: true, skill: "",
 };
 const TASKS = [ASK_TASK, meet];
-const base: Policy = { description: "", default_offer: ["ask"], callers: {} };
+const base: Policy = { description: "", default_offer: ["ask"], callers: {}, groups: {} };
 
 describe("execVerb", () => {
   it("allow grants a task and reports the caller's effective menu", () => {
@@ -82,13 +82,13 @@ describe("execVerb", () => {
   });
 
   it("allow's printed menu drops a dangling policy id with no manifest on disk", () => {
-    const dangling: Policy = { description: "", default_offer: ["ask", "gone"], callers: {} };
+    const dangling: Policy = { description: "", default_offer: ["ask", "gone"], callers: {}, groups: {} };
     const { lines } = execVerb(dangling, TASKS, "allow", "ken", "schedule-meeting");
     expect(lines.join("\n")).not.toContain("gone");
     expect(lines.join("\n")).toContain("ken can now: ask, schedule-meeting");
   });
   it("offer's printed menu drops a dangling policy id with no manifest on disk", () => {
-    const dangling: Policy = { description: "", default_offer: ["ask", "gone"], callers: {} };
+    const dangling: Policy = { description: "", default_offer: ["ask", "gone"], callers: {}, groups: {} };
     const { lines } = execVerb(dangling, TASKS, "offer", "schedule-meeting");
     expect(lines.join("\n")).not.toContain("gone");
     expect(lines.join("\n")).toContain("Offered to anyone: ask, schedule-meeting");

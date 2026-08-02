@@ -16,7 +16,9 @@ describe("task fields on call frames", () => {
     expect(bad.success).toBe(false);
   });
   it("carries task through incoming_call, call_result, and call_reply", () => {
-    expect(IncomingCall.safeParse({ type: "incoming_call", call_id: "c1", from: "a", message: "m", task: "ask" }).success).toBe(true);
+    expect(IncomingCall.safeParse({
+      type: "incoming_call", call_id: "c1", from: "a", message: "m", task: "ask", groups: ["g".repeat(22)],
+    }).success).toBe(true);
     expect(CallResult.safeParse({ type: "call_result", call_id: "c1", text: "t", task: "ask" }).success).toBe(true);
     expect(CallReply.safeParse({ type: "call_reply", call_id: "c1", text: "t", task: "ask" }).success).toBe(true);
   });

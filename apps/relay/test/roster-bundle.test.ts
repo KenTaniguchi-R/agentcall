@@ -61,6 +61,19 @@ describe("GET /v1/roster/:id/bundle", () => {
     expect(ids(forOwner, "b2tanaka")).toEqual(["ask"]);
   });
 
+  it("shows tasks granted through relay-attested shared roster membership", async () => {
+    const r = await setup("bg");
+    const target = await joinAs(r.roster_id, "bgtarget", r.join_secret);
+    const viewer = await joinAs(r.roster_id, "bgviewer", r.join_secret);
+    await putCard("bgtarget", target, {
+      ...card([task("ask"), task("payroll")], ["ask"]),
+      group_grants: { [r.roster_id]: ["payroll"] },
+    });
+    const body = await (await getBundle(r.roster_id, "bgviewer", viewer)).json<any>();
+    const entry = body.entries.find((candidate: any) => candidate.handle === "bgtarget");
+    expect(entry.tasks.map((candidate: any) => candidate.id).sort()).toEqual(["ask", "payroll"]);
+  });
+
   // The claim the first design draft got wrong: an entry carrying a handle
   // still discloses membership even with zero tasks. Omission is what makes
   // a member invisible. This endpoint is a search index, not a directory.

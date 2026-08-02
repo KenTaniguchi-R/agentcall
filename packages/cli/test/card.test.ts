@@ -26,6 +26,7 @@ describe("buildCardUpload", () => {
       mia: { offer: ["+schedule-meeting"], block: false },
       spammer: { offer: ["owner-introduction"], block: true },
     },
+    groups: { eng: { roster_id: "g".repeat(22), offer: ["schedule-meeting"] } },
   };
 
   it("includes card metadata but never envelopes or SKILL.md content", () => {
@@ -40,10 +41,15 @@ describe("buildCardUpload", () => {
   it("maps caller grants (stripping + prefixes) and omits blocked callers", () => {
     const upload = buildCardUpload(cfg, policy, [ASK_TASK, intro, meet]);
     expect(upload.grants).toEqual({ mia: ["schedule-meeting"] });
+    expect(upload.group_grants).toEqual({ ["g".repeat(22)]: ["schedule-meeting"] });
+    expect(upload.blocked).toEqual(["spammer"]);
   });
 
   it("drops offered/granted ids that have no task on disk", () => {
-    const stale: Policy = { description: "", default_offer: ["ask", "gone"], callers: { mia: { offer: ["also-gone"], block: false } } };
+    const stale: Policy = {
+      description: "", default_offer: ["ask", "gone"],
+      callers: { mia: { offer: ["also-gone"], block: false } }, groups: {},
+    };
     const upload = buildCardUpload(cfg, stale, [ASK_TASK]);
     expect(upload.default_offer).toEqual(["ask"]);
     expect(upload.grants).toEqual({});
@@ -53,7 +59,7 @@ describe("buildCardUpload", () => {
   it("publishes task keywords to the relay", () => {
     const upload = buildCardUpload(
       { org: "acme", handle: "ken", token: "t", agent_kind: "claude", relay: "https://r.test" },
-      { description: "d", default_offer: ["adr"], callers: {} },
+      { description: "d", default_offer: ["adr"], callers: {}, groups: {} },
       [{ id: "adr", name: "ADR", description: "Why.", examples: [],
          keywords: ["auth", "migration"], envelope: { caps: ["read"] }, threadable: true, skill: "" }],
     );
