@@ -13,11 +13,12 @@ import { loadTasks, scaffoldTask } from "./tasks.js";
 import { execVerb, type Verb } from "./verbs.js";
 import { buildCardReport } from "./lint.js";
 import { runDoctor } from "./doctor.js";
-import { loadContacts, addContact, removeContact, resolveAddress } from "./contacts.js";
+import { resolveAddress } from "./contacts.js";
 import { DEFAULT_SEARCH_LIMIT } from "./search.js";
 import { ExitOnly, realDeps } from "./commands/deps.js";
 import { rosterCreate, rosterForget, rosterJoin, rosterList } from "./commands/roster.js";
 import { search } from "./commands/search.js";
+import { contactsAdd, contactsList, contactsRemove } from "./commands/contacts.js";
 
 export function createProgram(): Command {
 const program = new Command();
@@ -216,49 +217,17 @@ contacts
   .argument("<name>", "short name to call them by (no @)")
   .argument("<address>", "their handle@host")
   .option("--note <note>", "who they are and what to ask them about")
-  .action((name: string, address: string, o: { note?: string }) => {
-    try {
-      const result = addContact(getPaths(), name, address, o.note);
-      console.log(`${result === "added" ? "Added" : "Updated"} ${name} -> ${address}`);
-    } catch (e) {
-      console.error(String(e instanceof Error ? e.message : e));
-      process.exitCode = 1;
-    }
-  });
+  .action(run((name: string, address: string, o: { note?: string }) => contactsAdd(realDeps(), name, address, o)));
 contacts
   .command("list")
   .description("list saved contacts (name, address, who they are)")
   .option("--json", "print the raw contacts array")
-  .action((o: { json?: boolean }) => {
-    try {
-      const sorted = [...loadContacts(getPaths()).contacts].sort((a, b) => a.name.localeCompare(b.name));
-      if (o.json) {
-        console.log(JSON.stringify(sorted));
-        return;
-      }
-      if (sorted.length === 0) {
-        console.log('No contacts yet. Save one with:\n  agentcall contacts add <name> <handle@host> --note "who they are"\nThen call by name: agentcall call <name> "<message>"');
-        return;
-      }
-      for (const c of sorted) console.log(`${c.name}  ${c.address}${c.note ? `  — ${c.note}` : ""}`);
-    } catch (e) {
-      console.error(String(e instanceof Error ? e.message : e));
-      process.exitCode = 1;
-    }
-  });
+  .action(run((o: { json?: boolean }) => contactsList(realDeps(), o)));
 contacts
   .command("remove")
   .description("delete a contact")
   .argument("<name>", "contact name to delete")
-  .action((name: string) => {
-    try {
-      removeContact(getPaths(), name);
-      console.log(`Removed ${name}.`);
-    } catch (e) {
-      console.error(String(e instanceof Error ? e.message : e));
-      process.exitCode = 1;
-    }
-  });
+  .action(run((name: string) => contactsRemove(realDeps(), name)));
 
 const roster = program.command("roster").description("join and manage discovery rosters for `agentcall search`");
 
