@@ -103,6 +103,7 @@ export const VERIFY_TIMEOUT_MS = 120_000;
 // more capability than an untrusted caller would actually be granted.
 export async function checkAgentSpawn(
   kind: AgentKind, workdir: string, runFn: typeof runAgent = runAgent,
+  resolveBin: (kind: AgentKind) => string = resolveAgentBin,
 ): Promise<VerifyCheck> {
   try {
     // GUARD_PROBE_LINE (below): this spawn has no real line behind it either —
@@ -122,8 +123,18 @@ export async function checkAgentSpawn(
     // after, on every subsequent run including the one meant to diagnose it.
     // The spec is built explicitly (rather than left to runAgent's own
     // default) so this override can be applied before the spawn happens.
+    //
+    // resolveBin is a parameter, not the bare `resolveAgentBin` import, for
+    // the same reason checkAgentBinary already takes one: building the spec
+    // here (needed for the AGENTCALL_HOME override above) moved a real
+    // binary-on-PATH lookup above the runFn injection seam. A test that
+    // stubs runFn to skip a real spawn, but leaves this at its default, would
+    // still hit the real PATH lookup and throw on any machine without
+    // claude/codex installed — which is every CI runner (see CLAUDE.md's TDD
+    // section: no live claude/codex spawn in CI). verifyAgent threads
+    // fns.resolveBin through to here for exactly that reason.
     const home = mkdtempSync(join(tmpdir(), "agentcall-doctor-probe-"));
-    const spec = buildSpawnSpec(kind, VERIFY_PROMPT, workdir, resolveAgentBin, ASK_TASK.envelope, "unknown", GUARD_PROBE_LINE);
+    const spec = buildSpawnSpec(kind, VERIFY_PROMPT, workdir, resolveBin, ASK_TASK.envelope, "unknown", GUARD_PROBE_LINE);
     spec.env = { ...spec.env, AGENTCALL_HOME: home };
     await runFn(kind, VERIFY_PROMPT, workdir, VERIFY_TIMEOUT_MS, spec, ASK_TASK.envelope, "unknown", undefined, GUARD_PROBE_LINE);
     return { name: "agent run", ok: true };
@@ -151,7 +162,7 @@ export async function verifyAgent(kind: AgentKind, workdir: string, fns: VerifyF
     checks.push(auth);
     if (!auth.ok) return checks;
   }
-  checks.push(await checkAgentSpawn(kind, workdir, fns.runFn));
+  checks.push(await checkAgentSpawn(kind, workdir, fns.runFn, fns.resolveBin));
   return checks;
 }
 
