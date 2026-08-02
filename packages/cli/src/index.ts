@@ -3,7 +3,7 @@ import { Command, CommanderError } from "commander";
 import { getPaths } from "./paths.js";
 import { loadConfig, saveConfig, relayUrl, assertCallableConfig } from "./config.js";
 import { callAgent, CallError } from "./callClient.js";
-import { getStatus, fetchCard, rotateToken, createRoster, joinRoster, ApiError } from "./api.js";
+import { getStatus, fetchCard, rotateToken, ApiError } from "./api.js";
 import { startListener } from "./listener.js";
 import { runSetup } from "./setup.js";
 import { installLaunchAgent, isLaunchAgentInstalled, uninstallLaunchAgent } from "./launchd.js";
@@ -14,13 +14,29 @@ import { execVerb, type Verb } from "./verbs.js";
 import { buildCardReport } from "./lint.js";
 import { runDoctor } from "./doctor.js";
 import { loadContacts, addContact, removeContact, resolveAddress } from "./contacts.js";
-import { forgetMembership, loadMemberships, saveMembership } from "./rosters.js";
+import { loadMemberships } from "./rosters.js";
 import { allRostersFailed, DEFAULT_SEARCH_LIMIT, rank, renderResults, sanitize, toEntries, type RosterStatus, type SearchEntry } from "./search.js";
 import { refreshRoster } from "./searchRefresh.js";
+import { realDeps, rosterCreate, rosterForget, rosterJoin, rosterList } from "./commands/roster.js";
 
 export function createProgram(): Command {
 const program = new Command();
 program.name("agentcall").description("Call other people's coding agents").version("0.4.0");
+
+// The ONLY place that knows about process state. Commands throw; this
+// converts a thrown error into the message-plus-exit-code convention. Before
+// this existed the same six lines appeared 15 times and the exit code was
+// set in 23 places.
+function run<A extends unknown[]>(fn: (...a: A) => Promise<void> | void) {
+  return async (...a: A) => {
+    try {
+      await fn(...a);
+    } catch (e) {
+      console.error(e instanceof Error ? e.message : String(e));
+      process.exitCode = 1;
+    }
+  };
+}
 
 program
   .command("setup")
@@ -248,23 +264,7 @@ roster
   .command("create")
   .description("create a roster and print its id and join secret")
   .option("--as <name>", "local name to record it under", "roster")
-  .action(async (o: { as: string }) => {
-    const paths = getPaths();
-    const cfg = loadConfig(paths);
-    try {
-      const { roster_id, secret } = await createRoster(relayUrl(cfg), { handle: cfg.handle, token: cfg.token });
-      saveMembership(paths, { name: o.as, relay: relayUrl(cfg), roster_id });
-      console.log(`Roster created and saved locally as "${o.as}".\n`);
-      console.log(`  id:     ${roster_id}`);
-      console.log(`  secret: ${secret}\n`);
-      // Printed once and never stored: the relay keeps only a SHA-256 digest.
-      console.log("The secret is shown once and is not recoverable. Share both with colleagues:");
-      console.log(`  agentcall roster join ${roster_id} --secret ${secret} --as ${o.as}`);
-    } catch (e) {
-      console.error(e instanceof Error ? e.message : String(e));
-      process.exitCode = 1;
-    }
-  });
+  .action(run((o: { as: string }) => rosterCreate(realDeps(), o)));
 
 roster
   .command("join")
@@ -272,47 +272,18 @@ roster
   .argument("<roster-id>", "roster id shared by whoever created it")
   .requiredOption("--secret <secret>", "the roster's join secret")
   .option("--as <name>", "local name for this roster", "roster")
-  .action(async (rosterId: string, o: { secret: string; as: string }) => {
-    const paths = getPaths();
-    const cfg = loadConfig(paths);
-    try {
-      await joinRoster(relayUrl(cfg), { handle: cfg.handle, token: cfg.token }, rosterId, o.secret);
-      // The secret is spent here and never written to disk: from now on the
-      // handle token plus the relay-side membership row is what authorizes.
-      saveMembership(paths, { name: o.as, relay: relayUrl(cfg), roster_id: rosterId });
-      console.log(`Joined. Saved locally as "${o.as}".`);
-      console.log(`Try: agentcall search "<what you need to know>"`);
-    } catch (e) {
-      console.error(e instanceof Error ? e.message : String(e));
-      process.exitCode = 1;
-    }
-  });
+  .action(run((rosterId: string, o: { secret: string; as: string }) => rosterJoin(realDeps(), rosterId, o)));
 
 roster
   .command("list")
   .description("list rosters this install has joined")
-  .action(() => {
-    const rosters = loadMemberships(getPaths());
-    if (rosters.length === 0) {
-      console.log("No rosters joined. Ask a colleague for a roster id and secret, then:\n  agentcall roster join <id> --secret <secret> --as <name>");
-      return;
-    }
-    for (const r of rosters) console.log(`${r.name}\t${r.roster_id}\t${r.relay}`);
-  });
+  .action(run(() => rosterList(realDeps())));
 
 roster
   .command("forget")
   .description("drop the local record of a roster (does NOT remove your membership on the relay — there is no leave operation)")
   .argument("<name>", "local roster name")
-  .action((name: string) => {
-    try {
-      forgetMembership(getPaths(), name);
-      console.log(`Forgot "${name}" locally. Your membership on the relay is unchanged — there is no leave operation.`);
-    } catch (e) {
-      console.error(String(e instanceof Error ? e.message : e));
-      process.exitCode = 1;
-    }
-  });
+  .action(run((name: string) => rosterForget(realDeps(), name)));
 
 program
   .command("search")
