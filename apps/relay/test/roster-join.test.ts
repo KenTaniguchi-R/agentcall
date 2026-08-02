@@ -1,5 +1,6 @@
-import { SELF } from "cloudflare:test";
+import { env, SELF } from "cloudflare:test";
 import { describe, expect, it } from "vitest";
+import { MAX_ROSTER_MEMBERS } from "@benree/agentcall-shared";
 import { registerHandle, wsAuth } from "./helpers.js";
 
 async function newRoster(handle: string) {
@@ -78,13 +79,35 @@ describe("POST /v1/roster/:id/join", () => {
   });
 
   it("409s when the roster is full, since the caller already proved the secret", async () => {
-    // Seeding MAX_ROSTER_MEMBERS handles through the API would blow the
+    // Seeding MAX_ROSTER_MEMBERS - 1 handles through the API would blow the
     // register rate limit, so insert membership rows directly.
     const r = await newRoster("rj6");
-    const db = (await import("cloudflare:test")).env.DB;
-    const stmt = db.prepare("INSERT OR IGNORE INTO roster_members (roster_id, org, handle, joined_at) VALUES (?, ?, ?, ?)");
-    await db.batch(Array.from({ length: 200 }, (_, i) => stmt.bind(r.roster_id, "acme", `filler${i}`, 1)));
+    const stmt = env.DB.prepare("INSERT OR IGNORE INTO roster_members (roster_id, org, handle, joined_at) VALUES (?, ?, ?, ?)");
+    await env.DB.batch(Array.from(
+      { length: MAX_ROSTER_MEMBERS - 1 },
+      (_, i) => stmt.bind(r.roster_id, "acme", `filler${i}`, 1),
+    ));
     const token = await registerHandle("rj6b");
     expect((await join(r.roster_id, "rj6b", token, r.secret)).status).toBe(409);
+    // Existing members remain idempotent even when there is no free slot.
+    expect((await join(r.roster_id, "rj6", r.token, r.secret)).status).toBe(200);
+  });
+
+  it("admits exactly one of two concurrent distinct joins at 199 members", async () => {
+    const r = await newRoster("rj7");
+    const stmt = env.DB.prepare("INSERT INTO roster_members (roster_id, org, handle, joined_at) VALUES (?, ?, ?, ?)");
+    await env.DB.batch(Array.from(
+      { length: MAX_ROSTER_MEMBERS - 2 },
+      (_, i) => stmt.bind(r.roster_id, "acme", `race-filler${i}`, 1),
+    ));
+    const [tokenA, tokenB] = await Promise.all([registerHandle("rj7a"), registerHandle("rj7b")]);
+    const [a, b] = await Promise.all([
+      join(r.roster_id, "rj7a", tokenA, r.secret),
+      join(r.roster_id, "rj7b", tokenB, r.secret),
+    ]);
+    expect([a.status, b.status].sort()).toEqual([200, 409]);
+    const count = await env.DB.prepare("SELECT COUNT(*) AS n FROM roster_members WHERE roster_id = ?")
+      .bind(r.roster_id).first<{ n: number }>();
+    expect(count?.n).toBe(MAX_ROSTER_MEMBERS);
   });
 });
