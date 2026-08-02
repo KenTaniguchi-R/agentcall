@@ -2,8 +2,7 @@ import { rmSync } from "node:fs";
 import { Command, CommanderError } from "commander";
 import { getPaths } from "./paths.js";
 import { loadConfig, saveConfig, relayUrl, assertCallableConfig } from "./config.js";
-import { callAgent, CallError } from "./callClient.js";
-import { getStatus, fetchCard, rotateToken, ApiError } from "./api.js";
+import { fetchCard, rotateToken, ApiError } from "./api.js";
 import { startListener } from "./listener.js";
 import { runSetup } from "./setup.js";
 import { installLaunchAgent, isLaunchAgentInstalled, uninstallLaunchAgent } from "./launchd.js";
@@ -19,6 +18,7 @@ import { ExitOnly, realDeps } from "./commands/deps.js";
 import { rosterCreate, rosterForget, rosterJoin, rosterList } from "./commands/roster.js";
 import { search } from "./commands/search.js";
 import { contactsAdd, contactsList, contactsRemove } from "./commands/contacts.js";
+import { call, status } from "./commands/call.js";
 
 export function createProgram(): Command {
 const program = new Command();
@@ -81,63 +81,14 @@ program
   .argument("<message...>", "message to send")
   .option("--json", "print the full reply envelope instead of just the text")
   .option("--task <id>", "task from the callee's card to perform (see: agentcall card <address>)")
-  .action(async (address: string, messageParts: string[], o: { json?: boolean; task?: string }) => {
-    const paths = getPaths();
-    // Config is loaded before resolution so the address can be checked against
-    // the relay this call will actually dial (see resolveAddress).
-    const cfg = loadConfig(paths);
-    const parsed = resolveAddress(paths, address, relayUrl(cfg));
-    if (!parsed.ok) {
-      console.error(parsed.error);
-      process.exitCode = 1;
-      return;
-    }
-    if (parsed.warning) console.error(parsed.warning);
-    const message = messageParts.join(" ");
-    try {
-      const reply = await callAgent({
-        relay: relayUrl(cfg),
-        from: cfg.handle,
-        token: cfg.token,
-        to: parsed.handle,
-        message,
-        task: o.task,
-        onStatus: (s) => console.error(s === "ringing" ? "ringing..." : "answered, agent working..."),
-      });
-      console.log(o.json ? JSON.stringify(reply) : reply.text);
-    } catch (e) {
-      console.error(e instanceof CallError ? `Call failed (${e.code}): ${e.message}` : String(e));
-      process.exitCode = 1;
-      return;
-    }
-  });
+  .action(run((address: string, messageParts: string[], o: { json?: boolean; task?: string }) =>
+    call(realDeps(), address, messageParts, o)));
 
 program
   .command("status")
   .description("check whether a handle's agent is currently online")
   .argument("<address>", "contact name or handle@host to check")
-  .action(async (address: string) => {
-    const paths = getPaths();
-    // Presence is caller-only on the relay, so status now needs credentials —
-    // this used to fall back to the default relay with no config at all.
-    const cfg = loadConfig(paths);
-    const cfgRelay = relayUrl(cfg);
-    const parsed = resolveAddress(paths, address, cfgRelay);
-    if (!parsed.ok) {
-      console.error(parsed.error);
-      process.exitCode = 1;
-      return;
-    }
-    if (parsed.warning) console.error(parsed.warning);
-    try {
-      const { online } = await getStatus(cfgRelay, parsed.handle, { handle: cfg.handle, token: cfg.token });
-      console.log(online ? "online" : "offline");
-      process.exitCode = online ? 0 : 2;
-    } catch (e) {
-      console.error(e instanceof ApiError ? e.message : String(e));
-      process.exitCode = 1;
-    }
-  });
+  .action(run((address: string) => status(realDeps(), address)));
 
 program
   .command("doctor")
