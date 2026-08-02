@@ -3,6 +3,7 @@ import { mkdtempSync, existsSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
+import { CODEX_THREADING_VERIFIED_VERSION } from "../src/runner.js";
 
 // Env-gated OFF by default. CLAUDE.md forbids live agent spawns in CI; this is
 // the single deliberate exception, and it only runs when a human sets the flag:
@@ -14,6 +15,8 @@ const enabled = process.env.AGENTCALL_PROBE_CODEX === "1";
 
 describe.skipIf(!enabled)("codex sandbox on resume", () => {
   it("honours -c sandbox_mode=read-only when resuming", () => {
+    const probedVersion = execFileSync("codex", ["--version"], { encoding: "utf8" })
+      .match(/\b(\d+\.\d+\.\d+)\b/)?.[1];
     const dir = mkdtempSync(join(tmpdir(), "agentcall-probe-"));
     const target = join(dir, "written-by-agent.txt");
 
@@ -44,5 +47,9 @@ describe.skipIf(!enabled)("codex sandbox on resume", () => {
       existsSync(target),
       "-c sandbox_mode did NOT confine the resumed session — codex threading must ship disabled",
     ).toBe(false);
+    expect(
+      probedVersion,
+      "probe passed on a new codex-cli release; update CODEX_THREADING_VERIFIED_VERSION and rerun before shipping",
+    ).toBe(CODEX_THREADING_VERIFIED_VERSION);
   }, 400_000);
 });

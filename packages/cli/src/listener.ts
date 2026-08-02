@@ -7,7 +7,7 @@ import {
 import { resolveWorkdir, type CallableConfig } from "./config.js";
 import type { Paths } from "./paths.js";
 import { buildPrompt } from "./prompt.js";
-import { AgentRunError, CODEX_THREADING_ENABLED, runAgent } from "./runner.js";
+import { AgentRunError, codexThreadingEnabled, CODEX_THREADING_VERIFIED_VERSION, runAgent } from "./runner.js";
 import {
   admitContext, loadContexts, mintContextId, pruneContexts, saveContexts, upsertContext,
   type ContextBinding,
@@ -24,6 +24,7 @@ export interface ListenerDeps {
   saveContexts?: typeof saveContexts;
   maxPending?: number;
   backoffMs?: (attempt: number) => number;
+  codexThreadingEnabled?: () => boolean;
 }
 
 export function startListener(deps: ListenerDeps): { stop(): void } {
@@ -35,6 +36,15 @@ export function startListener(deps: ListenerDeps): { stop(): void } {
   const workdir = resolveWorkdir(deps.config, deps.paths);
   const queue = new SerialQueue(deps.maxPending ?? 0);
   const backoff = deps.backoffMs ?? ((n) => Math.min(1000 * 2 ** n, 60_000) + Math.random() * 500);
+  const codexCanThread = deps.config.agent_kind === "codex"
+    ? (deps.codexThreadingEnabled ?? codexThreadingEnabled)()
+    : false;
+  if (deps.config.agent_kind === "codex" && !codexCanThread) {
+    console.error(
+      `Warning: Codex conversation threading is disabled because this codex-cli release has not passed ` +
+        `the resume sandbox probe (last verified: ${CODEX_THREADING_VERIFIED_VERSION}).`,
+    );
+  }
   let stopped = false;
   let attempt = 0;
   let ws: WebSocket | undefined;
@@ -115,7 +125,7 @@ export function startListener(deps: ListenerDeps): { stop(): void } {
       // this order reopens the hole the design exists to close.
       const now = Date.now();
       const threadingAvailable =
-        task.threadable && (deps.config.agent_kind === "claude" || CODEX_THREADING_ENABLED);
+        task.threadable && (deps.config.agent_kind === "claude" || codexCanThread);
       const contexts = pruneContexts(loadContexts(deps.paths), now);
       // Explicitly typed: `let binding = undefined` infers the type `undefined`
       // and rejects the assignment below.
@@ -127,7 +137,7 @@ export function startListener(deps: ListenerDeps): { stop(): void } {
         // admitContext would still match on the unchanged task *id*, resuming a
         // conversation against an envelope the owner has just decided must not
         // carry one. Same for the codex gate — an old binding must not be able
-        // to hand runAgent a resume id after CODEX_THREADING_ENABLED goes false.
+        // to hand runAgent a resume id after codex threading becomes unavailable.
         binding = threadingAvailable
           ? admitContext(contexts, {
               context_id, caller: from, task: task.id,

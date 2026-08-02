@@ -6,6 +6,7 @@ import { describe, expect, it } from "vitest";
 import { buildPrompt } from "../src/prompt.js";
 import {
   buildSpawnSpec, claudeAllowedTools, guardCodexConfigArg, guardSettingsJson, GUARD_TIMEOUT_S,
+  codexThreadingEnabled, CODEX_THREADING_VERIFIED_VERSION,
   parseClaudeJson, parseCodexJsonl, runAgent, truncateUtf8,
 } from "../src/runner.js";
 import { getPaths } from "../src/paths.js";
@@ -14,6 +15,20 @@ import { ASK_TASK, FULL_ACCESS_ENVELOPE, type Envelope, type Task } from "../src
 const p = getPaths("/tmp/fakehome");
 // runAgent/buildSpawnSpec take the resolved working directory, not Paths.
 const WORKDIR = p.publicDir;
+
+describe("codex threading evidence", () => {
+  const bin = () => "/fake/bin/codex";
+
+  it("enables threading only for the codex-cli release that passed the live sandbox probe", () => {
+    expect(codexThreadingEnabled(bin, () => `codex-cli ${CODEX_THREADING_VERIFIED_VERSION}`)).toBe(true);
+    expect(codexThreadingEnabled(bin, () => "codex-cli 0.147.0")).toBe(false);
+  });
+
+  it("fails closed when the version cannot be read or parsed", () => {
+    expect(codexThreadingEnabled(bin, () => "codex-cli unknown")).toBe(false);
+    expect(codexThreadingEnabled(bin, () => { throw new Error("missing"); })).toBe(false);
+  });
+});
 
 describe("buildPrompt", () => {
   it("includes handle, caller, divider, and message", () => {
