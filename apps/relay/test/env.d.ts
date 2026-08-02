@@ -1,5 +1,5 @@
-declare module "cloudflare:test" {
-  interface ProvidedEnv {
+declare namespace Cloudflare {
+  interface Env {
     DB: D1Database;
     HANDLE_DO: DurableObjectNamespace;
     RATE_LIMITER_DO: DurableObjectNamespace;
