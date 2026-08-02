@@ -1,4 +1,4 @@
-import { chmodSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { chmodSync, existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, isAbsolute, join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -245,7 +245,7 @@ describe("runAgent (with a fake agent binary)", () => {
       runAgent("claude", "x", WORKDIR, 5000, { cmd: "node", args: ["-e", script], cwd: "/tmp" }),
     ).rejects.toMatchObject({ code: "agent_error", message: expect.stringContaining("Not logged in") });
   });
-  it("kills the whole process group on timeout, so a grandchild holding stdout doesn't hang the promise", async () => {
+  it("kills the whole process group after the grandchild is ready", async () => {
     const marker = join(tmpdir(), `agentcall-pgid-test-${Date.now()}-${Math.random()}.pid`);
     // The outer process spawns a grandchild that inherits stdio (holding
     // the pipe open) and stays alive on its own long timer, then the outer
@@ -261,10 +261,17 @@ describe("runAgent (with a fake agent binary)", () => {
       fs.writeFileSync(${JSON.stringify(marker)}, String(gc.pid));
       setTimeout(() => {}, 1e6);
     `;
+    const controller = new AbortController();
+    const running = runAgent(
+      "claude", "x", WORKDIR, 10_000, { cmd: "node", args: ["-e", script], cwd: "/tmp" },
+      undefined, undefined, controller.signal,
+    );
+    const readyBy = Date.now() + 5_000;
+    while (!existsSync(marker) && Date.now() < readyBy) await new Promise((r) => setTimeout(r, 10));
+    expect(existsSync(marker)).toBe(true);
     const start = Date.now();
-    await expect(
-      runAgent("claude", "x", WORKDIR, 500, { cmd: "node", args: ["-e", script], cwd: "/tmp" }),
-    ).rejects.toMatchObject({ code: "timeout" });
+    controller.abort();
+    await expect(running).rejects.toMatchObject({ code: "canceled" });
     expect(Date.now() - start).toBeLessThan(5000);
     const grandchildPid = Number(readFileSync(marker, "utf8"));
     // Give the SIGTERM a moment to land, then confirm the grandchild (not
