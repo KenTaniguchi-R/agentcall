@@ -63,6 +63,35 @@ describe("decide — exact-target tools", () => {
   });
 });
 
+describe("decide — allowed workdir boundary", () => {
+  const ROOT = "/Users/owner/code/payments";
+  const bounded = (tool: string, input: Record<string, unknown>, cwd = ROOT) =>
+    decide(call(tool, input, cwd), HOME, id, "/opt/agentcall", ROOT);
+
+  it("allows file tools inside the resolved workdir", () => {
+    expect(bounded("Read", { file_path: `${ROOT}/src/index.ts` }).allow).toBe(true);
+    expect(bounded("Write", { file_path: `${ROOT}/notes/new.md` }).allow).toBe(true);
+  });
+
+  it("denies exact file targets outside the resolved workdir", () => {
+    expect(bounded("Read", { file_path: "/Users/owner/code/payroll/secrets.ts" }))
+      .toMatchObject({ allow: false, rule: "outside-allowed-root" });
+    expect(bounded("Edit", { file_path: "../payroll/secrets.ts" }))
+      .toMatchObject({ allow: false, rule: "outside-allowed-root" });
+  });
+
+  it("denies searches and absolute glob selectors outside the resolved workdir", () => {
+    expect(bounded("Grep", { path: "/Users/owner/code", pattern: "token" }))
+      .toMatchObject({ allow: false, rule: "outside-allowed-root" });
+    expect(bounded("Glob", { pattern: "/Users/owner/code/payroll/**/*.ts" }))
+      .toMatchObject({ allow: false, rule: "outside-allowed-root" });
+  });
+
+  it("still records but allows Bash because exec is an explicit residual", () => {
+    expect(bounded("Bash", { command: "cat /Users/owner/code/payroll/secrets.ts" }).allow).toBe(true);
+  });
+});
+
 describe("decide — tilde is a path, not a literal directory", () => {
   it("denies a tilde-prefixed read", () => {
     const v = decide(call("Read", { file_path: "~/.ssh/id_rsa" }), HOME, id);
@@ -237,12 +266,12 @@ describe("decide — task envelopes and launch config are protected", () => {
   const TASKS = "/Users/owner/AgentCall/ask-line/tasks";
 
   it("denies writing a task's SKILL.md, which sets its capability envelope", () => {
-    const v = decide(call("Write", { file_path: `${TASKS}/ask/SKILL.md` }), HOME, id, undefined, [TASKS]);
+    const v = decide(call("Write", { file_path: `${TASKS}/ask/SKILL.md` }), HOME, id, undefined, undefined, [TASKS]);
     expect(v.allow).toBe(false);
   });
 
   it("denies a Grep rooted at the tasks directory", () => {
-    const v = decide(call("Grep", { path: TASKS, pattern: "tools" }), HOME, id, undefined, [TASKS]);
+    const v = decide(call("Grep", { path: TASKS, pattern: "tools" }), HOME, id, undefined, undefined, [TASKS]);
     expect(v.allow).toBe(false);
   });
 
@@ -290,6 +319,7 @@ describe("per-line task directories are denied", () => {
       "/Users/real",
       id,
       "/pkg",
+      undefined,
       [join("/Users/real", "AgentCall", "codex", "tasks")],
     );
     expect(verdict.allow).toBe(false);
@@ -301,6 +331,7 @@ describe("per-line task directories are denied", () => {
       "/Users/real",
       id,
       "/pkg",
+      undefined,
       [join("/Users/real", "AgentCall", "codex", "tasks")],
     );
     expect(verdict.allow).toBe(true);

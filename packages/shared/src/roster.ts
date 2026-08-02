@@ -21,11 +21,28 @@ export const MAX_BUNDLE_BYTES = 4_500_000;
 
 export const CreateRosterResponse = z.object({
   roster_id: z.string().regex(ROSTER_ID_RE),
-  secret: z.string().min(1),
+  join_secret: z.string().min(1),
+  admin_secret: z.string().min(1),
 });
 
 export const JoinRosterRequest = z.object({
-  secret: z.string().min(1).max(200),
+  join_secret: z.string().min(1).max(200),
+});
+
+export const AdminSecretRequest = z.object({
+  admin_secret: z.string().min(1).max(200),
+});
+
+export const ExpelRosterRequest = AdminSecretRequest.extend({
+  handle: z.string().regex(HANDLE_RE),
+});
+
+export const RotateRosterRequest = AdminSecretRequest.extend({
+  evict: z.boolean().optional().default(false),
+});
+
+export const RotateRosterResponse = z.object({
+  join_secret: z.string().min(1),
 });
 
 // The search projection of a card task. `examples` are deliberately absent:

@@ -11,13 +11,15 @@ async function createRoster(handle: string, token: string) {
 }
 
 describe("POST /v1/roster", () => {
-  it("returns an opaque id and a secret to an authenticated handle", async () => {
+  it("returns an opaque id and separate join/admin secrets to an authenticated handle", async () => {
     const token = await registerHandle("rc1");
     const res = await createRoster("rc1", token);
     expect(res.status).toBe(200);
-    const body = await res.json<{ roster_id: string; secret: string }>();
+    const body = await res.json<{ roster_id: string; join_secret: string; admin_secret: string }>();
     expect(ROSTER_ID_RE.test(body.roster_id)).toBe(true);
-    expect(body.secret.length).toBeGreaterThan(20);
+    expect(body.join_secret.length).toBeGreaterThan(20);
+    expect(body.admin_secret.length).toBeGreaterThan(20);
+    expect(body.admin_secret).not.toBe(body.join_secret);
   });
 
   it("401s without credentials", async () => {

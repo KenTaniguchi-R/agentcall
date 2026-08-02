@@ -1,10 +1,10 @@
 import { rmSync } from "node:fs";
 import { Command, CommanderError } from "commander";
 import type { AgentKind } from "@benree/agentcall-shared";
-import { getMachinePaths } from "./paths.js";
+import { getMachinePaths, type LinePaths } from "./paths.js";
 import { addressHost, assertCallableLine, relayUrl, type LineConfig } from "./config.js";
 import { callAgent, CallError } from "./callClient.js";
-import { getStatus, fetchCard, createInvite, createRoster, joinRoster, ApiError } from "./api.js";
+import { getStatus, fetchCard, createInvite, createRoster, joinRoster, leaveRoster, expelRosterMember, rotateRoster, deleteRoster, ApiError } from "./api.js";
 import { startAllListeners } from "./listenAll.js";
 import { startListener } from "./listener.js";
 import { runSetup } from "./setup.js";
@@ -24,9 +24,10 @@ import { rotateLine } from "./commands/rotate.js";
 import { addLine, listLinesReport, removeLine, setPrimary } from "./commands/line.js";
 import { ask as ttyAsk } from "./tty.js";
 import { findOutbound, loadOutbound, rememberOutbound } from "./contextsOut.js";
-import { forgetMembership, loadMemberships, saveMembership } from "./rosters.js";
+import { deleteCached, forgetMembership, loadMemberships, saveMembership } from "./rosters.js";
 import { allRostersFailed, DEFAULT_SEARCH_LIMIT, rank, renderResults, sanitize, toEntries, type RosterStatus, type SearchEntry } from "./search.js";
 import { refreshRoster } from "./searchRefresh.js";
+import { ask } from "./tty.js";
 
 export function createProgram(): Command {
 const program = new Command();
@@ -417,14 +418,15 @@ roster
     if (!ctx) return;
     const cfg = ctx.config;
     try {
-      const { roster_id, secret } = await createRoster(relayUrl(cfg), { org: cfg.org, handle: cfg.handle, token: cfg.token });
+      const { roster_id, join_secret, admin_secret } = await createRoster(relayUrl(cfg), { org: cfg.org, handle: cfg.handle, token: cfg.token });
       saveMembership(ctx.paths, { name: o.as, relay: relayUrl(cfg), roster_id });
       console.log(`Roster created and saved locally as "${o.as}".\n`);
       console.log(`  id:     ${roster_id}`);
-      console.log(`  secret: ${secret}\n`);
-      // Printed once and never stored: the relay keeps only a SHA-256 digest.
-      console.log("The secret is shown once and is not recoverable. Share both with colleagues:");
-      console.log(`  agentcall roster join ${roster_id} --secret ${secret} --as ${o.as}`);
+      console.log(`  join secret:  ${join_secret}`);
+      console.log(`  admin secret: ${admin_secret}\n`);
+      console.log("Both secrets are shown once and are not recoverable. Store the admin secret in a password manager.");
+      console.log("Share only the id and join secret with colleagues:");
+      console.log(`  agentcall roster join ${roster_id} --secret ${join_secret} --as ${o.as}`);
     } catch (e) {
       console.error(e instanceof Error ? e.message : String(e));
       process.exitCode = 1;
@@ -471,8 +473,109 @@ roster
   });
 
 roster
+  .command("leave")
+  .description("leave a roster on the relay and remove its local record")
+  .argument("<name>", "local roster name")
+  .option("--line <name>", "line to leave it for (defaults to the primary line)")
+  .action(async (name: string, o: { line?: string }) => {
+    const ctx = rosterLine(o.line);
+    if (!ctx) return;
+    const cfg = ctx.config;
+    try {
+      const membership = namedRoster(ctx.paths, name);
+      await leaveRoster(membership.relay, { org: cfg.org, handle: cfg.handle, token: cfg.token }, membership.roster_id);
+      forgetMembership(ctx.paths, name);
+      deleteCached(ctx.paths, name);
+      console.log(`Left "${name}" and removed its local record.`);
+    } catch (e) {
+      console.error(e instanceof Error ? e.message : String(e));
+      process.exitCode = 1;
+    }
+  });
+
+async function adminSecret(flag?: string): Promise<string> {
+  const value = flag ?? process.env.AGENTCALL_ADMIN_SECRET;
+  if (value) return value;
+  const prompted = (await ask("Admin secret: ")).trim();
+  if (!prompted) throw new Error("An admin secret is required.");
+  return prompted;
+}
+
+async function confirmRoster(name: string, consequence: string, yes?: boolean): Promise<void> {
+  if (yes) return;
+  const answer = (await ask(`${consequence} Type the roster name "${name}" to continue: `)).trim();
+  if (answer !== name) throw new Error("Confirmation did not match; nothing was changed.");
+}
+
+function namedRoster(paths: LinePaths, name: string) {
+  const membership = loadMemberships(paths).find((r) => r.name.toLowerCase() === name.toLowerCase());
+  if (!membership) throw new Error(`No roster named "${name}" — run \`agentcall roster list\`.`);
+  return membership;
+}
+
+roster
+  .command("expel")
+  .description("remove a member using the roster admin secret")
+  .argument("<name>", "local roster name")
+  .argument("<handle>", "member handle to remove")
+  .option("--admin-secret <secret>", "admin secret (prefer AGENTCALL_ADMIN_SECRET to avoid shell history)")
+  .option("--line <name>", "line to act as (defaults to the primary line)")
+  .action(async (name: string, handle: string, o: { adminSecret?: string; line?: string }) => {
+    const ctx = rosterLine(o.line);
+    if (!ctx) return;
+    const cfg = ctx.config;
+    try {
+      const membership = namedRoster(ctx.paths, name);
+      await expelRosterMember(membership.relay, { org: cfg.org, handle: cfg.handle, token: cfg.token }, membership.roster_id, handle, await adminSecret(o.adminSecret));
+      console.log(`Expelled ${handle}. Rotate the join secret too if that member may still know it.`);
+    } catch (e) { console.error(e instanceof Error ? e.message : String(e)); process.exitCode = 1; }
+  });
+
+roster
+  .command("rotate")
+  .description("replace a roster join secret; --evict also removes every member")
+  .argument("<name>", "local roster name")
+  .option("--admin-secret <secret>", "admin secret (prefer AGENTCALL_ADMIN_SECRET to avoid shell history)")
+  .option("--evict", "remove every current member")
+  .option("--yes", "confirm destructive eviction")
+  .option("--line <name>", "line to act as (defaults to the primary line)")
+  .action(async (name: string, o: { adminSecret?: string; evict?: boolean; yes?: boolean; line?: string }) => {
+    const ctx = rosterLine(o.line);
+    if (!ctx) return;
+    const cfg = ctx.config;
+    try {
+      const membership = namedRoster(ctx.paths, name);
+      if (o.evict) await confirmRoster(name, "This removes every current member.", o.yes);
+      const out = await rotateRoster(membership.relay, { org: cfg.org, handle: cfg.handle, token: cfg.token }, membership.roster_id, await adminSecret(o.adminSecret), Boolean(o.evict));
+      if (o.evict) deleteCached(ctx.paths, name);
+      console.log(`New join secret: ${out.join_secret}`);
+    } catch (e) { console.error(e instanceof Error ? e.message : String(e)); process.exitCode = 1; }
+  });
+
+roster
+  .command("delete")
+  .description("permanently delete a roster while retaining its relay audit events")
+  .argument("<name>", "local roster name")
+  .option("--admin-secret <secret>", "admin secret (prefer AGENTCALL_ADMIN_SECRET to avoid shell history)")
+  .option("--yes", "confirm deletion")
+  .option("--line <name>", "line to act as (defaults to the primary line)")
+  .action(async (name: string, o: { adminSecret?: string; yes?: boolean; line?: string }) => {
+    const ctx = rosterLine(o.line);
+    if (!ctx) return;
+    const cfg = ctx.config;
+    try {
+      const membership = namedRoster(ctx.paths, name);
+      await confirmRoster(name, "Roster deletion cannot be undone.", o.yes);
+      await deleteRoster(membership.relay, { org: cfg.org, handle: cfg.handle, token: cfg.token }, membership.roster_id, await adminSecret(o.adminSecret));
+      forgetMembership(ctx.paths, name);
+      deleteCached(ctx.paths, name);
+      console.log(`Deleted "${name}"; relay audit events were retained.`);
+    } catch (e) { console.error(e instanceof Error ? e.message : String(e)); process.exitCode = 1; }
+  });
+
+roster
   .command("forget")
-  .description("drop the local record of a roster (does NOT remove your membership on the relay — there is no leave operation)")
+  .description("drop only the local roster record; use `roster leave` to remove relay membership")
   .argument("<name>", "local roster name")
   .option("--line <name>", "line to forget it for (defaults to the primary line)")
   .action((name: string, o: { line?: string }) => {
@@ -480,7 +583,7 @@ roster
     if (!ctx) return;
     try {
       forgetMembership(ctx.paths, name);
-      console.log(`Forgot "${name}" locally. Your membership on the relay is unchanged — there is no leave operation.`);
+      console.log(`Forgot "${name}" locally. Your membership on the relay is unchanged; use \`roster leave\` for removal.`);
     } catch (e) {
       console.error(String(e instanceof Error ? e.message : e));
       process.exitCode = 1;

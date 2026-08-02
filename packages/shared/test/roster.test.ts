@@ -1,8 +1,8 @@
 import { describe, expect, it } from "vitest";
 import { CardTask, MAX_TASK_KEYWORDS, MAX_KEYWORD_LENGTH } from "../src/card.js";
 import {
-  BundleEntry, MAX_BUNDLE_BYTES, MAX_BUNDLE_TASKS_PER_CARD, MAX_ROSTER_MEMBERS,
-  ROSTER_ID_RE, RosterBundle,
+  BundleEntry, CreateRosterResponse, ExpelRosterRequest, JoinRosterRequest, MAX_BUNDLE_BYTES,
+  MAX_BUNDLE_TASKS_PER_CARD, MAX_ROSTER_MEMBERS, ROSTER_ID_RE, RosterBundle, RotateRosterRequest,
 } from "../src/roster.js";
 import { MAX_TASK_ID_LENGTH } from "../src/protocol.js";
 
@@ -19,6 +19,23 @@ describe("roster ids", () => {
     for (const bad of ["short", "../etc/passwd", "a/b", ""]) {
       expect(ROSTER_ID_RE.test(bad)).toBe(false);
     }
+  });
+});
+
+describe("roster lifecycle protocol", () => {
+  it("keeps join and administrative authority separate", () => {
+    expect(CreateRosterResponse.parse({
+      roster_id: "a".repeat(22), join_secret: "join", admin_secret: "admin",
+    })).toBeTruthy();
+    expect(JoinRosterRequest.safeParse({ join_secret: "join" }).success).toBe(true);
+    expect(JoinRosterRequest.safeParse({ secret: "old-wire-shape" }).success).toBe(false);
+  });
+
+  it("validates lifecycle inputs", () => {
+    expect(ExpelRosterRequest.safeParse({ admin_secret: "admin", handle: "valid-handle" }).success).toBe(true);
+    expect(ExpelRosterRequest.safeParse({ admin_secret: "admin", handle: "INVALID" }).success).toBe(false);
+    expect(RotateRosterRequest.parse({ admin_secret: "admin" }).evict).toBe(false);
+    expect(RotateRosterRequest.parse({ admin_secret: "admin", evict: true }).evict).toBe(true);
   });
 });
 

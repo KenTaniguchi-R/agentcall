@@ -247,9 +247,9 @@ describe("pushCard / fetchCard", () => {
 
 describe("roster api", () => {
   it("creates a roster and returns the secret once", async () => {
-    const relay = await serve(200, { roster_id: "a".repeat(22), secret: "s3cret-value-long" });
+    const relay = await serve(200, { roster_id: "a".repeat(22), join_secret: "join-value-long", admin_secret: "admin-value-long" });
     const r = await createRoster(relay, { org: "acme", handle: "ken", token: "t" });
-    expect(r).toEqual({ roster_id: "a".repeat(22), secret: "s3cret-value-long" });
+    expect(r).toEqual({ roster_id: "a".repeat(22), join_secret: "join-value-long", admin_secret: "admin-value-long" });
   });
 
   // The relay deliberately returns byte-identical 404s for "no such roster"

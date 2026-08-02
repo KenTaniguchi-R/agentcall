@@ -192,14 +192,27 @@ export function decide(
   userHome: string,
   realpath: (p: string) => string,
   guardRoot: string = DEFAULT_PACKAGE_ROOT,
+  // Two orthogonal restrictions, and both apply. `allowedRoot` confines a task
+  // to one workdir (an allow-list); `extraDeniedRoots` adds paths that are
+  // denied wherever they sit (a deny-list). allowedRoot keeps position 5
+  // because its callers pass it positionally in quantity; extraDeniedRoots is
+  // 6th. Do not swap them — allowedRoot is a string and extraDeniedRoots is
+  // spread, so passing one where the other is expected silently explodes a
+  // path into single-character denied roots rather than failing loudly.
+  allowedRoot?: string,
   extraDeniedRoots: string[] = [],
 ): GuardVerdict {
   const { tool_name: tool, tool_input: args, cwd } = input;
   if (args === null || typeof args !== "object" || Array.isArray(args)) {
     return { allow: false, rule: "unparseable-input", detail: tool };
   }
+  // userHome, never a redirectable state root: AGENTCALL_HOME can move the
+  // latter, which would have the guard diligently protecting a temp directory
+  // while the real ~/.ssh stood open.
   const denied = deniedPaths(userHome, realpath, [guardRoot, ...extraDeniedRoots]);
   const canon = (p: string) => canonical(p, cwd, userHome, realpath);
+  const allowed = allowedRoot === undefined ? undefined : canon(allowedRoot);
+  const outsideAllowed = (target: string) => allowed !== undefined && !isInside(target, allowed);
   const reached = (t: string, withAncestors: boolean) =>
     denied.find((d) => isInside(t, d) || (withAncestors && isAncestorOf(t, d)));
 
@@ -233,7 +246,10 @@ export function decide(
     const target = canon(raw);
     if (basenameDenied(target)) return { allow: false, rule: "denied-basename", detail: target };
     const hit = reached(target, false);
-    return hit ? { allow: false, rule: "inside-denied-path", detail: target } : { allow: true };
+    if (hit) return { allow: false, rule: "inside-denied-path", detail: target };
+    return outsideAllowed(target)
+      ? { allow: false, rule: "outside-allowed-root", detail: target }
+      : { allow: true };
   }
 
   if (SCANNING_ROOT.has(tool) || tool === "Glob") {
@@ -248,6 +264,7 @@ export function decide(
     const root = canon(rawRoot);
     if (basenameDenied(root)) return { allow: false, rule: "denied-basename", detail: root };
     if (reached(root, true)) return { allow: false, rule: "root-reaches-denied-path", detail: root };
+    if (outsideAllowed(root)) return { allow: false, rule: "outside-allowed-root", detail: root };
 
     const selectorKey = SELECTOR_KEY[tool];
     const selector = selectorKey === undefined ? undefined : args[selectorKey];
@@ -269,7 +286,10 @@ export function decide(
     if (prefix === "") return { allow: true };
     const selectorRoot = canon(isAbsolute(expandHome(prefix, userHome)) ? prefix : join(rawRoot, prefix));
     const hit = reached(selectorRoot, true);
-    return hit ? { allow: false, rule: "root-reaches-denied-path", detail: selectorRoot } : { allow: true };
+    if (hit) return { allow: false, rule: "root-reaches-denied-path", detail: selectorRoot };
+    return outsideAllowed(selectorRoot)
+      ? { allow: false, rule: "outside-allowed-root", detail: selectorRoot }
+      : { allow: true };
   }
 
   // Unclassified tool. Deny — an argument shape this function has never seen
@@ -283,6 +303,7 @@ export interface GuardDeps {
   now: () => string;
   realpath: (p: string) => string;
   appendLine: (file: string, line: string) => void;
+  allowedRoot?: string;
 }
 
 export type GuardOutput = { exitCode: number; stdout: string; stderr: string };
@@ -334,7 +355,7 @@ export function runGuard(raw: string, deps: GuardDeps, mode: GuardMode = "enforc
     // defect (a) fixed for .ssh and quietly reopened for tasks.
     const userHome = deps.line.machine.userHome;
     const taskRoots = lineTaskDirs(getMachinePaths(userHome, userHome));
-    const verdict = decide(input, userHome, deps.realpath, undefined, taskRoots);
+    const verdict = decide(input, userHome, deps.realpath, undefined, deps.allowedRoot, taskRoots);
     const ts = deps.now();
     const write = (file: string, obj: Record<string, unknown>) =>
       deps.appendLine(file, JSON.stringify({ ts, ...obj }));

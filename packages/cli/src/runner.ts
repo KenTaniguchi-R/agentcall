@@ -142,7 +142,10 @@ export function buildSpawnSpec(
         "--settings", guardSettingsJson(),
       ],
       cwd: workdir,
-      env: { ...process.env, AGENTCALL_CALL_ID: callId, AGENTCALL_LINE: lineName },
+      env: {
+        ...process.env, AGENTCALL_CALL_ID: callId, AGENTCALL_LINE: lineName,
+        AGENTCALL_ALLOWED_ROOT: workdir,
+      },
     };
   }
   // Codex has no per-tool granularity, so the envelope's write cap maps onto

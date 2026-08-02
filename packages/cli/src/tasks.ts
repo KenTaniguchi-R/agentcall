@@ -1,5 +1,5 @@
-import { existsSync, mkdirSync, readdirSync, readFileSync, writeFileSync } from "node:fs";
-import { join } from "node:path";
+import { existsSync, mkdirSync, readdirSync, readFileSync, statSync, writeFileSync } from "node:fs";
+import { isAbsolute, join } from "node:path";
 import { z } from "zod";
 import { parse as parseYaml } from "yaml";
 import { MAX_KEYWORD_LENGTH, MAX_TASK_KEYWORDS, TASK_ID_RE } from "@benree/agentcall-shared";
@@ -49,6 +49,7 @@ export const SkillFrontmatter = z.object({
   keywords: z.array(z.string().min(1).max(MAX_KEYWORD_LENGTH)).max(MAX_TASK_KEYWORDS).default([]),
   tools: z.array(z.enum(CAPS)).default(["read"]),
   timeout_s: z.number().int().positive().max(300).optional(),
+  workdir: z.string().min(1).optional(),
   // Omitted = derived from `tools` (see deriveThreadable). Present = the owner
   // has decided, and their decision wins.
   threadable: z.boolean().optional(),
@@ -63,6 +64,7 @@ export interface Task {
   keywords: string[];
   envelope: Envelope;
   timeout_s?: number;
+  workdir?: string;
   threadable: boolean;
   skill: string; // SKILL.md body (after the frontmatter), embedded into the spawn prompt
 }
@@ -125,6 +127,11 @@ export function loadTasks(p: LinePaths, warn: (msg: string) => void = console.er
         continue;
       }
       fm = SkillFrontmatter.parse(parseYaml(split.meta));
+      if (fm.workdir !== undefined) {
+        if (!isAbsolute(fm.workdir)) throw new Error("workdir must be an absolute path");
+        if (!existsSync(fm.workdir)) throw new Error(`workdir does not exist: ${fm.workdir}`);
+        if (!statSync(fm.workdir).isDirectory()) throw new Error(`workdir is not a directory: ${fm.workdir}`);
+      }
       body = split.body;
     } catch (e) {
       warn(`agentcall: task "${id}": invalid SKILL.md frontmatter, skipped (${String(e).slice(0, 200)})`);
@@ -138,6 +145,7 @@ export function loadTasks(p: LinePaths, warn: (msg: string) => void = console.er
       keywords: fm.keywords,
       envelope: { caps: fm.tools },
       timeout_s: fm.timeout_s,
+      workdir: fm.workdir,
       threadable: deriveThreadable(fm.tools, fm.threadable),
       skill: body,
     });
@@ -154,6 +162,7 @@ description: TODO — one line callers will see on your card
 # name: defaults to the directory name
 # tools: [read]           # read | write | fetch | exec
 # timeout_s: 300
+# workdir: /absolute/path/to/the/repository
 # threadable: true       # allow --continue follow-ups; defaults false for write/exec tasks
 # examples:
 #   - An example message a caller might send

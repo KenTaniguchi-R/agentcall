@@ -268,11 +268,12 @@ what the tool guard does and does not confine regardless of which line answers.
 don't — that's what rosters and `agentcall search` are for.
 
 A **roster** is an opt-in group whose members can discover each other's
-published tasks. One person creates it and shares the id and secret:
+published tasks. Creation returns separate join and admin secrets. Store the
+admin secret in a password manager and share only the id and join secret:
 
 ```bash
 agentcall roster create --as acme
-# prints an id and a join secret, shown once and not recoverable
+# prints an id, join secret, and admin secret; all are shown once
 
 # everyone else:
 agentcall roster join <roster-id> --secret <secret> --as acme
@@ -317,13 +318,25 @@ anywhere. Refreshing a roster does tell the relay that your handle refreshed
 that roster at that time, so search *activity* isn't private — only the query
 is.
 
-**There is no way to remove a roster member and no way to rotate a roster's
-join secret.** If the secret leaks, abandon the roster and create a new one —
-membership lifecycle (expel, rotate, teardown) is deliberate follow-up work,
-not yet built. `agentcall roster forget` only drops your *local* record of
-having joined; it does not leave the roster, because there is no leave
-operation — your membership on the relay is unchanged. Someone who believes
-`forget` removed them from the roster is still a member.
+Membership has an explicit lifecycle:
+
+```bash
+agentcall roster leave acme                    # relay leave + local cleanup
+agentcall roster expel acme <handle>           # requires the admin secret
+agentcall roster rotate acme                   # closes the door; members stay
+agentcall roster rotate acme --evict --yes     # incident response: clear all members
+agentcall roster delete acme --yes              # teardown; audit events survive
+```
+
+Administrative commands resolve the secret from `--admin-secret`, then
+`AGENTCALL_ADMIN_SECRET`, then an interactive prompt. The flag is convenient
+for scripts but can appear in shell history and process listings. The admin
+secret is never stored by AgentCall and cannot be recovered; if every copy is
+lost, abandon and recreate the roster. Expulsion revokes future fetches, not
+data already cached or copied. An expelled member can rejoin while the old join
+secret remains valid, so rotate it after expulsion if they may still know it.
+`agentcall roster forget` remains the explicit local-only escape hatch when the
+relay is unreachable; use `leave` for actual membership removal.
 
 Results are hints, not permission: a task can appear in search and still be
 refused when you call it, because the callee's policy is what actually
@@ -412,9 +425,23 @@ Restart the listener afterwards — it resolves `workdir` once at startup, and
 refuses to start if the path is relative, missing, or not a directory.
 `agentcall doctor` reports the resolved path per line (or the reason it failed).
 
-When `workdir` is set, the prompt stops telling the agent to stay inside it —
-you pointed it at that directory on purpose. Note this was only ever an
-instruction, never a boundary; see below.
+Individual tasks can narrow this further with an absolute `workdir` in their
+`SKILL.md` frontmatter. It overrides the install-global directory for that task:
+
+```yaml
+---
+description: Explain decisions in the payments service.
+tools: [read]
+workdir: /Users/ken/code/payments-api
+---
+```
+
+Relative, missing, and non-directory task workdirs make that task invalid and
+it is not offered. For a Claude answering agent, file-shaped tools are guarded
+to the resolved task directory. This is a real boundary for `Read`, `Write`,
+`Edit`, `Glob`, `Grep`, and `LS`, including canonicalized paths and symlinks.
+It is not a boundary for `exec`, and Codex has no equivalent read boundary;
+see the residual risks below.
 
 ## Security model (v1, explicit)
 
@@ -441,8 +468,9 @@ instruction, never a boundary; see below.
     On a Claude answering agent using `Read`/`Write`/`Edit`/`Glob`/`Grep`, the
     tool guard below refuses the credential paths it covers. Capability
     scoping bounds *what kind* of action is possible, not *where*.
-  - The working directory is a prompt instruction, not an enforced boundary.
-    An agent granted `read` can read outside it regardless of `workdir`.
+  - A Claude answering agent's file-shaped tools are confined to the resolved
+    task workdir. A task granted `exec` can still read outside it through shell
+    commands, and a Codex answering agent is not confined for reads at all.
   - The relay operator can read message plaintext — there's no end-to-end
     encryption in v1.
   - A caller's prompt could induce the agent to read and echo back the
@@ -477,7 +505,8 @@ instruction, never a boundary; see below.
 they run. File reads, writes, searches, and listings that reach credential paths
 (`~/.ssh`, `~/.aws`, `.env`, Keychains, `~/.agentcall`, `~/.claude`, `~/.codex`), the guard's own
 installed code, `~/AgentCall/<line>/tasks` for every line, `~/Library/LaunchAgents`,
-and shell startup files are refused, and every tool call reaching the guard is
+and shell startup files are refused. For Claude, file-shaped tools outside the
+resolved task workdir are also refused, and every tool call reaching the guard is
 recorded to that line's `~/.agentcall/lines/<line>/tools.log`. `agentcall doctor`
 verifies the guard is in force — once per distinct agent kind rather than once per
 line, since the guard protects the binary, not any particular address, and claude

@@ -116,6 +116,7 @@ describe("buildSpawnSpec", () => {
     expect(s.cwd).toBe(WORKDIR);
     // Default callId, when the caller (e.g. a test) doesn't pass one.
     expect(s.env?.AGENTCALL_CALL_ID).toBe("unknown");
+    expect(s.env?.AGENTCALL_ALLOWED_ROOT).toBe(WORKDIR);
   });
 
   // Regression: every spawn used to be wrapped in `npx
@@ -491,6 +492,7 @@ describe("guard hook wiring", () => {
     expect(i).toBeGreaterThan(-1);
     expect(JSON.parse(spec.args[i + 1]!).hooks.PreToolUse).toBeDefined();
     expect(spec.env?.AGENTCALL_CALL_ID).toBe("call-9");
+    expect(spec.env?.AGENTCALL_ALLOWED_ROOT).toBe(WORKDIR);
   });
 
   it("does not pass claude's --settings to codex, which would not parse it", () => {

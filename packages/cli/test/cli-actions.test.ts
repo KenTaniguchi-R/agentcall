@@ -177,7 +177,7 @@ describe.sequential("CLI command actions", () => {
     const out = await runCommand(testHome, ["roster", "join", A, "--secret", "join-me", "--as", "acme"]);
 
     expect(out.code).toBe(0);
-    expect(seen).toEqual({ url: `/v1/roster/${A}/join`, method: "POST", body: JSON.stringify({ secret: "join-me" }) });
+    expect(seen).toEqual({ url: `/v1/roster/${A}/join`, method: "POST", body: JSON.stringify({ join_secret: "join-me" }) });
     expect(loadMemberships(paths)).toEqual([{ name: "acme", relay, roster_id: A }]);
   });
 
@@ -197,6 +197,45 @@ describe.sequential("CLI command actions", () => {
     expect(out.code).toBe(1);
     expect(out.stderr).toMatch(/roster forget/);
     expect(loadMemberships(paths)).toEqual([{ name: "acme", relay, roster_id: A }]);
+  });
+
+  it("removes local membership only after the relay accepts leave", async () => {
+    let seen = "";
+    const relay = await startRelay((url) => {
+      seen = url;
+      return { status: 200 };
+    });
+    const testHome = home();
+    const paths = seedConfig(testHome, relay);
+    saveMembership(paths, { name: "acme", relay, roster_id: A });
+
+    const out = await runCommand(testHome, ["roster", "leave", "acme"]);
+
+    expect(out.code).toBe(0);
+    expect(seen).toBe(`/v1/roster/${A}/leave`);
+    expect(loadMemberships(paths)).toEqual([]);
+  });
+
+  it("passes explicit eviction confirmation and prints the replacement join secret", async () => {
+    let seen: { url?: string; body?: string } = {};
+    const relay = await startRelay((url, _method, body) => {
+      seen = { url, body };
+      return { status: 200, body: { join_secret: "replacement-secret" } };
+    });
+    const testHome = home();
+    const paths = seedConfig(testHome, relay);
+    saveMembership(paths, { name: "acme", relay, roster_id: A });
+
+    const out = await runCommand(testHome, [
+      "roster", "rotate", "acme", "--evict", "--yes", "--admin-secret", "admin-secret",
+    ]);
+
+    expect(out.code).toBe(0);
+    expect(seen).toEqual({
+      url: `/v1/roster/${A}/rotate`,
+      body: JSON.stringify({ admin_secret: "admin-secret", evict: true }),
+    });
+    expect(out.stdout).toContain("replacement-secret");
   });
 
   it("keeps JSON stdout parseable when one roster refresh fails", async () => {
