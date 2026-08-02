@@ -80,6 +80,35 @@ describe("listener attach + status", () => {
     expect(frame.from).toBe("solo2");
   });
 
+  it("attests only rosters shared by caller and callee and ignores caller-asserted groups", async () => {
+    const targetToken = await registerHandle("group-target");
+    const callerToken = await registerHandle("group-caller");
+    const listener = await openWs("/v1/ws?role=listen", wsAuth("group-target", targetToken));
+    const shared = "s".repeat(22);
+    const callerOnly = "c".repeat(22);
+    const roster = env.DB.prepare(
+      "INSERT INTO rosters (id, org, join_secret_hash, admin_secret_hash, created_at) VALUES (?, 'acme', 'j', 'a', 1)",
+    );
+    const member = env.DB.prepare(
+      "INSERT INTO roster_members (roster_id, org, handle, joined_at) VALUES (?, 'acme', ?, 1)",
+    );
+    await env.DB.batch([
+      roster.bind(shared), roster.bind(callerOnly),
+      member.bind(shared, "group-target"), member.bind(shared, "group-caller"),
+      member.bind(callerOnly, "group-caller"),
+    ]);
+
+    const incoming = nextFrame(listener);
+    const caller = await openWs("/v1/ws?role=call&to=group-target", wsAuth("group-caller", callerToken));
+    caller.send(JSON.stringify({
+      type: "call_request", to: "group-target", message: "hi", groups: [callerOnly, "attacker-chosen"],
+    }));
+
+    expect(await incoming).toMatchObject({
+      type: "incoming_call", from: "group-caller", groups: [shared],
+    });
+  });
+
   it("does not route a caller to the same handle in another tenant", async () => {
     const betaToken = await registerHandle("tenant-target", "claude", "beta");
     await openWs("/v1/ws?role=listen", wsAuth("tenant-target", betaToken, "beta"));

@@ -34,6 +34,9 @@ export function execVerb(
     callers: Object.fromEntries(
       Object.entries(policy.callers).map(([k, v]) => [k, { offer: [...v.offer], block: v.block }]),
     ),
+    groups: Object.fromEntries(
+      Object.entries(policy.groups).map(([k, v]) => [k, { roster_id: v.roster_id, offer: [...v.offer] }]),
+    ),
   });
   // Enforcement (resolveTask) only ever offers ids that exist on disk; the
   // printed menu must match, or an owner reading `allow`'s output would

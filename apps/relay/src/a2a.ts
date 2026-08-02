@@ -7,6 +7,7 @@ import {
   standardError, toAgentCard, toDirectoryCard, visibleTasks,
 } from "@benree/agentcall-shared";
 import { authenticateRequest } from "./tenant.js";
+import { sharedRosterIds } from "./groups.js";
 
 // The card endpoint is public and cheap; a short TTL keeps the TCK's
 // Cache-Control/ETag checks satisfied without making policy edits slow to
@@ -79,11 +80,15 @@ export function mountA2A(app: Hono<{ Bindings: Env }>): void {
     }
 
     const upload = CardUpload.parse(JSON.parse(row.card_json));
+    if (upload.blocked.includes(viewer)) {
+      const { status, body } = standardError(404, "no such agent");
+      return c.json(body, status as 404);
+    }
     const origin = new URL(c.req.url).origin;
     const card = toAgentCard({
       handle,
       description: upload.description,
-      tasks: visibleTasks(upload, viewer),
+      tasks: visibleTasks(upload, viewer, await sharedRosterIds(c.env.DB, org, viewer, handle)),
       baseUrl: `${origin}/v1/a2a/${handle}`,
     });
 

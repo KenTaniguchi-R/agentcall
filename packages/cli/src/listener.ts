@@ -97,7 +97,7 @@ export function startListener(deps: ListenerDeps): { stop(): void } {
         return;
       }
 
-      const { call_id, from, message, task: requestedTask, context_id } = frame;
+      const { call_id, from, groups, message, task: requestedTask, context_id } = frame;
       const started = Date.now();
 
       // Resolve caller -> task -> envelope BEFORE the message is placed in any
@@ -105,7 +105,7 @@ export function startListener(deps: ListenerDeps): { stop(): void } {
       // tokens are burned by blocked callers or menu probing.
       let resolution: ReturnType<typeof resolveTask>;
       try {
-        resolution = resolveTask(loadPolicy(deps.paths), loadTasks(deps.paths), from, requestedTask);
+        resolution = resolveTask(loadPolicy(deps.paths), loadTasks(deps.paths), from, requestedTask, groups);
       } catch (e) {
         send({ type: "call_failed", call_id, code: "agent_error", detail: "A local policy error prevented this call from completing." });
         audit({ call_id, from, message: message.slice(0, 500), status: "policy_error", duration_ms: 0, error: String(e).slice(0, 2000) });
