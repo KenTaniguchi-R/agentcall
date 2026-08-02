@@ -6,6 +6,20 @@ which are released together.
 
 ## Unreleased
 
+### Documentation — cloud data map and residency decision
+
+- A living inventory now covers every D1 table, Durable Object storage shape,
+  native rate-limit counter, Analytics Engine dataset, log surface, transient
+  call-content path, and endpoint-local boundary, with sensitivity and actual
+  application retention.
+- Production D1 is recorded as WNAM with no jurisdiction and replication off.
+  The decision rejects pinning Durable Objects alone: jurisdictional ID
+  derivation would strand current objects while D1, analytics, processing, and
+  logs remained outside the claim.
+- Regional conclusions are explicit: a coordinated new EU deployment is
+  possible with caveats; complete US residency is blocked by D1's lack of a US
+  jurisdiction; Japan has no D1 or Durable Objects jurisdiction.
+
 ### Documentation — organization-scoped call reachability
 
 - The security model now states the implemented boundary explicitly: every
