@@ -810,7 +810,13 @@ git commit -m "refactor(cli): extract call and status commands"
   export function policyVerb(d: Deps, verb: Verb, args: string[]): void;
   ```
 
-The six policy commands all delegate to `execVerb` in `verbs.ts`, so they collapse into one `policyVerb` function rather than six near-identical ones. That is the one place this refactor removes duplication rather than only relocating it — verify against `index.ts:426-438` that the six differ *only* by the verb they pass. If any has extra logic, keep it separate rather than forcing the collapse.
+The six policy commands all delegate to `execVerb` in `verbs.ts` and move into one `policyVerb` function.
+
+**Correction, recorded after the fact (2026-08-02):** an earlier draft of this plan claimed this was "the one place this refactor removes duplication rather than only relocating it." **That was false.** `index.ts` already had a single shared `policyVerbAction(verb)` factory, introduced in `2f4b81e` in mid-July — all six commands were already wired to it, and duplication was already zero. This task relocates that shared function into `policy.ts` and reshapes its signature (closure-per-verb with `(a, b?)` positional params → `policyVerb(d, verb, args: string[])`). That is relocation, the same category as every other task here, not an exception to it.
+
+The commit message on `674e9a1` repeats the original false claim and is left uncorrected rather than rewriting shared history — this note is the correction of record. Verify against `git show dfb689a:packages/cli/src/index.ts` if you need the pre-change state.
+
+Still verify the six differ *only* by verb string and arity (`allow`/`revoke` take two arguments, the other four take one). If any has extra logic, keep it separate rather than forcing the collapse.
 
 - [ ] **Step 1: Write the failing tests**
 
