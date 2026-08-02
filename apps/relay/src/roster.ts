@@ -11,6 +11,7 @@ import {
 import { authenticateRequest } from "./tenant.js";
 import { checkLimit, NATIVE_ROSTER_READ, REGISTER, ROSTER_WRITE } from "./ratelimit/index.js";
 import { parseStoredCard } from "./stored-card.js";
+import { MAX_ROSTER_AUDIT_EVENTS, rosterAuditStatement } from "./events.js";
 
 // 16 random bytes, base64url — 22 chars, inside ROSTER_ID_RE's 16..64 window.
 // Unguessable but not secret: it travels in URL paths and will be logged.
@@ -35,13 +36,15 @@ export function mountRoster(app: Hono<{ Bindings: Env }>): void {
     const now = Date.now();
     await c.env.DB.batch([
       c.env.DB.prepare(
-        "INSERT INTO rosters (id, org, join_secret_hash, admin_secret_hash, created_at) VALUES (?, ?, ?, ?, ?)",
+        "INSERT INTO rosters (id, org, join_secret_hash, admin_secret_hash, created_at, audit_budget_used) " +
+          "VALUES (?, ?, ?, ?, ?, 1)",
       ).bind(roster_id, org, await sha256Hex(join_secret), await sha256Hex(admin_secret), now),
       c.env.DB.prepare("INSERT INTO roster_members (roster_id, org, handle, joined_at) VALUES (?, ?, ?, ?)")
         .bind(roster_id, org, handle, now),
-      c.env.DB.prepare(
-        "INSERT INTO roster_events (roster_id, org, kind, actor, subject, at) VALUES (?, ?, 'create', ?, NULL, ?)",
-      ).bind(roster_id, org, handle, now),
+      rosterAuditStatement(c, {
+        event: "roster.create", action: "C", rosterId: roster_id, org, actor: handle, actorType: "handle",
+        targetType: "roster", targetId: null, description: `${handle} created roster ${roster_id}`, at: now,
+      }, "previous-change"),
     ]);
     // Both secrets are returned exactly once and only their digests persist.
     return c.json({ roster_id, join_secret, admin_secret });
@@ -81,27 +84,53 @@ export function mountRoster(app: Hono<{ Bindings: Env }>): void {
       "INSERT OR IGNORE INTO roster_members (roster_id, org, handle, joined_at) " +
         "SELECT r.id, r.org, ?, ? FROM rosters r " +
         "WHERE r.id = ? AND r.org = ? AND r.join_secret_hash = ? " +
+        "AND r.audit_budget_used < ? " +
         "AND (SELECT COUNT(*) FROM roster_members WHERE roster_id = r.id) < ?",
-      ).bind(handle, now, id, org, supplied, MAX_ROSTER_MEMBERS),
+      ).bind(handle, now, id, org, supplied, MAX_ROSTER_AUDIT_EVENTS, MAX_ROSTER_MEMBERS),
       c.env.DB.prepare(
-        "INSERT INTO roster_events (roster_id, org, kind, actor, subject, at) " +
-          "SELECT ?, ?, 'join', ?, ?, ? WHERE EXISTS (" +
-          "SELECT 1 FROM roster_members WHERE roster_id = ? AND org = ? AND handle = ? AND joined_at = ?)",
-      ).bind(id, org, handle, handle, now, id, org, handle, now),
+        "UPDATE rosters SET audit_budget_used = audit_budget_used + 1 " +
+          "WHERE id = ? AND org = ? AND changes() = 1",
+      ).bind(id, org),
+      rosterAuditStatement(c, {
+        event: "roster.join", action: "C", rosterId: id, org, actor: handle, actorType: "handle",
+        targetType: "handle", targetId: handle, description: `${handle} joined roster ${id}`, at: now,
+      }, "previous-change"),
     ]);
     if ((inserted.meta.changes ?? 0) === 1) return c.json({ ok: true });
 
     // Zero changes has three meanings. This read chooses the response only;
     // it cannot authorize a write, so racing it cannot bypass the atomic gate.
     const state = await c.env.DB.prepare(
-      "SELECT r.join_secret_hash, EXISTS(" +
+      "SELECT r.join_secret_hash, r.audit_budget_used, EXISTS(" +
         "SELECT 1 FROM roster_members m WHERE m.roster_id = r.id AND m.org = r.org AND m.handle = ?" +
         ") AS member FROM rosters r WHERE r.id = ? AND r.org = ?",
-    ).bind(handle, id, org).first<{ join_secret_hash: string; member: number }>();
+    ).bind(handle, id, org).first<{ join_secret_hash: string; audit_budget_used: number; member: number }>();
     if (!state || !constantTimeEqual(state.join_secret_hash, supplied)) return c.json(NOT_FOUND, 404);
     if (state.member === 1) return c.json({ ok: true });
+    if (state.audit_budget_used >= MAX_ROSTER_AUDIT_EVENTS) {
+      await recordAuditBudgetExhaustion(c, id, org, handle, "handle");
+      return c.json({ error: "roster event budget exhausted" }, 409);
+    }
     return c.json({ error: "roster full" }, 409);
   });
+
+  async function recordAuditBudgetExhaustion(
+    c: Context<{ Bindings: Env }>, id: string, org: string, actor: string,
+    actorType: "handle" | "admin_secret",
+  ) {
+    const now = Date.now();
+    await c.env.DB.batch([
+      c.env.DB.prepare(
+        "UPDATE rosters SET audit_budget_exhausted_at = ? " +
+          "WHERE id = ? AND org = ? AND audit_budget_exhausted_at IS NULL",
+      ).bind(now, id, org),
+      rosterAuditStatement(c, {
+        event: "roster.audit_budget_exhausted", action: "U", rosterId: id, org, actor, actorType,
+        targetType: "roster", targetId: null,
+        description: `Roster ${id} exhausted its membership audit event budget`, at: now,
+      }, "previous-change"),
+    ]);
+  }
 
   async function adminRoster(c: Context<{ Bindings: Env }>, id: string, supplied: string) {
     const row = await c.env.DB.prepare(
@@ -126,13 +155,34 @@ export function mountRoster(app: Hono<{ Bindings: Env }>): void {
     ).bind(id, identity.org, identity.handle).first();
     if (!member) return c.json(NOT_FOUND, 404);
     const now = Date.now();
-    await c.env.DB.batch([
-      c.env.DB.prepare("DELETE FROM roster_members WHERE roster_id = ? AND org = ? AND handle = ?")
-        .bind(id, identity.org, identity.handle),
+    const [deleted] = await c.env.DB.batch([
       c.env.DB.prepare(
-        "INSERT INTO roster_events (roster_id, org, kind, actor, subject, at) VALUES (?, ?, 'leave', ?, ?, ?)",
-      ).bind(id, identity.org, identity.handle, identity.handle, now),
+        "DELETE FROM roster_members WHERE roster_id = ? AND org = ? AND handle = ? " +
+          "AND EXISTS (SELECT 1 FROM rosters WHERE id = ? AND org = ? AND audit_budget_used < ?)",
+      ).bind(id, identity.org, identity.handle, id, identity.org, MAX_ROSTER_AUDIT_EVENTS),
+      c.env.DB.prepare(
+        "UPDATE rosters SET audit_budget_used = audit_budget_used + 1 " +
+          "WHERE id = ? AND org = ? AND changes() = 1",
+      ).bind(id, identity.org),
+      rosterAuditStatement(c, {
+        event: "roster.leave", action: "D", rosterId: id, org: identity.org,
+        actor: identity.handle, actorType: "handle", targetType: "handle", targetId: identity.handle,
+        description: `${identity.handle} left roster ${id}`, at: now,
+      }, "previous-change"),
     ]);
+    if ((deleted.meta.changes ?? 0) !== 1) {
+      const state = await c.env.DB.prepare(
+        "SELECT audit_budget_used, EXISTS(" +
+          "SELECT 1 FROM roster_members WHERE roster_id = ? AND org = ? AND handle = ?" +
+          ") AS member FROM rosters WHERE id = ? AND org = ?",
+      ).bind(id, identity.org, identity.handle, id, identity.org)
+        .first<{ audit_budget_used: number; member: number }>();
+      if (state?.member === 1 && state.audit_budget_used >= MAX_ROSTER_AUDIT_EVENTS) {
+        await recordAuditBudgetExhaustion(c, id, identity.org, identity.handle, "handle");
+        return c.json({ error: "roster event budget exhausted" }, 409);
+      }
+      return c.json(NOT_FOUND, 404);
+    }
     return c.json({ ok: true });
   });
 
@@ -151,13 +201,16 @@ export function mountRoster(app: Hono<{ Bindings: Env }>): void {
     ).bind(id, identity.org, body.data.handle).first();
     if (!member) return c.json({ error: "member not found" }, 404);
     const now = Date.now();
-    await c.env.DB.batch([
+    const [deleted] = await c.env.DB.batch([
       c.env.DB.prepare("DELETE FROM roster_members WHERE roster_id = ? AND org = ? AND handle = ?")
         .bind(id, identity.org, body.data.handle),
-      c.env.DB.prepare(
-        "INSERT INTO roster_events (roster_id, org, kind, actor, subject, at) VALUES (?, ?, 'expel', ?, ?, ?)",
-      ).bind(id, identity.org, identity.handle, body.data.handle, now),
+      rosterAuditStatement(c, {
+        event: "roster.expel", action: "D", rosterId: id, org: identity.org,
+        actor: identity.handle, actorType: "admin_secret", targetType: "handle", targetId: body.data.handle,
+        description: `${identity.handle} expelled ${body.data.handle} from roster ${id}`, at: now,
+      }, "previous-change"),
     ]);
+    if ((deleted.meta.changes ?? 0) !== 1) return c.json({ error: "member not found" }, 404);
     return c.json({ ok: true });
   });
 
@@ -176,17 +229,22 @@ export function mountRoster(app: Hono<{ Bindings: Env }>): void {
     const statements = [
       c.env.DB.prepare("UPDATE rosters SET join_secret_hash = ? WHERE id = ? AND org = ?")
         .bind(await sha256Hex(join_secret), id, identity.org),
-      c.env.DB.prepare(
-        "INSERT INTO roster_events (roster_id, org, kind, actor, subject, at) VALUES (?, ?, 'rotate', ?, NULL, ?)",
-      ).bind(id, identity.org, identity.handle, now),
     ];
     if (body.data.evict) statements.push(
       c.env.DB.prepare("DELETE FROM roster_members WHERE roster_id = ? AND org = ?").bind(id, identity.org),
-      c.env.DB.prepare(
-        "INSERT INTO roster_events (roster_id, org, kind, actor, subject, at) VALUES (?, ?, 'evict_all', ?, NULL, ?)",
-      ).bind(id, identity.org, identity.handle, now),
     );
-    await c.env.DB.batch(statements);
+    statements.push(rosterAuditStatement(c, {
+      event: "roster.rotate", action: "U", rosterId: id, org: identity.org,
+      actor: identity.handle, actorType: "admin_secret", targetType: "join_key", targetId: null,
+      description: `${identity.handle} rotated the join key for roster ${id}`, at: now,
+    }, "roster-exists"));
+    if (body.data.evict) statements.push(rosterAuditStatement(c, {
+      event: "roster.evict_all", action: "D", rosterId: id, org: identity.org,
+      actor: identity.handle, actorType: "admin_secret", targetType: "roster", targetId: null,
+      description: `${identity.handle} evicted every member from roster ${id}`, at: now,
+    }, "roster-exists"));
+    const [updated] = await c.env.DB.batch(statements);
+    if ((updated.meta.changes ?? 0) !== 1) return c.json(NOT_FOUND, 404);
     return c.json({ join_secret });
   });
 
@@ -201,13 +259,16 @@ export function mountRoster(app: Hono<{ Bindings: Env }>): void {
     const roster = await adminRoster(c, id, body.data.admin_secret);
     if (!roster || roster.org !== identity.org) return c.json(NOT_FOUND, 404);
     const now = Date.now();
-    await c.env.DB.batch([
-      c.env.DB.prepare(
-        "INSERT INTO roster_events (roster_id, org, kind, actor, subject, at) VALUES (?, ?, 'delete', ?, NULL, ?)",
-      ).bind(id, identity.org, identity.handle, now),
+    const [, deleted] = await c.env.DB.batch([
       c.env.DB.prepare("DELETE FROM roster_members WHERE roster_id = ? AND org = ?").bind(id, identity.org),
       c.env.DB.prepare("DELETE FROM rosters WHERE id = ? AND org = ?").bind(id, identity.org),
+      rosterAuditStatement(c, {
+        event: "roster.delete", action: "D", rosterId: id, org: identity.org,
+        actor: identity.handle, actorType: "admin_secret", targetType: "roster", targetId: null,
+        description: `${identity.handle} deleted roster ${id}`, at: now,
+      }, "previous-change"),
     ]);
+    if ((deleted.meta.changes ?? 0) !== 1) return c.json(NOT_FOUND, 404);
     return c.json({ ok: true });
   });
 

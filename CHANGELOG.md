@@ -6,6 +6,17 @@ which are released together.
 
 ## Unreleased
 
+### Changed — roster mutations emit complete audit evidence
+
+- Roster audit events now use stable `roster.*` names and record CRUD action,
+  organization, actor authority, typed target, source IP/country, description,
+  and timestamp. All seven roster mutation event types become available with
+  this release: `roster.create`, `roster.join`, `roster.leave`, `roster.expel`,
+  `roster.rotate`, `roster.evict_all`, and `roster.delete`.
+- A persistent per-roster budget bounds membership audit growth independently
+  of source IP. Exhaustion is recorded once, while administrative recovery and
+  security operations remain available.
+
 ### Changed — Durable Object lifecycle is declarative
 
 - Relay deployments now declare `HandleDO` and `RateLimiterDO` as SQLite-backed
