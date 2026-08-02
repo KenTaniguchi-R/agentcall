@@ -19,7 +19,7 @@ export interface RotateDeps {
 export async function rotateLine(ctx: LineContext, deps: RotateDeps = {}): Promise<void> {
   const log = deps.log ?? console.log;
   const { token } = await (deps.rotate ?? rotateToken)(
-    relayUrl(ctx.config), { handle: ctx.config.handle, token: ctx.config.token },
+    relayUrl(ctx.config), { org: ctx.config.org, handle: ctx.config.handle, token: ctx.config.token },
   );
   saveLineConfig(ctx.paths, { ...ctx.config, token });
   // A caller-only line (no agent_kind) has no listener socket of its own — the

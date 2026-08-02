@@ -5,6 +5,8 @@ name: Invariants
 # GitHub annotations on the PR, which need no write permission.
 on:
   pull_request:
+  push:
+    branches: [main]
 
 permissions:
   contents: read
@@ -22,13 +24,39 @@ jobs:
           # Need the base branch to diff against.
           fetch-depth: 0
 
+      - name: Determine comparison base
+        env:
+          PUSH_BEFORE: ${{ github.event.before }}
+        run: |
+          if [ -n "$GITHUB_BASE_REF" ]; then
+            base="origin/${GITHUB_BASE_REF}"
+          elif [ -n "$PUSH_BEFORE" ] &&
+               [ "$PUSH_BEFORE" != "0000000000000000000000000000000000000000" ] &&
+               git rev-parse --verify "${PUSH_BEFORE}^{commit}" >/dev/null 2>&1; then
+            base="$PUSH_BEFORE"
+          else
+            # github.event.before is all zeroes for a branch's first push.
+            # main normally has a parent, so retain a useful fallback rather
+            # than constructing the invalid `origin/` ref this workflow used
+            # before it supported push events.
+            base="HEAD^"
+          fi
+          echo "INVARIANTS_BASE=$base" >> "$GITHUB_ENV"
+          echo "Comparing $base...HEAD"
+
       - name: Protocol frames must live in packages/shared
         run: |
-          # A frame is identifiable by its `type:` discriminator -- z.literal().
-          # Anywhere outside packages/shared that means a frame shape was
-          # redefined locally instead of imported from the single source of
-          # truth. Baseline at time of writing: zero occurrences.
-          hits=$(grep -rn 'z\.literal(' apps/relay/src packages/cli/src || true)
+          # A frame is identifiable by its `type:` discriminator, which is
+          # always a STRING literal -- z.literal("call_request"). Anywhere
+          # outside packages/shared that means a frame shape was redefined
+          # locally instead of imported from the single source of truth.
+          #
+          # Matching bare `z.literal(` instead flagged `version: z.literal(1)`
+          # in packages/cli/src/rosters.ts -- a local file-format version tag,
+          # not a protocol frame. All 13 discriminators in protocol.ts are
+          # string literals and it declares no numeric ones, so requiring the
+          # quote costs no coverage.
+          hits=$(grep -rn 'z\.literal("' apps/relay/src packages/cli/src || true)
           if [ -n "$hits" ]; then
             echo "$hits" | while IFS=: read -r file line _; do
               echo "::error file=$file,line=$line::Protocol frame defined outside packages/shared. Frame shapes are declared once in packages/shared/src/protocol.ts and imported -- see CLAUDE.md."
@@ -49,7 +77,7 @@ jobs:
           GRACE_DAYS=14
           today=$(date -u +%s)
           modified=$(git diff --name-only --diff-filter=M \
-            "origin/${GITHUB_BASE_REF}...HEAD" \
+            "${INVARIANTS_BASE}...HEAD" \
             -- 'docs/superpowers/**' 'docs/security/2026-07-16-security-review.md' || true)
           for file in $modified; do
             # Pull YYYY-MM-DD off the front of the basename.
@@ -73,7 +101,7 @@ jobs:
           # gh issue list is the status board. A markdown TODO drifts from it
           # immediately and then quietly becomes wrong.
           added=$(git diff --name-only --diff-filter=A \
-            "origin/${GITHUB_BASE_REF}...HEAD" || true)
+            "${INVARIANTS_BASE}...HEAD" || true)
           for file in $added; do
             case "$(basename "$file" | tr '[:upper:]' '[:lower:]')" in
               todo.md|tasks.md|roadmap.md|backlog.md)

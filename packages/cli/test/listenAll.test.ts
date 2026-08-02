@@ -13,7 +13,7 @@ beforeEach(() => {
   mkdirSync(m.linesDir, { recursive: true });
 });
 
-const base = { token: "t", relay: "https://r.example", agent_kind: "claude" as const };
+const base = { org: "acme", token: "t", relay: "https://r.example", agent_kind: "claude" as const };
 
 describe("startAllListeners", () => {
   it("starts one listener per callable line", () => {
@@ -27,7 +27,7 @@ describe("startAllListeners", () => {
   });
 
   it("skips a caller-only line", () => {
-    saveLineConfig(getLinePaths(m, "caller"), { handle: "ken", token: "t", relay: "https://r.example" });
+    saveLineConfig(getLinePaths(m, "caller"), { org: "acme", handle: "ken", token: "t", relay: "https://r.example" });
     const h = startAllListeners(m, { start: () => ({ stop() {} }) });
     expect(h.started).toEqual([]);
     h.stop();

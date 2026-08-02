@@ -8,7 +8,7 @@ import { savePerson } from "../src/person.js";
 import { resolveLine } from "../src/lineContext.js";
 
 let m: MachinePaths;
-const cfg = { handle: "ken", token: "t", relay: "https://r.example", agent_kind: "claude" as const };
+const cfg = { org: "acme", handle: "ken", token: "t", relay: "https://r.example", agent_kind: "claude" as const };
 
 beforeEach(() => {
   const root = mkdtempSync(join(tmpdir(), "agentcall-ctx-"));

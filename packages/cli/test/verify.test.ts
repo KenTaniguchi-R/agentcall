@@ -280,18 +280,18 @@ describe("verifyAgent", () => {
 });
 
 describe("checkRelaySelfCall", () => {
-  const cfg = { handle: "ken", token: "tok", agent_kind: "claude" as const, relay: "https://relay.example" };
+  const cfg = { org: "acme", handle: "ken", token: "tok", agent_kind: "claude" as const, relay: "https://relay.example" };
 
   it("calls the agent's own address through the relay and passes on a reply", async () => {
-    const seen: Array<{ from: string; to: string; relay: string; token: string; message: string; timeoutMs?: number }> = [];
+    const seen: Array<{ org: string; from: string; to: string; relay: string; token: string; message: string; timeoutMs?: number }> = [];
     const c = await checkRelaySelfCall(cfg, async (opts) => {
-      seen.push({ from: opts.from, to: opts.to, relay: opts.relay, token: opts.token, message: opts.message, timeoutMs: opts.timeoutMs });
+      seen.push({ org: opts.org, from: opts.from, to: opts.to, relay: opts.relay, token: opts.token, message: opts.message, timeoutMs: opts.timeoutMs });
       return { type: "call_reply", call_id: "c1", text: "hi", task: "ask" } as never;
     });
     expect(c).toMatchObject({ name: "relay self-call", ok: true });
     expect(seen).toEqual([
       {
-        from: "ken", to: "ken", relay: "https://relay.example", token: "tok",
+        from: "ken", to: "ken", relay: "https://relay.example", org: "acme", token: "tok",
         message: "agentcall doctor self-test: reply briefly", timeoutMs: VERIFY_TIMEOUT_MS + 30_000,
       },
     ]);

@@ -40,6 +40,39 @@ This removes the single flat `~/.agentcall/config.json` (and `Config`/`Paths`/
 a post-registration verify pass by default, mirroring `setup`'s; `--no-verify` on
 `line add` skips it.
 
+Tenancy is a property of the LINE, not the machine: `org` sits in each line's
+`config.json` alongside `relay`, because an org names a tenant *on a relay* and
+the relay was already per-line. Rosters, `agentcall search`, tenant invites and
+conversation bindings follow it — each is scoped to one line and takes
+`--line <name>` (defaulting to the primary line), so a machine can hold lines in
+two organizations without either seeing the other's memberships, invites, or
+open conversations.
+
+### Added — multi-turn calls: `agentcall call --continue`
+
+- **`agentcall call <address> "..." --continue`** follows up on your last
+  conversation with that address instead of starting a fresh one, reusing the
+  answering agent's session. `--context <id>` targets a specific conversation
+  by id rather than "the last one". Conversations expire 30 minutes after
+  their last turn and are capped at 10 turns; a conversation is scoped to the
+  caller and to the task it started on, and cannot be handed to someone else
+  or moved to another task.
+- **`threadable` in a task's `SKILL.md` frontmatter** opts a task into
+  `--continue`. Tasks granting `write` or `exec` are not conversational by
+  default — a caller's earlier messages persist in the agent's context across
+  turns, which is a materially worse risk against those capabilities than
+  against a read-only one — but read-only tasks default to threadable.
+
+### Changed — `session_id` is now an opaque callee-minted `context_id`
+
+- The protocol's `session_id` field is renamed `context_id` and no longer
+  carries the answering agent's real session id — that value never leaves the
+  callee's machine. `context_id` is instead a token the callee mints and
+  hands the caller back, which the callee looks up against its own local
+  binding store on the next turn.
+- `RATE_LIMIT_PER_HOUR` raised from 10 to 30, so a normal multi-turn
+  conversation doesn't consume a caller's entire hourly budget.
+
 ### Fixed — `doctor`'s tool-guard check called healthy installs broken
 
 The check asked a real `claude` spawn to read a canary `.env` and required a
@@ -61,6 +94,43 @@ the in-checkout `pnpm build`.
 rather than a `fix:`.
 
 ## 0.4.0 — 2026-08-01
+
+### Added — roster-based discovery: `agentcall search`, `agentcall roster`, task `keywords`
+
+- **`agentcall search "<question>"`** finds which colleague's agent can answer
+  something, ranked over the rosters you've joined. The ranker runs entirely
+  on your machine — the relay never sees the query text, only that your
+  handle refreshed a roster (and when). `--json` gives a machine-readable
+  result for your own agent to parse, `--roster <name>` scopes to one roster,
+  and `--offline` ranks against the last cached bundle without refreshing.
+  A result is prefixed with `[roster-name]` only when more than one roster is
+  in scope. If every joined roster fails to refresh, the command exits
+  non-zero; a partial failure across several rosters still exits `0`, with
+  the affected roster called out as stale in the output.
+- **`agentcall roster create|join|list|forget`** — an opt-in discovery group.
+  One person creates a roster and shares its id and join secret once (the
+  relay stores only a SHA-256 digest of the secret); everyone else joins with
+  `agentcall roster join <id> --secret <secret>`. `forget` only drops the
+  local record of having joined — there is no leave operation, so membership
+  on the relay is unaffected.
+- **`keywords` in a task's `SKILL.md` frontmatter**, published on the agent
+  card and weighted highest by search (`keywords` 3, task name 2, description
+  1 per matching word). A result must clear a minimum score to be shown at
+  all, so a single word incidentally shared with a description does not
+  surface a task that can't actually help — this came from a real
+  over-firing case during development.
+- Relay: `POST /v1/roster`, `POST /v1/roster/:id/join`, and
+  `GET /v1/roster/:id/bundle` (filtered per caller), backed by the new
+  `rosters` and `roster_members` tables (migration `0004_rosters.sql`).
+
+### Known issue — no way to expel a roster member or rotate a roster secret (unfixed)
+
+- A roster has no membership-lifecycle operations beyond joining: nobody can
+  be removed, and the join secret can't be rotated. A leaked secret means
+  abandoning the roster and creating a new one. `agentcall roster forget`
+  only erases the local record of having joined; it does not leave the
+  roster, so a member who believes they left is still visible to everyone
+  else's search.
 
 ### Known issue — Codex reaches the filesystem without the shell, and unrecorded (unfixed)
 

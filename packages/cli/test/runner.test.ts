@@ -1,10 +1,12 @@
-import { readFileSync } from "node:fs";
+import { chmodSync, existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { isAbsolute, join } from "node:path";
+import { dirname, isAbsolute, join } from "node:path";
+import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
 import { buildPrompt } from "../src/prompt.js";
 import {
   buildSpawnSpec, claudeAllowedTools, guardCodexConfigArg, guardSettingsJson, GUARD_TIMEOUT_S,
+  codexThreadingEnabled, CODEX_THREADING_VERIFIED_VERSION,
   parseClaudeJson, parseCodexJsonl, runAgent, truncateUtf8, type AgentKind, type SpawnSpec,
 } from "../src/runner.js";
 import { resolveAgentBin } from "../src/bin.js";
@@ -37,6 +39,20 @@ function agentRun(
   return runAgent(kind, prompt, workdir, timeoutMs, specOverride, envelope, callId, signal, lineName);
 }
 
+describe("codex threading evidence", () => {
+  const bin = () => "/fake/bin/codex";
+
+  it("enables threading only for the codex-cli release that passed the live sandbox probe", () => {
+    expect(codexThreadingEnabled(bin, () => `codex-cli ${CODEX_THREADING_VERIFIED_VERSION}`)).toBe(true);
+    expect(codexThreadingEnabled(bin, () => "codex-cli 0.147.0")).toBe(false);
+  });
+
+  it("fails closed when the version cannot be read or parsed", () => {
+    expect(codexThreadingEnabled(bin, () => "codex-cli unknown")).toBe(false);
+    expect(codexThreadingEnabled(bin, () => { throw new Error("missing"); })).toBe(false);
+  });
+});
+
 describe("buildPrompt", () => {
   it("includes handle, caller, divider, and message", () => {
     const out = buildPrompt("ken", "shusaku", "review my plan");
@@ -48,7 +64,7 @@ describe("buildPrompt", () => {
   it("embeds the task name, id, and SKILL.md content when a non-ask task is given", () => {
     const task: Task = {
       id: "schedule-meeting", name: "Schedule a meeting", description: "Book a time.",
-      examples: [], envelope: { caps: ["read"] },
+      examples: [], keywords: [], envelope: { caps: ["read"] }, threadable: true,
       skill: "# Steps\nCheck the calendar first.",
     };
     const out = buildPrompt("ken", "shusaku", "next tue?", task);
@@ -295,6 +311,40 @@ describe("runAgent (with a fake agent binary)", () => {
     await new Promise((r) => setTimeout(r, 300));
     expect(() => process.kill(grandchildPid, 0)).toThrow();
   }, 15_000);
+  // Cancellation (listener.ts's cancel_call handling) reuses the exact same
+  // teardown path as a timeout: SIGTERM/grace/SIGKILL against the whole
+  // process group. The test above proves that path for a timed-out call;
+  // this proves it separately for an aborted one, since "the promise settled
+  // with code: canceled" alone doesn't prove the grandchild actually died —
+  // only inspecting the pid after teardown does.
+  it("kills the whole process group when the call is canceled via abort, not just the direct child", async () => {
+    const marker = join(tmpdir(), `agentcall-pgid-cancel-test-${Date.now()}-${Math.random()}.pid`);
+    const script = `
+      const cp = require("child_process");
+      const fs = require("fs");
+      const gc = cp.spawn(process.execPath, ["-e", "setTimeout(() => {}, 1e6)"], { stdio: "inherit" });
+      fs.writeFileSync(${JSON.stringify(marker)}, String(gc.pid));
+      setTimeout(() => {}, 1e6);
+    `;
+    const controller = new AbortController();
+    const running = agentRun(
+      "claude", "x", WORKDIR, 10_000, { cmd: "node", args: ["-e", script], cwd: "/tmp" },
+      undefined, undefined, controller.signal,
+    );
+    const readyBy = Date.now() + 5_000;
+    while (!existsSync(marker) && Date.now() < readyBy) await new Promise((r) => setTimeout(r, 10));
+    expect(existsSync(marker)).toBe(true);
+    const start = Date.now();
+    controller.abort();
+    await expect(running).rejects.toMatchObject({ code: "canceled" });
+    expect(Date.now() - start).toBeLessThan(5000);
+    const grandchildPid = Number(readFileSync(marker, "utf8"));
+    // Give the SIGTERM a moment to land, then confirm the grandchild (not
+    // just the direct child) was actually torn down, not merely detected
+    // as gone via a hung-forever `close` listener.
+    await new Promise((r) => setTimeout(r, 300));
+    expect(() => process.kill(grandchildPid, 0)).toThrow();
+  }, 15_000);
   it("caps accumulated stdout and rejects agent_error instead of buffering unbounded output", async () => {
     const script = `
       process.stdout.write(Buffer.alloc(1024 * 1024, "x"));
@@ -307,6 +357,67 @@ describe("runAgent (with a fake agent binary)", () => {
     // Should be caught by the 10MB cap almost immediately, well before the
     // 20s timeout — proves the cap tripped, not the timeout.
     expect(Date.now() - start).toBeLessThan(10_000);
+  }, 15_000);
+});
+
+// runAgent forwards its positionals to buildSpawnSpec. `lineName` and `resume`
+// are the adjacent pair now — both plain strings, lineName required and
+// resume optional — so transposing them typechecks cleanly and would hand
+// the line name to `--resume` (the flag that decides which session gets
+// resumed) while feeding the real session id to the PreToolUse guard as
+// AGENTCALL_LINE. `callId` sits two positions before lineName (separated by
+// `signal`), so a callId<->lineName or callId<->resume transposition is
+// covered too. Every other runAgent test passes a specOverride, which skips
+// buildSpawnSpec entirely, so nothing else pins this forwarding. This drives
+// the real path (resolveAgentBin included) against a fake `claude` that
+// records its argv and env instead of answering.
+describe("runAgent -> buildSpawnSpec forwarding", () => {
+  // Durable (not under $TMPDIR): preferDurableBin deliberately skips ephemeral
+  // dirs, so a fake planted in os.tmpdir() would be passed over. Same trick as
+  // test/bin.test.ts.
+  const binDir = join(dirname(fileURLToPath(import.meta.url)), "..", ".tmp", `runner-${process.pid}-bin`);
+  const capture = join(binDir, "spawn.txt");
+  const q = (s: string) => JSON.stringify(s); // sh-safe: these paths have no quotes
+
+  it("passes resume to --resume, lineName to AGENTCALL_LINE, and callId to AGENTCALL_CALL_ID — never swapped", async () => {
+    const realPath = process.env.PATH;
+    try {
+      mkdirSync(binDir, { recursive: true });
+      const fake = join(binDir, "claude");
+      writeFileSync(fake, [
+        "#!/bin/sh",
+        `: > ${q(capture)}`,
+        `for a in "$@"; do printf '%s\\n' "$a" >> ${q(capture)}; done`,
+        `printf 'ENV_CALL_ID=%s\\n' "$AGENTCALL_CALL_ID" >> ${q(capture)}`,
+        `printf 'ENV_LINE=%s\\n' "$AGENTCALL_LINE" >> ${q(capture)}`,
+        `printf '%s\\n' '{"type":"result","result":"ok","session_id":"s"}'`,
+        "",
+      ].join("\n"));
+      chmodSync(fake, 0o755);
+      // ONLY the fake dir, so resolveAgentBin cannot fall through to a real
+      // claude install on the developer's PATH.
+      process.env.PATH = binDir;
+
+      // A real, existing cwd: the spawn inherits it, and a missing one fails
+      // as ENOENT against the command itself. (WORKDIR is a path fixture under
+      // a home that was never created.)
+      const out = await runAgent(
+        "claude", "PROMPT", tmpdir(), 10_000, undefined, { caps: ["read"] },
+        "call-id-not-a-session", undefined, "line-name-not-a-call-id-or-session",
+        "session-id-not-a-call",
+      );
+      expect(out.text).toBe("ok");
+
+      const argv = readFileSync(capture, "utf8").split("\n");
+      expect(argv[argv.indexOf("--resume") + 1]).toBe("session-id-not-a-call");
+      expect(argv).toContain("ENV_CALL_ID=call-id-not-a-session");
+      expect(argv).toContain("ENV_LINE=line-name-not-a-call-id-or-session");
+      expect(argv).not.toContain("call-id-not-a-session"); // never in argv at all
+      expect(argv).not.toContain("line-name-not-a-call-id-or-session"); // never in argv at all
+    } finally {
+      if (realPath !== undefined) process.env.PATH = realPath;
+      rmSync(binDir, { recursive: true, force: true });
+    }
   }, 15_000);
 });
 
@@ -419,6 +530,95 @@ describe("guard hook wiring", () => {
   it("keeps the prompt last, after the -c override", () => {
     const spec = spawnSpec("codex", "PROMPT", WORKDIR, () => "/bin/codex");
     expect(spec.args.at(-1)).toBe("PROMPT");
+  });
+});
+
+describe("buildSpawnSpec resume (claude)", () => {
+  const bin = () => "/usr/bin/claude";
+
+  it("adds --resume with the agent session id", () => {
+    const spec = buildSpawnSpec("claude", "hi", "/w", bin, { caps: ["read"] }, "c1", "line", "sess-abc");
+    const i = spec.args.indexOf("--resume");
+    expect(i).toBeGreaterThan(-1);
+    expect(spec.args[i + 1]).toBe("sess-abc");
+  });
+
+  it("omits --resume when no session is given", () => {
+    const spec = buildSpawnSpec("claude", "hi", "/w", bin, { caps: ["read"] }, "c1", "line");
+    expect(spec.args).not.toContain("--resume");
+  });
+
+  // The envelope is re-applied per spawn, so a resumed session cannot inherit
+  // capabilities from the turn that created it.
+  it("still carries the full envelope and guard on a resumed spawn", () => {
+    const spec = buildSpawnSpec("claude", "hi", "/w", bin, { caps: ["read"] }, "c1", "line", "sess-abc");
+    expect(spec.args).toContain("--allowedTools");
+    expect(spec.args).toContain("--permission-mode");
+    expect(spec.args).toContain("dontAsk");
+    expect(spec.args).toContain("--settings");
+    expect(spec.args[spec.args.indexOf("--allowedTools") + 1]).toBe("Read,Grep,Glob,LS");
+  });
+
+  it("keeps the prompt as the -p value", () => {
+    const spec = buildSpawnSpec("claude", "follow up", "/w", bin, { caps: ["read"] }, "c1", "line", "sess-abc");
+    expect(spec.args[spec.args.indexOf("-p") + 1]).toBe("follow up");
+  });
+
+  // Same env line whether or not resume is set (see runner.ts), so this is
+  // really the same guarantee "AGENTCALL_LINE propagation" pins for the
+  // fresh spawn — restated here so a reader of the resume tests doesn't have
+  // to trust that the branch wasn't split.
+  it("still sets AGENTCALL_LINE on a resumed spawn", () => {
+    const spec = buildSpawnSpec("claude", "hi", "/w", bin, { caps: ["read"] }, "c1", "line", "sess-abc");
+    expect(spec.env?.AGENTCALL_LINE).toBe("line");
+  });
+});
+
+describe("buildSpawnSpec resume (codex)", () => {
+  const bin = () => "/usr/bin/codex";
+
+  it("uses the resume subcommand with the session id", () => {
+    const spec = buildSpawnSpec("codex", "hi", "/w", bin, { caps: ["read"] }, "c1", "line", "sess-abc");
+    expect(spec.args.slice(0, 3)).toEqual(["exec", "resume", "sess-abc"]);
+  });
+
+  // resume has no --sandbox, so the envelope rides the config override instead.
+  // Without this the resumed session keeps whatever sandbox it was created with.
+  it("re-applies the envelope through -c sandbox_mode", () => {
+    const ro = buildSpawnSpec("codex", "hi", "/w", bin, { caps: ["read"] }, "c1", "line", "sess-abc");
+    expect(ro.args).toContain(`sandbox_mode="read-only"`);
+    const rw = buildSpawnSpec("codex", "hi", "/w", bin, { caps: ["read", "write"] }, "c1", "line", "sess-abc");
+    expect(rw.args).toContain(`sandbox_mode="workspace-write"`);
+  });
+
+  it("never passes --sandbox or --cd on a resume, which the subcommand rejects", () => {
+    const spec = buildSpawnSpec("codex", "hi", "/w", bin, { caps: ["read"] }, "c1", "line", "sess-abc");
+    expect(spec.args).not.toContain("--sandbox");
+    expect(spec.args).not.toContain("--cd");
+  });
+
+  it("keeps --ignore-user-config and the guard on a resumed spawn", () => {
+    const spec = buildSpawnSpec("codex", "hi", "/w", bin, { caps: ["read"] }, "c1", "line", "sess-abc");
+    expect(spec.args).toContain("--ignore-user-config");
+    expect(spec.args.some((a) => a.startsWith("hooks.PreToolUse="))).toBe(true);
+  });
+
+  it("puts the prompt last", () => {
+    const spec = buildSpawnSpec("codex", "follow up", "/w", bin, { caps: ["read"] }, "c1", "line", "sess-abc");
+    expect(spec.args.at(-1)).toBe("follow up");
+  });
+
+  // Security invariant: AGENTCALL_LINE must reach the spawned env on BOTH the
+  // fresh spawn branch and the codex `exec resume` branch, not just the
+  // former — the PreToolUse guard resolves the line's tasksDir/calls.log from
+  // this var and fails closed without it, so a resumed call missing it would
+  // silently deny every tool use. "AGENTCALL_LINE propagation" below only
+  // exercises the fresh (no-resume) codex branch; this exercises the
+  // dedicated resume return statement in buildSpawnSpec, which sets it
+  // independently rather than falling through to the fresh branch's code.
+  it("sets AGENTCALL_LINE on a resumed spawn, same as the fresh spawn", () => {
+    const spec = buildSpawnSpec("codex", "hi", "/w", bin, { caps: ["read"] }, "c1", "line", "sess-abc");
+    expect(spec.env?.AGENTCALL_LINE).toBe("line");
   });
 });
 

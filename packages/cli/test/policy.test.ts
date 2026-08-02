@@ -12,11 +12,11 @@ function linePaths(home: string) {
 
 const intro: Task = {
   id: "owner-introduction", name: "Intro", description: "Introduce the owner.",
-  examples: [], envelope: { caps: ["read"] }, skill: "",
+  examples: [], keywords: [], envelope: { caps: ["read"] }, threadable: true, skill: "",
 };
 const meet: Task = {
   id: "schedule-meeting", name: "Schedule", description: "Book a time.",
-  examples: [], envelope: { caps: ["read", "fetch"] }, skill: "",
+  examples: [], keywords: [], envelope: { caps: ["read", "fetch"] }, threadable: true, skill: "",
 };
 const TASKS = [ASK_TASK, intro, meet];
 

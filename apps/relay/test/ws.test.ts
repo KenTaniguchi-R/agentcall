@@ -1,6 +1,7 @@
-import { SELF } from "cloudflare:test";
+import { env, SELF } from "cloudflare:test";
 import { describe, expect, it } from "vitest";
-import { registerHandle, wsAuth, openWs, closed, nextFrame } from "./helpers.js";
+import app from "../src/index.js";
+import { fixedRateLimit, registerHandle, issueInvite, wsAuth, openWs, closed, nextFrame } from "./helpers.js";
 
 describe("listener attach + status", () => {
   it("401s a listener with a bad token", async () => {
@@ -67,7 +68,7 @@ describe("listener attach + status", () => {
     const res = await SELF.fetch("https://relay.test/v1/register", {
       method: "POST",
       headers: { "content-type": "application/json" },
-      body: JSON.stringify({ handle: "solo2" }),
+      body: JSON.stringify({ invite: await issueInvite("acme", "solo2"), handle: "solo2" }),
     });
     expect(res.status).toBe(200);
     const { token } = await res.json<{ token: string }>();
@@ -77,6 +78,29 @@ describe("listener attach + status", () => {
     const frame = await incoming;
     expect(frame.type).toBe("incoming_call");
     expect(frame.from).toBe("solo2");
+  });
+
+  it("does not route a caller to the same handle in another tenant", async () => {
+    const betaToken = await registerHandle("tenant-target", "claude", "beta");
+    await openWs("/v1/ws?role=listen", wsAuth("tenant-target", betaToken, "beta"));
+    const callerToken = await registerHandle("tenant-caller", "claude", "acme");
+    const res = await SELF.fetch("https://relay.test/v1/ws?role=call&to=tenant-target", {
+      headers: { Upgrade: "websocket", ...wsAuth("tenant-caller", callerToken, "acme") },
+    });
+    expect(res.status).toBe(404);
+  });
+
+  it("keeps Durable Object state separate for identical handles in two tenants", async () => {
+    const acmeTarget = await registerHandle("same-person", "claude", "acme-do");
+    const betaTarget = await registerHandle("same-person", "claude", "beta-do");
+    const acmeListener = await openWs("/v1/ws?role=listen", wsAuth("same-person", acmeTarget, "acme-do"));
+    await openWs("/v1/ws?role=listen", wsAuth("same-person", betaTarget, "beta-do"));
+
+    const acmeCaller = await registerHandle("caller", "claude", "acme-do");
+    const incoming = nextFrame(acmeListener);
+    const caller = await openWs("/v1/ws?role=call&to=same-person", wsAuth("caller", acmeCaller, "acme-do"));
+    caller.send(JSON.stringify({ type: "call_request", to: "same-person", message: "acme only" }));
+    expect(await incoming).toMatchObject({ type: "incoming_call", from: "caller", message: "acme only" });
   });
   // /v1/status was anonymous and unthrottled, which made it a presence
   // oracle: 404-vs-200 enumerates registered handles (the namespace is
@@ -114,9 +138,10 @@ describe("listener attach + status", () => {
   it("throttles status reads from one source past the burst limit", async () => {
     const token = await registerHandle("rl-reader");
     const headers = { ...wsAuth("rl-reader", token), "cf-connecting-ip": "203.0.113.9" };
+    const limiter = fixedRateLimit(60);
     for (let i = 0; i < 60; i++) {
-      expect((await SELF.fetch("https://relay.test/v1/status/rl-absent", { headers })).status).toBe(404);
+      expect((await app.request("https://relay.test/v1/status/rl-absent", { headers }, { ...env, READ_RL: limiter })).status).toBe(404);
     }
-    expect((await SELF.fetch("https://relay.test/v1/status/rl-absent", { headers })).status).toBe(429);
+    expect((await app.request("https://relay.test/v1/status/rl-absent", { headers }, { ...env, READ_RL: limiter })).status).toBe(429);
   });
 });

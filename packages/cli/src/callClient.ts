@@ -20,11 +20,12 @@ const HUMAN: Record<string, string> = {
   blocked: "This agent's owner has blocked calls from your handle.",
   task_not_offered: "That task isn't offered to you.",
   task_unknown: "That task doesn't exist on this agent.",
+  context_unknown: "That conversation is no longer available. Start a new call.",
 };
 
 export interface CallOpts {
-  relay: string; from: string; token: string; to: string; message: string;
-  sessionId?: string; onStatus?: (state: string) => void; timeoutMs?: number;
+  relay: string; org: string; from: string; token: string; to: string; message: string;
+  contextId?: string; onStatus?: (state: string) => void; timeoutMs?: number;
   // Interval for the caller-side keepalive ping below; overridable for tests.
   pingIntervalMs?: number;
   // Task id from the callee's card to perform; omitted lets the callee's
@@ -36,7 +37,7 @@ export function callAgent(opts: CallOpts): Promise<CallReplyType> {
   const wsUrl = opts.relay.replace(/^http/, "ws") + `/v1/ws?role=call&to=${encodeURIComponent(opts.to)}`;
   return new Promise((resolve, reject) => {
     const ws = new WebSocket(wsUrl, {
-      headers: { Authorization: `Bearer ${opts.token}`, "X-AgentCall-Handle": opts.from },
+      headers: { Authorization: `Bearer ${opts.token}`, "X-AgentCall-Org": opts.org, "X-AgentCall-Handle": opts.from },
     });
     let settled = false;
     let pingTimer: ReturnType<typeof setInterval> | undefined;
@@ -60,7 +61,7 @@ export function callAgent(opts: CallOpts): Promise<CallReplyType> {
     });
     ws.on("error", (e) => finish(() => reject(new CallError(`Connection failed: ${e.message}`, "connection_failed"))));
     ws.on("open", () => {
-      ws.send(JSON.stringify({ type: "call_request", to: opts.to, message: opts.message, session_id: opts.sessionId, task: opts.task }));
+      ws.send(JSON.stringify({ type: "call_request", to: opts.to, message: opts.message, context_id: opts.contextId, task: opts.task }));
       // Cloudflare's idle timeout can drop a long-running call (agent answers
       // can take up to AGENT_TIMEOUT_MS) if the socket goes quiet. Ping keeps
       // it alive; unref() so this timer alone never keeps the process open.

@@ -75,7 +75,7 @@ function failingVerifyFor(kind: AgentKind) {
 describe("runDoctor", () => {
   it("exits 0 and runs every check including the relay self-call when all pass", async () => {
     const m = freshMachine();
-    saveLineConfig(getLinePaths(m, LINE), { handle: "ken", token: "t", agent_kind: "claude", relay: "https://relay.example" });
+    saveLineConfig(getLinePaths(m, LINE), { org: "acme", handle: "ken", token: "t", agent_kind: "claude", relay: "https://relay.example" });
     const lines: string[] = [];
     const code = await runDoctor({ ...baseDeps, machine: m, log: (l) => lines.push(l) });
     expect(code).toBe(0);
@@ -91,7 +91,7 @@ describe("runDoctor", () => {
   it("reports a broken workdir but still runs the agent checks", async () => {
     const m = freshMachine();
     saveLineConfig(getLinePaths(m, LINE), {
-      handle: "ken", token: "t", agent_kind: "claude", relay: "https://relay.example",
+      org: "acme", handle: "ken", token: "t", agent_kind: "claude", relay: "https://relay.example",
       workdir: "/no/such/project",
     });
     const lines: string[] = [];
@@ -106,7 +106,7 @@ describe("runDoctor", () => {
   it("reports a configured workdir by path when it is valid", async () => {
     const m = freshMachine();
     saveLineConfig(getLinePaths(m, LINE), {
-      handle: "ken", token: "t", agent_kind: "claude", relay: "https://relay.example",
+      org: "acme", handle: "ken", token: "t", agent_kind: "claude", relay: "https://relay.example",
       workdir: m.userHome,
     });
     const lines: string[] = [];
@@ -124,7 +124,7 @@ describe("runDoctor", () => {
 
   it("exits 0 and says caller-only when the config has no agent_kind", async () => {
     const m = freshMachine();
-    saveLineConfig(getLinePaths(m, "caller"), { handle: "solo", token: "t", relay: "https://relay.example" });
+    saveLineConfig(getLinePaths(m, "caller"), { org: "acme", handle: "solo", token: "t", relay: "https://relay.example" });
     const lines: string[] = [];
     const code = await runDoctor({ ...baseDeps, machine: m, log: (l) => lines.push(l) });
     expect(code).toBe(0);
@@ -133,7 +133,7 @@ describe("runDoctor", () => {
 
   it("skips the relay self-call (but still runs agent checks) when the handle is offline", async () => {
     const m = freshMachine();
-    saveLineConfig(getLinePaths(m, LINE), { handle: "ken", token: "t", agent_kind: "claude", relay: "https://relay.example" });
+    saveLineConfig(getLinePaths(m, LINE), { org: "acme", handle: "ken", token: "t", agent_kind: "claude", relay: "https://relay.example" });
     const lines: string[] = [];
     let selfCalled = false;
     const code = await runDoctor({
@@ -155,7 +155,7 @@ describe("runDoctor", () => {
 
   it("skips spawn and self-call after a failed codex auth check", async () => {
     const m = freshMachine();
-    saveLineConfig(getLinePaths(m, LINE), { handle: "ken", token: "t", agent_kind: "codex", relay: "https://relay.example" });
+    saveLineConfig(getLinePaths(m, LINE), { org: "acme", handle: "ken", token: "t", agent_kind: "codex", relay: "https://relay.example" });
     let spawned = false;
     const lines: string[] = [];
     const code = await runDoctor({
@@ -180,7 +180,7 @@ describe("runDoctor", () => {
 
   it("reports the launchd listener as not loaded without blocking agent checks", async () => {
     const m = freshMachine();
-    saveLineConfig(getLinePaths(m, LINE), { handle: "ken", token: "t", agent_kind: "claude", relay: "https://relay.example" });
+    saveLineConfig(getLinePaths(m, LINE), { org: "acme", handle: "ken", token: "t", agent_kind: "claude", relay: "https://relay.example" });
     const lines: string[] = [];
     const code = await runDoctor({ ...baseDeps, machine: m, launchctlList: () => "nothing here\n", log: (l) => lines.push(l) });
     expect(code).toBe(1);
@@ -198,7 +198,7 @@ describe("runDoctor", () => {
   // which is exactly the kind of silent failure this check exists to catch.
   it("runs the tool guard check for a claude install and reports it passing", async () => {
     const m = freshMachine();
-    saveLineConfig(getLinePaths(m, LINE), { handle: "ken", token: "t", agent_kind: "claude", relay: "https://relay.example" });
+    saveLineConfig(getLinePaths(m, LINE), { org: "acme", handle: "ken", token: "t", agent_kind: "claude", relay: "https://relay.example" });
     const lines: string[] = [];
     const code = await runDoctor({ ...baseDeps, machine: m, log: (l) => lines.push(l) });
     expect(code).toBe(0);
@@ -210,7 +210,7 @@ describe("runDoctor", () => {
   // owner has nothing to fix.
   it("keeps exit 0 when the guard check can only warn", async () => {
     const m = freshMachine();
-    saveLineConfig(getLinePaths(m, LINE), { handle: "ken", token: "t", agent_kind: "claude", relay: "https://relay.example" });
+    saveLineConfig(getLinePaths(m, LINE), { org: "acme", handle: "ken", token: "t", agent_kind: "claude", relay: "https://relay.example" });
     const lines: string[] = [];
     const code = await runDoctor({
       ...baseDeps,
@@ -225,7 +225,7 @@ describe("runDoctor", () => {
 
   it("does not run the tool guard check for a codex install", async () => {
     const m = freshMachine();
-    saveLineConfig(getLinePaths(m, LINE), { handle: "ken", token: "t", agent_kind: "codex", relay: "https://relay.example" });
+    saveLineConfig(getLinePaths(m, LINE), { org: "acme", handle: "ken", token: "t", agent_kind: "codex", relay: "https://relay.example" });
     const lines: string[] = [];
     const code = await runDoctor({
       ...baseDeps,
@@ -250,7 +250,7 @@ describe("runDoctor", () => {
   // so the two are distinguishable in the output.
   it("reports a malformed relay string as its own failure, not folded into offline", async () => {
     const m = freshMachine();
-    saveLineConfig(getLinePaths(m, LINE), { handle: "ken", token: "t", agent_kind: "claude", relay: "not a url" });
+    saveLineConfig(getLinePaths(m, LINE), { org: "acme", handle: "ken", token: "t", agent_kind: "claude", relay: "not a url" });
     let statusCalled = false;
     const lines: string[] = [];
     const code = await runDoctor({
@@ -276,7 +276,7 @@ describe("runDoctor", () => {
   // config.json field that was never the problem.
   it("names the actually-validated relay (AGENTCALL_RELAY), not cfg.relay, when it's malformed", async () => {
     const m = freshMachine();
-    saveLineConfig(getLinePaths(m, LINE), { handle: "ken", token: "t", agent_kind: "claude", relay: "https://relay.example" });
+    saveLineConfig(getLinePaths(m, LINE), { org: "acme", handle: "ken", token: "t", agent_kind: "claude", relay: "https://relay.example" });
     process.env.AGENTCALL_RELAY = "not a url";
     try {
       const lines: string[] = [];
@@ -294,7 +294,7 @@ describe("runDoctor", () => {
 describe("runDoctor across lines", () => {
   it("reports every line and exits non-zero if any callable line fails", async () => {
     const m = freshMachine();
-    const base = { handle: "ken", token: "t", agent_kind: "claude" as const, relay: "https://relay.example" };
+    const base = { org: "acme", handle: "ken", token: "t", agent_kind: "claude" as const, relay: "https://relay.example" };
     saveLineConfig(getLinePaths(m, "claude"), base);
     saveLineConfig(getLinePaths(m, "codex"), { ...base, handle: "ken-cdx", agent_kind: "codex" as AgentKind });
     const out: string[] = [];
@@ -312,8 +312,8 @@ describe("runDoctor across lines", () => {
 
   it("treats a caller-only line as fine, not as a failure, alongside a healthy callable line", async () => {
     const m = freshMachine();
-    saveLineConfig(getLinePaths(m, LINE), { handle: "ken", token: "t", agent_kind: "claude", relay: "https://relay.example" });
-    saveLineConfig(getLinePaths(m, "caller"), { handle: "solo", token: "t", relay: "https://relay.example" });
+    saveLineConfig(getLinePaths(m, LINE), { org: "acme", handle: "ken", token: "t", agent_kind: "claude", relay: "https://relay.example" });
+    saveLineConfig(getLinePaths(m, "caller"), { org: "acme", handle: "solo", token: "t", relay: "https://relay.example" });
     const out: string[] = [];
     const code = await runDoctor({ ...baseDeps, machine: m, log: (s) => out.push(s) });
     expect(code).toBe(0);
@@ -331,7 +331,7 @@ describe("runDoctor across lines", () => {
 
   it("probes the guard once per agent kind, not once per line", async () => {
     const m = freshMachine();
-    const base = { handle: "ken-a", token: "t", agent_kind: "claude" as const, relay: "https://relay.example" };
+    const base = { org: "acme", handle: "ken-a", token: "t", agent_kind: "claude" as const, relay: "https://relay.example" };
     saveLineConfig(getLinePaths(m, "a"), base);
     saveLineConfig(getLinePaths(m, "b"), { ...base, handle: "ken-b" });
     let probes = 0;
@@ -349,7 +349,7 @@ describe("runDoctor across lines", () => {
 
   it("checks the single launch agent once, not per line", async () => {
     const m = freshMachine();
-    const base = { handle: "ken-a", token: "t", agent_kind: "claude" as const, relay: "https://relay.example" };
+    const base = { org: "acme", handle: "ken-a", token: "t", agent_kind: "claude" as const, relay: "https://relay.example" };
     saveLineConfig(getLinePaths(m, "a"), base);
     saveLineConfig(getLinePaths(m, "b"), { ...base, handle: "ken-b" });
     let listed = 0;

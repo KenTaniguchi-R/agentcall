@@ -18,9 +18,12 @@
 - **Stage files explicitly** — `git add <file> <file>`. Never `git add -A` or `git add .`.
 - **`typecheck` covers `src` and `test`.** New test files are type-checked; a test that doesn't compile is a failure.
 - **No live network and no live `claude`/`codex` spawn in tests.** CLI tests mock `ws`/`fs`; relay tests drive routes through `SELF.fetch`.
-- **Relay rate-limit bindings must exist in both `apps/relay/wrangler.jsonc` and the `Env` type in `apps/relay/src/index.ts`.** Adding one in a single place fails at runtime, not at compile time.
+- **A relay rate-limit binding must exist in THREE places**, not two: `apps/relay/wrangler.jsonc` (`ratelimits`), the `Env` type in `apps/relay/src/index.ts`, and **`apps/relay/vitest.config.ts`**, which mirrors the bindings by hand for miniflare because the test tooling drops `wrangler.jsonc`'s `ratelimits` field entirely. Miss the third and `c.env.<BINDING>` is `undefined` at test time — every request through it 500s, and nothing fails at compile time. This bit Task 3, which added a binding two places and stayed green because its own route used a different one; the gap only surfaced in Task 4 when that binding got its first consumer.
 - **`RELAY_HOST` in `apps/relay/src/index.ts` is deliberately not exported** — workerd rejects non-handler named exports from the entry module. Do not export it.
-- Exact constant values, copied from the spec: `MAX_ROSTER_MEMBERS = 200`, `MAX_BUNDLE_TASKS_PER_CARD = 10`, `MAX_BUNDLE_BYTES = 4_500_000`, keyword string max 40 chars, max 20 keywords per task, cache TTL 15 minutes, default search limit 5, field weights `keywords: 3, name: 2, description: 1`.
+- Exact constant values, copied from the spec: `MAX_ROSTER_MEMBERS = 200`, `MAX_BUNDLE_TASKS_PER_CARD = 10`, `MAX_BUNDLE_BYTES = 4_500_000`, `MAX_KEYWORD_LENGTH = 40`, `MAX_TASK_KEYWORDS = 20`, `MAX_TASK_ID_LENGTH = 64`, cache TTL 15 minutes, default search limit 5, field weights `keywords: 3, name: 2, description: 1`, `MIN_SCORE = 2`.
+- **A result must clear `MIN_SCORE = 2` to be shown.** A curated hit clears it alone (keyword 3, task name 2); two corroborating description terms clear it; a lone incidental word in prose does not. Pin it with a test asserting **both** directions — a description-only match returns nothing, a single keyword match still routes — otherwise a later edit can raise the threshold arbitrarily without failing anything.
+- **Test fixtures for the over-firing tests must be able to match.** A roster fixture sharing no tokens with the queries proves nothing; it re-tests the zero-overlap case and would pass under a much looser matcher. At least one fixture card must contain ordinary coding vocabulary incidentally, so a false match is genuinely possible.
+- **Bounds are named constants that the schemas themselves consume, never bare literals.** `MAX_KEYWORD_LENGTH` / `MAX_TASK_KEYWORDS` live in `packages/shared/src/card.ts`; `MAX_TASK_ID_LENGTH` lives in `packages/shared/src/protocol.ts` beside `TASK_ID_RE`, pinned to it by test. This exists so the bundle-size guard and the schema read one source — a literal in either place recreates the drift the guard is there to catch.
 
 ## File Structure
 
@@ -350,7 +353,13 @@ describe("the bounds are arithmetic, not hope", () => {
     const shape = CardTask.shape;
     const maxName = shape.name.maxLength ?? 0;
     const maxDescription = shape.description.maxLength ?? 0;
-    const worstTask = 64 + maxName + maxDescription + 20 * 40; // id + name + description + keywords
+    // Every term traces to one named constant or a live schema read. Do NOT
+    // hardcode: zod 4 does not expose .maxLength on a ZodArray (it returns
+    // undefined — only .element.maxLength works), so the array caps are shared
+    // via constants that the SCHEMAS themselves consume. That is what makes the
+    // guard track the schema instead of restating it.
+    const worstTask =
+      MAX_TASK_ID_LENGTH + maxName + maxDescription + MAX_TASK_KEYWORDS * MAX_KEYWORD_LENGTH;
     const worst = MAX_ROSTER_MEMBERS * MAX_BUNDLE_TASKS_PER_CARD * worstTask;
     expect(worst).toBeLessThanOrEqual(MAX_BUNDLE_BYTES);
   });
@@ -405,7 +414,7 @@ export const BundleTask = z.object({
   id: z.string().regex(TASK_ID_RE),
   name: z.string().max(100),
   description: z.string().max(1000),
-  keywords: z.array(z.string().max(40)).max(20).default([]),
+  keywords: z.array(z.string().max(MAX_KEYWORD_LENGTH)).max(MAX_TASK_KEYWORDS).default([]),
 });
 
 export const BundleEntry = z.object({
@@ -462,7 +471,7 @@ of blowing the response budget in production."
 
 **Files:**
 - Create: `apps/relay/migrations/0004_rosters.sql`, `apps/relay/src/roster.ts`
-- Modify: `apps/relay/wrangler.jsonc` (`ratelimits` array), `apps/relay/src/index.ts` (`Env`, `mountRoster`)
+- Modify: `apps/relay/wrangler.jsonc` (`ratelimits` array), `apps/relay/src/index.ts` (`Env`, `mountRoster`), **`apps/relay/vitest.config.ts`** (see below)
 - Test: `apps/relay/test/roster-create.test.ts`
 
 **Interfaces:**
@@ -722,7 +731,21 @@ describe("POST /v1/roster/:id/join", () => {
 
   it("400s on a malformed roster id rather than querying for it", async () => {
     const token = await registerHandle("rj4");
-    expect((await join("../etc/passwd", "rj4", token, "x")).status).toBe(400);
+    // NOT "../etc/passwd": URL dot-segment removal collapses "roster/../etc"
+    // to "etc" before a Request object exists, so that input never reaches
+    // this route at all — it would silently assert against Hono's no-route
+    // 404 and look like security coverage while testing nothing.
+    expect((await join("short!", "rj4", token, "x")).status).toBe(400);
+  });
+
+  it("400s on a percent-encoded traversal id, the form that actually reaches the route", async () => {
+    // %2E%2E%2Fetc survives URL parsing as a single path segment, and Hono
+    // decodes path params — so the handler really does see "../etc", which
+    // ROSTER_ID_RE rejects (its character class has no "." or "/").
+    const token = await registerHandle("rj4b");
+    const res = await join("%2E%2E%2Fetc", "rj4b", token, "x");
+    expect(res.status).toBe(400);
+    expect(await res.json()).toEqual({ error: "invalid roster id" });
   });
 
   it("is idempotent: rejoining does not duplicate membership", async () => {
@@ -1256,7 +1279,10 @@ describe("tokenize", () => {
     expect(tokenize("architecture-history")).toEqual(["architecture", "history"]);
   });
   it("lowercases and drops punctuation", () => {
-    expect(tokenize("Why DID we?!")).toEqual(["did"]); // "why" and "we" are stopwords
+    // "why", "did", and "we" are all stopwords; "auth" is the only term
+    // carrying topical signal, and it survives lowercased. Do not pick an
+    // example word that is itself on the stopword list.
+    expect(tokenize("Why DID we AUTH?!")).toEqual(["auth"]);
   });
   it("NFKC-normalizes full-width input", () => {
     expect(tokenize("ＡＵＴＨ")).toEqual(["auth"]);
@@ -1416,6 +1442,18 @@ export interface SearchResult extends SearchEntry {
 
 export const DEFAULT_SEARCH_LIMIT = 5;
 
+// A result must clear this to be shown. With weights keywords:3, name:2,
+// description:1, a curated hit qualifies on its own (a keyword, or the task
+// name), and two corroborating description terms qualify — but a SINGLE
+// incidental word in prose does not.
+//
+// This is not arbitrary. Without it, a colleague whose CI task description
+// merely mentioned "deploy" and "test" was routed for the queries "deploy the
+// worker to production" and "fix the failing test", neither of which they can
+// help with. One low-weight term in prose is not evidence, and a tool that
+// answers those questions gets muted — at which point it finds nobody.
+export const MIN_SCORE = 2;
+
 // Plain codepoint comparison rather than localeCompare: tie-break order must
 // be identical on every machine, and localeCompare is locale-dependent.
 const cmp = (a: string, b: string) => (a < b ? -1 : a > b ? 1 : 0);
@@ -1443,7 +1481,7 @@ export function rank(query: string, entries: SearchEntry[], limit = DEFAULT_SEAR
       for (const f of fields) score += WEIGHTS[f];
       matched.push({ term, fields });
     }
-    if (score > 0) scored.push({ ...e, score, matched });
+    if (score >= MIN_SCORE) scored.push({ ...e, score, matched });
   }
 
   scored.sort(
@@ -2055,12 +2093,30 @@ describe("renderResults", () => {
   });
 
   it("emits no escape sequences even when a card contains them", () => {
+    // The payload goes in `description` and `task` because those are what the
+    // human renderer actually prints. `name` is deliberately NOT rendered --
+    // the output shows the task id, which is what `--task` needs -- so name
+    // earns its place by being scored, not displayed. The --json path does
+    // emit `name`, and sanitizes it there.
     const evil = rank("payroll", [
-      { roster: "acme", handle: "x", address: "x@relay.test", task: "t",
-        name: "[31mPayroll", description: "d", keywords: ["payroll"] },
+      { roster: "acme", handle: "x", address: "x@relay.test",
+        task: "\u001b[31mpayroll-report", name: "Payroll",
+        description: "\u001b[2Jwiped", keywords: ["payroll"] },
     ]);
-    // eslint-disable-next-line no-control-regex
-    expect(renderResults(evil, [{ name: "acme", ageSeconds: 1, stale: false }])).not.toMatch(/[ -]/);
+    const output = renderResults(evil, [{ name: "acme", ageSeconds: 1, stale: false }]);
+    const lines = output.split("\n");
+    // No control character WITHIN any line: ESC, CR, BEL and friends. Do NOT
+    // assert /\p{Cc}/u against the whole string -- that category includes
+    // U+000A, so it matches the renderer's own structural newlines and the
+    // assertion could never pass on correct multi-line output.
+    for (const line of lines) expect(line).not.toMatch(/\p{Cc}/u);
+    // And no EXTRA lines. sanitize() strips control characters from field
+    // content, so a callee cannot smuggle a newline in to forge a result line
+    // or paint over real output. Splitting on "\n" alone would hide exactly
+    // that, which is why the line count is asserted too.
+    // Compute this from the fixture rather than guessing; it is the assertion
+    // that makes an injected newline detectable.
+    expect(lines).toHaveLength(5);
   });
 });
 ```
@@ -2084,9 +2140,14 @@ import type { BundleEntryType } from "@benree/agentcall-shared";
 //
 // Applied at RENDER time, not at parse time, so the cache stays faithful to
 // what the relay actually served and matching runs on the real text.
+// Replace with a SPACE rather than deleting, matching sanitizeDetail in
+// packages/shared/src/protocol.ts — otherwise a stripped newline runs two
+// words together ("Handles auth.Also covers payroll."), and BundleTask
+// descriptions may legitimately contain newlines. Collapse the resulting
+// runs so a CRLF does not leave a double space.
 export function sanitize(text: string, max = 200): string {
-  const stripped = text.replace(/[\p{Cc}\p{Cf}]/gu, "");
-  return stripped.length > max ? stripped.slice(0, max) : stripped;
+  const clean = text.replace(/[\p{Cc}\p{Cf}]/gu, " ").replace(/ {2,}/g, " ");
+  return clean.length > max ? clean.slice(0, max) : clean;
 }
 
 export function toEntries(roster: string, host: string, entries: BundleEntryType[]): SearchEntry[] {
@@ -2110,8 +2171,19 @@ export interface RosterStatus {
   stale: boolean;
 }
 
+// Returns true when every roster failed to refresh — as opposed to refreshing
+// fine and simply matching nothing. The caller sets a non-zero exit code on
+// that, because otherwise a script or agent gating on exit status cannot tell
+// "nobody matched" from "the whole search path was unreachable", and both
+// print the same line. Partial failure stays exit 0: real results came back,
+// and the stale warnings already say what happened.
+export function allRostersFailed(membershipCount: number, succeededCount: number): boolean {
+  return membershipCount > 0 && succeededCount === 0;
+}
+
 export function renderResults(results: SearchResult[], rosters: RosterStatus[]): string {
   const lines: string[] = [];
+  const showRoster = rosters.length > 1;
   for (const r of rosters) {
     if (r.stale) {
       lines.push(`warning: roster "${r.name}" is ${Math.round(r.ageSeconds / 60)}m stale (relay unreachable)`);
@@ -2124,7 +2196,14 @@ export function renderResults(results: SearchResult[], rosters: RosterStatus[]):
     return lines.join("\n");
   }
   for (const r of results) {
-    lines.push(`${r.address}  ${sanitize(r.task, 64)}`);
+    // Name the roster only when the render spans more than one. With no
+    // --roster every joined roster merges into ONE ranking and every address
+    // is handle@<the same relay>, so without this there is no way to tell
+    // which roster a suggested colleague came from. Conditional so the common
+    // single-roster user doesn't get a redundant tag on every line. Test BOTH
+    // directions, or someone will make it unconditional without failing anything.
+    const tag = showRoster ? `[${sanitize(r.roster, 40)}] ` : "";
+    lines.push(`${tag}${r.address}  ${sanitize(r.task, 64)}`);
     lines.push(`  ${sanitize(r.description, 200)}`);
     lines.push(
       `  matched: ${r.matched.map((m) => `${sanitize(m.term, 40)} (${m.fields.join(", ")})`).join(" · ")}`,

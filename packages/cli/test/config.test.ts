@@ -16,7 +16,7 @@ function linePaths(home: string) { return getLinePaths(getMachinePaths(home, hom
 
 describe("relayUrl", () => {
   it("env > config > default", () => {
-    const cfg = { handle: "k", token: "t", agent_kind: "claude" as const, relay: "https://custom.example" };
+    const cfg = { org: "acme", handle: "k", token: "t", agent_kind: "claude" as const, relay: "https://custom.example" };
     expect(relayUrl(cfg)).toBe("https://custom.example");
     expect(relayUrl(undefined)).toBe("https://agentcall.benree.tech");
     process.env.AGENTCALL_RELAY = "http://localhost:8787";
@@ -24,14 +24,14 @@ describe("relayUrl", () => {
     finally { delete process.env.AGENTCALL_RELAY; }
   });
   it("strips a trailing slash from env, config, and default", () => {
-    const cfg = { handle: "k", token: "t", agent_kind: "claude" as const, relay: "https://custom.example/" };
+    const cfg = { org: "acme", handle: "k", token: "t", agent_kind: "claude" as const, relay: "https://custom.example/" };
     expect(relayUrl(cfg)).toBe("https://custom.example");
     process.env.AGENTCALL_RELAY = "http://localhost:8787/";
     try { expect(relayUrl(cfg)).toBe("http://localhost:8787"); }
     finally { delete process.env.AGENTCALL_RELAY; }
   });
   it("treats an empty-string env var as unset", () => {
-    const cfg = { handle: "k", token: "t", agent_kind: "claude" as const, relay: "https://custom.example" };
+    const cfg = { org: "acme", handle: "k", token: "t", agent_kind: "claude" as const, relay: "https://custom.example" };
     process.env.AGENTCALL_RELAY = "";
     try { expect(relayUrl(cfg)).toBe("https://custom.example"); }
     finally { delete process.env.AGENTCALL_RELAY; }
@@ -40,9 +40,9 @@ describe("relayUrl", () => {
 
 describe("assertCallableLine", () => {
   it("passes a full config and rejects caller-only", () => {
-    const full = { handle: "k", token: "t", agent_kind: "claude" as const, relay: "https://x.y" };
+    const full = { org: "acme", handle: "k", token: "t", agent_kind: "claude" as const, relay: "https://x.y" };
     expect(() => assertCallableLine(full)).not.toThrow();
-    expect(() => assertCallableLine({ handle: "k", token: "t", relay: "https://x.y" }))
+    expect(() => assertCallableLine({ org: "acme", handle: "k", token: "t", relay: "https://x.y" }))
       .toThrow(/caller-only.*line add/);
   });
 });
@@ -51,7 +51,7 @@ describe("assertCallableLine", () => {
 // developer points it at a real project so calls answer with real context,
 // and everyone else silently keeps ~/AgentCall/<line>/public.
 describe("resolveLineWorkdir", () => {
-  const base = { handle: "k", token: "t", agent_kind: "claude" as const, relay: "https://x.y" };
+  const base = { org: "acme", handle: "k", token: "t", agent_kind: "claude" as const, relay: "https://x.y" };
 
   it("defaults to shareDir and reports it as confined", () => {
     const p = linePaths("/tmp/fakehome");

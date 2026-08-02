@@ -4,6 +4,7 @@ declare module "cloudflare:test" {
     HANDLE_DO: DurableObjectNamespace;
     REGISTER_RL: RateLimit;
     CARD_RL: RateLimit;
+    BOOTSTRAP_TOKEN: string;
     TEST_MIGRATIONS: import("wrangler").D1Migration[];
   }
 }

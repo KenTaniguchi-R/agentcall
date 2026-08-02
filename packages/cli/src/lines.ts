@@ -1,6 +1,6 @@
 import { chmodSync, existsSync, mkdirSync, readdirSync, readFileSync, renameSync, writeFileSync } from "node:fs";
 import { z } from "zod";
-import { AgentKindSchema } from "@benree/agentcall-shared";
+import { AgentKindSchema, ORG_RE } from "@benree/agentcall-shared";
 import { getLinePaths, type LinePaths, type MachinePaths } from "./paths.js";
 import type { LineConfig } from "./config.js";
 // A line name becomes a directory component and part of an authored-content
@@ -17,6 +17,7 @@ import { assertValidLineName, LINE_NAME_RE } from "./lineName.js";
 export { assertValidLineName, LINE_NAME_RE };
 
 export const LineConfigSchema = z.object({
+  org: z.string().regex(ORG_RE),
   handle: z.string(),
   token: z.string(),
   relay: z.string(),
@@ -28,8 +29,24 @@ export function loadLineConfig(l: LinePaths): LineConfig {
   if (!existsSync(l.configFile)) {
     throw new Error(`Line "${l.name}" has no config.json — it was never finished. Remove it with \`agentcall line remove ${l.name}\`.`);
   }
+  let raw: unknown;
   try {
-    return LineConfigSchema.parse(JSON.parse(readFileSync(l.configFile, "utf8")));
+    raw = JSON.parse(readFileSync(l.configFile, "utf8"));
+  } catch (e) {
+    throw new Error(`Corrupt config.json for line "${l.name}": ${e instanceof Error ? e.message : String(e)}`);
+  }
+  // Checked ahead of the schema so a line written before tenancy existed gets
+  // the actionable re-enroll instruction rather than a zod "required" error
+  // reported as generic corruption. `org` is not recoverable locally — only
+  // the relay can issue one against an invite.
+  if (raw !== null && typeof raw === "object" && !(raw as { org?: unknown }).org) {
+    throw new Error(
+      `Line "${l.name}" at ${l.configFile} has no organization. ` +
+        `Re-enroll it with \`agentcall line add ${l.name} --invite <token>\`.`,
+    );
+  }
+  try {
+    return LineConfigSchema.parse(raw);
   } catch (e) {
     throw new Error(`Corrupt config.json for line "${l.name}": ${e instanceof Error ? e.message : String(e)}`);
   }

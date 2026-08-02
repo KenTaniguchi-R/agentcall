@@ -2,6 +2,8 @@ import { z } from "zod";
 import { AgentKindSchema, HANDLE_RE, TASK_ID_RE } from "./protocol.js";
 
 export const MAX_CARD_TASKS = 50;
+export const MAX_TASK_KEYWORDS = 20;
+export const MAX_KEYWORD_LENGTH = 40;
 
 // A `tier` field ("T1" | "T2") used to ride along here, reserving T2 for
 // approval-gated tasks. No code ever branched on it and the approval gate is
@@ -12,6 +14,11 @@ export const CardTask = z.object({
   name: z.string().min(1).max(100),
   description: z.string().min(1).max(1000),
   examples: z.array(z.string().max(500)).max(10).default([]),
+  // Bounded per-string like every neighbouring field. Unbounded keyword
+  // strings amplify: 20 per task x 50 tasks x 200 roster members, re-sent on
+  // every bundle refresh. These are the highest-weighted field in
+  // `agentcall search`, so they are the callee's precision lever.
+  keywords: z.array(z.string().min(1).max(MAX_KEYWORD_LENGTH)).max(MAX_TASK_KEYWORDS).default([]),
 });
 
 // What a callee pushes to the relay: full task list + visibility policy.
@@ -36,3 +43,18 @@ export const AgentCard = z.object({
 export type CardTaskType = z.infer<typeof CardTask>;
 export type CardUploadType = z.infer<typeof CardUpload>;
 export type AgentCardType = z.infer<typeof AgentCard>;
+
+// The single visibility rule: a viewer sees default_offer plus their own
+// grants, never the full ACL. Lives here rather than in the relay route
+// because two endpoints now apply it — GET /v1/card/:handle and the roster
+// bundle — and they must not drift.
+//
+// Own-property check, not a bare lookup: `grants` is a zod z.record object
+// that inherits Object.prototype, and HANDLE_RE accepts "constructor" — so
+// `grants[viewer]` would hand back the Object constructor (not iterable,
+// 500s the endpoint) for a viewer with that handle, against every callee.
+export function visibleTasks(upload: CardUploadType, viewer: string): CardTaskType[] {
+  const granted = viewer && Object.hasOwn(upload.grants, viewer) ? upload.grants[viewer]! : [];
+  const visible = new Set([...upload.default_offer, ...granted]);
+  return upload.tasks.filter((t) => visible.has(t.id));
+}

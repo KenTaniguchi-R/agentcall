@@ -4,8 +4,9 @@ import type { Hono } from "hono";
 import type { Env } from "./index.js";
 import {
   A2A_VERSION_HEADER, CardUpload, a2aError, isSupportedA2AVersion,
-  standardError, toAgentCard, toDirectoryCard,
+  standardError, toAgentCard, toDirectoryCard, visibleTasks,
 } from "@benree/agentcall-shared";
+import { authenticateRequest } from "./tenant.js";
 
 // The card endpoint is public and cheap; a short TTL keeps the TCK's
 // Cache-Control/ETag checks satisfied without making policy edits slow to
@@ -15,6 +16,14 @@ const CARD_MAX_AGE = 300;
 function cardHeaders(etagSource: string, updatedAtMs: number): Record<string, string> {
   return {
     "Cache-Control": `public, max-age=${CARD_MAX_AGE}`,
+    ETag: `"${etagSource}"`,
+    "Last-Modified": new Date(updatedAtMs).toUTCString(),
+  };
+}
+
+function privateCardHeaders(etagSource: string, updatedAtMs: number): Record<string, string> {
+  return {
+    "Cache-Control": "private, no-store",
     ETag: `"${etagSource}"`,
     "Last-Modified": new Date(updatedAtMs).toUTCString(),
   };
@@ -39,6 +48,13 @@ export function mountA2A(app: Hono<{ Bindings: Env }>): void {
       return c.json(body, status as 400);
     }
 
+    const identity = await authenticateRequest(c.env.DB, c.req);
+    if (!identity) {
+      const { status, body } = standardError(401, "unauthorized");
+      return c.json(body, status as 401);
+    }
+    const { org, handle: viewer } = identity;
+
     const ip = c.req.header("cf-connecting-ip") ?? "unknown";
     if (!(await c.env.READ_RL.limit({ key: ip })).success) {
       const { status, body } = standardError(429, "rate limited");
@@ -47,8 +63,8 @@ export function mountA2A(app: Hono<{ Bindings: Env }>): void {
 
     const handle = c.req.param("handle");
     const row = await c.env.DB.prepare(
-      "SELECT card_json, updated_at FROM cards WHERE handle = ?",
-    ).bind(handle).first<{ card_json: string; updated_at: number }>();
+      "SELECT card_json, updated_at FROM cards WHERE org = ? AND handle = ?",
+    ).bind(org, handle).first<{ card_json: string; updated_at: number }>();
 
     // §3.3.2 Resource category — a plain 404, NOT TaskNotFoundError, which is
     // an A2A-specific error about tasks and would be semantically wrong for a
@@ -63,18 +79,14 @@ export function mountA2A(app: Hono<{ Bindings: Env }>): void {
     }
 
     const upload = CardUpload.parse(JSON.parse(row.card_json));
-    // Public view only in this plan: default_offer, never per-caller grants.
-    // The authenticated extended view is GetExtendedAgentCard, which arrives
-    // with the operations in Plan 2.
-    const visible = new Set(upload.default_offer);
     const origin = new URL(c.req.url).origin;
     const card = toAgentCard({
       handle,
       description: upload.description,
-      tasks: upload.tasks.filter((t) => visible.has(t.id)),
+      tasks: visibleTasks(upload, viewer),
       baseUrl: `${origin}/v1/a2a/${handle}`,
     });
 
-    return c.json(card, 200, cardHeaders(`${handle}-${row.updated_at}`, row.updated_at));
+    return c.json(card, 200, privateCardHeaders(`${org}-${viewer}-${handle}-${row.updated_at}`, row.updated_at));
   });
 }

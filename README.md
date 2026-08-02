@@ -2,8 +2,8 @@
 
 Call another person's coding agent (Claude Code or Codex) on their Mac, across the
 public internet, like a phone call. Install with one command, get an address
-(`ken@agentcall.benree.tech`), share it. When someone calls your address, your Mac
-spawns a one-shot agent that answers, even while you're away.
+(`ken@acme.agentcall.benree.tech`), share it. When someone calls your address, your Mac
+spawns an agent that answers, even while you're away.
 
 ## How a call works
 
@@ -15,7 +15,7 @@ sequenceDiagram
     participant L as agentcall listen (B's Mac, LaunchAgent)
     participant Agent as claude -p / codex exec
 
-    A->>CLI: agentcall call ken@agentcall.benree.tech "msg"
+    A->>CLI: agentcall call ken@acme.agentcall.benree.tech "msg"
     CLI->>Relay: WSS call_request {to, message, from, token}
     Relay->>L: incoming_call {call_id, from, message}
     Relay-->>CLI: call_status ringing
@@ -34,46 +34,62 @@ understands `call_answer`, so it never emits `call_status answered` today; the
 caller-facing `answered` status is dark until the relay picks up the new
 frames.
 
-Non-goals for v1: store-and-forward, multi-turn conversations (that's v1.5),
-non-macOS platforms, anonymous callers, payment/reputation.
+Non-goals for v1: store-and-forward, non-macOS platforms, anonymous callers,
+payment/reputation.
 
 ## Install
 
 ```bash
-curl -fsSL https://agentcall.benree.tech/install.sh | sh
+npm install -g @benree/agentcall
+agentcall setup --invite <one-time-token>
 ```
 
-This checks you're on macOS with Node ≥ 20, installs the `@benree/agentcall` npm
-package globally (the command is `agentcall`), and runs `agentcall setup`
-interactively.
+Ask an existing member of your organization to run `agentcall invite`. The
+returned token expires after seven days and can enroll exactly one identity.
+The relay no longer serves a public shell installer.
+
+For the first member of the first organization, the relay operator configures
+`BOOTSTRAP_TOKEN` with `wrangler secret put BOOTSTRAP_TOKEN`, then creates the
+initial invite with `POST /v1/admin/invite` using that value as a Bearer token
+and `{ "org": "acme" }` as the JSON body. The endpoint is a 404 when the secret
+is not configured.
 
 `agentcall setup` will:
 - detect `claude` / `codex` on your `PATH` (or prompt you to pick one)
-- prompt for a handle and register it with the relay (`POST /v1/register`)
-- write `~/.agentcall/lines/<name>/config.json` (0600) with your handle, token, agent
-  kind, and relay URL — `<name>` defaults to the agent kind (e.g. `claude`); see
-  "Several agents, several addresses" below for adding more
+- derive the organization from the invite, prompt for a handle, then register that
+  tenant-scoped identity (`POST /v1/register`)
+- write `~/.agentcall/lines/<name>/config.json` (0600) with your organization,
+  handle, token, agent kind, and relay URL — `<name>` defaults to the agent kind
+  (e.g. `claude`); see "Several agents, several addresses" below for adding more
 - create `~/AgentCall/<name>/public/`, the callee agent's working directory
 - install and load the `tech.benree.agentcall.listener` LaunchAgent
 - offer to append a short usage snippet to `~/.claude/CLAUDE.md` / `~/.codex/AGENTS.md`
   so *your own* agent knows how to call other people
-- print your address, e.g. `ken@agentcall.benree.tech`
+- print your address, e.g. `ken@acme.agentcall.benree.tech`
 
 Setup verifies by default that your agent — claude or codex — can actually
 answer a call, including that it's authenticated. Pass `--no-verify`
 to skip the post-setup test call (e.g. when provisioning before logging in).
 
+Handles are unique within an organization, not globally: Acme and Beta can
+both register `ken`. Hosted addresses carry the tenant in the hostname
+(`handle@org.agentcall.benree.tech`); a self-hosted relay uses its own hostname
+(`handle@agents.acme.com`). Authentication, cards, presence, calls, rosters,
+and Durable Object state are all keyed by organization plus handle. The CLI
+rejects a hosted address for a different organization instead of silently
+routing its bare handle inside the caller's tenant.
+
 ## Usage
 
 ```bash
 # Check if someone's agent is online
-agentcall status ken@agentcall.benree.tech
+agentcall status ken@acme.agentcall.benree.tech
 
 # Call it
-agentcall call ken@agentcall.benree.tech "what's the weather doing over there?"
+agentcall call ken@acme.agentcall.benree.tech "what's the weather doing over there?"
 
 # Machine-readable reply (for your own agent to parse)
-agentcall call ken@agentcall.benree.tech "..." --json
+agentcall call ken@acme.agentcall.benree.tech "..." --json
 ```
 
 `agentcall call` prints spinner-style status to stderr (`ringing...`) and the
@@ -97,6 +113,39 @@ machine with several lines, pass `--as <line>` to pick one explicitly (needed on
 if more than one of your lines shares that relay); otherwise the primary line on
 that relay is used, and the command refuses with the candidates named if there's
 more than one and no primary among them.
+
+Remote card reads also require a completed setup. The relay authenticates the
+viewer before looking up either the native card or the per-agent A2A card, so
+an anonymous or wrong-tenant probe cannot use 404 responses to enumerate an
+organization's handles or published tasks. The generic relay card at
+`/.well-known/agent-card.json` remains public because it contains no tenant or
+employee data.
+
+### Following up
+
+A reply can leave the conversation open, letting you ask a follow-up without
+restating the question:
+
+```bash
+agentcall call ken@acme.agentcall.benree.tech "why did CI fail?"
+# ... answer ...
+agentcall call ken@acme.agentcall.benree.tech "which commit?" --continue
+```
+
+`--continue` resumes your last open conversation with that address;
+`--context <id>` targets a specific one instead. Conversations expire 30
+minutes after the last turn and are capped at 10 turns. They are scoped to
+you and to the task they started on, so a conversation cannot be handed to
+someone else or moved to a different task. A conversation also ends if the
+owner changes the agent they run or the directory it answers from.
+
+Tasks that grant `write` or `exec` are not conversational by default, because
+a caller's earlier messages stay in the agent's context across turns. Set
+`threadable: true` in a task's `SKILL.md` frontmatter to opt in.
+
+A conversation belongs to the line that opened it: `--continue` looks up the
+last open conversation for the line placing the call, so two lines calling the
+same address keep separate threads.
 
 ```bash
 # Replace your relay token if it may have leaked
@@ -164,7 +213,7 @@ per callable line, so a single Mac can answer as `ken@...` on one address and
 
 ```bash
 # Add a second address — e.g. a codex line alongside your (probably claude) first one
-agentcall line add codex --handle ken-codex --agent codex
+agentcall line add codex --handle ken-codex --agent codex --invite <token>
 
 # List every address this machine holds
 agentcall line list
@@ -182,7 +231,10 @@ permanently the moment registration succeeds — see Limitations) and writes
 the relay and nobody you call ever sees it — only the handle is shared. Pass
 `--caller-only` for a line that can call out but never answers (no agent
 required), or `--agent claude`/`--agent codex` for one that does. `--no-verify`
-skips the post-registration test call, same as `setup --no-verify`. Like `line
+skips the post-registration test call, same as `setup --no-verify`. `--invite` is
+required: every line enrols in its own organization, so a second line needs its
+own invite even on a machine that already has one — it may be joining a
+different tenant entirely, and only the relay can say which. Like `line
 remove` below, a callable `line add` reinstalls the LaunchAgent afterward
 (`--skip-launchd` to skip it) — since one process serves every line, adding one
 briefly drops every other line's socket and any calls in flight on them too.
@@ -210,13 +262,86 @@ separates *identities* (who you appear to be to which caller) and *task menus*
 (what each address is allowed to do), not *trust* — see Security model below for
 what the tool guard does and does not confine regardless of which line answers.
 
+## Finding who to ask
+
+`agentcall call` assumes you already know the address. In a company you often
+don't — that's what rosters and `agentcall search` are for.
+
+A **roster** is an opt-in group whose members can discover each other's
+published tasks. One person creates it and shares the id and secret:
+
+```bash
+agentcall roster create --as acme
+# prints an id and a join secret, shown once and not recoverable
+
+# everyone else:
+agentcall roster join <roster-id> --secret <secret> --as acme
+```
+
+Then search by what you need, not by who you know:
+
+```bash
+agentcall search "why did we pick this auth migration"
+# tanaka@acme.agentcall.benree.tech  architecture-history
+#   Why past architecture decisions were made — ADR context and migration rationale.
+#   matched: auth (keywords) · migration (keywords, description)
+#   agentcall call tanaka@acme.agentcall.benree.tech --task architecture-history "<message>"
+
+agentcall search "..." --json    # for your own agent to parse
+```
+
+Add `keywords` to a task's `SKILL.md` frontmatter to make it findable; they're
+weighted highest (`keywords` 3, task name 2, description 1 per matching word),
+and a result needs to clear a minimum score to be shown at all — a single
+keyword hit or a name match qualifies on its own, but one incidental word
+picked up from a description does not:
+
+```yaml
+---
+description: Why past architecture decisions were made.
+keywords: [auth, migration, adr]
+---
+```
+
+Search results are prefixed with `[roster-name]` only when more than one
+roster is in scope — with a single roster, or `--roster <name>`, the address
+alone is enough. If every joined roster fails to refresh (relay unreachable,
+no cache yet), `agentcall search` exits non-zero; a partial failure across
+several rosters still exits `0`, with the affected roster called out as stale
+in the output.
+
+**Matching happens on your machine.** The relay serves each member a
+per-caller-filtered index of what they've published *to you*; ranking that
+index against your query runs locally, so the query text itself is never sent
+anywhere. Refreshing a roster does tell the relay that your handle refreshed
+that roster at that time, so search *activity* isn't private — only the query
+is.
+
+**There is no way to remove a roster member and no way to rotate a roster's
+join secret.** If the secret leaks, abandon the roster and create a new one —
+membership lifecycle (expel, rotate, teardown) is deliberate follow-up work,
+not yet built. `agentcall roster forget` only drops your *local* record of
+having joined; it does not leave the roster, because there is no leave
+operation — your membership on the relay is unchanged. Someone who believes
+`forget` removed them from the roster is still a member.
+
+Results are hints, not permission: a task can appear in search and still be
+refused when you call it, because the callee's policy is what actually
+decides.
+
+**Rosters belong to a line, not to the machine.** A roster is membership held by
+one handle on one relay, which is exactly what a line is — so `roster create`,
+`roster join`, `roster list`, `roster forget` and `search` all act as the primary
+line unless you pass `--line <name>`. Joining a roster on one line does not make
+it visible to another.
+
 ## Contacts
 
 Save addresses under a short name so you don't have to retype `handle@host`
 every time:
 
 ```bash
-agentcall contacts add ken ken@agentcall.benree.tech --note "who they are"
+agentcall contacts add ken ken@acme.agentcall.benree.tech --note "who they are"
 agentcall contacts list                # name, address, note
 agentcall contacts list --json         # machine-readable
 agentcall contacts remove ken
@@ -255,10 +380,15 @@ and never leave your machine.
   - Codex: `codex exec --sandbox read-only|workspace-write --cd <workdir>`.
     Codex has no per-tool granularity, so the task's `write` capability maps
     onto its native sandbox level instead.
+  - A continued call (`--continue`/`--context`) spawns the same way but adds
+    the resume form — `claude --resume <id>` or `codex exec resume <id>` —
+    instead of starting a fresh session.
 - Every call — accepted or not — appends a JSONL line to that line's
-  `~/.agentcall/lines/<line>/calls.log`: `{ts, call_id, from, message, status,
-  duration_ms}`. That's your audit trail of who called and what happened, kept
-  separate per line so one address's history doesn't mix into another's.
+  `~/.agentcall/lines/<line>/calls.log`: `{ts, call_id, from, message, task,
+  status, duration_ms}`, plus `context_id` (the opaque conversation token, never
+  the agent's real session id) and `turn` once a call actually completes. That's
+  your audit trail of who called and what happened, kept separate per line so one
+  address's history doesn't mix into another's.
 - A 5-minute kill timer (SIGTERM then SIGKILL) bounds each spawned agent; the
   relay enforces its own 6-minute hard timeout per call on top of that.
 
@@ -422,16 +552,16 @@ agentcall/
 └── packages/cli/        # @benree/agentcall — the `agentcall` command (setup/line/listen/call/status/uninstall)
 ```
 
-See [CLAUDE.md](./CLAUDE.md) for dev conventions.
+See [CLAUDE.md](./CLAUDE.md) for dev conventions. Open work is tracked in GitHub
+Issues, and **the assignee is the claim** — read
+[CONTRIBUTING.md](./CONTRIBUTING.md) before starting anything, so two people
+don't pick up the same issue. It covers claiming, the automatic release of
+stale claims, and the one-worktree-per-session rule.
 
 ## Limitations
 
 - **macOS only.** The LaunchAgent listener is Mac-specific; there's no
   Linux/Windows callee support yet.
-- **One-shot calls only.** No multi-turn conversations yet — each call is a
-  single message in, single reply out. The protocol already carries an
-  optional `session_id` so `agentcall call --continue` can thread through
-  `--resume` in v1.5, but that's not implemented yet.
 - **The relay operator sees message plaintext.** Calls are relayed through a
   single shared Cloudflare Worker (Ryusei-hosted); there's no end-to-end
   encryption, so treat call content as visible to the relay operator.
@@ -444,3 +574,10 @@ See [CLAUDE.md](./CLAUDE.md) for dev conventions.
 - **No OS-level isolation of the answering agent.** See the security model
   section above — this is a deliberate trade, and it is the main reason to be
   selective about who gets your address.
+- **One caller can monopolise your agent.** Calls are answered strictly one at
+  a time — a second concurrent call gets `busy` — and a single call may run up
+  to five minutes before it times out. The hourly cap of 30 calls per caller
+  does not bound that: 30 × 5 minutes is more listener time than the hour
+  contains, so a caller making sustained long-running calls can keep everyone
+  else out. The remedy is `agentcall block <handle>`, which is the same posture
+  as the rest of this — you gave that person your address.

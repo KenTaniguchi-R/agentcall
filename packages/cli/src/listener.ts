@@ -7,7 +7,11 @@ import {
 import { resolveLineWorkdir, type CallableLineConfig } from "./config.js";
 import type { LinePaths } from "./paths.js";
 import { buildPrompt } from "./prompt.js";
-import { AgentRunError, runAgent } from "./runner.js";
+import { AgentRunError, codexThreadingEnabled, CODEX_THREADING_VERIFIED_VERSION, runAgent } from "./runner.js";
+import {
+  admitContext, loadContexts, mintContextId, pruneContexts, saveContexts, upsertContext,
+  type ContextBinding,
+} from "./contexts.js";
 import { SerialQueue } from "./queue.js";
 import { loadPolicy, resolveTask } from "./policy.js";
 import { loadTasks } from "./tasks.js";
@@ -18,6 +22,7 @@ export interface ListenerDeps {
   /** Called on every (re)connect — a rotated token takes effect without a restart. */
   loadConfig: () => CallableLineConfig;
   run?: typeof runAgent;
+  saveContexts?: typeof saveContexts;
   maxPending?: number;
   backoffMs?: (attempt: number) => number;
   // Test seam so a test can assert on what each (re)connect sends — a
@@ -25,21 +30,46 @@ export interface ListenerDeps {
   // Authorization headers awkward. Production leaves this unset and gets a
   // real `ws` socket.
   socketFactory?: (url: string, opts: { headers: Record<string, string> }) => WebSocket;
+  codexThreadingEnabled?: () => boolean;
 }
 
 export function startListener(deps: ListenerDeps): { stop(): void } {
   const run = deps.run ?? runAgent;
   const newSocket = deps.socketFactory ?? ((url: string, opts: { headers: Record<string, string> }) => new WebSocket(url, opts));
+  const persistContexts = deps.saveContexts ?? saveContexts;
   const queue = new SerialQueue(deps.maxPending ?? 0);
   const backoff = deps.backoffMs ?? ((n) => Math.min(1000 * 2 ** n, 60_000) + Math.random() * 500);
+  // One startup read, purely to decide codex threading. Everything else reads
+  // config per-connect (see connect() below), but agent_kind is what the
+  // threading probe keys off and the probe shells out to `codex --version` —
+  // re-running it on every reconnect would spawn a process per backoff tick,
+  // and the warning below would repeat forever in listener.log. Editing
+  // agent_kind therefore needs a listener restart, same as changing the relay.
+  const startupKind = deps.loadConfig().agent_kind;
+  const codexCanThread = startupKind === "codex"
+    ? (deps.codexThreadingEnabled ?? codexThreadingEnabled)()
+    : false;
+  if (startupKind === "codex" && !codexCanThread) {
+    console.error(
+      `Warning: Codex conversation threading is disabled because this codex-cli release has not passed ` +
+        `the resume sandbox probe (last verified: ${CODEX_THREADING_VERIFIED_VERSION}).`,
+    );
+  }
   let stopped = false;
   let attempt = 0;
   let ws: WebSocket | undefined;
   let pingTimer: ReturnType<typeof setInterval> | undefined;
 
   const audit = (entry: Record<string, unknown>) => {
-    mkdirSync(dirname(deps.paths.callsLog), { recursive: true });
-    appendFileSync(deps.paths.callsLog, JSON.stringify({ ts: new Date().toISOString(), ...entry }) + "\n");
+    try {
+      mkdirSync(dirname(deps.paths.callsLog), { recursive: true });
+      appendFileSync(deps.paths.callsLog, JSON.stringify({ ts: new Date().toISOString(), ...entry }) + "\n");
+    } catch (e) {
+      // Audit persistence is observability, not call delivery. A full or
+      // read-only disk must not turn a refusal, failure, or completed answer
+      // into a second failure while trying to record the first outcome.
+      console.error(`Warning: could not write the call audit log: ${String(e)}`);
+    }
   };
 
   // Config (and therefore workdir) is re-read on every (re)connect, not just
@@ -69,7 +99,11 @@ export function startListener(deps: ListenerDeps): { stop(): void } {
     // a bug to the next person tracing a relay-host change that didn't take.
     const url = deps.relay.replace(/^http/, "ws") + "/v1/ws?role=listen";
     ws = newSocket(url, {
-      headers: { Authorization: `Bearer ${config.token}`, "X-AgentCall-Handle": config.handle },
+      headers: {
+        Authorization: `Bearer ${config.token}`,
+        "X-AgentCall-Org": config.org,
+        "X-AgentCall-Handle": config.handle,
+      },
     });
     ws.on("open", () => {
       attempt = 0;
@@ -96,7 +130,7 @@ export function startListener(deps: ListenerDeps): { stop(): void } {
         return;
       }
 
-      const { call_id, from, message, task: requestedTask } = frame;
+      const { call_id, from, message, task: requestedTask, context_id } = frame;
       const started = Date.now();
 
       // Resolve caller -> task -> envelope BEFORE the message is placed in any
@@ -116,6 +150,46 @@ export function startListener(deps: ListenerDeps): { stop(): void } {
         return;
       }
       const task = resolution.task;
+
+      // Task resolution above ran on the verified `from` and local files only
+      // (see policy.ts's CaMeL invariant). context_id is caller-controlled, so
+      // it is consulted only AFTER, and only to confirm the binding was made
+      // under the SAME task. It can narrow a call, never select one. Inverting
+      // this order reopens the hole the design exists to close.
+      const now = Date.now();
+      const threadingAvailable =
+        task.threadable && (config.agent_kind === "claude" || codexCanThread);
+      const contexts = pruneContexts(loadContexts(deps.paths), now);
+      // Explicitly typed: `let binding = undefined` infers the type `undefined`
+      // and rejects the assignment below.
+      let binding: ContextBinding | undefined;
+      if (context_id !== undefined) {
+        // `threadingAvailable` gates admission as well as minting. A binding
+        // outlives the conditions it was minted under: the owner can add
+        // `write`/`exec` to a task's SKILL.md (or set `threadable: false`) and
+        // admitContext would still match on the unchanged task *id*, resuming a
+        // conversation against an envelope the owner has just decided must not
+        // carry one. Same for the codex gate — an old binding must not be able
+        // to hand runAgent a resume id after codex threading becomes unavailable.
+        binding = threadingAvailable
+          ? admitContext(contexts, {
+              context_id, caller: from, task: task.id,
+              agent_kind: config.agent_kind, workdir: workdir.dir, now,
+            })
+          : undefined;
+        // One code for every failure — expired, not yours, wrong task, wrong
+        // directory, threading withdrawn. Distinguishing them would tell an
+        // attacker that a guessed token exists but belongs to someone else. And
+        // this FAILS the call rather than quietly starting a fresh session,
+        // because a silent almost-right answer is the #43/#51 failure mode.
+        if (!binding) {
+          send({ type: "call_failed", call_id, code: "context_unknown" });
+          audit({ call_id, from, message: message.slice(0, 500), task: task.id,
+                  status: "context_unknown", duration_ms: 0 });
+          return;
+        }
+      }
+
       const timeoutMs = task.timeout_s !== undefined ? task.timeout_s * 1000 : AGENT_TIMEOUT_MS;
 
       // call_accepted is sent from *inside* the job, not after tryEnqueue
@@ -135,7 +209,7 @@ export function startListener(deps: ListenerDeps): { stop(): void } {
         try {
           const out = await run(
             config.agent_kind,
-            buildPrompt(config.handle, from, message, task, workdir),
+            buildPrompt(config.handle, from, message, task, workdir, binding !== undefined),
             workdir.dir,
             timeoutMs,
             undefined,
@@ -146,9 +220,58 @@ export function startListener(deps: ListenerDeps): { stop(): void } {
             // PreToolUse guard needs it to know which line's calls.log and
             // task dirs it's policing, and fails closed without it.
             deps.paths.name,
+            binding?.agent_session_id,
           );
-          send({ type: "call_result", call_id, text: out.text, session_id: out.session_id, task: task.id });
-          audit({ call_id, from, message: message.slice(0, 500), task: task.id, status: "ok", duration_ms: Date.now() - started });
+
+          // Mint on a fresh threadable call; roll the existing binding forward
+          // on a resumed one. The agent's session id can change between turns,
+          // so it is re-read from the output rather than assumed stable — but
+          // an ABSENT one must not stop an admitted resume from rolling
+          // forward. parseCodexJsonl's non-JSON fallback yields no session id at
+          // all, and gating this whole block on `out.session_id` left such a
+          // turn at its old `turns` with its TTL sliding from the last
+          // successful write — an unbounded conversation pinned below
+          // MAX_CONTEXT_TURNS. On a resume the previously bound session id is
+          // still the right one to resume next time, so it is kept. A FRESH
+          // call with no session id still mints nothing: there is no session to
+          // resume. `||`, not `??`: an empty session id is no session id, and
+          // the binding schema requires a non-empty one.
+          const sessionId = out.session_id || binding?.agent_session_id;
+          let contextId: string | undefined;
+          let contextPersistError: string | undefined;
+          if (threadingAvailable && sessionId !== undefined) {
+            const next = {
+              context_id: binding?.context_id ?? mintContextId(),
+              agent_session_id: sessionId,
+              caller: from,
+              task: task.id,
+              agent_kind: config.agent_kind,
+              workdir: workdir.dir,
+              turns: (binding?.turns ?? 0) + 1,
+              created_at: binding?.created_at ?? now,
+              last_used_at: now,
+            };
+            try {
+              persistContexts(deps.paths, pruneContexts(upsertContext(contexts, next), now));
+              contextId = next.context_id;
+            } catch (e) {
+              // The agent has already completed. Losing the optional resume
+              // binding must cost only the follow-up, never the answer.
+              contextPersistError = String(e).slice(0, 2000);
+              console.error(`Warning: could not save the call context: ${contextPersistError}`);
+            }
+          }
+
+          // context_id, never out.session_id: the minted handle is the only
+          // thing that travels. The audit log gets the same treatment — it is
+          // the owner's file, but it is also what gets pasted into a bug report.
+          send({ type: "call_result", call_id, text: out.text, context_id: contextId, task: task.id });
+          audit({
+            call_id, from, message: message.slice(0, 500), task: task.id, status: "ok",
+            duration_ms: Date.now() - started,
+            context_id: contextId, turn: (binding?.turns ?? 0) + 1,
+            context_persist_error: contextPersistError,
+          });
         } catch (e) {
           const code = e instanceof AgentRunError ? e.code : "agent_error";
           // runAgent settles from the child's exit handler, so reaching here
@@ -159,9 +282,18 @@ export function startListener(deps: ListenerDeps): { stop(): void } {
             return;
           }
           send({ type: "call_failed", call_id, code, detail: "The agent hit an internal error while answering." });
+          // The agent's own error text can echo the session id back at us: a
+          // stale binding makes `claude --resume <id>` print that id, and
+          // runAgent folds the child's stderr/stdout into its message. Scrubbed
+          // before the slice, because contexts.ts's invariant is that the real
+          // agent_session_id never reaches an audit log — nothing leaves the
+          // machine, but calls.log is what gets pasted into a bug report.
+          const err = binding
+            ? String(e).replaceAll(binding.agent_session_id, "<session>")
+            : String(e);
           audit({
             call_id, from, message: message.slice(0, 500), task: task.id, status: code,
-            duration_ms: Date.now() - started, error: String(e).slice(0, 2000),
+            duration_ms: Date.now() - started, error: err.slice(0, 2000),
           });
         }
       });

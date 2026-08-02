@@ -8,7 +8,7 @@ import { resolveLine } from "../src/lineContext.js";
 import { rotateLine } from "../src/commands/rotate.js";
 
 let m: MachinePaths;
-const base = { handle: "ken", token: "old", relay: "https://r.example", agent_kind: "claude" as const };
+const base = { org: "acme", handle: "ken", token: "old", relay: "https://r.example", agent_kind: "claude" as const };
 
 beforeEach(() => {
   const root = mkdtempSync(join(tmpdir(), "agentcall-rot-"));
@@ -49,7 +49,7 @@ describe("rotateLine", () => {
   // it and started printing reconnect/restart guidance unconditionally, which
   // makes no sense for a line that was never listening in the first place.
   it("does not print listener guidance for a caller-only line", async () => {
-    saveLineConfig(getLinePaths(m, "caller"), { handle: "ken-c", token: "old", relay: "https://r.example" });
+    saveLineConfig(getLinePaths(m, "caller"), { org: "acme", handle: "ken-c", token: "old", relay: "https://r.example" });
     const out: string[] = [];
     await rotateLine(resolveLine(m, { line: "caller" }),
       { rotate: async () => ({ token: "new" }), log: (s) => out.push(s) });

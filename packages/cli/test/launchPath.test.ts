@@ -12,7 +12,7 @@ function newMachine(): MachinePaths {
   return getMachinePaths(root, root);
 }
 
-const base: LineConfig = { handle: "ken", token: "t", relay: "https://r.example" };
+const base: LineConfig = { org: "acme", handle: "ken", token: "t", relay: "https://r.example" };
 
 describe("resolveExtraPathDirs", () => {
   it("returns unique dirnames of resolved bins, skipping unresolved ones", () => {

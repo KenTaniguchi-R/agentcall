@@ -2,7 +2,7 @@ import { mkdirSync, mkdtempSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
-import { ASK_TASK, FULL_ACCESS_ENVELOPE, loadTasks, scaffoldTask, SkillFrontmatter, splitFrontmatter } from "../src/tasks.js";
+import { ASK_TASK, deriveThreadable, FULL_ACCESS_ENVELOPE, loadTasks, scaffoldTask, SkillFrontmatter, splitFrontmatter } from "../src/tasks.js";
 import { getLinePaths, getMachinePaths } from "../src/paths.js";
 
 function tempHome() { return mkdtempSync(join(tmpdir(), "agentcall-tasks-")); }
@@ -133,6 +133,50 @@ describe("loadTasks", () => {
   });
 });
 
+describe("deriveThreadable", () => {
+  it("threads read-only envelopes", () => {
+    expect(deriveThreadable(["read"])).toBe(true);
+    expect(deriveThreadable(["read", "fetch"])).toBe(true);
+  });
+
+  // Across turns the caller's earlier text lives in context as conversation,
+  // not as fenced input, so a premise planted on turn 1 can be cashed on turn
+  // 5. Tolerable against read; not against exec.
+  it("refuses to thread write or exec envelopes", () => {
+    expect(deriveThreadable(["read", "write"])).toBe(false);
+    expect(deriveThreadable(["read", "exec"])).toBe(false);
+  });
+
+  it("lets an explicit value win either way", () => {
+    expect(deriveThreadable(["read", "exec"], true)).toBe(true);
+    expect(deriveThreadable(["read"], false)).toBe(false);
+  });
+});
+
+describe("loadTasks threadable", () => {
+  it("derives threadable from tools when frontmatter omits it", () => {
+    const home = tempHome();
+    writeSkill(home, "readonly-task", "---\ndescription: d\ntools: [read]\n---\nbody");
+    expect(loadTasks(linePaths(home)).find((t) => t.id === "readonly-task")!.threadable).toBe(true);
+  });
+
+  it("derives false for an exec task", () => {
+    const home = tempHome();
+    writeSkill(home, "exec-task", "---\ndescription: d\ntools: [read, exec]\n---\nbody");
+    expect(loadTasks(linePaths(home)).find((t) => t.id === "exec-task")!.threadable).toBe(false);
+  });
+
+  it("honours an explicit override", () => {
+    const home = tempHome();
+    writeSkill(home, "opt-in", "---\ndescription: d\ntools: [read, exec]\nthreadable: true\n---\nbody");
+    expect(loadTasks(linePaths(home)).find((t) => t.id === "opt-in")!.threadable).toBe(true);
+  });
+
+  it("makes the built-in ask task threadable", () => {
+    expect(loadTasks(linePaths(tempHome())).find((t) => t.id === "ask")!.threadable).toBe(true);
+  });
+});
+
 describe("scaffoldTask", () => {
   it("creates a SKILL.md that loadTasks accepts as a valid task", () => {
     const home = tempHome();
@@ -158,5 +202,38 @@ describe("scaffoldTask", () => {
 describe("FULL_ACCESS_ENVELOPE", () => {
   it("is every capability", () => {
     expect(FULL_ACCESS_ENVELOPE).toEqual({ caps: ["read", "write", "fetch", "exec"] });
+  });
+});
+
+describe("keywords frontmatter", () => {
+  it("loads keywords from SKILL.md", () => {
+    const home = tempHome();
+    writeSkill(home, "adr", [
+      "---",
+      "description: Why past architecture decisions were made.",
+      "keywords: [auth, migration, adr]",
+      "---",
+      "body",
+    ].join("\n"));
+    const task = loadTasks(linePaths(home)).find((t) => t.id === "adr")!;
+    expect(task.keywords).toEqual(["auth", "migration", "adr"]);
+  });
+
+  it("defaults keywords to [] when the frontmatter omits them", () => {
+    const home = tempHome();
+    writeSkill(home, "plain", ["---", "description: A task.", "---", "body"].join("\n"));
+    expect(loadTasks(linePaths(home)).find((t) => t.id === "plain")!.keywords).toEqual([]);
+  });
+
+  it("skips a task whose keywords exceed the cap, without killing others", () => {
+    const home = tempHome();
+    writeSkill(home, "bad", [
+      "---", "description: A task.",
+      `keywords: [${Array.from({ length: 21 }, (_, i) => `k${i}`).join(", ")}]`,
+      "---", "body",
+    ].join("\n"));
+    const ids = loadTasks(linePaths(home), () => {}).map((t) => t.id);
+    expect(ids).toContain("ask");     // built-in survives
+    expect(ids).not.toContain("bad"); // one broken manifest never takes the rest offline
   });
 });

@@ -2,7 +2,7 @@ import { existsSync, mkdirSync, readdirSync, readFileSync, writeFileSync } from 
 import { join } from "node:path";
 import { z } from "zod";
 import { parse as parseYaml } from "yaml";
-import { TASK_ID_RE } from "@benree/agentcall-shared";
+import { MAX_KEYWORD_LENGTH, MAX_TASK_KEYWORDS, TASK_ID_RE } from "@benree/agentcall-shared";
 import type { LinePaths } from "./paths.js";
 
 export const CAPS = ["read", "write", "fetch", "exec"] as const;
@@ -43,8 +43,15 @@ export const SkillFrontmatter = z.object({
   name: z.string().min(1).max(100).optional(),
   description: z.string().min(1).max(1000),
   examples: z.array(z.string().max(500)).max(10).default([]),
+  // Mirrors CardTask.keywords in packages/shared exactly. The two must not
+  // drift: this is the authoring side of the field the search ranker weights
+  // highest.
+  keywords: z.array(z.string().min(1).max(MAX_KEYWORD_LENGTH)).max(MAX_TASK_KEYWORDS).default([]),
   tools: z.array(z.enum(CAPS)).default(["read"]),
   timeout_s: z.number().int().positive().max(300).optional(),
+  // Omitted = derived from `tools` (see deriveThreadable). Present = the owner
+  // has decided, and their decision wins.
+  threadable: z.boolean().optional(),
 });
 export type SkillFrontmatterType = z.infer<typeof SkillFrontmatter>;
 
@@ -53,8 +60,10 @@ export interface Task {
   name: string;
   description: string;
   examples: string[];
+  keywords: string[];
   envelope: Envelope;
   timeout_s?: number;
+  threadable: boolean;
   skill: string; // SKILL.md body (after the frontmatter), embedded into the spawn prompt
 }
 
@@ -63,9 +72,26 @@ export const ASK_TASK: Task = {
   name: "Ask a question",
   description: "Answer questions using the files in the public directory.",
   examples: [],
+  keywords: [],
   envelope: { caps: ["read"] },
+  threadable: true,
   skill: "",
 };
+
+// Whether a caller may hold a multi-turn conversation against this task.
+//
+// Derived rather than configured, because the risk it manages is already
+// declared: across turns the caller's earlier messages sit in the model's
+// context as conversation rather than as fenced input, so an attacker can
+// plant a premise on turn 1 and cash it on turn 5. That is a tolerable risk
+// against a read-only envelope and a materially worse one against exec.
+//
+// Same move as claudeAllowedTools, which derives tool grants from the envelope
+// instead of asking the owner to restate them.
+export function deriveThreadable(caps: Cap[], explicit?: boolean): boolean {
+  if (explicit !== undefined) return explicit;
+  return !caps.includes("write") && !caps.includes("exec");
+}
 
 // Reads ~/AgentCall/<line>/tasks/<id>/SKILL.md (YAML frontmatter + body).
 // Invalid or duplicate entries are skipped with a warning rather than
@@ -109,8 +135,10 @@ export function loadTasks(p: LinePaths, warn: (msg: string) => void = console.er
       name: fm.name ?? id,
       description: fm.description,
       examples: fm.examples,
+      keywords: fm.keywords,
       envelope: { caps: fm.tools },
       timeout_s: fm.timeout_s,
+      threadable: deriveThreadable(fm.tools, fm.threadable),
       skill: body,
     });
   }
@@ -126,8 +154,12 @@ description: TODO — one line callers will see on your card
 # name: defaults to the directory name
 # tools: [read]           # read | write | fetch | exec
 # timeout_s: 300
+# threadable: true       # allow --continue follow-ups; defaults false for write/exec tasks
 # examples:
 #   - An example message a caller might send
+# keywords:              # search terms; weighted highest by \`agentcall search\`
+#   - auth
+#   - migration
 ---
 # Instructions for this task
 

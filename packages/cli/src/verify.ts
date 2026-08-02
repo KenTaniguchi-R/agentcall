@@ -176,6 +176,7 @@ export async function checkRelaySelfCall(cfg: LineConfig, callFn: typeof callAge
   try {
     await callFn({
       relay: relayUrl(cfg),
+      org: cfg.org,
       from: cfg.handle,
       token: cfg.token,
       to: cfg.handle,

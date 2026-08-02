@@ -1,4 +1,4 @@
-import { existsSync, mkdtempSync, readFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -37,8 +37,9 @@ vi.mock("../src/launchd.js", () => ({
 // addLine's real validation/ordering/disk-writes/launchd wiring — just with
 // no network underneath it.
 const R = "https://r.example";
-const stubRegister = async (_relay: string, handle: string) => ({ token: "tok-123", address: `${handle}@fake.example` });
-const base: LineConfig = { handle: "ken", token: "t", relay: R, agent_kind: "claude" };
+const stubRegister = async (_relay: string, _invite: string, handle: string) =>
+  ({ org: "acme", token: "tok-123", address: `${handle}@fake.example` });
+const base: LineConfig = { org: "acme", handle: "ken", token: "t", relay: R, agent_kind: "claude" };
 
 // The real addLine, wired to stubRegister instead of the network. Used as
 // the `addLineFn` seam by every test below unless a test needs to observe
@@ -55,8 +56,14 @@ const fakeAddLine = (m: MachinePaths, opts: AddLineOpts) =>
 // seam..." overrides it explicitly to prove an override still reaches
 // addLine's derivation.
 const noNetworkResolveBin = () => null;
+// runSetup now requires opts.invite on the first-run path (throws "An
+// organization invite is required." before even prompting for a handle —
+// see the dedicated "requires an invite for a fresh enrollment" test, which
+// calls runSetup directly rather than through this helper). Defaulted here
+// so the tests below, which are about everything else, don't all have to
+// repeat it.
 function run(opts: SetupOpts): Promise<{ ready: boolean }> {
-  return runSetup({ resolveBin: noNetworkResolveBin, ...opts });
+  return runSetup({ resolveBin: noNetworkResolveBin, invite: "test-invite", ...opts });
 }
 
 let home: string;
@@ -92,15 +99,36 @@ describe("runSetup", () => {
     expect(listLines(m).map((l) => l.name)).toEqual(["codex"]);
   });
 
-  it("creates nothing on a second run and points at line add", async () => {
-    saveLineConfig(getLinePaths(m, "claude"), base);
+  // Re-homed from main's "re-running setup ... reuses the saved config
+  // instead of re-registering": there is no reuse path left to exercise
+  // (a second run never calls addLine at all), so this instead pins the new
+  // equivalent — a no-op that neither re-registers nor disturbs the
+  // existing line's config.json.
+  it("creates nothing on a second run and points at line add, leaving the existing line's config.json and policy.json untouched", async () => {
+    const lp = getLinePaths(m, "claude");
+    saveLineConfig(lp, base);
     savePerson(m, { primary_line: "claude" });
+    const before = readFileSync(lp.configFile, "utf8");
+    // Also pins the new equivalent of main's "does not overwrite an existing
+    // policy.json on re-run": that test's own reuse path is gone (a second
+    // run never touches an existing line's directory at all), so the same
+    // "no-op" guarantee that protects config.json is what protects any
+    // custom policy.json now too.
+    mkdirSync(lp.dir, { recursive: true });
+    const customPolicy = JSON.stringify({ description: "custom", default_offer: ["ask"] });
+    writeFileSync(lp.policyFile, customPolicy);
     const out: string[] = [];
+    // handle/relay match the existing "claude" line's — a mismatch on
+    // either is the *different* refusal path covered by the two
+    // "refuses an explicitly different relay/handle..." tests below.
     const res = await run({
-      handle: "other", agent: "codex", relay: R, yes: true, snippet: false, verify: false,
-      addLineFn: fakeAddLine, skipLaunchd: true, log: (s) => out.push(s),
+      handle: base.handle, agent: "codex", relay: base.relay, yes: true, snippet: false, verify: false,
+      addLineFn: () => { throw new Error("must not re-register on a second run"); },
+      skipLaunchd: true, log: (s) => out.push(s),
     });
     expect(listLines(m).map((l) => l.name)).toEqual(["claude"]);
+    expect(readFileSync(lp.configFile, "utf8")).toBe(before);
+    expect(readFileSync(lp.policyFile, "utf8")).toBe(customPolicy);
     expect(out.join("\n")).toMatch(/agentcall line add/);
     expect(res.ready).toBe(true);
   });
@@ -114,6 +142,41 @@ describe("runSetup", () => {
     // The caller-only half of the old flat-config test: no agent means no
     // shareDir/tasksDir/policy — addLine's `if (agentKind)` block never runs.
     expect(existsSync(getLinePaths(m, "caller").shareDir)).toBe(false);
+  });
+
+  // Re-homed from main's #79 ("refuses an explicitly different relay instead
+  // of silently reusing the saved registration"). Several relays on one
+  // machine are legal now (that's what lines are for), so the remedy is no
+  // longer "reuse silently ignored the flag" vs. "throw and point at
+  // uninstall" — it's "throw only when the flag names something no existing
+  // line provides, and point at `line add` instead of `uninstall`". Split
+  // into two tests, one per flag, since runSetup checks them independently.
+  it("refuses an explicitly different relay than any existing line's, pointing at line add", async () => {
+    const lp = getLinePaths(m, "claude");
+    saveLineConfig(lp, base);
+    savePerson(m, { primary_line: "claude" });
+    const before = readFileSync(lp.configFile, "utf8");
+
+    await expect(run({
+      relay: "https://other.example", snippet: false, verify: false, skipLaunchd: true,
+      addLineFn: () => { throw new Error("must not register"); },
+    })).rejects.toThrow(/no line on.*agentcall line add/i);
+
+    expect(readFileSync(lp.configFile, "utf8")).toBe(before);
+  });
+
+  it("refuses an explicitly different handle than any existing line holds, pointing at line add", async () => {
+    const lp = getLinePaths(m, "claude");
+    saveLineConfig(lp, base);
+    savePerson(m, { primary_line: "claude" });
+    const before = readFileSync(lp.configFile, "utf8");
+
+    await expect(run({
+      handle: "someone-else", snippet: false, verify: false, skipLaunchd: true,
+      addLineFn: () => { throw new Error("must not register"); },
+    })).rejects.toThrow(/holds no line for the handle.*agentcall line add/i);
+
+    expect(readFileSync(lp.configFile, "utf8")).toBe(before);
   });
 
   // Regression: re-running setup used to run agent detection (and its
@@ -140,6 +203,18 @@ describe("runSetup", () => {
     });
     expect(listLines(m)[0]!.config!.handle).toBe("asked-handle");
     expect(asked.length).toBeGreaterThan(0);
+  });
+
+  it("requires an invite for a fresh enrollment", async () => {
+    const home = mkdtempSync(join(tmpdir(), "agentcall-setup-"));
+    process.env.AGENTCALL_HOME = home;
+    try {
+      await expect(runSetup({
+        verify: false, handle: "ken", callerOnly: true, relay: "http://127.0.0.1:1", snippet: false,
+      })).rejects.toThrow(/setup --invite/);
+    } finally {
+      delete process.env.AGENTCALL_HOME;
+    }
   });
 
   it("detects the agent kind via injectable hasBin when --agent is omitted", async () => {
@@ -206,6 +281,11 @@ describe("runSetup", () => {
     expect(cardCalls).toHaveLength(1);
     expect(cardCalls[0]).toMatchObject({ agent_kind: "claude", relay: R });
   });
+  // main's "does not overwrite an existing policy.json on re-run" has no
+  // remaining code path (addLine refuses a name that already exists —
+  // see line-cmd.test.ts — so a line's policy.json is never regenerated
+  // after creation); its intent is now covered by the policy.json half of
+  // "creates nothing on a second run..." above.
 });
 
 describe("setup progress output", () => {
@@ -254,7 +334,14 @@ describe("warnIfOutsideLaunchdPath", () => {
 });
 
 describe("caller-only setup", () => {
-  it("prints a caller-only summary with an upgrade hint instead of 'share your address'", async () => {
+  // main's "--caller-only registers without agent_kind and skips
+  // publicDir/launchd" is covered above by "creates an agentless line under
+  // --caller-only", and main's "re-running --caller-only setup reuses the
+  // config, asks nothing, stays caller-only" is the same no-op code path as
+  // "creates nothing on a second run..." above (runSetup's existing.length >
+  // 0 branch does not distinguish caller-only from callable) — not
+  // duplicated here.
+  it("prints a caller-only summary pointing at `line add`, not a setup re-run", async () => {
     const logs: string[] = [];
     const spy = vi.spyOn(console, "log").mockImplementation((...a: unknown[]) => {
       logs.push(a.map(String).join(" "));
@@ -266,7 +353,10 @@ describe("caller-only setup", () => {
       });
       const summary = logs.join("\n");
       expect(summary).toContain("caller-only");
-      expect(summary).toContain("agentcall setup");
+      // Must NOT tell the owner to re-run setup: setup is first-run only now,
+      // so that instruction would send them round a loop that does nothing.
+      expect(summary).toContain("agentcall line add");
+      expect(summary).not.toMatch(/re-run `?agentcall setup/);
       expect(summary).not.toContain("Share your address");
     } finally {
       spy.mockRestore();
@@ -295,6 +385,24 @@ describe("caller-only setup", () => {
     });
     expect(listLines(m)[0]!.config!.agent_kind).toBe("claude");
   });
+
+  // main also had:
+  // - "--caller-only against an already-callable config makes no changes and
+  //   points at uninstall" and "refuses a caller-only setup under a new
+  //   handle when the machine already answers calls" — both are the same
+  //   existing.length > 0 no-op/refusal code path already covered above
+  //   ("creates nothing on a second run...", and the two "refuses an
+  //   explicitly different relay/handle..." tests), just under the
+  //   --caller-only flag, which runSetup's reuse branch does not treat
+  //   specially.
+  // - "re-running setup upgrades a caller-only config to callable, keeping
+  //   handle and token" — this capability is GONE, not just re-homed: a
+  //   second `runSetup` call never calls addLine (see the "creates nothing
+  //   on a second run" test), so there is no code path left that upgrades an
+  //   existing caller-only line in place. Turning a caller-only line callable
+  //   now requires a new line (`agentcall line add <name> --agent <kind>`),
+  //   which is a different address, not an upgrade of the same one. Flagging
+  //   this as a semantic removal rather than silently dropping the test.
 });
 
 describe("runSetup verification", () => {

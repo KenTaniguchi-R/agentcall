@@ -1,6 +1,7 @@
-import { SELF } from "cloudflare:test";
+import { env, SELF } from "cloudflare:test";
 import { describe, expect, it } from "vitest";
-import { registerHandle, wsAuth } from "./helpers.js";
+import app from "../src/index.js";
+import { fixedRateLimit, registerHandle, wsAuth } from "./helpers.js";
 
 const UPLOAD = {
   description: "Ken's public agent",
@@ -12,6 +13,7 @@ const UPLOAD = {
   default_offer: ["ask"],
   grants: { mia: ["schedule-meeting"] },
 };
+const ORG_HEADERS = { "X-AgentCall-Org": "acme" };
 
 async function putCard(handle: string, token: string, body: unknown = UPLOAD) {
   return SELF.fetch("https://relay.test/v1/card", {
@@ -38,7 +40,7 @@ describe("PUT /v1/card", () => {
     const token = await registerHandle("ken4");
     await putCard("ken4", token);
     await putCard("ken4", token, { ...UPLOAD, description: "updated" });
-    const res = await SELF.fetch("https://relay.test/v1/card/ken4");
+    const res = await SELF.fetch("https://relay.test/v1/card/ken4", { headers: wsAuth("ken4", token) });
     expect((await res.json<{ description: string }>()).description).toBe("updated");
   });
 
@@ -59,14 +61,21 @@ describe("PUT /v1/card", () => {
 });
 
 describe("GET /v1/card/:handle", () => {
-  it("404s when no card was pushed", async () => {
+  it("404s for an authenticated tenant member when no card was pushed", async () => {
     await registerHandle("nocard");
-    expect((await SELF.fetch("https://relay.test/v1/card/nocard")).status).toBe(404);
+    const viewer = await registerHandle("nocard-viewer");
+    expect((await SELF.fetch("https://relay.test/v1/card/nocard", { headers: wsAuth("nocard-viewer", viewer) })).status).toBe(404);
   });
-  it("public view shows only default_offer tasks", async () => {
+  it("401s an anonymous card read", async () => {
+    const token = await registerHandle("private-card");
+    await putCard("private-card", token);
+    expect((await SELF.fetch("https://relay.test/v1/card/private-card", { headers: ORG_HEADERS })).status).toBe(401);
+  });
+  it("an authenticated tenant member sees default_offer tasks", async () => {
     const token = await registerHandle("pub");
     await putCard("pub", token);
-    const res = await SELF.fetch("https://relay.test/v1/card/pub");
+    const viewer = await registerHandle("pub-viewer");
+    const res = await SELF.fetch("https://relay.test/v1/card/pub", { headers: wsAuth("pub-viewer", viewer) });
     expect(res.status).toBe(200);
     const card = await res.json<{ handle: string; tasks: { id: string }[] }>();
     expect(card.handle).toBe("pub");
@@ -102,14 +111,16 @@ describe("GET /v1/card/:handle", () => {
     expect(card.tasks.map((t) => t.id)).toEqual(["ask"]);
   });
 
-  it("throttles anonymous card reads from one source past the burst limit", async () => {
+  it("throttles authenticated card reads from one source past the burst limit", async () => {
     const token = await registerHandle("rlcard");
     await putCard("rlcard", token);
-    const headers = { "cf-connecting-ip": "203.0.113.10" };
+    const viewer = await registerHandle("rlcard-viewer");
+    const headers = { "cf-connecting-ip": "203.0.113.10", ...wsAuth("rlcard-viewer", viewer) };
+    const limiter = fixedRateLimit(60);
     for (let i = 0; i < 60; i++) {
-      expect((await SELF.fetch("https://relay.test/v1/card/rlcard", { headers })).status).toBe(200);
+      expect((await app.request("https://relay.test/v1/card/rlcard", { headers }, { ...env, READ_RL: limiter })).status).toBe(200);
     }
-    expect((await SELF.fetch("https://relay.test/v1/card/rlcard", { headers })).status).toBe(429);
+    expect((await app.request("https://relay.test/v1/card/rlcard", { headers }, { ...env, READ_RL: limiter })).status).toBe(429);
   });
 
   it("401s when auth headers are present but invalid", async () => {
@@ -117,5 +128,17 @@ describe("GET /v1/card/:handle", () => {
     await putCard("ext3", token);
     const res = await SELF.fetch("https://relay.test/v1/card/ext3", { headers: wsAuth("mia", "bad") });
     expect(res.status).toBe(401);
+  });
+
+  it("does not let credentials from another tenant select this tenant", async () => {
+    const token = await registerHandle("tenant-card");
+    await putCard("tenant-card", token);
+    const outsider = await registerHandle("outsider", "claude", "beta");
+    const headers = wsAuth("outsider", outsider, "beta");
+    headers["X-AgentCall-Org"] = "acme";
+    const known = await SELF.fetch("https://relay.test/v1/card/tenant-card", { headers });
+    const unknown = await SELF.fetch("https://relay.test/v1/card/nobody-here", { headers });
+    expect(known.status).toBe(401);
+    expect(await known.text()).toBe(await unknown.text());
   });
 });

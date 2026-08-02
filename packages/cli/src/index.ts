@@ -1,10 +1,10 @@
 import { rmSync } from "node:fs";
-import { Command } from "commander";
+import { Command, CommanderError } from "commander";
 import type { AgentKind } from "@benree/agentcall-shared";
 import { getMachinePaths } from "./paths.js";
-import { assertCallableLine, relayUrl, type LineConfig } from "./config.js";
+import { addressHost, assertCallableLine, relayUrl, type LineConfig } from "./config.js";
 import { callAgent, CallError } from "./callClient.js";
-import { getStatus, fetchCard, ApiError } from "./api.js";
+import { getStatus, fetchCard, createInvite, createRoster, joinRoster, ApiError } from "./api.js";
 import { startAllListeners } from "./listenAll.js";
 import { startListener } from "./listener.js";
 import { runSetup } from "./setup.js";
@@ -23,13 +23,19 @@ import { pickOutboundLine } from "./outbound.js";
 import { rotateLine } from "./commands/rotate.js";
 import { addLine, listLinesReport, removeLine, setPrimary } from "./commands/line.js";
 import { ask as ttyAsk } from "./tty.js";
+import { findOutbound, loadOutbound, rememberOutbound } from "./contextsOut.js";
+import { forgetMembership, loadMemberships, saveMembership } from "./rosters.js";
+import { allRostersFailed, DEFAULT_SEARCH_LIMIT, rank, renderResults, sanitize, toEntries, type RosterStatus, type SearchEntry } from "./search.js";
+import { refreshRoster } from "./searchRefresh.js";
 
+export function createProgram(): Command {
 const program = new Command();
 program.name("agentcall").description("Call other people's coding agents").version("0.4.0");
 
 program
   .command("setup")
-  .description("register a handle, configure your agent, and install the background listener")
+  .description("enroll with an organization invite, configure your agent, and install the background listener")
+  .option("--invite <token>", "one-time organization invite (required for first enrollment)")
   .option("--handle <handle>", "handle to register (prompted if omitted)")
   .option("--agent <agent>", "agent kind: claude or codex (auto-detected if omitted)")
   .option("--relay <url>", "relay URL to register against")
@@ -40,6 +46,7 @@ program
   .action(
     async (o: {
       handle?: string;
+      invite?: string;
       agent?: string;
       relay?: string;
       snippet?: boolean;
@@ -48,6 +55,7 @@ program
       verify?: boolean;
     }) => {
       const result = await runSetup({
+        invite: o.invite,
         handle: o.handle,
         agent: o.agent as AgentKind | undefined,
         relay: o.relay,
@@ -61,6 +69,32 @@ program
   );
 
 program
+  .command("invite")
+  .description("create a one-time invite for your organization")
+  // An invite enrolls someone into ONE tenant, and the tenant is a property of
+  // the line (see config.ts). A machine with lines in two orgs must be told
+  // which org it is inviting into.
+  .option("--line <name>", "line whose organization to invite into (defaults to the primary line)")
+  .action(async (o: { line?: string }) => {
+    let cfg: LineConfig;
+    try {
+      cfg = resolveLine(getMachinePaths(), { line: o.line }).config;
+    } catch (e) {
+      console.error(String(e instanceof Error ? e.message : e));
+      process.exitCode = 1;
+      return;
+    }
+    try {
+      const created = await createInvite(relayUrl(cfg), { org: cfg.org, handle: cfg.handle, token: cfg.token });
+      console.log(created.invite);
+      console.error(`Expires ${new Date(created.expires_at).toISOString()}`);
+    } catch (e) {
+      console.error(e instanceof ApiError ? e.message : String(e));
+      process.exitCode = 1;
+    }
+  });
+
+program
   .command("call")
   .description("call another handle's agent with a message and print its reply")
   .argument("<address>", "contact name or handle@host to call")
@@ -68,41 +102,96 @@ program
   .option("--json", "print the full reply envelope instead of just the text")
   .option("--task <id>", "task from the callee's card to perform (see: agentcall card <address>)")
   .option("--as <line>", "line to call from (defaults to the primary line on the destination's relay)")
-  .action(async (address: string, messageParts: string[], o: { json?: boolean; task?: string; as?: string }) => {
+  .option("--continue", "continue the last conversation with this address")
+  .option("--context <id>", "continue a specific conversation by id")
+  .action(async (address: string, messageParts: string[], o: { json?: boolean; task?: string; as?: string; continue?: boolean; context?: string }) => {
     const machine = getMachinePaths();
     // The address is resolved BEFORE line selection now: which line places
     // this call depends on the destination's host (pickOutboundLine matches
     // it against each line's own relay), so the destination has to be known
-    // first. No relay is passed to resolveAddress here — with several lines
-    // possibly on several relays, "the configured relay" isn't a single
-    // thing to compare against anymore; pickOutboundLine's own error already
-    // names which relays this machine actually holds lines on when none fit.
-    const parsed = resolveAddress(machine, address);
-    if (!parsed.ok) {
-      console.error(parsed.error);
+    // first. No relay or org is passed on THIS pass — with several lines
+    // possibly on several relays and in several tenants, "the configured
+    // relay" isn't a single thing to compare against anymore; pickOutboundLine's
+    // own error already names which relays this machine actually holds lines on
+    // when none fit.
+    const firstPass = resolveAddress(machine, address);
+    if (!firstPass.ok) {
+      console.error(firstPass.error);
       process.exitCode = 1;
       return;
     }
     let ctx: LineContext;
     try {
-      ctx = pickOutboundLine(machine, `https://${parsed.host}`, { as: o.as });
+      ctx = pickOutboundLine(machine, `https://${firstPass.host}`, { as: o.as });
     } catch (e) {
       console.error(String(e instanceof Error ? e.message : e));
       process.exitCode = 1;
       return;
     }
     const cfg = ctx.config;
+    // Second pass, now that the calling line — and therefore the tenant — is
+    // known. This is what carries #66's cross-tenant refusal into the per-line
+    // model: resolveAddress stays the single resolution path (see contacts.ts)
+    // rather than growing a second, drifting copy of the org comparison here.
+    const parsed = resolveAddress(machine, address, relayUrl(cfg), cfg.org);
+    if (!parsed.ok) {
+      console.error(parsed.error);
+      process.exitCode = 1;
+      return;
+    }
+    if (parsed.warning) console.error(parsed.warning);
     const message = messageParts.join(" ");
+
+    // --continue resolves against what the callee told us last time. The task
+    // is re-sent explicitly: without it turn 2 would re-run policy resolution
+    // and could land on a different task than the context was minted under,
+    // which admission would then reject -- a self-inflicted context_unknown.
+    let contextId = o.context;
+    let task = o.task;
+    if (o.continue) {
+      if (contextId) {
+        console.error("Use --continue or --context, not both.");
+        process.exitCode = 1;
+        return;
+      }
+      const prev = findOutbound(loadOutbound(ctx.paths), {
+        relay: relayUrl(cfg), from: cfg.handle, to: parsed.handle,
+      });
+      if (!prev) {
+        console.error(`No open conversation with ${address}. Call without --continue to start one.`);
+        process.exitCode = 1;
+        return;
+      }
+      if (task !== undefined && task !== prev.task) {
+        console.error(`That conversation is on task "${prev.task}", not "${task}".`);
+        process.exitCode = 1;
+        return;
+      }
+      contextId = prev.context_id;
+      task = prev.task;
+    }
+
     try {
       const reply = await callAgent({
         relay: relayUrl(cfg),
+        org: cfg.org,
         from: cfg.handle,
         token: cfg.token,
         to: parsed.handle,
         message,
-        task: o.task,
+        task,
+        contextId,
         onStatus: (s) => console.error(s === "ringing" ? "ringing..." : "answered, agent working..."),
       });
+      if (reply.context_id && reply.task) {
+        rememberOutbound(ctx.paths, {
+          relay: relayUrl(cfg), from: cfg.handle, to: parsed.handle,
+          task: reply.task, context_id: reply.context_id, at: Date.now(),
+        });
+        // stderr, never stdout: reply.text must stay pipeable, and this matches
+        // the existing "ringing..." / "answered" convention.
+        console.error("conversation open — add --continue to follow up");
+      }
       console.log(o.json ? JSON.stringify(reply) : reply.text);
     } catch (e) {
       console.error(e instanceof CallError ? `Call failed (${e.code}): ${e.message}` : String(e));
@@ -121,16 +210,17 @@ program
     // Presence is caller-only on the relay, so status needs credentials —
     // same reasoning as `call` above for resolving the address before the
     // line: which line has credentials for this relay depends on the
-    // destination's host.
-    const parsed = resolveAddress(machine, address);
-    if (!parsed.ok) {
-      console.error(parsed.error);
+    // destination's host. The second pass below re-checks it against the
+    // chosen line's tenant, exactly as `call` does.
+    const firstPass = resolveAddress(machine, address);
+    if (!firstPass.ok) {
+      console.error(firstPass.error);
       process.exitCode = 1;
       return;
     }
     let ctx: LineContext;
     try {
-      ctx = pickOutboundLine(machine, `https://${parsed.host}`, { as: o.as });
+      ctx = pickOutboundLine(machine, `https://${firstPass.host}`, { as: o.as });
     } catch (e) {
       console.error(String(e instanceof Error ? e.message : e));
       process.exitCode = 1;
@@ -138,8 +228,15 @@ program
     }
     const cfg = ctx.config;
     const cfgRelay = relayUrl(cfg);
+    const parsed = resolveAddress(machine, address, cfgRelay, cfg.org);
+    if (!parsed.ok) {
+      console.error(parsed.error);
+      process.exitCode = 1;
+      return;
+    }
+    if (parsed.warning) console.error(parsed.warning);
     try {
-      const { online } = await getStatus(cfgRelay, parsed.handle, { handle: cfg.handle, token: cfg.token });
+      const { online } = await getStatus(cfgRelay, parsed.handle, { org: cfg.org, handle: cfg.handle, token: cfg.token });
       console.log(online ? "online" : "offline");
       process.exitCode = online ? 0 : 2;
     } catch (e) {
@@ -199,9 +296,21 @@ program
       console.log("Card published.");
       return;
     }
-    let ctx: LineContext | undefined;
-    try { ctx = resolveLine(machine, { line: o.line }); } catch { ctx = undefined; }
-    const parsed = resolveAddress(machine, target, relayUrl(ctx?.config));
+    // A resolvable line is now REQUIRED to fetch someone else's card: card
+    // reads are authenticated on the relay (fetchCard takes a non-optional
+    // Auth), so the old "resolve if you can, fetch anonymously otherwise"
+    // fallback would only ever produce a 401. Failing here names the actual
+    // problem instead.
+    let ctx: LineContext;
+    try {
+      ctx = resolveLine(machine, { line: o.line });
+    } catch (e) {
+      console.error(String(e instanceof Error ? e.message : e));
+      process.exitCode = 1;
+      return;
+    }
+    const cfg = ctx.config;
+    const parsed = resolveAddress(machine, target, relayUrl(cfg), cfg.org);
     if (!parsed.ok) {
       console.error(`${parsed.error} (or 'push')`);
       process.exitCode = 1;
@@ -210,9 +319,9 @@ program
     if (parsed.warning) console.error(parsed.warning);
     try {
       const card = await fetchCard(
-        ctx ? relayUrl(ctx.config) : relayUrl(undefined),
+        relayUrl(cfg),
         parsed.handle,
-        ctx ? { handle: ctx.config.handle, token: ctx.config.token } : undefined,
+        { org: cfg.org, handle: cfg.handle, token: cfg.token },
       );
       console.log(`${card.handle} (${card.agent_kind})${card.description ? ` — ${card.description}` : ""}`);
       for (const t of card.tasks) {
@@ -275,6 +384,174 @@ contacts
       console.error(String(e instanceof Error ? e.message : e));
       process.exitCode = 1;
     }
+  });
+
+// Rosters are LINE-scoped, not machine-scoped. A roster is membership held by
+// a handle on a relay, and a line is exactly "a handle on a relay" — the
+// bundle cache even validates (relay, caller, roster_id) on every read (see
+// rosters.ts's readCached). Storing memberships per machine would let a line
+// in one tenant read a bundle fetched by a line in another, which is the one
+// thing that validation exists to prevent. Hence `--line` on every command
+// here, and rostersFile/rosterCacheFile living under LinePaths.
+const roster = program.command("roster").description("join and manage discovery rosters for `agentcall search`");
+
+// Resolves the line a roster/search command acts as, or reports and exits.
+// Returns undefined on failure, having already set process.exitCode.
+function rosterLine(line: string | undefined): LineContext | undefined {
+  try {
+    return resolveLine(getMachinePaths(), { line });
+  } catch (e) {
+    console.error(String(e instanceof Error ? e.message : e));
+    process.exitCode = 1;
+    return undefined;
+  }
+}
+
+roster
+  .command("create")
+  .description("create a roster and print its id and join secret")
+  .option("--as <name>", "local name to record it under", "roster")
+  .option("--line <name>", "line to create it as (defaults to the primary line)")
+  .action(async (o: { as: string; line?: string }) => {
+    const ctx = rosterLine(o.line);
+    if (!ctx) return;
+    const cfg = ctx.config;
+    try {
+      const { roster_id, secret } = await createRoster(relayUrl(cfg), { org: cfg.org, handle: cfg.handle, token: cfg.token });
+      saveMembership(ctx.paths, { name: o.as, relay: relayUrl(cfg), roster_id });
+      console.log(`Roster created and saved locally as "${o.as}".\n`);
+      console.log(`  id:     ${roster_id}`);
+      console.log(`  secret: ${secret}\n`);
+      // Printed once and never stored: the relay keeps only a SHA-256 digest.
+      console.log("The secret is shown once and is not recoverable. Share both with colleagues:");
+      console.log(`  agentcall roster join ${roster_id} --secret ${secret} --as ${o.as}`);
+    } catch (e) {
+      console.error(e instanceof Error ? e.message : String(e));
+      process.exitCode = 1;
+    }
+  });
+
+roster
+  .command("join")
+  .description("join a roster so `agentcall search` can see its members")
+  .argument("<roster-id>", "roster id shared by whoever created it")
+  .requiredOption("--secret <secret>", "the roster's join secret")
+  .option("--as <name>", "local name for this roster", "roster")
+  .option("--line <name>", "line to join as (defaults to the primary line)")
+  .action(async (rosterId: string, o: { secret: string; as: string; line?: string }) => {
+    const ctx = rosterLine(o.line);
+    if (!ctx) return;
+    const cfg = ctx.config;
+    try {
+      await joinRoster(relayUrl(cfg), { org: cfg.org, handle: cfg.handle, token: cfg.token }, rosterId, o.secret);
+      // The secret is spent here and never written to disk: from now on the
+      // handle token plus the relay-side membership row is what authorizes.
+      saveMembership(ctx.paths, { name: o.as, relay: relayUrl(cfg), roster_id: rosterId });
+      console.log(`Joined. Saved locally as "${o.as}".`);
+      console.log(`Try: agentcall search "<what you need to know>"`);
+    } catch (e) {
+      console.error(e instanceof Error ? e.message : String(e));
+      process.exitCode = 1;
+    }
+  });
+
+roster
+  .command("list")
+  .description("list rosters this line has joined")
+  .option("--line <name>", "line to list for (defaults to the primary line)")
+  .action((o: { line?: string }) => {
+    const ctx = rosterLine(o.line);
+    if (!ctx) return;
+    const rosters = loadMemberships(ctx.paths);
+    if (rosters.length === 0) {
+      console.log("No rosters joined. Ask a colleague for a roster id and secret, then:\n  agentcall roster join <id> --secret <secret> --as <name>");
+      return;
+    }
+    for (const r of rosters) console.log(`${r.name}\t${r.roster_id}\t${r.relay}`);
+  });
+
+roster
+  .command("forget")
+  .description("drop the local record of a roster (does NOT remove your membership on the relay — there is no leave operation)")
+  .argument("<name>", "local roster name")
+  .option("--line <name>", "line to forget it for (defaults to the primary line)")
+  .action((name: string, o: { line?: string }) => {
+    const ctx = rosterLine(o.line);
+    if (!ctx) return;
+    try {
+      forgetMembership(ctx.paths, name);
+      console.log(`Forgot "${name}" locally. Your membership on the relay is unchanged — there is no leave operation.`);
+    } catch (e) {
+      console.error(String(e instanceof Error ? e.message : e));
+      process.exitCode = 1;
+    }
+  });
+
+program
+  .command("search")
+  .description("find which colleague's agent can answer something")
+  .argument("<question...>", "what you need to know")
+  .option("--roster <name>", "search only this roster (default: all joined rosters)")
+  .option("--limit <n>", "maximum results", (v) => Number.parseInt(v, 10), DEFAULT_SEARCH_LIMIT)
+  .option("--json", "machine-readable output for your own agent")
+  .option("--offline", "never refresh; use whatever is cached")
+  .option("--line <name>", "line to search as (defaults to the primary line)")
+  .action(async (questionParts: string[], o: { roster?: string; limit: number; json?: boolean; offline?: boolean; line?: string }) => {
+    const ctx = rosterLine(o.line);
+    if (!ctx) return;
+    const cfg = ctx.config;
+    const relay = relayUrl(cfg);
+    const identity = { relay, caller: cfg.handle };
+    const memberships = loadMemberships(ctx.paths)
+      .filter((m) => m.relay === relay)
+      .filter((m) => !o.roster || m.name.toLowerCase() === o.roster.toLowerCase());
+
+    if (memberships.length === 0) {
+      console.error(
+        o.roster
+          ? `No roster named "${o.roster}" on ${relay} — run \`agentcall roster list\`.`
+          : `No rosters joined on ${relay}. Ask a colleague for a roster id and secret, then:\n  agentcall roster join <id> --secret <secret> --as <name>`,
+      );
+      process.exitCode = 1;
+      return;
+    }
+
+    const host = addressHost(cfg);
+    const entries: SearchEntry[] = [];
+    const statuses: RosterStatus[] = [];
+    for (const m of memberships) {
+      try {
+        // Each roster degrades on its own: one unreachable roster must not
+        // take down a search across the others.
+        const out = await refreshRoster(ctx.paths, m.name, m.roster_id, identity, { org: cfg.org, handle: cfg.handle, token: cfg.token }, { offline: o.offline });
+        entries.push(...toEntries(m.name, host, out.entries));
+        statuses.push({ name: m.name, ageSeconds: out.ageSeconds, stale: out.stale });
+      } catch (e) {
+        console.error(`${m.name}: ${e instanceof Error ? e.message : String(e)}`);
+      }
+    }
+
+    // Every roster attempted, every one failed: not a genuine no-results
+    // run, so a script or calling agent gating on exit code must be able to
+    // tell the difference. Partial failure stays exit 0 — see allRostersFailed.
+    if (allRostersFailed(memberships.length, statuses.length)) {
+      process.exitCode = 1;
+    }
+
+    const results = rank(questionParts.join(" "), entries, o.limit);
+    if (o.json) {
+      console.log(JSON.stringify({
+        query: questionParts.join(" "),
+        rosters: statuses.map((s) => ({ name: s.name, cache_age_seconds: s.ageSeconds, stale: s.stale })),
+        results: results.map((r) => ({
+          roster: r.roster, address: r.address, handle: r.handle, task: r.task,
+          name: sanitize(r.name, 100), description: sanitize(r.description, 1000),
+          score: r.score, matched: r.matched,
+        })),
+      }));
+      return;
+    }
+    console.log(renderResults(results, statuses));
   });
 
 // Shared by allow/revoke/block/unblock/offer/unoffer: resolve exactly once
@@ -360,6 +637,7 @@ line
   .description("register another address on this machine")
   .argument("<name>", "local name for this line, e.g. codex (never shared — the handle is)")
   .option("--handle <handle>", "handle to register (prompted if omitted)")
+  .option("--invite <token>", "one-time organization invite (required — each line enrolls in its own tenant)")
   .option("--agent <agent>", "agent kind: claude or codex (omit with --caller-only)")
   .option("--relay <url>", "relay URL to register against")
   .option("--caller-only", "register a handle to call others without making this line's agent callable")
@@ -368,7 +646,7 @@ line
   .action(
     async (
       name: string,
-      o: { handle?: string; agent?: string; relay?: string; callerOnly?: boolean; skipLaunchd?: boolean; verify?: boolean },
+      o: { handle?: string; invite?: string; agent?: string; relay?: string; callerOnly?: boolean; skipLaunchd?: boolean; verify?: boolean },
     ) => {
       const machine = getMachinePaths();
       if (!o.callerOnly && o.agent !== "claude" && o.agent !== "codex") {
@@ -389,6 +667,14 @@ line
         process.exitCode = 1;
         return;
       }
+      // Same reasoning as the line-name check above: addLine re-checks this
+      // before it touches the network, but doing it here too avoids prompting
+      // for a handle on a command that cannot possibly register.
+      if (!o.invite?.trim()) {
+        console.error(`An organization invite is required. Run \`agentcall line add ${name} --invite <token>\`.`);
+        process.exitCode = 1;
+        return;
+      }
       const handle = o.handle ?? (await ttyAsk(`Choose a handle for "${name}" (e.g. ${name}): `)).trim();
       if (!handle) {
         console.error("A handle is required.");
@@ -401,6 +687,7 @@ line
           name,
           handle,
           relay,
+          invite: o.invite,
           agent: o.callerOnly ? undefined : (o.agent as AgentKind),
           callerOnly: o.callerOnly,
           verify: o.verify,
@@ -432,7 +719,9 @@ line
       try {
         online.set(
           l2.config.handle,
-          (await getStatus(relayUrl(l2.config), l2.config.handle, { handle: l2.config.handle, token: l2.config.token })).online,
+          (await getStatus(relayUrl(l2.config), l2.config.handle, {
+            org: l2.config.org, handle: l2.config.handle, token: l2.config.token,
+          })).online,
         );
       } catch {
         online.set(l2.config.handle, false);
@@ -547,7 +836,10 @@ program
     try {
       // The multi-line listener (Task 8) re-reads each line's config.json on
       // every reconnect, so a running listener — foreground or under launchd —
-      // picks up the new token on its own; no restart needed here.
+      // picks up the new token on its own; no restart needed here. This is
+      // what replaced main's explicit installLaunchAgent() restart: the
+      // restart existed only because the old single listener read its token
+      // once at startup.
       await rotateLine(ctx);
     } catch (e) {
       console.error(e instanceof ApiError ? e.message : String(e));
@@ -566,7 +858,33 @@ program
     console.log("agentcall listener removed." + (o.purge ? " Config purged." : ""));
   });
 
-program.parseAsync().catch((e) => {
-  console.error(String(e));
-  process.exitCode = 1;
-});
+return program;
+}
+
+// Commander actions predate this test seam and communicate failure through
+// process.exitCode. Isolate that process-global state here so two in-process
+// invocations cannot leak a failure into one another (or into Vitest itself).
+export interface CliOutput {
+  writeOut?: (text: string) => void;
+  writeErr?: (text: string) => void;
+}
+
+export async function runCli(argv: string[], output: CliOutput = {}): Promise<number> {
+  const previousExitCode = process.exitCode;
+  process.exitCode = undefined;
+  try {
+    const program = createProgram();
+    program.configureOutput(output);
+    program.exitOverride();
+    try {
+      await program.parseAsync(argv, { from: "user" });
+      return process.exitCode ?? 0;
+    } catch (e) {
+      if (e instanceof CommanderError) return e.exitCode;
+      console.error(String(e));
+      return 1;
+    }
+  } finally {
+    process.exitCode = previousExitCode;
+  }
+}

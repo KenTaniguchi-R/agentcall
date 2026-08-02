@@ -117,19 +117,27 @@ describe("resolveAddress", () => {
     }
   });
 
-  // The host half of an address was parsed and then dropped: every command
-  // routes to the configured relay regardless of what the address says, so a
+  // The host half of an address was parsed and then dropped: a call is dialled
+  // on the calling line's relay regardless of what the address says, so a
   // custom AGENTCALL_RELAY silently sends the call somewhere else. It stays a
   // warning rather than a rejection because the relay hands out a hardcoded
-  // RELAY_HOST, so a self-hosted or local-dev relay can never match.
+  // RELAY_HOST, so a self-hosted or local-dev relay can never match. The merge
+  // of origin/main briefly reinstated the rejection; see relayHostWarning.
   it("warns when the address host is not the relay the call will actually go to", () => {
     const p = getMachinePaths(tempHome());
     const r = resolveAddress(p, "ken@agentcall.benree.tech", "https://relay.example.com");
     expect(r.ok).toBe(true);
-    if (r.ok) {
-      expect(r.warning).toContain("agentcall.benree.tech");
-      expect(r.warning).toContain("relay.example.com");
-    }
+    if (r.ok) expect(r.warning).toMatch(/agentcall\.benree\.tech.*relay\.example\.com/);
+  });
+
+  // From origin/main (#66): on the real relay a tenant's addresses are
+  // <handle>@<org>.agentcall.benree.tech, so the host we compare against has
+  // to carry the calling line's org or the warning names the wrong host.
+  it("expects the org-prefixed host when the relay is the real one", () => {
+    const p = getMachinePaths(tempHome());
+    const same = resolveAddress(p, "ken@acme.agentcall.benree.tech", "https://agentcall.benree.tech", "acme");
+    expect(same.ok).toBe(true);
+    if (same.ok) expect(same.warning).toBeUndefined();
   });
 
   it("does not warn when the address host matches the relay", () => {
@@ -146,19 +154,30 @@ describe("resolveAddress", () => {
     if (r.ok) expect(r.warning).toBeUndefined();
   });
 
+  // From origin/main (#66). Unlike the host mismatch above this is a hard
+  // REJECTION and must stay one: it is the tenant boundary, not a diagnostic.
+  // The literal-address half is covered by "rejects a hosted address belonging
+  // to another tenant" below; this is the contact-book half.
+  it("rejects a contact-book hit belonging to a different organization", () => {
+    const p = getMachinePaths(tempHome());
+    addContact(p, "ken", "ken@other.agentcall.benree.tech");
+    const r = resolveAddress(p, "ken", "https://agentcall.benree.tech", "acme");
+    expect(r.ok).toBe(false);
+    if (!r.ok) expect(r.error).toMatch(/organization "other".*"acme"/);
+  });
+
   it("warns for a contact-book hit too, naming the contact's address", () => {
     const p = getMachinePaths(tempHome());
     addContact(p, "ken", "ken@agentcall.benree.tech");
     const r = resolveAddress(p, "ken", "http://127.0.0.1:8787");
     expect(r.ok).toBe(true);
-    if (r.ok) expect(r.warning).toContain("127.0.0.1:8787");
+    if (r.ok) expect(r.warning).toMatch(/ken.*127\.0\.0\.1:8787/);
   });
 
   it("an unparseable relay URL is ignored rather than blocking the call", () => {
     const p = getMachinePaths(tempHome());
     const r = resolveAddress(p, "ken@agentcall.benree.tech", "not a url");
     expect(r.ok).toBe(true);
-    if (r.ok) expect(r.warning).toBeUndefined();
   });
 
   it("rejects a stored contact whose address is invalid (hand-edited file)", () => {
@@ -168,5 +187,26 @@ describe("resolveAddress", () => {
     const r = resolveAddress(p, "bad");
     expect(r.ok).toBe(false);
     if (!r.ok) expect(r.error.toLowerCase()).toContain("invalid address");
+  });
+
+  it("rejects a hosted address belonging to another tenant", () => {
+    const r = resolveAddress(
+      getMachinePaths(tempHome()),
+      "ken@beta.agentcall.benree.tech",
+      "https://agentcall.benree.tech",
+      "acme",
+    );
+    expect(r.ok).toBe(false);
+    if (!r.ok) expect(r.error).toMatch(/beta.*acme/);
+  });
+
+  it("accepts a hosted address in the install's tenant", () => {
+    const r = resolveAddress(
+      getMachinePaths(tempHome()),
+      "ken@acme.agentcall.benree.tech",
+      "https://agentcall.benree.tech",
+      "acme",
+    );
+    expect(r.ok).toBe(true);
   });
 });

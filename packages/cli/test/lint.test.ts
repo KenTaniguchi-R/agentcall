@@ -7,7 +7,7 @@ import { publishCard } from "../src/card.js";
 import { getLinePaths, getMachinePaths } from "../src/paths.js";
 import type { LineConfig } from "../src/config.js";
 
-const cfg: LineConfig = { handle: "ken", token: "t", agent_kind: "claude", relay: "https://r" };
+const cfg: LineConfig = { org: "acme", handle: "ken", token: "t", agent_kind: "claude", relay: "https://r" };
 
 function linePaths(h: string) {
   return getLinePaths(getMachinePaths(h, h), "line");

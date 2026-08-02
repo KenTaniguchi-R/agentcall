@@ -17,6 +17,12 @@ export interface AddLineOpts {
   name: string;
   handle: string;
   relay: string;
+  // Every registration is an enrollment into a tenant (#74), and the tenant is
+  // a property of the LINE, not the machine: `org` lives in LineConfig beside
+  // `relay`. So a second line needs its own invite even on a machine that
+  // already has one — it may be enrolling into a different tenant entirely,
+  // and only the relay can tell us which.
+  invite?: string;
   agent?: AgentKind;
   callerOnly?: boolean;
   // false skips the post-registration verify step (commander's --no-verify
@@ -74,15 +80,22 @@ export async function addLine(m: MachinePaths, opts: AddLineOpts): Promise<{ add
   }
 
   const agentKind = opts.callerOnly ? undefined : opts.agent;
-  const { token, address } = await (opts.register ?? registerHandle)(opts.relay, opts.handle, agentKind);
+  // Checked here rather than left to registerHandle's own guard so it joins
+  // the other pre-network validations above: a missing invite must not be
+  // discovered after anything has been spent.
+  const invite = opts.invite?.trim();
+  if (!invite) {
+    throw new Error(`An organization invite is required. Run \`agentcall line add ${opts.name} --invite <token>\`.`);
+  }
+  const { org, token, address } = await (opts.register ?? registerHandle)(opts.relay, invite, opts.handle, agentKind);
 
   // Registration succeeded, so the handle is spent and unreclaimable (#16).
   // config.json is therefore the very first thing written — everything below
   // is recoverable by re-running, losing the token is not.
   const paths = getLinePaths(m, opts.name);
   const cfg: LineConfig = agentKind
-    ? { handle: opts.handle, token, relay: opts.relay, agent_kind: agentKind }
-    : { handle: opts.handle, token, relay: opts.relay };
+    ? { org, handle: opts.handle, token, relay: opts.relay, agent_kind: agentKind }
+    : { org, handle: opts.handle, token, relay: opts.relay };
   saveLineConfig(paths, cfg);
 
   if (agentKind) {

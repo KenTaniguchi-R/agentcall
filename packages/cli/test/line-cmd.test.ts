@@ -38,8 +38,8 @@ beforeEach(() => {
   mkdirSync(m.linesDir, { recursive: true });
 });
 
-const ok = async () => ({ token: "tok", address: "ken-cdx@r.example" });
-const base = { handle: "ken", token: "t", relay: "https://r.example", agent_kind: "claude" as const };
+const ok = async () => ({ org: "acme", token: "tok", address: "ken-cdx@r.example" });
+const base = { org: "acme", handle: "ken", token: "t", relay: "https://r.example", agent_kind: "claude" as const };
 
 // launchPathDirs (addLine's/removeLine's extraPathDirs default — see
 // launchPath.ts) falls back to the real `which` via defaultResolveBin
@@ -50,8 +50,13 @@ const base = { handle: "ken", token: "t", relay: "https://r.example", agent_kind
 // tests that assert on the derivation itself pass their own resolveBin,
 // which overrides this default.
 const noNetworkResolveBin = () => null;
+// `invite` is defaulted here for the same reason `resolveBin` is: every
+// registration needs one (tenancy, #74), and threading a literal through all
+// ~20 call sites below would only obscure what each test is actually about.
+// The tests that care about the invite itself pass their own, or call
+// addLineImpl directly.
 function addLine(m: MachinePaths, opts: AddLineOpts): ReturnType<typeof addLineImpl> {
-  return addLineImpl(m, { resolveBin: noNetworkResolveBin, ...opts });
+  return addLineImpl(m, { resolveBin: noNetworkResolveBin, invite: "test-invite", ...opts });
 }
 function removeLine(m: MachinePaths, name: string, opts: RemoveLineOpts = {}): void {
   removeLineImpl(m, name, { resolveBin: noNetworkResolveBin, ...opts });
@@ -76,7 +81,7 @@ describe("addLine", () => {
   it("rejects an invalid line name before registering", async () => {
     let called = false;
     await expect(addLine(m, { name: "../evil", handle: "x", agent: "codex", relay: "https://r.example",
-      register: async () => { called = true; return { token: "t", address: "a" }; },
+      register: async () => { called = true; return { org: "acme", token: "t", address: "a" }; },
       installLaunchAgentFn: () => {}, publishCardFn: async () => undefined, verify: false }))
       .rejects.toThrow(/line name/i);
     expect(called).toBe(false);
@@ -86,7 +91,7 @@ describe("addLine", () => {
     saveLineConfig(getLinePaths(m, "codex"), base);
     let called = false;
     await expect(addLine(m, { name: "codex", handle: "other", agent: "codex", relay: "https://r.example",
-      register: async () => { called = true; return { token: "t", address: "a" }; },
+      register: async () => { called = true; return { org: "acme", token: "t", address: "a" }; },
       installLaunchAgentFn: () => {}, publishCardFn: async () => undefined, verify: false }))
       .rejects.toThrow(/already/);
     expect(called).toBe(false);
@@ -96,7 +101,7 @@ describe("addLine", () => {
     saveLineConfig(getLinePaths(m, "claude"), { ...base, handle: "ken-cdx" });
     let called = false;
     await expect(addLine(m, { name: "codex", handle: "ken-cdx", agent: "codex", relay: "https://r.example",
-      register: async () => { called = true; return { token: "t", address: "a" }; },
+      register: async () => { called = true; return { org: "acme", token: "t", address: "a" }; },
       installLaunchAgentFn: () => {}, publishCardFn: async () => undefined, verify: false }))
       .rejects.toThrow(/ken-cdx/);
     expect(called).toBe(false);

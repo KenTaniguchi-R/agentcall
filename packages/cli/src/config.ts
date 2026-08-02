@@ -7,6 +7,12 @@ import type { LinePaths } from "./paths.js";
 // with) used to be a single machine-wide record; Task 12 deleted that half
 // once every consumer moved to LineConfig/LinePaths.
 export interface LineConfig {
+  // The tenant this line is enrolled in. On the LINE, not on the machine:
+  // `org` and `relay` are two halves of one identity — the org names a tenant
+  // *on a relay* — and `relay` was already per-line. A machine-wide org would
+  // mean a second line on another relay silently inherited the first tenant's
+  // slug and addressed itself as `<handle>@<wrong-org>.<host>`.
+  org: string;
   handle: string;
   token: string;
   relay: string;
@@ -67,4 +73,9 @@ export function relayUrl(cfg?: LineConfig): string {
   // is treated as unset rather than as "point at the empty string".
   const envRelay = process.env.AGENTCALL_RELAY || undefined;
   return normalizeRelay(envRelay ?? cfg?.relay ?? DEFAULT_RELAY);
+}
+
+export function addressHost(cfg: LineConfig): string {
+  const host = new URL(relayUrl(cfg)).hostname;
+  return host === "agentcall.benree.tech" ? `${cfg.org}.${host}` : host;
 }

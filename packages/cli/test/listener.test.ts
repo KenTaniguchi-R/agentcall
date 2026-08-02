@@ -4,9 +4,11 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { WebSocketServer, type WebSocket as WsSocket } from "ws";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { CONTEXT_TTL_MS, MAX_CONTEXT_TURNS } from "@benree/agentcall-shared";
 import { startListener } from "../src/listener.js";
 import { getLinePaths, getMachinePaths, type LinePaths, type MachinePaths } from "../src/paths.js";
 import { AgentRunError, buildSpawnSpec } from "../src/runner.js";
+import { loadContexts, mintContextId, saveContexts, type ContextBinding } from "../src/contexts.js";
 import type { CallableLineConfig } from "../src/config.js";
 
 let httpServer: Server;
@@ -34,7 +36,7 @@ function fakeRelay(onConn: (ws: WsSocket) => void): Promise<string> {
 // that has already passed `assertCallableLine`, and annotating the fixture as
 // the wider `LineConfig` widens agent_kind back to optional at every spread
 // site.
-const cfg: CallableLineConfig = { handle: "ken", token: "tok", agent_kind: "claude", relay: "unused" };
+const cfg: CallableLineConfig = { org: "acme", handle: "ken", token: "tok", agent_kind: "claude", relay: "unused" };
 
 function frames(ws: WsSocket, n: number): Promise<any[]> {
   return new Promise((resolve) => {
@@ -68,7 +70,7 @@ function seededPaths(): LinePaths {
 // override, or seed onto `.paths` before calling startListener.
 function baseDeps(relay: string) {
   const paths = seededPaths();
-  return { paths, relay, loadConfig: () => ({ ...cfg, relay }) };
+  return { paths, relay, loadConfig: () => ({ ...cfg, relay }), codexThreadingEnabled: () => true };
 }
 
 describe("startListener workdir", () => {
@@ -121,7 +123,7 @@ describe("startListener", () => {
         paths = deps.paths;
         stopper = startListener({
           ...deps,
-          run: async () => ({ text: "the answer", session_id: "s1" }),
+          run: async () => ({ text: "the answer", session_id: "agent-session-s1" }),
         });
       });
     });
@@ -131,7 +133,12 @@ describe("startListener", () => {
     const [accepted, started, result] = await expectFrames;
     expect(accepted).toMatchObject({ type: "call_accepted", call_id: "c1" });
     expect(started).toMatchObject({ type: "call_started", call_id: "c1" });
-    expect(result).toMatchObject({ type: "call_result", call_id: "c1", text: "the answer", session_id: "s1" });
+    // call_result carries the MINTED binding handle. This assertion used to read
+    // `context_id: "s1"` -- the agent's own session id forwarded straight onto
+    // the wire, which is the capability leak the context design exists to close.
+    expect(result).toMatchObject({ type: "call_result", call_id: "c1", text: "the answer" });
+    expect(result.context_id).toMatch(/^ctx_[A-Za-z0-9_-]{22}$/);
+    expect(JSON.stringify(result)).not.toContain("agent-session");
     const audit = readFileSync(paths.callsLog, "utf8").trim().split("\n").map((l) => JSON.parse(l));
     expect(audit[0]).toMatchObject({ call_id: "c1", from: "shusaku", status: "ok" });
   });
@@ -517,7 +524,7 @@ describe("startListener config reload", () => {
     const l = startListener({
       relay: "https://r.example",
       paths: linePaths,
-      loadConfig: () => ({ handle: "ken", token, relay: "https://r.example", agent_kind: "claude" }),
+      loadConfig: () => ({ org: "acme", handle: "ken", token, relay: "https://r.example", agent_kind: "claude" }),
       socketFactory: sockets.factory,
       backoffMs: () => 0,
     });
@@ -552,15 +559,22 @@ describe("startListener reconnect isolation", () => {
       const healthySockets = fakeSocketFactory(() => {});
       const healthy = startListener({
         relay: "https://r.example", paths: healthyPaths,
-        loadConfig: () => ({ handle: "h", token: "t", relay: "https://r.example", agent_kind: "claude" }),
+        loadConfig: () => ({ org: "acme", handle: "h", token: "t", relay: "https://r.example", agent_kind: "claude" }),
         socketFactory: healthySockets.factory,
         backoffMs: () => 0,
       });
       const healthySocketBeforeBreak = healthySockets.last();
 
-      // The broken line: its SECOND loadConfig() call throws — simulating a
+      // The broken line's THIRD loadConfig() call throws — simulating a
       // config.json that went bad, or a workdir removed, sometime after this
-      // line's listener already started successfully once.
+      // line's listener already started successfully once. Three, not two:
+      // startListener reads loadConfig() once up front (call #1, purely to
+      // decide codex threading — see the `startupKind` comment in
+      // listener.ts) before connect() ever runs, then again for the initial
+      // synchronous connect() (call #2, must succeed or this whole
+      // `startListener` call throws instead of the reconnect below getting a
+      // chance to). Call #3 is the first actual reconnect, which is the one
+      // this test forces and which must be caught internally.
       let loadConfigCalls = 0;
       const brokenPaths = getLinePaths(freshMachine(), "broken");
       const brokenSockets = fakeSocketFactory(() => {});
@@ -568,8 +582,8 @@ describe("startListener reconnect isolation", () => {
         relay: "https://r.example", paths: brokenPaths,
         loadConfig: () => {
           loadConfigCalls++;
-          if (loadConfigCalls === 2) throw new Error("config.json is corrupt");
-          return { handle: "b", token: "t", relay: "https://r.example", agent_kind: "claude" };
+          if (loadConfigCalls === 3) throw new Error("config.json is corrupt");
+          return { org: "acme", handle: "b", token: "t", relay: "https://r.example", agent_kind: "claude" };
         },
         socketFactory: brokenSockets.factory,
         backoffMs: () => 0,
@@ -577,7 +591,7 @@ describe("startListener reconnect isolation", () => {
       const brokenSocketBeforeBreak = brokenSockets.last();
 
       // Force the broken line's reconnect — this is the attempt whose
-      // loadConfig() throws (call #2).
+      // loadConfig() throws (call #3).
       brokenSockets.last().emit("close");
       await tick();
 
@@ -596,7 +610,7 @@ describe("startListener reconnect isolation", () => {
       // (c) the broken line keeps retrying rather than giving up: its
       // scheduled reconnect fires again on its own (no external nudge needed
       // here — the catch block calls scheduleReconnect()), and this time
-      // loadConfig() succeeds (call #3), producing a genuinely new socket.
+      // loadConfig() succeeds (call #4), producing a genuinely new socket.
       await tick();
       expect(brokenSockets.last()).not.toBe(brokenSocketBeforeBreak);
 
@@ -605,5 +619,359 @@ describe("startListener reconnect isolation", () => {
     } finally {
       errorSpy.mockRestore();
     }
+  });
+});
+
+// Drives one inbound call and returns the frames the listener sent back.
+// `seed` runs against the deps before the listener starts, so a test can plant
+// a binding, a policy, or a task.
+async function oneCall(
+  incoming: Record<string, unknown>,
+  opts: {
+    seed?: (paths: LinePaths) => void;
+    run?: (...a: any[]) => Promise<{ text: string; session_id?: string }>;
+    saveContexts?: () => void;
+    frameCount?: number;
+    config?: CallableLineConfig;
+    codexThreadingEnabled?: () => boolean;
+  } = {},
+): Promise<{ frames: any[]; paths: LinePaths }> {
+  let deps!: ReturnType<typeof baseDeps>;
+  const got = await new Promise<any[]>((resolve) => {
+    void fakeRelay((ws) => {
+      const collected = frames(ws, opts.frameCount ?? 3);
+      ws.send(JSON.stringify({ type: "incoming_call", call_id: "c1", from: "sota", ...incoming }));
+      void collected.then(resolve);
+    }).then((url) => {
+      deps = baseDeps(url);
+      // loadConfig is called fresh on every (re)connect (see listener.ts), so
+      // an override just closes over the resolved value instead of mutating
+      // `deps` — there is no `deps.config` field to assign onto any more.
+      const config = opts.config ?? { ...cfg, relay: url };
+      opts.seed?.(deps.paths);
+      stopper = startListener({
+        ...deps,
+        loadConfig: () => config,
+        run: opts.run ?? (async () => ({ text: "ok", session_id: "real-agent-session" })),
+        saveContexts: opts.saveContexts,
+        codexThreadingEnabled: opts.codexThreadingEnabled ?? deps.codexThreadingEnabled,
+      });
+    });
+  });
+  return { frames: got, paths: deps.paths };
+}
+
+describe("listener contexts", () => {
+  // 22 base64url characters, so it satisfies CONTEXT_ID_RE and survives
+  // loadContexts' schema parse. A binding that fails that parse would be
+  // dropped on load and every test below would pass for the wrong reason.
+  const SEEDED_CTX = "ctx_AAAAAAAAAAAAAAAAAAAAAA";
+
+  const seedBinding =
+    (over: Partial<ContextBinding> = {}) =>
+    (paths: LinePaths) => {
+      const b: ContextBinding = {
+        context_id: SEEDED_CTX,
+        agent_session_id: "real-agent-session",
+        caller: "sota",
+        task: "ask",
+        agent_kind: "claude",
+        // baseDeps' config sets no workdir, so resolveLineWorkdir returns shareDir.
+        workdir: paths.shareDir,
+        turns: 1,
+        created_at: Date.now(),
+        last_used_at: Date.now(),
+        ...over,
+      };
+      saveContexts(paths, [b]);
+    };
+
+  it("mints a context on a fresh threadable call and returns it", async () => {
+    const { frames: f, paths } = await oneCall({ message: "hi" });
+    const result = f.find((x) => x.type === "call_result");
+    expect(result.context_id).toMatch(/^ctx_[A-Za-z0-9_-]{22}$/);
+    const stored = loadContexts(paths);
+    expect(stored).toHaveLength(1);
+    expect(stored[0]!.agent_session_id).toBe("real-agent-session");
+    expect(stored[0]!.caller).toBe("sota");
+    expect(stored[0]!.context_id).toBe(result.context_id);
+  });
+
+  it("does not mint a codex context when the installed CLI lacks current sandbox evidence", async () => {
+    const errors: string[] = [];
+    const spy = vi.spyOn(console, "error").mockImplementation((...args: unknown[]) => errors.push(args.map(String).join(" ")));
+    try {
+      const { frames: f, paths } = await oneCall(
+        { message: "hi" },
+        {
+          config: { ...cfg, agent_kind: "codex" },
+          codexThreadingEnabled: () => false,
+        },
+      );
+      expect(f.find((x) => x.type === "call_result").context_id).toBeUndefined();
+      expect(loadContexts(paths)).toEqual([]);
+      expect(errors).toEqual([expect.stringMatching(/Codex conversation threading is disabled.*last verified/i)]);
+    } finally {
+      spy.mockRestore();
+    }
+  });
+
+  it("refuses an existing codex context after sandbox evidence is withdrawn", async () => {
+    let spawned = false;
+    const { frames: f } = await oneCall(
+      { message: "resume", context_id: SEEDED_CTX },
+      {
+        config: { ...cfg, agent_kind: "codex" },
+        codexThreadingEnabled: () => false,
+        frameCount: 1,
+        seed: seedBinding({ agent_kind: "codex" }),
+        run: async () => { spawned = true; return { text: "unsafe" }; },
+      },
+    );
+    expect(f[0]).toMatchObject({ type: "call_failed", code: "context_unknown" });
+    expect(spawned).toBe(false);
+  });
+
+  it("delivers a completed answer without a context when context persistence fails", async () => {
+    const errors: string[] = [];
+    const spy = vi.spyOn(console, "error").mockImplementation((...args: unknown[]) => errors.push(args.map(String).join(" ")));
+    try {
+      const { frames: f, paths } = await oneCall(
+        { message: "hi" },
+        { saveContexts: () => { throw new Error("ENOSPC: disk full"); } },
+      );
+      expect(f.map((x) => x.type)).toEqual(["call_accepted", "call_started", "call_result"]);
+      expect(f[2]).toMatchObject({ call_id: "c1", text: "ok", task: "ask" });
+      expect(f[2].context_id).toBeUndefined();
+      expect(loadContexts(paths)).toEqual([]);
+      expect(errors.some((line) => line.includes("could not save the call context") && line.includes("ENOSPC"))).toBe(true);
+      const audit = JSON.parse(readFileSync(paths.callsLog, "utf8").trim());
+      expect(audit).toMatchObject({ status: "ok", context_persist_error: expect.stringContaining("ENOSPC") });
+    } finally {
+      spy.mockRestore();
+    }
+  });
+
+  // The binding is the security boundary: the real session id must never be
+  // what goes back on the wire.
+  it("never returns the real agent session id", async () => {
+    const { frames: f } = await oneCall({ message: "hi" });
+    const result = f.find((x) => x.type === "call_result");
+    expect(result.context_id).not.toBe("real-agent-session");
+    expect(JSON.stringify(f)).not.toContain("real-agent-session");
+  });
+
+  it("resumes with the real session id when the binding matches", async () => {
+    let sawResume: string | undefined;
+    await oneCall(
+      { message: "and the commit?", context_id: SEEDED_CTX },
+      {
+        seed: seedBinding(),
+        // run(...)'s positionals, per listener.ts: kind, prompt, workdir,
+        // timeoutMs, specOverride, envelope, callId, signal, lineName,
+        // resume — resume is index 9, not 8, now that lineName sits before
+        // it (see runner.ts's buildSpawnSpec/runAgent signatures).
+        run: async (...a: any[]) => {
+          sawResume = a[9] as string | undefined;
+          return { text: "ok", session_id: "real-agent-session" };
+        },
+      },
+    );
+    expect(sawResume).toBe("real-agent-session");
+  });
+
+  it("builds the threaded prompt variant on a resumed call", async () => {
+    let prompt = "";
+    await oneCall(
+      { message: "and the commit?", context_id: SEEDED_CTX },
+      {
+        seed: seedBinding(),
+        run: async (...a: any[]) => {
+          prompt = a[1] as string;
+          return { text: "ok", session_id: "real-agent-session" };
+        },
+      },
+    );
+    expect(prompt).toContain("continuing a call");
+    expect(prompt).not.toContain("one-shot");
+  });
+
+  it("increments the turn count on a resumed call", async () => {
+    const { paths } = await oneCall(
+      { message: "again", context_id: SEEDED_CTX },
+      { seed: seedBinding({ turns: 3 }) },
+    );
+    expect(loadContexts(paths)[0]!.turns).toBe(4);
+  });
+
+  // Regression: the roll-forward block used to be gated on `out.session_id`,
+  // so a resumed turn whose agent returned none left the binding at its old
+  // turn count with its TTL sliding from the last successful write. A caller
+  // could then resume forever, pinned below MAX_CONTEXT_TURNS. Reachable for
+  // real: parseCodexJsonl's non-JSON fallback returns session_id: undefined.
+  it("still counts a resumed turn when the agent returns no session id, so the cap holds", async () => {
+    const first = await oneCall(
+      { message: "turn ten", context_id: SEEDED_CTX },
+      { seed: seedBinding({ turns: MAX_CONTEXT_TURNS - 1 }), run: async () => ({ text: "ok" }) },
+    );
+    const rolled = loadContexts(first.paths)[0]!;
+    expect(rolled.turns).toBe(MAX_CONTEXT_TURNS);
+    // The session id it had nothing to replace with is kept, not clobbered
+    // with undefined — it is still the right one to resume next time.
+    expect(rolled.agent_session_id).toBe("real-agent-session");
+
+    // oneCall owns the module-level relay/listener handles, so the first pair
+    // has to be torn down here rather than in afterEach, which only ever sees
+    // the second.
+    stopper?.stop();
+    await new Promise<void>((r) => httpServer.close(() => r()));
+
+    let spawned = false;
+    const { frames: f } = await oneCall(
+      { message: "turn eleven", context_id: SEEDED_CTX },
+      {
+        frameCount: 1,
+        run: async () => { spawned = true; return { text: "should not happen" }; },
+        // The rolled-forward binding, re-homed into the second call's tmp root
+        // so the refusal can only come from the turn cap and not from a
+        // workdir mismatch.
+        seed: (p) => saveContexts(p, [{ ...rolled, workdir: p.shareDir }]),
+      },
+    );
+    expect(f[0]).toMatchObject({ type: "call_failed", code: "context_unknown" });
+    expect(spawned).toBe(false);
+  });
+
+  // contexts.ts's invariant: the real agent_session_id never reaches an audit
+  // log. A stale binding makes `claude --resume <id>` print that id in its own
+  // error text, which runAgent folds into the AgentRunError message.
+  it("scrubs the real session id out of an audited failure", async () => {
+    const { paths } = await oneCall(
+      { message: "resume a dead session", context_id: SEEDED_CTX },
+      {
+        seed: seedBinding(),
+        run: async () => {
+          throw new AgentRunError(
+            "agent exited 1: No conversation found with session ID: real-agent-session",
+            "agent_error",
+          );
+        },
+      },
+    );
+    const line = JSON.parse(readFileSync(paths.callsLog, "utf8").trim().split("\n").at(-1)!);
+    expect(line).toMatchObject({ status: "agent_error" });
+    expect(line.error).not.toContain("real-agent-session");
+    expect(line.error).toContain("<session>");
+  });
+
+  it("keeps the same context id across a resumed turn rather than minting a second", async () => {
+    const { frames: f, paths } = await oneCall(
+      { message: "again", context_id: SEEDED_CTX },
+      { seed: seedBinding() },
+    );
+    expect(f.find((x) => x.type === "call_result").context_id).toBe(SEEDED_CTX);
+    expect(loadContexts(paths)).toHaveLength(1);
+  });
+
+  // The table the design exists to satisfy. Every row must fail the call and
+  // spawn nothing.
+  const refusals: Array<[string, Partial<ContextBinding>]> = [
+    ["a different caller", { caller: "mallory" }],
+    ["a different task", { task: "deploy-status" }],
+    ["a different agent kind", { agent_kind: "codex" }],
+    ["a changed workdir", { workdir: "/somewhere/else" }],
+    ["an expired context", { last_used_at: Date.now() - CONTEXT_TTL_MS - 1 }],
+    ["an exhausted turn cap", { turns: MAX_CONTEXT_TURNS }],
+  ];
+
+  for (const [label, over] of refusals) {
+    it(`refuses ${label} with context_unknown and no spawn`, async () => {
+      let spawned = false;
+      const { frames: f } = await oneCall(
+        { message: "sneaky", context_id: SEEDED_CTX },
+        {
+          seed: seedBinding(over),
+          frameCount: 1,
+          run: async () => { spawned = true; return { text: "should not happen" }; },
+        },
+      );
+      expect(f[0]).toMatchObject({ type: "call_failed", code: "context_unknown" });
+      expect(spawned).toBe(false);
+    });
+  }
+
+  // Not one of the six admitContext checks: the binding matches on every field
+  // it stores, including the task *id*. What changed is the task itself. The
+  // owner added `exec` to notes/SKILL.md after this binding was minted, so
+  // deriveThreadable now says no -- and a binding minted an hour ago must not
+  // outlive the decision it was minted under.
+  it("refuses a context whose task has since become non-threadable, with no spawn", async () => {
+    let spawned = false;
+    const { frames: f } = await oneCall(
+      { message: "and now rm -rf", context_id: SEEDED_CTX, task: "notes" },
+      {
+        frameCount: 1,
+        run: async () => { spawned = true; return { text: "should not happen" }; },
+        seed: (p) => {
+          seedTask(p, "notes", ["description: d", "tools: [read, exec]"]);
+          seedPolicy(p, { default_offer: ["ask", "notes"] });
+          seedBinding({ task: "notes" })(p);
+        },
+      },
+    );
+    expect(f[0]).toMatchObject({ type: "call_failed", code: "context_unknown" });
+    expect(spawned).toBe(false);
+  });
+
+  it("refuses an unknown context with no spawn", async () => {
+    let spawned = false;
+    const { frames: f } = await oneCall(
+      { message: "sneaky", context_id: mintContextId() },
+      { frameCount: 1, run: async () => { spawned = true; return { text: "no" }; } },
+    );
+    expect(f[0]).toMatchObject({ type: "call_failed", code: "context_unknown" });
+    expect(spawned).toBe(false);
+  });
+
+  // One code for every reason. A refusal must not tell the caller whether the
+  // token they guessed exists at all, nor which of the six checks rejected it.
+  // Paired with the "unknown context" test above, which asserts the identical
+  // frame for a token that was never minted: same keys, same values.
+  it("gives a refusal no detail that distinguishes it from any other refusal", async () => {
+    const { frames: f } = await oneCall(
+      { message: "x", context_id: SEEDED_CTX },
+      { seed: seedBinding({ caller: "mallory" }), frameCount: 1 },
+    );
+    expect(Object.keys(f[0]).sort()).toEqual(["call_id", "code", "type"]);
+  });
+
+  it("does not mint a context for a non-threadable task", async () => {
+    const { frames: f, paths } = await oneCall({ message: "hi", task: "risky" }, {
+      seed: (p) => {
+        seedTask(p, "risky", ["description: d", "tools: [read, exec]"]);
+        seedPolicy(p, { default_offer: ["ask", "risky"] });
+      },
+    });
+    expect(f.find((x) => x.type === "call_result").context_id).toBeUndefined();
+    expect(loadContexts(paths)).toHaveLength(0);
+  });
+
+  it("audits the context id and turn number", async () => {
+    const { paths } = await oneCall({ message: "hi" });
+    const line = JSON.parse(readFileSync(paths.callsLog, "utf8").trim().split("\n").at(-1)!);
+    expect(line.context_id).toMatch(/^ctx_/);
+    expect(line.turn).toBe(1);
+    expect(JSON.stringify(line)).not.toContain("real-agent-session");
+  });
+
+  it("audits a refused context without spawning or minting", async () => {
+    const { paths } = await oneCall(
+      { message: "sneaky", context_id: SEEDED_CTX },
+      { seed: seedBinding({ caller: "mallory" }), frameCount: 1 },
+    );
+    const line = JSON.parse(readFileSync(paths.callsLog, "utf8").trim().split("\n").at(-1)!);
+    expect(line).toMatchObject({ status: "context_unknown", from: "sota", task: "ask" });
+    // The refusal path must not roll the binding forward or touch its turn count.
+    expect(loadContexts(paths)[0]!.turns).toBe(1);
   });
 });

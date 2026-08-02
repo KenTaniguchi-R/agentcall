@@ -1,25 +1,32 @@
 import {
-  HANDLE_RE, RESERVED_HANDLES, AgentCard, type AgentCardType, type AgentKind, type CardUploadType,
+  HANDLE_RE, AgentCard, CreateInviteResponse, CreateRosterResponse, RegisterResponse, RosterBundle,
+  type AgentCardType, type AgentKind, type CardUploadType, type RosterBundleType,
 } from "@benree/agentcall-shared";
 
 export class ApiError extends Error {
-  constructor(message: string, public code: "handle_taken" | "invalid" | "unknown_handle" | "network") {
+  constructor(message: string, public code: "handle_taken" | "invite_invalid" | "invalid" | "unknown_handle" | "network") {
     super(message);
   }
 }
 
-// Mirrors the relay's own validation (HANDLE_RE, RESERVED_HANDLES) so a bad
-// or reserved handle fails instantly with a clear message instead of a round
-// trip to get back a generic 400.
+export type Auth = { org: string; handle: string; token: string };
+
+function authHeaders(auth: Auth): Record<string, string> {
+  return {
+    Authorization: `Bearer ${auth.token}`,
+    "X-AgentCall-Org": auth.org,
+    "X-AgentCall-Handle": auth.handle,
+  };
+}
+
+// Mirrors the relay's handle-shape validation so malformed input fails before
+// a network round trip. Availability and namespacing remain relay-authoritative.
 export function assertValidHandle(handle: string): void {
   if (!HANDLE_RE.test(handle)) {
     throw new ApiError(
       `"${handle}" isn't a valid handle: use lowercase letters, digits, and hyphens, 2-31 characters, starting with a letter or digit.`,
       "invalid",
     );
-  }
-  if ((RESERVED_HANDLES as readonly string[]).includes(handle)) {
-    throw new ApiError(`"${handle}" is a reserved handle and can't be registered.`, "invalid");
   }
 }
 
@@ -40,8 +47,9 @@ async function relayFetch(relay: string, path: string, init: RequestInit, timeou
 }
 
 export async function registerHandle(
-  relay: string, handle: string, agentKind?: AgentKind, opts: { timeoutMs?: number } = {},
-): Promise<{ token: string; address: string }> {
+  relay: string, invite: string, handle: string, agentKind?: AgentKind, opts: { timeoutMs?: number } = {},
+): Promise<{ org: string; token: string; address: string }> {
+  if (!invite) throw new ApiError("An organization invite is required.", "invite_invalid");
   assertValidHandle(handle);
   const res = await relayFetch(
     relay,
@@ -49,25 +57,41 @@ export async function registerHandle(
     {
       method: "POST",
       headers: { "content-type": "application/json" },
-      body: JSON.stringify({ handle, agent_kind: agentKind }),
+      body: JSON.stringify({ invite, handle, agent_kind: agentKind }),
     },
     opts.timeoutMs ?? RELAY_TIMEOUT_MS,
   );
+  if (res.status === 404) throw new ApiError("This invite is invalid, expired, or already used.", "invite_invalid");
   if (res.status === 409) throw new ApiError(`Handle "${handle}" is already taken.`, "handle_taken");
   if (!res.ok) throw new ApiError(`Registration failed (${res.status}).`, "invalid");
-  return (await res.json()) as { token: string; address: string };
+  return RegisterResponse.parse(await res.json());
+}
+
+export async function createInvite(
+  relay: string, auth: Auth, opts: { timeoutMs?: number } = {},
+): Promise<{ invite: string; expires_at: number }> {
+  const res = await relayFetch(
+    relay,
+    "/v1/invite",
+    { method: "POST", headers: authHeaders(auth) },
+    opts.timeoutMs ?? RELAY_TIMEOUT_MS,
+  );
+  if (res.status === 401) throw new ApiError("Your credentials were rejected. Re-run `agentcall setup`.", "invalid");
+  if (res.status === 429) throw new ApiError("Too many invites created — try again in a minute.", "network");
+  if (!res.ok) throw new ApiError(`Invite creation failed (${res.status}).`, "network");
+  return CreateInviteResponse.parse(await res.json());
 }
 
 // Presence is caller-only on the relay now, so this always authenticates —
 // `auth` is required rather than optional to make that a compile-time fact
 // instead of a runtime 401.
 export async function getStatus(
-  relay: string, handle: string, auth: { handle: string; token: string }, opts: { timeoutMs?: number } = {},
+  relay: string, handle: string, auth: Auth, opts: { timeoutMs?: number } = {},
 ): Promise<{ online: boolean }> {
   const res = await relayFetch(
     relay,
     `/v1/status/${handle}`,
-    { headers: { Authorization: `Bearer ${auth.token}`, "X-AgentCall-Handle": auth.handle } },
+    { headers: authHeaders(auth) },
     opts.timeoutMs ?? RELAY_TIMEOUT_MS,
   );
   if (res.status === 401) throw new ApiError("Your credentials were rejected. Re-run `agentcall setup`.", "invalid");
@@ -81,14 +105,14 @@ export async function getStatus(
 // current token and returns a fresh one, so a leaked token stops being a
 // permanent liability.
 export async function rotateToken(
-  relay: string, auth: { handle: string; token: string }, opts: { timeoutMs?: number } = {},
+  relay: string, auth: Auth, opts: { timeoutMs?: number } = {},
 ): Promise<{ token: string }> {
   const res = await relayFetch(
     relay,
     "/v1/token/rotate",
     {
       method: "POST",
-      headers: { Authorization: `Bearer ${auth.token}`, "X-AgentCall-Handle": auth.handle },
+      headers: authHeaders(auth),
     },
     opts.timeoutMs ?? RELAY_TIMEOUT_MS,
   );
@@ -99,7 +123,7 @@ export async function rotateToken(
 }
 
 export async function pushCard(
-  relay: string, auth: { handle: string; token: string }, upload: CardUploadType,
+  relay: string, auth: Auth, upload: CardUploadType,
   opts: { timeoutMs?: number } = {},
 ): Promise<void> {
   const res = await relayFetch(
@@ -107,11 +131,7 @@ export async function pushCard(
     "/v1/card",
     {
       method: "PUT",
-      headers: {
-        "content-type": "application/json",
-        Authorization: `Bearer ${auth.token}`,
-        "X-AgentCall-Handle": auth.handle,
-      },
+      headers: { "content-type": "application/json", ...authHeaders(auth) },
       body: JSON.stringify(upload),
     },
     opts.timeoutMs ?? RELAY_TIMEOUT_MS,
@@ -120,14 +140,69 @@ export async function pushCard(
   if (!res.ok) throw new ApiError(`Card push failed (${res.status}).`, "network");
 }
 
+export async function createRoster(
+  relay: string, auth: Auth, opts: { timeoutMs?: number } = {},
+): Promise<{ roster_id: string; secret: string }> {
+  const res = await relayFetch(
+    relay, "/v1/roster",
+    { method: "POST", headers: authHeaders(auth) },
+    opts.timeoutMs ?? RELAY_TIMEOUT_MS,
+  );
+  if (res.status === 401) throw new ApiError("Your credentials were rejected. Re-run `agentcall setup`.", "invalid");
+  if (res.status === 429) throw new ApiError("Too many rosters created — try again in a minute.", "network");
+  if (!res.ok) throw new ApiError(`Roster creation failed (${res.status}).`, "network");
+  return CreateRosterResponse.parse(await res.json());
+}
+
+export async function joinRoster(
+  relay: string, auth: Auth, rosterId: string, secret: string,
+  opts: { timeoutMs?: number } = {},
+): Promise<void> {
+  const res = await relayFetch(
+    relay, `/v1/roster/${rosterId}/join`,
+    {
+      method: "POST",
+      headers: { "content-type": "application/json", ...authHeaders(auth) },
+      body: JSON.stringify({ secret }),
+    },
+    opts.timeoutMs ?? RELAY_TIMEOUT_MS,
+  );
+  if (res.status === 401) throw new ApiError("Your credentials were rejected. Re-run `agentcall setup`.", "invalid");
+  if (res.status === 429) throw new ApiError("Too many join attempts — try again in a minute.", "network");
+  // The relay deliberately cannot tell these apart, and neither can this
+  // message: distinguishing them would make roster ids enumerable.
+  if (res.status === 404) {
+    throw new ApiError("No such roster, or the secret is wrong.", "unknown_handle");
+  }
+  if (res.status === 409) throw new ApiError("That roster is full.", "invalid");
+  if (!res.ok) throw new ApiError(`Joining the roster failed (${res.status}).`, "network");
+}
+
+// Returns "not-modified" rather than a bundle when the relay 304s, so the
+// caller keeps its cached entries instead of parsing an empty body.
+export async function fetchRosterBundle(
+  relay: string, auth: Auth, rosterId: string, etag?: string,
+  opts: { timeoutMs?: number } = {},
+): Promise<{ bundle: RosterBundleType; etag?: string } | "not-modified"> {
+  const headers: Record<string, string> = authHeaders(auth);
+  if (etag) headers["If-None-Match"] = etag;
+  const res = await relayFetch(relay, `/v1/roster/${rosterId}/bundle`, { headers }, opts.timeoutMs ?? RELAY_TIMEOUT_MS);
+  if (res.status === 304) return "not-modified";
+  if (res.status === 401) throw new ApiError("Your credentials were rejected. Re-run `agentcall setup`.", "invalid");
+  if (res.status === 429) throw new ApiError("Too many roster refreshes — try again in a minute.", "network");
+  if (res.status === 404) {
+    throw new ApiError("That roster is gone, or you are no longer a member.", "unknown_handle");
+  }
+  if (!res.ok) throw new ApiError(`Roster refresh failed (${res.status}).`, "network");
+  return { bundle: RosterBundle.parse(await res.json()), etag: res.headers.get("ETag") ?? undefined };
+}
+
 export async function fetchCard(
-  relay: string, handle: string, auth?: { handle: string; token: string },
+  relay: string, handle: string, auth: Auth,
   opts: { timeoutMs?: number } = {},
 ): Promise<AgentCardType> {
-  const headers: Record<string, string> = auth
-    ? { Authorization: `Bearer ${auth.token}`, "X-AgentCall-Handle": auth.handle }
-    : {};
-  const res = await relayFetch(relay, `/v1/card/${handle}`, { headers }, opts.timeoutMs ?? RELAY_TIMEOUT_MS);
+  const res = await relayFetch(relay, `/v1/card/${handle}`, { headers: authHeaders(auth) }, opts.timeoutMs ?? RELAY_TIMEOUT_MS);
+  if (res.status === 401) throw new ApiError("Your credentials were rejected. Re-run `agentcall setup`.", "invalid");
   if (res.status === 404) throw new ApiError(`No card published for "${handle}".`, "unknown_handle");
   if (!res.ok) throw new ApiError(`Card fetch failed (${res.status}).`, "network");
   return AgentCard.parse(await res.json());

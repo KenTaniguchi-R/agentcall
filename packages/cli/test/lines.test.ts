@@ -12,7 +12,7 @@ beforeEach(() => {
   mkdirSync(m.linesDir, { recursive: true });
 });
 
-const cfg = { handle: "ken", token: "t", relay: "https://r.example", agent_kind: "claude" as const };
+const cfg = { org: "acme", handle: "ken", token: "t", relay: "https://r.example", agent_kind: "claude" as const };
 
 describe("assertValidLineName", () => {
   it("accepts lowercase alphanumeric and hyphens", () => {
@@ -50,10 +50,29 @@ describe("saveLineConfig / loadLineConfig", () => {
 
   it("round-trips a caller-only line (no agent_kind)", () => {
     const l = getLinePaths(m, "caller");
-    const callerOnly = { handle: "solo", token: "t", relay: "https://r.example" };
+    const callerOnly = { org: "acme", handle: "solo", token: "t", relay: "https://r.example" };
     saveLineConfig(l, callerOnly);
     expect(loadLineConfig(l)).toEqual(callerOnly);
     expect(loadLineConfig(l).agent_kind).toBeUndefined();
+  });
+
+  // Re-homed from main's config.test.ts, where it covered loadConfig. `org`
+  // moved onto the LINE with the rest of the tenant identity, so this is now
+  // loadLineConfig's job. The message must stay distinct from the generic
+  // "corrupt config.json" one: `org` cannot be recovered locally, so the only
+  // useful instruction is to re-enroll against an invite.
+  it("rejects a line config without an organization, pointing at re-enrollment", () => {
+    const l = getLinePaths(m, "preorg");
+    mkdirSync(l.dir, { recursive: true });
+    writeFileSync(l.configFile, JSON.stringify({ handle: "ken", token: "old", relay: "https://relay.example" }));
+    expect(() => loadLineConfig(l)).toThrow(/no organization.*line add.*--invite/i);
+  });
+
+  it("rejects a malformed organization slug", () => {
+    const l = getLinePaths(m, "badorg");
+    mkdirSync(l.dir, { recursive: true });
+    writeFileSync(l.configFile, JSON.stringify({ ...cfg, org: "Not A Slug" }));
+    expect(() => loadLineConfig(l)).toThrow(/corrupt config\.json/i);
   });
 });
 

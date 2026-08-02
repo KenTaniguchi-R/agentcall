@@ -6,8 +6,9 @@ import { listLines } from "./lines.js";
 import { resolveLine } from "./lineContext.js";
 import { getMachinePaths } from "./paths.js";
 import { ask as ttyAsk } from "./tty.js";
-import { relayUrl, resolveLineWorkdir, type LineConfig } from "./config.js";
+import { addressHost, relayUrl, resolveLineWorkdir, type LineConfig } from "./config.js";
 import { defaultResolveBin } from "./launchPath.js";
+import { host } from "./outbound.js";
 import { appendSnippet } from "./snippet.js";
 import { installLaunchAgent } from "./launchd.js";
 import { formatCheck, verifyAgent, type VerifyCheck, type VerifyFns } from "./verify.js";
@@ -19,6 +20,7 @@ import { formatCheck, verifyAgent, type VerifyCheck, type VerifyFns } from "./ve
 const LAUNCHD_PATH_DIRS = ["/opt/homebrew/bin", "/usr/local/bin"];
 
 export interface SetupOpts {
+  invite?: string;
   handle?: string;
   agent?: AgentKind;
   yes?: boolean;
@@ -107,11 +109,37 @@ export async function runSetup(opts: SetupOpts): Promise<{ ready: boolean }> {
 
   const machine = getMachinePaths();
   const existing = listLines(machine);
+  const requestedRelay = opts.relay?.replace(/\/+$/, "");
 
   // Setup is first-run only. Adding an address to a machine that already has
   // one is `line add` — which is also why the old clobber path (#43) is gone:
   // there is no single config.json left to overwrite.
   if (existing.length > 0) {
+    // #79, re-homed. There, a `--relay` that disagreed with the saved
+    // registration was silently ignored on a reuse run; the fix was to refuse
+    // rather than pretend. The same silent-ignore exists here — this branch
+    // registers nothing, so `--relay`/`--handle` would have no effect at all —
+    // but the remedy differs, because several relays on one machine are now
+    // LEGAL (that is what lines are for). So this refuses only when the flag
+    // asks for something no existing line provides, and points at `line add`
+    // rather than at `uninstall`.
+    const ready = existing.filter((l) => l.config);
+    if (requestedRelay !== undefined && !ready.some((l) => host(l.config!.relay) === host(requestedRelay))) {
+      throw new Error(
+        `This machine has no line on ${requestedRelay} (it has: ` +
+          `${[...new Set(ready.map((l) => host(l.config!.relay)))].join(", ") || "none"}). ` +
+          "`agentcall setup` only ever creates the first line — add another with " +
+          `\`agentcall line add <name> --relay ${requestedRelay} --handle <handle> --invite <token>\`.`,
+      );
+    }
+    if (opts.handle !== undefined && !ready.some((l) => l.config!.handle === opts.handle)) {
+      throw new Error(
+        `This machine holds no line for the handle "${opts.handle}" (it holds: ` +
+          `${ready.map((l) => l.config!.handle).join(", ") || "none"}). ` +
+          "`agentcall setup` only ever creates the first line — add another with " +
+          `\`agentcall line add <name> --handle ${opts.handle} --invite <token>\`.`,
+      );
+    }
     log("agentcall is already set up on this machine.\n");
     for (const row of listLinesReport(machine)) {
       log(`  ${row.name.padEnd(10)} ${row.address}${row.primary ? "   primary" : ""}`);
@@ -131,9 +159,13 @@ export async function runSetup(opts: SetupOpts): Promise<{ ready: boolean }> {
     warnIfOutsideLaunchdPath("npx", resolveBinFn);
   }
 
+  // Checked before the handle prompt so a run that cannot possibly register
+  // fails immediately instead of after an interactive question.
+  const invite = opts.invite?.trim();
+  if (!invite) throw new Error("An organization invite is required. Run `agentcall setup --invite <token>`.");
   const handle = opts.handle ?? (await ask("Choose a handle (e.g. ken): ")).trim();
   if (!handle) throw new Error("A handle is required.");
-  const relay = (opts.relay ?? relayUrl()).replace(/\/+$/, "");
+  const relay = requestedRelay ?? relayUrl();
   // The line name is local; default it to the agent kind, which is what the
   // owner will call it anyway.
   const name = agentKind ?? "caller";
@@ -151,6 +183,7 @@ export async function runSetup(opts: SetupOpts): Promise<{ ready: boolean }> {
     name,
     handle,
     relay,
+    invite,
     agent: agentKind,
     callerOnly: !callable,
     installLaunchAgentFn: opts.skipLaunchd ? () => {} : opts.installLaunchAgentFn,
@@ -210,8 +243,17 @@ export async function runSetup(opts: SetupOpts): Promise<{ ready: boolean }> {
         `  Relay:   ${cfg.relay}\n` +
         `  Address: ${address}\n\n` +
         `You can call other agents:\n` +
-        `  agentcall call ken@agentcall.benree.tech "hello"\n\n` +
-        `To make your own agent callable later, install claude or codex and re-run \`agentcall setup\`.\n`,
+        `  agentcall call ken@${addressHost(cfg)} "hello"\n\n` +
+        // NOT "re-run `agentcall setup`" any more: setup is first-run only, so
+        // a re-run prints the line list and changes nothing. Before lines, a
+        // re-run genuinely upgraded a caller-only install in place, keeping the
+        // handle; there is no in-place upgrade now, and saying otherwise would
+        // send the owner round a loop that silently does nothing. `line add`
+        // is the honest instruction — note it yields a NEW address, so this is
+        // a real capability gap, not just different wording.
+        `To answer calls later, install claude or codex and add a callable line:\n` +
+        `  agentcall line add <name> --agent <claude|codex> --invite <token>\n` +
+        `That registers a NEW address — "${cfg.handle}" itself stays caller-only.\n`,
     );
   }
   return { ready: true };
