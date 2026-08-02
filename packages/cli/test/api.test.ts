@@ -3,12 +3,16 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { registerHandle, getStatus, fetchCard, pushCard, rotateToken, createInvite, listInvites, revokeInvite,
   createRoster, joinRoster,
   fetchRosterBundle, issueRosterJoinKey, listRosterJoinKeys, revokeRosterJoinKey } from "../src/api.js";
-import { generateAndSaveKeys } from "../src/keys.js";
+import { generateAndSaveKeys, type StoredKeys } from "../src/keys.js";
 import { fetchKeys, publishEncryptionKey, publishIdentityKey } from "../src/api.js";
 import { getPaths } from "../src/paths.js";
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import {
+  HPKE_SUITE, encryptionKeyTranscript, fromBase64Url, keyIdFor, signTranscript,
+  type EncryptionKeyRecordType, type IdentityRecordType,
+} from "@benree/agentcall-shared";
 
 const JOIN_KEY = `agjk_${"a".repeat(12)}_${"s".repeat(32)}`;
 
@@ -354,6 +358,39 @@ describe("roster api", () => {
   });
 });
 
+// Test-only re-derivation of the private-key import api.ts keeps unexported:
+// building a genuinely valid, schema-passing fixture requires signing with the
+// same identity key the relay would verify against, not a hand-typed signature.
+async function importIdentityPrivateKeyForTest(pkcs8B64url: string): Promise<CryptoKey> {
+  return crypto.subtle.importKey(
+    "pkcs8", fromBase64Url(pkcs8B64url) as BufferSource,
+    { name: "ECDSA", namedCurve: "P-256" }, false, ["sign"],
+  );
+}
+
+async function buildValidKeysResponse(
+  keys: StoredKeys, address: string,
+): Promise<{ identity: IdentityRecordType; encryption: { record: EncryptionKeyRecordType; signature: string } }> {
+  const identity: IdentityRecordType = { v: 1, address, identity_pub: keys.identity_pub };
+  const now = 1_754_000_000_000;
+  const record: EncryptionKeyRecordType = {
+    v: 1,
+    address,
+    key_id: await keyIdFor(keys.encryption_pub),
+    suite: HPKE_SUITE,
+    pub: keys.encryption_pub,
+    epoch: keys.epoch,
+    not_before: now,
+    not_after: now + 1_000_000,
+    prev: null,
+  };
+  const signature = await signTranscript(
+    await importIdentityPrivateKeyForTest(keys.identity_pkcs8),
+    encryptionKeyTranscript(record),
+  );
+  return { identity, encryption: { record, signature } };
+}
+
 describe("key publication", () => {
   const auth = { org: "acme", handle: "ken", token: "t0ken" };
 
@@ -412,6 +449,74 @@ describe("key publication", () => {
       await expect(fetchKeys("https://relay.test", auth, "nobody")).rejects.toThrow(/no published key/i);
     } finally {
       vi.unstubAllGlobals();
+    }
+  });
+
+  it("round-trips a well-formed 200 response into the typed identity and encryption records", async () => {
+    const home = mkdtempSync(join(tmpdir(), "agentcall-api-"));
+    try {
+      const keys = await generateAndSaveKeys(getPaths(home));
+      const response = await buildValidKeysResponse(keys, "ken@relay.test");
+      vi.stubGlobal("fetch", vi.fn(async () => new Response(JSON.stringify(response), { status: 200 })));
+
+      const result = await fetchKeys("https://relay.test", auth, "ken");
+
+      expect(result.identity).toEqual(response.identity);
+      expect(result.encryption.record).toEqual(response.encryption.record);
+      expect(result.encryption.signature).toBe(response.encryption.signature);
+    } finally {
+      vi.unstubAllGlobals();
+      rmSync(home, { recursive: true, force: true });
+    }
+  });
+
+  it("rejects a 200 response whose identity record is missing a required field", async () => {
+    const home = mkdtempSync(join(tmpdir(), "agentcall-api-"));
+    try {
+      const keys = await generateAndSaveKeys(getPaths(home));
+      const response = await buildValidKeysResponse(keys, "ken@relay.test");
+      const brokenIdentity: Record<string, unknown> = { ...response.identity };
+      delete brokenIdentity.identity_pub;
+      const malformed = { ...response, identity: brokenIdentity };
+      vi.stubGlobal("fetch", vi.fn(async () => new Response(JSON.stringify(malformed), { status: 200 })));
+
+      await expect(fetchKeys("https://relay.test", auth, "ken")).rejects.toMatchObject({ code: "invalid" });
+    } finally {
+      vi.unstubAllGlobals();
+      rmSync(home, { recursive: true, force: true });
+    }
+  });
+
+  it("rejects a 200 response whose encryption record has an invalid key_id", async () => {
+    const home = mkdtempSync(join(tmpdir(), "agentcall-api-"));
+    try {
+      const keys = await generateAndSaveKeys(getPaths(home));
+      const response = await buildValidKeysResponse(keys, "ken@relay.test");
+      const malformed = {
+        ...response,
+        encryption: { ...response.encryption, record: { ...response.encryption.record, key_id: "not-32-hex-chars" } },
+      };
+      vi.stubGlobal("fetch", vi.fn(async () => new Response(JSON.stringify(malformed), { status: 200 })));
+
+      await expect(fetchKeys("https://relay.test", auth, "ken")).rejects.toMatchObject({ code: "invalid" });
+    } finally {
+      vi.unstubAllGlobals();
+      rmSync(home, { recursive: true, force: true });
+    }
+  });
+
+  it("rejects a 200 response whose encryption signature is not a string", async () => {
+    const home = mkdtempSync(join(tmpdir(), "agentcall-api-"));
+    try {
+      const keys = await generateAndSaveKeys(getPaths(home));
+      const response = await buildValidKeysResponse(keys, "ken@relay.test");
+      const malformed = { ...response, encryption: { ...response.encryption, signature: 12345 } };
+      vi.stubGlobal("fetch", vi.fn(async () => new Response(JSON.stringify(malformed), { status: 200 })));
+
+      await expect(fetchKeys("https://relay.test", auth, "ken")).rejects.toMatchObject({ code: "invalid" });
+    } finally {
+      vi.unstubAllGlobals();
+      rmSync(home, { recursive: true, force: true });
     }
   });
 });
