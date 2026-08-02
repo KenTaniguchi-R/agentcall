@@ -1,4 +1,4 @@
-import { mkdirSync, mkdtempSync, statSync } from "node:fs";
+import { mkdirSync, mkdtempSync, statSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
@@ -18,7 +18,7 @@ describe("paths", () => {
 describe("config", () => {
   it("round-trips and sets 0600/0700 perms", () => {
     const p = getPaths(tempHome());
-    const cfg = { handle: "ken", token: "t".repeat(43), agent_kind: "claude" as const, relay: "https://agentcall.benree.tech" };
+    const cfg = { org: "acme", handle: "ken", token: "t".repeat(43), agent_kind: "claude" as const, relay: "https://agentcall.benree.tech" };
     saveConfig(p, cfg);
     expect(loadConfig(p)).toEqual(cfg);
     expect(statSync(p.configFile).mode & 0o777).toBe(0o600);
@@ -28,8 +28,14 @@ describe("config", () => {
     const p = getPaths(tempHome());
     expect(() => loadConfig(p)).toThrow(/agentcall setup/);
   });
+  it("rejects a config without an organization", () => {
+    const p = getPaths(tempHome());
+    mkdirSync(p.dir, { recursive: true });
+    writeFileSync(p.configFile, JSON.stringify({ handle: "ken", token: "old", relay: "https://relay.example" }));
+    expect(() => loadConfig(p)).toThrow(/no organization.*setup --org/i);
+  });
   it("relayUrl: env > config > default", () => {
-    const cfg = { handle: "k", token: "t", agent_kind: "claude" as const, relay: "https://custom.example" };
+    const cfg = { org: "acme", handle: "k", token: "t", agent_kind: "claude" as const, relay: "https://custom.example" };
     expect(relayUrl(cfg)).toBe("https://custom.example");
     expect(relayUrl(undefined)).toBe("https://agentcall.benree.tech");
     process.env.AGENTCALL_RELAY = "http://localhost:8787";
@@ -37,29 +43,29 @@ describe("config", () => {
     finally { delete process.env.AGENTCALL_RELAY; }
   });
   it("relayUrl strips a trailing slash from env, config, and default", () => {
-    const cfg = { handle: "k", token: "t", agent_kind: "claude" as const, relay: "https://custom.example/" };
+    const cfg = { org: "acme", handle: "k", token: "t", agent_kind: "claude" as const, relay: "https://custom.example/" };
     expect(relayUrl(cfg)).toBe("https://custom.example");
     process.env.AGENTCALL_RELAY = "http://localhost:8787/";
     try { expect(relayUrl(cfg)).toBe("http://localhost:8787"); }
     finally { delete process.env.AGENTCALL_RELAY; }
   });
   it("relayUrl treats an empty-string env var as unset", () => {
-    const cfg = { handle: "k", token: "t", agent_kind: "claude" as const, relay: "https://custom.example" };
+    const cfg = { org: "acme", handle: "k", token: "t", agent_kind: "claude" as const, relay: "https://custom.example" };
     process.env.AGENTCALL_RELAY = "";
     try { expect(relayUrl(cfg)).toBe("https://custom.example"); }
     finally { delete process.env.AGENTCALL_RELAY; }
   });
   it("round-trips a caller-only config (no agent_kind)", () => {
     const p = getPaths(tempHome());
-    const cfg = { handle: "solo", token: "t".repeat(43), relay: "https://agentcall.benree.tech" };
+    const cfg = { org: "acme", handle: "solo", token: "t".repeat(43), relay: "https://agentcall.benree.tech" };
     saveConfig(p, cfg);
     expect(loadConfig(p)).toEqual(cfg);
     expect(loadConfig(p).agent_kind).toBeUndefined();
   });
   it("assertCallableConfig passes a full config and rejects caller-only", () => {
-    const full = { handle: "k", token: "t", agent_kind: "claude" as const, relay: "https://x.y" };
+    const full = { org: "acme", handle: "k", token: "t", agent_kind: "claude" as const, relay: "https://x.y" };
     expect(() => assertCallableConfig(full)).not.toThrow();
-    expect(() => assertCallableConfig({ handle: "k", token: "t", relay: "https://x.y" }))
+    expect(() => assertCallableConfig({ org: "acme", handle: "k", token: "t", relay: "https://x.y" }))
       .toThrow(/caller-only.*agentcall setup/);
   });
 });
@@ -68,7 +74,7 @@ describe("config", () => {
 // developer points it at a real project so calls answer with real context,
 // and everyone else silently keeps ~/AgentCall/public.
 describe("resolveWorkdir", () => {
-  const base = { handle: "k", token: "t", agent_kind: "claude" as const, relay: "https://x.y" };
+  const base = { org: "acme", handle: "k", token: "t", agent_kind: "claude" as const, relay: "https://x.y" };
 
   it("defaults to publicDir and reports it as confined", () => {
     const p = getPaths("/tmp/fakehome");

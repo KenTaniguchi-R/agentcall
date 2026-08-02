@@ -12,7 +12,7 @@ const setup = () => {
   saveMembership(p, { name: "acme", relay: "https://r.test", roster_id: "a".repeat(22) });
   return p;
 };
-const AUTH = { handle: "ken", token: "t" };
+const AUTH = { org: "acme", handle: "ken", token: "t" };
 const IDENTITY = { relay: "https://r.test", caller: "ken" };
 const cached = (fetchedAt: number) => ({
   relay: "https://r.test", caller: "ken", roster_id: "a".repeat(22),

@@ -81,7 +81,7 @@ export async function runDoctor(deps: DoctorDeps): Promise<number> {
   let online = false;
   try {
     online = (await (deps.getStatusFn ?? getStatus)(
-      relayUrl(cfg), cfg.handle, { handle: cfg.handle, token: cfg.token },
+      relayUrl(cfg), cfg.handle, { org: cfg.org, handle: cfg.handle, token: cfg.token },
     )).online;
     report({
       name: "relay status",

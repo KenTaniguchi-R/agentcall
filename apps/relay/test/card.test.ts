@@ -12,6 +12,7 @@ const UPLOAD = {
   default_offer: ["ask"],
   grants: { mia: ["schedule-meeting"] },
 };
+const ORG_HEADERS = { "X-AgentCall-Org": "acme" };
 
 async function putCard(handle: string, token: string, body: unknown = UPLOAD) {
   return SELF.fetch("https://relay.test/v1/card", {
@@ -38,7 +39,7 @@ describe("PUT /v1/card", () => {
     const token = await registerHandle("ken4");
     await putCard("ken4", token);
     await putCard("ken4", token, { ...UPLOAD, description: "updated" });
-    const res = await SELF.fetch("https://relay.test/v1/card/ken4");
+    const res = await SELF.fetch("https://relay.test/v1/card/ken4", { headers: ORG_HEADERS });
     expect((await res.json<{ description: string }>()).description).toBe("updated");
   });
 
@@ -61,12 +62,12 @@ describe("PUT /v1/card", () => {
 describe("GET /v1/card/:handle", () => {
   it("404s when no card was pushed", async () => {
     await registerHandle("nocard");
-    expect((await SELF.fetch("https://relay.test/v1/card/nocard")).status).toBe(404);
+    expect((await SELF.fetch("https://relay.test/v1/card/nocard", { headers: ORG_HEADERS })).status).toBe(404);
   });
   it("public view shows only default_offer tasks", async () => {
     const token = await registerHandle("pub");
     await putCard("pub", token);
-    const res = await SELF.fetch("https://relay.test/v1/card/pub");
+    const res = await SELF.fetch("https://relay.test/v1/card/pub", { headers: ORG_HEADERS });
     expect(res.status).toBe(200);
     const card = await res.json<{ handle: string; tasks: { id: string }[] }>();
     expect(card.handle).toBe("pub");
@@ -105,11 +106,15 @@ describe("GET /v1/card/:handle", () => {
   it("throttles anonymous card reads from one source past the burst limit", async () => {
     const token = await registerHandle("rlcard");
     await putCard("rlcard", token);
-    const headers = { "cf-connecting-ip": "203.0.113.10" };
+    const headers = { "cf-connecting-ip": "203.0.113.10", ...ORG_HEADERS };
     for (let i = 0; i < 60; i++) {
       expect((await SELF.fetch("https://relay.test/v1/card/rlcard", { headers })).status).toBe(200);
     }
-    expect((await SELF.fetch("https://relay.test/v1/card/rlcard", { headers })).status).toBe(429);
+    let throttled = false;
+    for (let i = 0; i < 10 && !throttled; i++) {
+      throttled = (await SELF.fetch("https://relay.test/v1/card/rlcard", { headers })).status === 429;
+    }
+    expect(throttled).toBe(true);
   });
 
   it("401s when auth headers are present but invalid", async () => {

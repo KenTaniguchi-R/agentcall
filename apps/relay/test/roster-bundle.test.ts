@@ -111,8 +111,8 @@ describe("GET /v1/roster/:id/bundle", () => {
     await joinAs(r.roster_id, "b8bad", r.secret);
     await putCard("b8good", good, card([task("adr")], ["adr"]));
     const db = (await import("cloudflare:test")).env.DB;
-    await db.prepare("INSERT INTO cards (handle, card_json, updated_at) VALUES (?, ?, ?)")
-      .bind("b8bad", "{not json", Date.now()).run();
+    await db.prepare("INSERT INTO cards (org, handle, card_json, updated_at) VALUES (?, ?, ?, ?)")
+      .bind("acme", "b8bad", "{not json", Date.now()).run();
     const res = await getBundle(r.roster_id, "b8own", r.ownerToken);
     expect(res.status).toBe(200);
     const body = await res.json<any>();

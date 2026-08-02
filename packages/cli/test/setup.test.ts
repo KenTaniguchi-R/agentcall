@@ -23,7 +23,7 @@ function fakeRelay(): Promise<string> {
         const parsed = JSON.parse(body);
         registerBodies.push(parsed);
         res.writeHead(200, { "content-type": "application/json" });
-        res.end(JSON.stringify({ token: "tok-123", address: `${parsed.handle}@agentcall.benree.tech` }));
+        res.end(JSON.stringify({ token: "tok-123", address: `${parsed.handle}@${parsed.org}.agentcall.benree.tech` }));
       });
     });
     server.listen(0, "127.0.0.1", () => resolve(`http://127.0.0.1:${(server.address() as { port: number }).port}`));
@@ -66,10 +66,10 @@ describe("runSetup", () => {
     process.env.AGENTCALL_HOME = home;
     try {
       const relay = await fakeRelay();
-      await runSetup({ verify: false, handle: "ken", agent: "claude", relay, snippet: false, skipLaunchd: true });
+      await runSetup({ org: "acme", verify: false, handle: "ken", agent: "claude", relay, snippet: false, skipLaunchd: true });
       const p = getPaths(home);
       const cfg = JSON.parse(readFileSync(p.configFile, "utf8"));
-      expect(cfg).toMatchObject({ handle: "ken", token: "tok-123", agent_kind: "claude", relay });
+      expect(cfg).toMatchObject({ org: "acme", handle: "ken", token: "tok-123", agent_kind: "claude", relay });
       expect(existsSync(p.publicDir)).toBe(true);
     } finally {
       delete process.env.AGENTCALL_HOME;
@@ -81,7 +81,7 @@ describe("runSetup", () => {
     process.env.AGENTCALL_HOME = home;
     try {
       const relay = await fakeRelay();
-      await runSetup({ verify: false, handle: "ken", agent: "claude", relay, snippet: false, skipLaunchd: true });
+      await runSetup({ org: "acme", verify: false, handle: "ken", agent: "claude", relay, snippet: false, skipLaunchd: true });
       const p = getPaths(home);
       const firstCfg = JSON.parse(readFileSync(p.configFile, "utf8"));
 
@@ -89,7 +89,7 @@ describe("runSetup", () => {
       // runSetup still tried to register, this run would throw. It must
       // instead detect the existing config.json (same handle) and reuse it.
       const badRelay = await fakeRelay409();
-      await runSetup({ verify: false, handle: "ken", agent: "claude", relay: badRelay, snippet: false, skipLaunchd: true });
+      await runSetup({ org: "acme", verify: false, handle: "ken", agent: "claude", relay: badRelay, snippet: false, skipLaunchd: true });
 
       const secondCfg = JSON.parse(readFileSync(p.configFile, "utf8"));
       expect(secondCfg).toEqual(firstCfg);
@@ -108,10 +108,10 @@ describe("runSetup", () => {
     process.env.AGENTCALL_HOME = home;
     try {
       const relay = await fakeRelay();
-      await runSetup({ verify: false, handle: "ken", agent: "claude", relay, snippet: false, skipLaunchd: true });
+      await runSetup({ org: "acme", verify: false, handle: "ken", agent: "claude", relay, snippet: false, skipLaunchd: true });
 
       const asked: string[] = [];
-      await runSetup({
+      await runSetup({ org: "acme",
         verify: false,
         relay,
         snippet: false,
@@ -131,7 +131,7 @@ describe("runSetup", () => {
     try {
       const relay = await fakeRelay();
       const asked: string[] = [];
-      await runSetup({
+      await runSetup({ org: "acme",
         verify: false,
         agent: "claude",
         relay,
@@ -153,7 +153,7 @@ describe("runSetup", () => {
     process.env.AGENTCALL_HOME = home;
     try {
       const relay = await fakeRelay();
-      await runSetup({
+      await runSetup({ org: "acme",
         verify: false,
         handle: "ken2",
         relay,
@@ -180,7 +180,7 @@ describe("runSetup", () => {
     try {
       const relay = await fakeRelay();
       let launchdCalled = false;
-      await runSetup({
+      await runSetup({ org: "acme",
         verify: false,
         handle: "ken3",
         relay,
@@ -205,7 +205,7 @@ describe("runSetup", () => {
     try {
       const relay = await fakeRelay();
       let captured: string[] | undefined;
-      await runSetup({
+      await runSetup({ org: "acme",
         verify: false,
         handle: "ken4",
         agent: "claude",
@@ -229,7 +229,7 @@ describe("runSetup", () => {
     try {
       const requests: { method?: string; url?: string; body?: string }[] = [];
       const relay = await fakeRelayRecording(requests);
-      await runSetup({ verify: false, handle: "ken", agent: "claude", relay, snippet: false, skipLaunchd: true });
+      await runSetup({ org: "acme", verify: false, handle: "ken", agent: "claude", relay, snippet: false, skipLaunchd: true });
       const p = getPaths(home);
       expect(existsSync(p.tasksDir)).toBe(true);
       const policy = JSON.parse(readFileSync(p.policyFile, "utf8"));
@@ -248,11 +248,11 @@ describe("runSetup", () => {
     process.env.AGENTCALL_HOME = home;
     try {
       const relay = await fakeRelay();
-      await runSetup({ verify: false, handle: "ken", agent: "claude", relay, snippet: false, skipLaunchd: true });
+      await runSetup({ org: "acme", verify: false, handle: "ken", agent: "claude", relay, snippet: false, skipLaunchd: true });
       const p = getPaths(home);
       const custom = { description: "custom", default_offer: ["ask"], callers: { mia: { offer: ["x"], block: false } } };
       writeFileSync(p.policyFile, JSON.stringify(custom));
-      await runSetup({ verify: false, handle: "ken", agent: "claude", relay, snippet: false, skipLaunchd: true });
+      await runSetup({ org: "acme", verify: false, handle: "ken", agent: "claude", relay, snippet: false, skipLaunchd: true });
       expect(JSON.parse(readFileSync(p.policyFile, "utf8"))).toEqual(custom);
     } finally {
       delete process.env.AGENTCALL_HOME;
@@ -270,7 +270,7 @@ describe("setup progress output", () => {
     });
     try {
       const relay = await fakeRelay();
-      await runSetup({ verify: false, handle: "ken9", agent: "claude", relay, snippet: false, skipLaunchd: true });
+      await runSetup({ org: "acme", verify: false, handle: "ken9", agent: "claude", relay, snippet: false, skipLaunchd: true });
       expect(logs.some((l) => l.includes("Registering ken9"))).toBe(true);
     } finally {
       spy.mockRestore();
@@ -337,7 +337,7 @@ describe("caller-only setup", () => {
       const relay = await fakeRelay();
       registerBodies.length = 0;
       let launchdCalled = false;
-      await runSetup({
+      await runSetup({ org: "acme",
         verify: false,
         handle: "solo",
         callerOnly: true,
@@ -346,10 +346,10 @@ describe("caller-only setup", () => {
         hasBin: () => false, // no agent installed at all
         installLaunchAgentFn: () => { launchdCalled = true; },
       });
-      expect(registerBodies).toEqual([{ handle: "solo" }]);
+      expect(registerBodies).toEqual([{ org: "acme", handle: "solo" }]);
       const p = getPaths(home);
       const cfg = JSON.parse(readFileSync(p.configFile, "utf8"));
-      expect(cfg).toEqual({ handle: "solo", token: "tok-123", relay });
+      expect(cfg).toEqual({ org: "acme", handle: "solo", token: "tok-123", relay });
       expect(existsSync(p.publicDir)).toBe(false);
       expect(launchdCalled).toBe(false);
     } finally {
@@ -366,7 +366,7 @@ describe("caller-only setup", () => {
     });
     try {
       const relay = await fakeRelay();
-      await runSetup({ verify: false, handle: "solo2", callerOnly: true, relay, snippet: false, hasBin: () => false });
+      await runSetup({ org: "acme", verify: false, handle: "solo2", callerOnly: true, relay, snippet: false, hasBin: () => false });
       const summary = logs.join("\n");
       expect(summary).toContain("caller-only");
       expect(summary).toContain("agentcall setup");
@@ -382,13 +382,13 @@ describe("caller-only setup", () => {
     process.env.AGENTCALL_HOME = home;
     try {
       const relay = await fakeRelay();
-      await runSetup({ verify: false, handle: "solo3", callerOnly: true, relay, snippet: false, hasBin: () => false });
+      await runSetup({ org: "acme", verify: false, handle: "solo3", callerOnly: true, relay, snippet: false, hasBin: () => false });
       const p = getPaths(home);
       const firstCfg = JSON.parse(readFileSync(p.configFile, "utf8"));
 
       const badRelay = await fakeRelay409();
       const asked: string[] = [];
-      await runSetup({
+      await runSetup({ org: "acme",
         verify: false,
         callerOnly: true,
         relay: badRelay,
@@ -410,7 +410,7 @@ describe("caller-only setup", () => {
       const relay = await fakeRelay();
       const asked: string[] = [];
       let launchdCalled = false;
-      await runSetup({
+      await runSetup({ org: "acme",
         verify: false,
         handle: "asker",
         relay,
@@ -434,7 +434,7 @@ describe("caller-only setup", () => {
     process.env.AGENTCALL_HOME = home;
     try {
       const relay = await fakeRelay();
-      await runSetup({
+      await runSetup({ org: "acme",
         verify: false,
         handle: "defaulter",
         relay,
@@ -457,7 +457,7 @@ describe("caller-only setup", () => {
     process.env.AGENTCALL_HOME = home;
     try {
       const relay = await fakeRelay();
-      await runSetup({ verify: false, handle: "upg", callerOnly: true, relay, snippet: false, hasBin: () => false });
+      await runSetup({ org: "acme", verify: false, handle: "upg", callerOnly: true, relay, snippet: false, hasBin: () => false });
       const p = getPaths(home);
       expect(JSON.parse(readFileSync(p.configFile, "utf8")).agent_kind).toBeUndefined();
 
@@ -465,7 +465,7 @@ describe("caller-only setup", () => {
       // it must reuse the existing handle/token, not re-register.
       const badRelay = await fakeRelay409();
       let launchdCalled = false;
-      await runSetup({
+      await runSetup({ org: "acme",
         verify: false,
         relay: badRelay,
         snippet: false,
@@ -494,11 +494,11 @@ describe("caller-only setup", () => {
     });
     try {
       const relay = await fakeRelay();
-      await runSetup({ verify: false, handle: "full", agent: "claude", relay, snippet: false, skipLaunchd: true });
+      await runSetup({ org: "acme", verify: false, handle: "full", agent: "claude", relay, snippet: false, skipLaunchd: true });
       const p = getPaths(home);
       const before = readFileSync(p.configFile, "utf8");
 
-      const result = await runSetup({ verify: false, callerOnly: true, relay, snippet: false, hasBin: () => true });
+      const result = await runSetup({ org: "acme", verify: false, callerOnly: true, relay, snippet: false, hasBin: () => true });
 
       expect(readFileSync(p.configFile, "utf8")).toBe(before);
       expect(errors.some((l) => l.includes("uninstall"))).toBe(true);
@@ -518,11 +518,11 @@ describe("caller-only setup", () => {
     });
     try {
       const relay = await fakeRelay();
-      await runSetup({ verify: false, handle: "resident", agent: "claude", relay, snippet: false, skipLaunchd: true });
+      await runSetup({ org: "acme", verify: false, handle: "resident", agent: "claude", relay, snippet: false, skipLaunchd: true });
       const p = getPaths(home);
       const before = readFileSync(p.configFile, "utf8");
 
-      const result = await runSetup({ verify: false, handle: "other", callerOnly: true, relay, snippet: false, hasBin: () => false });
+      const result = await runSetup({ org: "acme", verify: false, handle: "other", callerOnly: true, relay, snippet: false, hasBin: () => false });
 
       expect(readFileSync(p.configFile, "utf8")).toBe(before);
       expect(errors.some((l) => l.includes("uninstall") && l.includes("resident"))).toBe(true);
@@ -544,7 +544,7 @@ describe("runSetup verification", () => {
     });
     try {
       const relay = await fakeRelay();
-      const result = await runSetup({
+      const result = await runSetup({ org: "acme",
         handle: "ken", agent: "claude", relay, snippet: false, skipLaunchd: true,
         verifyFns: { resolveBin: () => "/fake/bin/claude", runFn: async () => ({ text: "OK" }) },
       });
@@ -566,7 +566,7 @@ describe("runSetup verification", () => {
     try {
       const relay = await fakeRelay();
       const installed: string[] = [];
-      const result = await runSetup({
+      const result = await runSetup({ org: "acme",
         handle: "ken", agent: "claude", relay, snippet: false,
         installLaunchAgentFn: () => {
           installed.push("yes");
@@ -601,7 +601,7 @@ describe("runSetup verification", () => {
     try {
       const relay = await fakeRelay();
       let ran = false;
-      const result = await runSetup({
+      const result = await runSetup({ org: "acme",
         handle: "ken", agent: "claude", relay, snippet: false, skipLaunchd: true, verify: false,
         verifyFns: {
           resolveBin: () => "/fake/bin/claude",
@@ -624,7 +624,7 @@ describe("runSetup verification", () => {
     try {
       const relay = await fakeRelay();
       let ran = false;
-      const result = await runSetup({
+      const result = await runSetup({ org: "acme",
         handle: "solo", relay, snippet: false, skipLaunchd: true, callerOnly: true,
         verifyFns: {
           resolveBin: () => "/fake/bin/claude",

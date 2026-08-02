@@ -1,6 +1,7 @@
 import { z } from "zod";
 
 export const HANDLE_RE = /^[a-z0-9][a-z0-9-]{1,30}$/;
+export const ORG_RE = /^[a-z0-9][a-z0-9-]{1,62}$/;
 export const TASK_ID_RE = /^[a-z0-9][a-z0-9-]{0,63}$/;
 // Bounds derived from TASK_ID_RE: 1 (mandatory first char) + 63 (0-63 range) = 64.
 // Must stay consistent with TASK_ID_RE; drift is caught by test/protocol.test.ts.
@@ -126,6 +127,7 @@ export const RelayToCallerFrame = z.discriminatedUnion("type", [CallStatus, Call
 export const RelayToListenerFrame = z.discriminatedUnion("type", [IncomingCall, CancelCall]);
 
 export const RegisterRequest = z.object({
+  org: z.string().regex(ORG_RE),
   handle: z.string().regex(HANDLE_RE),
   // Absent = caller-only: the handle can call others but is not callable.
   agent_kind: z.enum(["claude", "codex"]).optional(),

@@ -33,7 +33,7 @@ function fakeRelay(onConn: (ws: WsSocket) => void): Promise<string> {
 // CallableConfig, not Config: `startListener` only accepts a config that has
 // already passed `assertCallableConfig`, and annotating the fixture as the
 // wider `Config` widens agent_kind back to optional at every spread site.
-const cfg: CallableConfig = { handle: "ken", token: "tok", agent_kind: "claude", relay: "unused" };
+const cfg: CallableConfig = { org: "acme", handle: "ken", token: "tok", agent_kind: "claude", relay: "unused" };
 
 function frames(ws: WsSocket, n: number): Promise<any[]> {
   return new Promise((resolve) => {

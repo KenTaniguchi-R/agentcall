@@ -43,7 +43,11 @@ export function startListener(deps: ListenerDeps): { stop(): void } {
     if (stopped) return;
     const url = deps.relay.replace(/^http/, "ws") + "/v1/ws?role=listen";
     ws = new WebSocket(url, {
-      headers: { Authorization: `Bearer ${deps.config.token}`, "X-AgentCall-Handle": deps.config.handle },
+      headers: {
+        Authorization: `Bearer ${deps.config.token}`,
+        "X-AgentCall-Org": deps.config.org,
+        "X-AgentCall-Handle": deps.config.handle,
+      },
     });
     ws.on("open", () => {
       attempt = 0;

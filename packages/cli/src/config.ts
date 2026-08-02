@@ -1,8 +1,10 @@
 import { existsSync, mkdirSync, readFileSync, statSync, writeFileSync, chmodSync } from "node:fs";
 import { isAbsolute } from "node:path";
+import { ORG_RE } from "@benree/agentcall-shared";
 import type { Paths } from "./paths.js";
 
 export interface Config {
+  org: string;
   handle: string;
   token: string;
   // Absent = caller-only: this install can call others but is not callable.
@@ -64,7 +66,12 @@ export function loadConfig(p: Paths): Config {
   if (!existsSync(p.configFile)) {
     throw new Error(`No agentcall config found. Run \`agentcall setup\` first.`);
   }
-  return JSON.parse(readFileSync(p.configFile, "utf8")) as Config;
+  const parsed = JSON.parse(readFileSync(p.configFile, "utf8")) as Partial<Config>;
+  if (!parsed.org) {
+    throw new Error(`Agentcall config at ${p.configFile} has no organization. Run \`agentcall setup --org <organization>\`.`);
+  }
+  if (!ORG_RE.test(parsed.org)) throw new Error(`Invalid organization slug "${parsed.org}" in ${p.configFile}.`);
+  return parsed as Config;
 }
 
 export function saveConfig(p: Paths, cfg: Config): void {
@@ -85,4 +92,9 @@ export function relayUrl(cfg?: Config): string {
   // is treated as unset rather than as "point at the empty string".
   const envRelay = process.env.AGENTCALL_RELAY || undefined;
   return normalizeRelay(envRelay ?? cfg?.relay ?? DEFAULT_RELAY);
+}
+
+export function addressHost(cfg: Config): string {
+  const host = new URL(relayUrl(cfg)).hostname;
+  return host === "agentcall.benree.tech" ? `${cfg.org}.${host}` : host;
 }

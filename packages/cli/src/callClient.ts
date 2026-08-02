@@ -23,7 +23,7 @@ const HUMAN: Record<string, string> = {
 };
 
 export interface CallOpts {
-  relay: string; from: string; token: string; to: string; message: string;
+  relay: string; org: string; from: string; token: string; to: string; message: string;
   sessionId?: string; onStatus?: (state: string) => void; timeoutMs?: number;
   // Interval for the caller-side keepalive ping below; overridable for tests.
   pingIntervalMs?: number;
@@ -36,7 +36,7 @@ export function callAgent(opts: CallOpts): Promise<CallReplyType> {
   const wsUrl = opts.relay.replace(/^http/, "ws") + `/v1/ws?role=call&to=${encodeURIComponent(opts.to)}`;
   return new Promise((resolve, reject) => {
     const ws = new WebSocket(wsUrl, {
-      headers: { Authorization: `Bearer ${opts.token}`, "X-AgentCall-Handle": opts.from },
+      headers: { Authorization: `Bearer ${opts.token}`, "X-AgentCall-Org": opts.org, "X-AgentCall-Handle": opts.from },
     });
     let settled = false;
     let pingTimer: ReturnType<typeof setInterval> | undefined;
