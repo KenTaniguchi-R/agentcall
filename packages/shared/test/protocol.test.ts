@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
   CallRequest, CallerFrame, RelayToCallerFrame, ListenerToRelayFrame,
-  HANDLE_RE, RESERVED_HANDLES, MAX_MESSAGE_BYTES, parseAddress, safeParseFrame,
+  HANDLE_RE, MAX_MESSAGE_BYTES, parseAddress, safeParseFrame,
   RegisterRequest, CallReply, CallError, MAX_DETAIL_LENGTH, sanitizeDetail,
   CallAccepted, CallStarted, CancelCall, CallCancelled, CallNotCancelled, RelayToListenerFrame,
   TASK_ID_RE, MAX_TASK_ID_LENGTH,
@@ -13,10 +13,6 @@ describe("handle rules", () => {
   });
   it("rejects invalid handles", () => {
     for (const h of ["K", "-a", "a", "a".repeat(32), "a_b", "a b", ""]) expect(HANDLE_RE.test(h)).toBe(false);
-  });
-  it("reserves system names", () => {
-    expect(RESERVED_HANDLES).toContain("admin");
-    expect(RESERVED_HANDLES).toContain("www");
   });
 });
 
@@ -119,17 +115,18 @@ describe("detail bounds and sanitization", () => {
 
 describe("RegisterRequest", () => {
   it("parses with and without agent_kind (absent = caller-only)", () => {
-    expect(RegisterRequest.parse({ org: "acme", handle: "ken", agent_kind: "claude" }))
-      .toEqual({ org: "acme", handle: "ken", agent_kind: "claude" });
-    expect(RegisterRequest.parse({ org: "acme", handle: "solo" })).toEqual({ org: "acme", handle: "solo" });
+    const invite = "i".repeat(40);
+    expect(RegisterRequest.parse({ invite, handle: "ken", agent_kind: "claude" }))
+      .toEqual({ invite, handle: "ken", agent_kind: "claude" });
+    expect(RegisterRequest.parse({ invite, handle: "solo" })).toEqual({ invite, handle: "solo" });
   });
 
-  it("requires a valid organization slug", () => {
+  it("requires an invite and does not accept a client-selected organization", () => {
     expect(RegisterRequest.safeParse({ handle: "ken" }).success).toBe(false);
-    expect(RegisterRequest.safeParse({ org: "Acme Corp", handle: "ken" }).success).toBe(false);
+    expect(RegisterRequest.safeParse({ org: "acme", handle: "ken" }).success).toBe(false);
   });
   it("still rejects invalid agent kinds", () => {
-    expect(RegisterRequest.safeParse({ handle: "ken", agent_kind: "vim" }).success).toBe(false);
+    expect(RegisterRequest.safeParse({ invite: "i".repeat(40), handle: "ken", agent_kind: "vim" }).success).toBe(false);
   });
 });
 

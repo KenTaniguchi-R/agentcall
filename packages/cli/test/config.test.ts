@@ -32,7 +32,7 @@ describe("config", () => {
     const p = getPaths(tempHome());
     mkdirSync(p.dir, { recursive: true });
     writeFileSync(p.configFile, JSON.stringify({ handle: "ken", token: "old", relay: "https://relay.example" }));
-    expect(() => loadConfig(p)).toThrow(/no organization.*setup --org/i);
+    expect(() => loadConfig(p)).toThrow(/no organization.*setup --invite/i);
   });
   it("relayUrl: env > config > default", () => {
     const cfg = { org: "acme", handle: "k", token: "t", agent_kind: "claude" as const, relay: "https://custom.example" };

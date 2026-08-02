@@ -20,7 +20,7 @@ import { formatCheck, verifyAgent, type VerifyCheck, type VerifyFns } from "./ve
 const LAUNCHD_PATH_DIRS = ["/opt/homebrew/bin", "/usr/local/bin"];
 
 export interface SetupOpts {
-  org?: string;
+  invite?: string;
   handle?: string;
   agent?: "claude" | "codex";
   yes?: boolean;
@@ -154,8 +154,7 @@ export async function runSetup(opts: SetupOpts): Promise<{ ready: boolean }> {
   }
   const reusedCfg =
     existingCfg !== undefined &&
-    (!opts.handle || opts.handle === existingCfg.handle) &&
-    (!opts.org || opts.org === existingCfg.org)
+    (!opts.handle || opts.handle === existingCfg.handle)
       ? existingCfg
       : undefined;
 
@@ -198,15 +197,15 @@ export async function runSetup(opts: SetupOpts): Promise<{ ready: boolean }> {
     address = addressFromConfig(cfg);
     console.log(`Reusing existing registration for ${cfg.handle}`);
   } else {
-    const org = opts.org ?? (await ask("Organization slug (e.g. acme): ")).trim();
-    if (!org) throw new Error("An organization is required.");
+    const invite = opts.invite?.trim();
+    if (!invite) throw new Error("An organization invite is required. Run `agentcall setup --invite <token>`.");
     const handle = opts.handle ?? (await ask("Choose a handle (e.g. ken): ")).trim();
     if (!handle) throw new Error("A handle is required.");
 
     const relay = (opts.relay ?? relayUrl()).replace(/\/+$/, "");
 
     console.log(`Registering ${handle} with ${relay} ...`);
-    const { token, address: registeredAddress } = await registerHandle(relay, org, handle, agentKind);
+    const { org, token, address: registeredAddress } = await registerHandle(relay, invite, handle, agentKind);
     cfg = agentKind ? { org, handle, token, agent_kind: agentKind, relay } : { org, handle, token, relay };
     address = registeredAddress;
     saveConfig(paths, cfg);

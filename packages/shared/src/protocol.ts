@@ -12,10 +12,6 @@ export const MAX_TASK_ID_LENGTH = 64;
 // string could carry terminal-escape/control sequences straight into a
 // caller's stdout (terminal injection).
 export const MAX_OFFERED_TASKS = 50;
-export const RESERVED_HANDLES = [
-  "admin", "www", "relay", "api", "install", "help", "support", "root",
-  "agentcall", "system", "status", "info",
-] as const;
 export const MAX_MESSAGE_BYTES = 64_000;
 export const MAX_REPLY_BYTES = 256_000;
 // `detail` is the one free-form string a callee can put in front of a
@@ -146,12 +142,19 @@ export const RelayToCallerFrame = z.discriminatedUnion("type", [CallStatus, Call
 export const RelayToListenerFrame = z.discriminatedUnion("type", [IncomingCall, CancelCall]);
 
 export const RegisterRequest = z.object({
-  org: z.string().regex(ORG_RE),
+  invite: z.string().min(40).max(200),
   handle: z.string().regex(HANDLE_RE),
   // Absent = caller-only: the handle can call others but is not callable.
   agent_kind: z.enum(["claude", "codex"]).optional(),
 });
-export const RegisterResponse = z.object({ token: z.string(), address: z.string() });
+export const RegisterResponse = z.object({ org: z.string().regex(ORG_RE), token: z.string(), address: z.string() });
+
+export const CreateInviteResponse = z.object({
+  invite: z.string().min(40).max(200),
+  expires_at: z.number().int().positive(),
+});
+
+export const BootstrapInviteRequest = z.object({ org: z.string().regex(ORG_RE) });
 
 export type ErrorCodeType = z.infer<typeof ErrorCode>;
 export type CallRequestType = z.infer<typeof CallRequest>;

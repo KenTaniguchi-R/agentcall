@@ -68,7 +68,7 @@ export function loadConfig(p: Paths): Config {
   }
   const parsed = JSON.parse(readFileSync(p.configFile, "utf8")) as Partial<Config>;
   if (!parsed.org) {
-    throw new Error(`Agentcall config at ${p.configFile} has no organization. Run \`agentcall setup --org <organization>\`.`);
+    throw new Error(`Agentcall config at ${p.configFile} has no organization. Re-enroll with \`agentcall setup --invite <token>\`.`);
   }
   if (!ORG_RE.test(parsed.org)) throw new Error(`Invalid organization slug "${parsed.org}" in ${p.configFile}.`);
   return parsed as Config;
