@@ -1,8 +1,8 @@
 import type { Hono } from "hono";
 import type { Env } from "../index.js";
-import { generateToken, sha256Hex, verifyHandleToken } from "../auth.js";
+import { generateToken, sha256Hex } from "../auth.js";
 import { JoinRosterRequest, MAX_ROSTER_MEMBERS } from "@benree/agentcall-shared";
-import { notFound, requireRoster, secretMatches } from "./guards.js";
+import { notFound, requireHandle, requireRoster, secretMatches } from "./guards.js";
 import { handleBundle } from "./bundle.js";
 
 // 16 random bytes, base64url — 22 chars, inside ROSTER_ID_RE's 16..64 window.
@@ -17,9 +17,8 @@ export function mountRoster(app: Hono<{ Bindings: Env }>): void {
   // and it is rate-limited on REGISTER_RL rather than ROSTER_RL so creating
   // a roster costs what registering a handle costs.
   app.post("/v1/roster", async (c) => {
-    const handle = c.req.header("X-AgentCall-Handle") ?? "";
-    const token = (c.req.header("Authorization") ?? "").replace(/^Bearer\s+/i, "");
-    if (!(await verifyHandleToken(c.env.DB, handle, token))) return c.json({ error: "unauthorized" }, 401);
+    const handle = await requireHandle(c);
+    if (handle instanceof Response) return handle;
     // Reuses REGISTER_RL with a distinct key prefix, the same technique
     // /v1/token/rotate uses: creating rosters should cost what registering
     // handles costs, so it cannot be used to cheaply fill D1 with rows.

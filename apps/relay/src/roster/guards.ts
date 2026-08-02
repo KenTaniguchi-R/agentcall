@@ -26,28 +26,36 @@ export async function secretMatches(supplied: string, hash: string | null): Prom
   return constantTimeEqual(hash, digest);
 }
 
-// Every roster route starts here. Possession of a handle token is the floor,
-// not the gate — registration is open, so membership or a secret is what
-// actually authorizes. Order matters: auth, then id shape, then rate limit,
-// and only then anything that touches roster rows. Rate limiting before any
-// existence-dependent query is what keeps a 429 from distinguishing a real
-// roster id from a fabricated one.
-export async function requireRoster(
-  c: Context<{ Bindings: Env }>,
-  op: string,
-): Promise<{ handle: string; id: string } | Response> {
+// The floor for every roster route: possession of a handle token proves who
+// you are, not what you may see. Registration is open, so membership or a
+// secret is what actually authorizes. Split out from requireRoster because
+// POST /v1/roster has no :id to shape-check and rate-limits on REGISTER_RL.
+export async function requireHandle(c: Context<{ Bindings: Env }>): Promise<string | Response> {
   const handle = c.req.header("X-AgentCall-Handle") ?? "";
   const token = (c.req.header("Authorization") ?? "").replace(/^Bearer\s+/i, "");
   if (!(await verifyHandleToken(c.env.DB, handle, token))) {
     return c.json({ error: "unauthorized" }, 401);
   }
+  return handle;
+}
 
-  // Every caller mounts this on a route with a literal ":id" segment, so
-  // Hono always supplies it — but that route type isn't visible from this
-  // generic Context, so the compiler only sees `string | undefined` here.
-  const id = c.req.param("id") as string;
+// Every roster route with an :id starts here. Order matters: auth, then id
+// shape, then rate limit, and only then anything that touches roster rows.
+// Rate limiting before any existence-dependent query is what keeps a 429
+// from distinguishing a real roster id from a fabricated one.
+export async function requireRoster(
+  c: Context<{ Bindings: Env }>,
+  op: string,
+): Promise<{ handle: string; id: string } | Response> {
+  const handle = await requireHandle(c);
+  if (handle instanceof Response) return handle;
+
+  const id = c.req.param("id");
+  // Not just a type narrowing: a route mounted without a literal `:id`
+  // segment reaches here with undefined, and a cast would hand it to a D1
+  // bind() as the string "undefined". Fail the same way a malformed id does.
   // Shape-check before touching D1: a malformed id can never match a row.
-  if (!ROSTER_ID_RE.test(id)) return c.json({ error: "invalid roster id" }, 400);
+  if (!id || !ROSTER_ID_RE.test(id)) return c.json({ error: "invalid roster id" }, 400);
 
   const ip = c.req.header("cf-connecting-ip") ?? "unknown";
   if (!(await c.env.ROSTER_RL.limit({ key: `${op}:${ip}:${id}` })).success) {
