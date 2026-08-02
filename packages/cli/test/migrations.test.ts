@@ -14,6 +14,7 @@ const historical = [
 const repair = readFileSync(join(migrationsDir, "0006_tenancy_and_roster_lifecycle.sql"), "utf8");
 const auditEvents = readFileSync(join(migrationsDir, "0007_roster_audit_events.sql"), "utf8");
 const joinKeys = readFileSync(join(migrationsDir, "0008_roster_join_keys.sql"), "utf8");
+const orgInvites = readFileSync(join(migrationsDir, "0009_org_invite_lifecycle.sql"), "utf8");
 
 function legacyDatabase(): DatabaseSync {
   const db = new DatabaseSync(":memory:");
@@ -147,5 +148,22 @@ describe("D1 migration reconciliation", () => {
       expect(() => db.exec(joinKeys)).toThrow(/check constraint/i);
       expect(columns(db, "rosters")).toContain("join_secret_hash");
     }
+  });
+
+  it("adds organization invite lifecycle and a separately scoped audit ledger", () => {
+    const db = tenantDatabase();
+    db.exec(auditEvents);
+    db.exec(joinKeys);
+    db.exec(orgInvites);
+
+    expect(columns(db, "invites")).toEqual([
+      "token_hash", "org", "created_by", "created_at", "expires_at", "used_at", "used_by",
+      "description", "revoked_at",
+    ]);
+    expect(columns(db, "org_events")).toEqual([
+      "id", "event", "action_type", "org", "actor", "actor_type", "target_type", "target_id",
+      "actor_ip", "actor_country", "description", "at",
+    ]);
+    expect(columns(db, "roster_events")).toContain("roster_id");
   });
 });

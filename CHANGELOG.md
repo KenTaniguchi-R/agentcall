@@ -6,6 +6,22 @@ which are released together.
 
 ## Unreleased
 
+### Organization invite lifecycle
+
+- Replaced the create-only organization invite command with `invite create`,
+  `invite list`, and idempotent `invite revoke` operations. Inventory exposes a
+  SHA-256 public ID and lifecycle/provenance metadata, never the invite secret.
+- Invite creation now accepts a bounded purpose and 1–90 day expiry, enforces a
+  100-active-invite tenant cap, and deletes terminal credential rows after a
+  30-day application retention window.
+- Issue, redemption, and revocation mutations append evidence atomically to a
+  10,000-event rolling organization ledger. Any authenticated member retains
+  the existing authority to manage invites; role restrictions remain assigned
+  to the RBAC/SSO track.
+- Revoked credentials fail registration, lifecycle operations remain
+  tenant-isolated, and hosted registration addresses are derived from the
+  invite's organization even when the request uses a conflicting tenant host.
+
 ### Documentation — bounded credential lifecycle
 
 - The future identity cutover now includes 90-day client credentials that

@@ -188,24 +188,15 @@ describe("POST /v1/register", () => {
     });
     expect((await res.json<{ address: string }>()).address).toBe("person@hosted.agentcall.benree.tech");
   });
-});
 
-describe("POST /v1/invite", () => {
-  it("lets an authenticated tenant member create a single-use tenant invite", async () => {
-    const token = await registerHandle("inviter", "claude", "tenant-a");
-    const res = await SELF.fetch("https://relay.test/v1/invite", {
-      method: "POST", headers: wsAuth("inviter", token, "tenant-a"),
+  it("uses the invite tenant rather than a conflicting hosted tenant subdomain", async () => {
+    const invite = await issueInvite("bob", "host-mismatch");
+    const res = await SELF.fetch("https://acme.agentcall.benree.tech/v1/register", {
+      method: "POST",
+      headers: { "content-type": "application/json", "cf-connecting-ip": "203.0.113.213" },
+      body: JSON.stringify({ invite, handle: "person" }),
     });
-    expect(res.status).toBe(200);
-    const created = await res.json<{ invite: string; expires_at: number }>();
-    expect(created.invite.length).toBeGreaterThanOrEqual(40);
-    expect(created.expires_at).toBeGreaterThan(Date.now());
-    const enrolled = await register({ invite: created.invite, handle: "new-member" }, "203.0.113.166");
-    expect(await enrolled.json()).toMatchObject({ org: "tenant-a" });
-  });
-
-  it("rejects anonymous invite creation", async () => {
-    expect((await SELF.fetch("https://relay.test/v1/invite", { method: "POST" })).status).toBe(401);
+    expect((await res.json<{ address: string }>()).address).toBe("person@bob.agentcall.benree.tech");
   });
 });
 

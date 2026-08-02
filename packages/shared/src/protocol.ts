@@ -161,13 +161,6 @@ export const RegisterRequest = z.object({
 });
 export const RegisterResponse = z.object({ org: z.string().regex(ORG_RE), token: z.string(), address: z.string() });
 
-export const CreateInviteResponse = z.object({
-  invite: z.string().min(40).max(200),
-  expires_at: z.number().int().positive(),
-});
-
-export const BootstrapInviteRequest = z.object({ org: z.string().regex(ORG_RE) });
-
 export type ErrorCodeType = z.infer<typeof ErrorCode>;
 export type CallRequestType = z.infer<typeof CallRequest>;
 export type CallStatusType = z.infer<typeof CallStatus>;

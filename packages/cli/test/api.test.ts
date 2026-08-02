@@ -1,6 +1,7 @@
 import { createServer, type Server, type IncomingMessage, type ServerResponse } from "node:http";
 import { afterEach, describe, expect, it } from "vitest";
-import { registerHandle, getStatus, fetchCard, pushCard, rotateToken, createInvite, createRoster, joinRoster,
+import { registerHandle, getStatus, fetchCard, pushCard, rotateToken, createInvite, listInvites, revokeInvite,
+  createRoster, joinRoster,
   fetchRosterBundle, issueRosterJoinKey, listRosterJoinKeys, revokeRosterJoinKey } from "../src/api.js";
 
 const JOIN_KEY = `agjk_${"a".repeat(12)}_${"s".repeat(32)}`;
@@ -176,18 +177,43 @@ describe("api client", () => {
     expect(captured).toEqual([{ invite: "valid-invite", handle: "solo" }]);
   });
   it("creates an invite with tenant credentials", async () => {
-    let headers: IncomingMessage["headers"] | undefined;
-    const relay = await new Promise<string>((resolve) => {
-      server = createServer((req, res) => {
-        headers = req.headers;
+    let seen: { path?: string; headers?: IncomingMessage["headers"]; body?: string } = {};
+    const metadata = {
+      id: "a".repeat(64), description: "vendor", created_by: "ken", created_at: 1,
+      expires_at: 2, used_at: null, used_by: null, revoked_at: null,
+    };
+    const relay = await startServer((req, res, body) => {
+        seen = { path: req.url, headers: req.headers, body };
         res.writeHead(200, { "content-type": "application/json" });
-        res.end(JSON.stringify({ invite: "i".repeat(43), expires_at: Date.now() + 60_000 }));
-      });
-      server.listen(0, "127.0.0.1", () => resolve(`http://127.0.0.1:${(server.address() as { port: number }).port}`));
+        res.end(JSON.stringify({ invite: "i".repeat(43), metadata }));
     });
-    expect((await createInvite(relay, { org: "acme", handle: "ken", token: "tok" })).invite).toHaveLength(43);
-    expect(headers?.authorization).toBe("Bearer tok");
-    expect(headers?.["x-agentcall-org"]).toBe("acme");
+    expect((await createInvite(
+      relay, { org: "acme", handle: "ken", token: "tok" },
+      { description: "vendor", expires_in_days: 30 },
+    )).invite).toHaveLength(43);
+    expect(seen.path).toBe("/v1/invites");
+    expect(seen.headers?.authorization).toBe("Bearer tok");
+    expect(seen.headers?.["x-agentcall-org"]).toBe("acme");
+    expect(JSON.parse(seen.body ?? "")).toEqual({ description: "vendor", expires_in_days: 30 });
+  });
+
+  it("lists and revokes invites by public ID", async () => {
+    const metadata = {
+      id: "b".repeat(64), description: "", created_by: "ken", created_at: 1,
+      expires_at: 2, used_at: null, used_by: null, revoked_at: null,
+    };
+    let requests: string[] = [];
+    const relay = await startServer((req, res) => {
+      requests.push(req.url ?? "");
+      res.writeHead(200, { "content-type": "application/json" });
+      res.end(JSON.stringify(req.url?.endsWith("/list")
+        ? { invites: [metadata] }
+        : { id: metadata.id, revoked_at: 3 }));
+    });
+    const auth = { org: "acme", handle: "ken", token: "tok" };
+    expect(await listInvites(relay, auth)).toEqual([metadata]);
+    expect(await revokeInvite(relay, auth, metadata.id)).toEqual({ id: metadata.id, revoked_at: 3 });
+    expect(requests).toEqual(["/v1/invites/list", `/v1/invites/${metadata.id}/revoke`]);
   });
 });
 
