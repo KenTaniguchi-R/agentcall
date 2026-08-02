@@ -1,14 +1,13 @@
 import { execFileSync } from "node:child_process";
-import { existsSync, mkdirSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { dirname, join } from "node:path";
 import type { AgentKind } from "@benree/agentcall-shared";
-import { getPaths, getMachinePaths, type Paths } from "./paths.js";
+import { addLine, listLinesReport } from "./commands/line.js";
+import { listLines } from "./lines.js";
+import { resolveLine } from "./lineContext.js";
+import { getMachinePaths } from "./paths.js";
 import { ask as ttyAsk } from "./tty.js";
-import { loadConfig, saveConfig, relayUrl, resolveWorkdir, type Config } from "./config.js";
-import { registerHandle } from "./api.js";
-import { publishCard } from "./card.js";
-import { DEFAULT_POLICY } from "./policy.js";
+import { relayUrl, resolveLineWorkdir, type Config } from "./config.js";
 import { isEphemeralDir, preferDurableBin } from "./bin.js";
 import { appendSnippet } from "./snippet.js";
 import { installLaunchAgent } from "./launchd.js";
@@ -36,6 +35,8 @@ export interface SetupOpts {
   resolveBin?: (name: string) => string | null;
   installLaunchAgentFn?: typeof installLaunchAgent;
   verifyFns?: VerifyFns;
+  addLineFn?: typeof addLine;
+  log?: (s: string) => void;
 }
 
 // Dirnames of the resolved bins, deduped and skipping any that failed to
@@ -97,18 +98,6 @@ export function warnIfOutsideLaunchdPath(name: string, resolveBin: (n: string) =
   }
 }
 
-// Derives the address a fresh registration would have produced, for reuse's
-// sake, without calling the relay: register's response is always
-// `${handle}@${host of relay}` (see apps/relay's RELAY_HOST), so a saved
-// config's handle + relay is enough to reconstruct it locally.
-function addressFromConfig(cfg: Config): string {
-  try {
-    return `${cfg.handle}@${new URL(cfg.relay).host}`;
-  } catch {
-    return `${cfg.handle}@${cfg.relay}`;
-  }
-}
-
 // Whether this install should answer calls (run the listener) or stay
 // caller-only. Precedence: explicit --caller-only > a reused config that is
 // already callable > explicit --agent > no agent binary on PATH (fall back
@@ -135,108 +124,70 @@ async function decideCallable(
 }
 
 export async function runSetup(opts: SetupOpts): Promise<{ ready: boolean }> {
-  const paths: Paths = getPaths();
   const hasBinFn = opts.hasBin ?? ((name) => (opts.resolveBin ?? defaultResolveBin)(name) !== null);
   const resolveBinFn = opts.resolveBin ?? defaultResolveBin;
   const ask = opts.io?.ask ?? ttyAsk;
+  const log = opts.log ?? console.log;
 
-  // Idempotency: a re-run against an already-registered handle used to
-  // always POST /v1/register, which the relay correctly 409s (the handle is
-  // taken — by this same install) — aborting setup even though a valid
-  // token already sits in config.json. If a usable config already exists
-  // for the handle we'd otherwise register, skip registration entirely and
-  // just re-do the local steps below, which are all idempotent anyway.
-  let existingCfg: Config | undefined;
-  try {
-    existingCfg = loadConfig(paths);
-  } catch {
-    existingCfg = undefined;
-  }
-  const reusedCfg =
-    existingCfg !== undefined && (!opts.handle || opts.handle === existingCfg.handle) ? existingCfg : undefined;
+  const machine = getMachinePaths();
+  const existing = listLines(machine);
 
-  const callable = await decideCallable(opts, hasBinFn, ask, reusedCfg);
-
-  // A caller-only outcome must not clobber an existing callable install:
-  // config.json is machine-global, and the installed LaunchAgent would keep
-  // relaunching `agentcall listen` against a config it can no longer serve
-  // (assertCallableConfig throws -> crash loop) while the old handle
-  // silently went offline. Refuse and point at uninstall instead.
-  if (!callable && existingCfg?.agent_kind) {
-    console.error(
-      `This machine already answers calls as "${existingCfg.handle}". To stop answering calls, run ` +
-        "`agentcall uninstall` (config is kept; re-run `agentcall setup` to come back).",
-    );
-    return { ready: false };
+  // Setup is first-run only. Adding an address to a machine that already has
+  // one is `line add` — which is also why the old clobber path (#43) is gone:
+  // there is no single config.json left to overwrite.
+  if (existing.length > 0) {
+    log("agentcall is already set up on this machine.\n");
+    for (const row of listLinesReport(machine)) {
+      log(`  ${row.name.padEnd(10)} ${row.address}${row.primary ? "   primary" : ""}`);
+    }
+    log(`\nTo add another address:  agentcall line add <name> --handle <handle>`);
+    if (opts.snippet !== false) {
+      appendSnippet(join(homedir(), ".claude", "CLAUDE.md"));
+      appendSnippet(join(homedir(), ".codex", "AGENTS.md"));
+    }
+    return { ready: true };
   }
 
-  // On reuse the saved agent_kind is what actually gets spawned (see
-  // listener.ts), so skip detection entirely — it may prompt ("Which should
-  // agentcall use?") and its answer would be ignored anyway.
-  let agentKind: AgentKind | undefined;
-  if (callable) {
-    agentKind = reusedCfg?.agent_kind ?? (await detectAgentKind(opts, hasBinFn, ask));
+  const callable = await decideCallable(opts, hasBinFn, ask, undefined);
+  const agentKind = callable ? await detectAgentKind(opts, hasBinFn, ask) : undefined;
+  if (agentKind) {
     warnIfOutsideLaunchdPath(agentKind, resolveBinFn);
     warnIfOutsideLaunchdPath("npx", resolveBinFn);
   }
 
-  let cfg: Config;
-  let address: string;
-  if (reusedCfg) {
-    cfg = reusedCfg;
-    if (callable && !cfg.agent_kind && agentKind) {
-      // Upgrade caller-only -> callable: keep handle/token, add the agent
-      // locally. The relay's stored agent_kind stays NULL, which is fine —
-      // the relay never reads that column after registration.
-      cfg = { ...cfg, agent_kind: agentKind };
-      saveConfig(paths, cfg);
-    }
-    address = addressFromConfig(cfg);
-    console.log(`Reusing existing registration for ${cfg.handle}`);
-  } else {
-    const handle = opts.handle ?? (await ask("Choose a handle (e.g. ken): ")).trim();
-    if (!handle) throw new Error("A handle is required.");
+  const handle = opts.handle ?? (await ask("Choose a handle (e.g. ken): ")).trim();
+  if (!handle) throw new Error("A handle is required.");
+  const relay = (opts.relay ?? relayUrl()).replace(/\/+$/, "");
+  // The line name is local; default it to the agent kind, which is what the
+  // owner will call it anyway.
+  const name = agentKind ?? "caller";
 
-    const relay = (opts.relay ?? relayUrl()).replace(/\/+$/, "");
+  log(`Registering ${handle} with ${relay} ...`);
+  // Same fix setup used to apply directly: widen the LaunchAgent's PATH past
+  // its fixed base dirs when the agent/npx binary resolved outside them (e.g.
+  // an nvm/fnm-managed install) — otherwise the supervised listener can't
+  // find its own agent at spawn time. addLine doesn't compute this itself;
+  // the caller does and threads it through.
+  const extraPathDirs = agentKind ? resolveExtraPathDirs([agentKind, "npx"], resolveBinFn) : [];
+  const { address } = await (opts.addLineFn ?? addLine)(machine, {
+    name,
+    handle,
+    relay,
+    agent: agentKind,
+    callerOnly: !callable,
+    installLaunchAgentFn: opts.skipLaunchd ? () => {} : opts.installLaunchAgentFn,
+    extraPathDirs,
+  });
 
-    console.log(`Registering ${handle} with ${relay} ...`);
-    const { token, address: registeredAddress } = await registerHandle(relay, handle, agentKind);
-    cfg = agentKind ? { handle, token, agent_kind: agentKind, relay } : { handle, token, relay };
-    address = registeredAddress;
-    saveConfig(paths, cfg);
-  }
+  const ctx = resolveLine(machine, { line: name });
+  const cfg = ctx.config;
 
-  // Everything below the config is listener-side (callee) machinery: a
-  // caller-only install (no agent_kind) has no tasks or card to publish and
-  // no listener to install, so it needs none of it.
   let verifyFailure: VerifyCheck | undefined;
-  if (cfg.agent_kind) {
-    mkdirSync(paths.publicDir, { recursive: true });
-    mkdirSync(paths.tasksDir, { recursive: true });
-    if (!existsSync(paths.policyFile)) {
-      writeFileSync(paths.policyFile, JSON.stringify(DEFAULT_POLICY, null, 2) + "\n");
-    }
-
-    // Publish the agent card (task menu) to the relay so callers can discover
-    // what this agent offers before calling. Best-effort: a relay hiccup here
-    // must not abort setup — `agentcall card push` re-publishes any time.
-    try {
-      await publishCard(cfg, paths);
-    } catch (e) {
-      console.error(`Warning: could not publish the agent card (${String(e)}). Run \`agentcall card push\` later.`);
-    }
-
-    if (!opts.skipLaunchd) {
-      const extraPathDirs = resolveExtraPathDirs([cfg.agent_kind, "npx"], resolveBinFn);
-      (opts.installLaunchAgentFn ?? installLaunchAgent)(getMachinePaths(), undefined, extraPathDirs);
-    }
-
-    if (opts.verify !== false) {
-      console.log(`\nVerifying ${cfg.agent_kind} can answer a test call (takes ~10-30s)...`);
-      const checks = await verifyAgent(cfg.agent_kind, resolveWorkdir(cfg, paths).dir, opts.verifyFns);
-      for (const c of checks) console.log(formatCheck(c));
-      verifyFailure = checks.find((c) => !c.ok);
-    }
+  if (cfg.agent_kind && opts.verify !== false) {
+    log(`\nVerifying ${cfg.agent_kind} can answer a test call (takes ~10-30s)...`);
+    const checks = await verifyAgent(cfg.agent_kind, resolveLineWorkdir(cfg, ctx.paths).dir, opts.verifyFns);
+    for (const c of checks) log(formatCheck(c));
+    verifyFailure = checks.find((c) => !c.ok);
   }
 
   if (opts.snippet !== false) {
@@ -258,7 +209,7 @@ export async function runSetup(opts: SetupOpts): Promise<{ ready: boolean }> {
     return { ready: false };
   }
   if (cfg.agent_kind) {
-    console.log(
+    log(
       `\nagentcall is set up.\n` +
         (opts.verify !== false ? `  ✓ agent verified (${cfg.agent_kind} answered a test call)\n` : "") +
         `  Handle:  ${cfg.handle}\n` +
@@ -269,7 +220,7 @@ export async function runSetup(opts: SetupOpts): Promise<{ ready: boolean }> {
         `  agentcall call ${address} "hello"\n`,
     );
   } else {
-    console.log(
+    log(
       `\nagentcall is set up (caller-only).\n` +
         `  Handle:  ${cfg.handle}\n` +
         `  Relay:   ${cfg.relay}\n` +

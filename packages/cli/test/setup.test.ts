@@ -1,280 +1,188 @@
-import { existsSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
-import { createServer, type Server } from "node:http";
+import { existsSync, mkdtempSync, readFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { resolveExtraPathDirs, runSetup, warnIfOutsideLaunchdPath } from "../src/setup.js";
-import { getPaths } from "../src/paths.js";
+import { getLinePaths, getMachinePaths, type MachinePaths } from "../src/paths.js";
+import { listLines, saveLineConfig } from "../src/lines.js";
+import { loadPerson, savePerson } from "../src/person.js";
+import { addLine, type AddLineOpts } from "../src/commands/line.js";
+import type { LineConfig } from "../src/config.js";
 import { AgentRunError } from "../src/runner.js";
 
-let server: Server;
+// A local stand-in for the relay: registerHandle's real implementation
+// spends the handle it registers permanently (handle release isn't
+// implemented — see #16), so no test here may reach it, not even against a
+// throwaway local HTTP server. Every runSetup call below goes through
+// `addLine` with this `register` seam instead, which still exercises
+// addLine's real validation/ordering/disk-writes/launchd wiring — just with
+// no network underneath it.
+const R = "https://r.example";
+const stubRegister = async (_relay: string, handle: string) => ({ token: "tok-123", address: `${handle}@fake.example` });
+const base: LineConfig = { handle: "ken", token: "t", relay: R, agent_kind: "claude" };
+
+// The real addLine, wired to stubRegister instead of the network. Used as
+// the `addLineFn` seam by every test below unless a test needs to observe
+// one of addLine's own callbacks (publishCardFn, installLaunchAgentFn) —
+// those pass their own wrapper built the same way.
+const fakeAddLine = (m: MachinePaths, opts: AddLineOpts) =>
+  addLine(m, { ...opts, register: stubRegister, publishCardFn: opts.publishCardFn ?? (async () => undefined) });
+
+let home: string;
+let m: MachinePaths;
+beforeEach(() => {
+  home = mkdtempSync(join(tmpdir(), "agentcall-setup-"));
+  process.env.AGENTCALL_HOME = home;
+  m = getMachinePaths(home, home);
+});
 afterEach(() => {
-  server?.close();
-  server409?.close();
+  delete process.env.AGENTCALL_HOME;
 });
 
-const registerBodies: unknown[] = [];
-function fakeRelay(): Promise<string> {
-  return new Promise((resolve) => {
-    server = createServer((req, res) => {
-      let body = "";
-      req.on("data", (d) => (body += d));
-      req.on("end", () => {
-        const parsed = JSON.parse(body);
-        registerBodies.push(parsed);
-        res.writeHead(200, { "content-type": "application/json" });
-        res.end(JSON.stringify({ token: "tok-123", address: `${parsed.handle}@agentcall.benree.tech` }));
-      });
-    });
-    server.listen(0, "127.0.0.1", () => resolve(`http://127.0.0.1:${(server.address() as { port: number }).port}`));
-  });
-}
-
-// Simulates a relay that always 409s registration, as if the handle were
-// already taken there (which it would be, on a genuine re-run) — used to
-// prove a second runSetup call reuses the saved config instead of
-// re-registering.
-let server409: Server;
-function fakeRelay409(): Promise<string> {
-  return new Promise((resolve) => {
-    server409 = createServer((_req, res) => {
-      res.writeHead(409, { "content-type": "application/json" });
-      res.end(JSON.stringify({ error: "handle taken" }));
-    });
-    server409.listen(0, "127.0.0.1", () => resolve(`http://127.0.0.1:${(server409.address() as { port: number }).port}`));
-  });
-}
-
-function fakeRelayRecording(requests: { method?: string; url?: string; body?: string }[]): Promise<string> {
-  return new Promise((resolve) => {
-    server = createServer((req, res) => {
-      let body = "";
-      req.on("data", (d) => (body += d));
-      req.on("end", () => {
-        requests.push({ method: req.method, url: req.url, body });
-        res.writeHead(200, { "content-type": "application/json" });
-        res.end(JSON.stringify({ token: "tok-123", address: "ken@agentcall.benree.tech", ok: true }));
-      });
-    });
-    server.listen(0, "127.0.0.1", () => resolve(`http://127.0.0.1:${(server.address() as { port: number }).port}`));
-  });
-}
-
 describe("runSetup", () => {
-  it("registers, writes config, creates public dir (non-interactive)", async () => {
-    const home = mkdtempSync(join(tmpdir(), "agentcall-setup-"));
-    process.env.AGENTCALL_HOME = home;
-    try {
-      const relay = await fakeRelay();
-      await runSetup({ verify: false, handle: "ken", agent: "claude", relay, snippet: false, skipLaunchd: true });
-      const p = getPaths(home);
-      const cfg = JSON.parse(readFileSync(p.configFile, "utf8"));
-      expect(cfg).toMatchObject({ handle: "ken", token: "tok-123", agent_kind: "claude", relay });
-      expect(existsSync(p.publicDir)).toBe(true);
-    } finally {
-      delete process.env.AGENTCALL_HOME;
-    }
+  it("creates person.json plus one line, and marks it primary", async () => {
+    await runSetup({
+      handle: "ken", agent: "claude", relay: R, yes: true, snippet: false, verify: false,
+      addLineFn: fakeAddLine, skipLaunchd: true,
+    });
+    expect(loadPerson(m).primary_line).toBe("claude");
+    expect(listLines(m).map((l) => l.name)).toEqual(["claude"]);
   });
 
-  it("re-running setup with the same handle reuses the saved config instead of re-registering", async () => {
-    const home = mkdtempSync(join(tmpdir(), "agentcall-setup-"));
-    process.env.AGENTCALL_HOME = home;
-    try {
-      const relay = await fakeRelay();
-      await runSetup({ verify: false, handle: "ken", agent: "claude", relay, snippet: false, skipLaunchd: true });
-      const p = getPaths(home);
-      const firstCfg = JSON.parse(readFileSync(p.configFile, "utf8"));
+  it("names the line after the agent kind", async () => {
+    await runSetup({
+      handle: "ken", agent: "codex", relay: R, yes: true, snippet: false, verify: false,
+      addLineFn: fakeAddLine, skipLaunchd: true,
+    });
+    expect(listLines(m).map((l) => l.name)).toEqual(["codex"]);
+  });
 
-      // Second run points at a relay that 409s every register call — if
-      // runSetup still tried to register, this run would throw. It must
-      // instead detect the existing config.json (same handle) and reuse it.
-      const badRelay = await fakeRelay409();
-      await runSetup({ verify: false, handle: "ken", agent: "claude", relay: badRelay, snippet: false, skipLaunchd: true });
+  it("creates nothing on a second run and points at line add", async () => {
+    saveLineConfig(getLinePaths(m, "claude"), base);
+    savePerson(m, { primary_line: "claude" });
+    const out: string[] = [];
+    const res = await runSetup({
+      handle: "other", agent: "codex", relay: R, yes: true, snippet: false, verify: false,
+      addLineFn: fakeAddLine, skipLaunchd: true, log: (s) => out.push(s),
+    });
+    expect(listLines(m).map((l) => l.name)).toEqual(["claude"]);
+    expect(out.join("\n")).toMatch(/agentcall line add/);
+    expect(res.ready).toBe(true);
+  });
 
-      const secondCfg = JSON.parse(readFileSync(p.configFile, "utf8"));
-      expect(secondCfg).toEqual(firstCfg);
-      expect(secondCfg.token).toBe("tok-123");
-      expect(existsSync(p.publicDir)).toBe(true);
-    } finally {
-      delete process.env.AGENTCALL_HOME;
-    }
+  it("creates an agentless line under --caller-only", async () => {
+    await runSetup({
+      handle: "ken", callerOnly: true, relay: R, yes: true, snippet: false, verify: false,
+      addLineFn: fakeAddLine, skipLaunchd: true,
+    });
+    expect(listLines(m)[0]!.config!.agent_kind).toBeUndefined();
   });
 
   // Regression: re-running setup used to run agent detection (and its
-  // "Which should agentcall use?" prompt) before the reuse check, then
-  // ignore the answer in favor of the saved config's agent_kind.
-  it("re-running setup with a saved config asks no questions at all", async () => {
-    const home = mkdtempSync(join(tmpdir(), "agentcall-setup-"));
-    process.env.AGENTCALL_HOME = home;
-    try {
-      const relay = await fakeRelay();
-      await runSetup({ verify: false, handle: "ken", agent: "claude", relay, snippet: false, skipLaunchd: true });
-
-      const asked: string[] = [];
-      await runSetup({
-        verify: false,
-        relay,
-        snippet: false,
-        skipLaunchd: true,
-        hasBin: () => true, // both claude and codex on PATH — would normally prompt
-        io: { ask: async (q) => { asked.push(q); return "claude"; } },
-      });
-      expect(asked).toEqual([]);
-    } finally {
-      delete process.env.AGENTCALL_HOME;
-    }
+  // "Which should agentcall use?" prompt) before the reuse check. That path
+  // is gone entirely now — a second run short-circuits on `existing.length >
+  // 0` before touching decideCallable/detectAgentKind at all.
+  it("asks no questions on a second run", async () => {
+    saveLineConfig(getLinePaths(m, "claude"), base);
+    savePerson(m, { primary_line: "claude" });
+    const asked: string[] = [];
+    await runSetup({
+      relay: R, snippet: false, verify: false, skipLaunchd: true, addLineFn: fakeAddLine,
+      hasBin: () => true, // both claude and codex on PATH — would normally prompt
+      io: { ask: async (q) => { asked.push(q); return "claude"; } },
+    });
+    expect(asked).toEqual([]);
   });
 
   it("prompts for a missing handle via io.ask", async () => {
-    const home = mkdtempSync(join(tmpdir(), "agentcall-setup-"));
-    process.env.AGENTCALL_HOME = home;
-    try {
-      const relay = await fakeRelay();
-      const asked: string[] = [];
-      await runSetup({
-        verify: false,
-        agent: "claude",
-        relay,
-        snippet: false,
-        skipLaunchd: true,
-        io: { ask: async (q) => { asked.push(q); return "asked-handle"; } },
-      });
-      const p = getPaths(home);
-      const cfg = JSON.parse(readFileSync(p.configFile, "utf8"));
-      expect(cfg.handle).toBe("asked-handle");
-      expect(asked.length).toBeGreaterThan(0);
-    } finally {
-      delete process.env.AGENTCALL_HOME;
-    }
+    const asked: string[] = [];
+    await runSetup({
+      agent: "claude", relay: R, snippet: false, verify: false, skipLaunchd: true, addLineFn: fakeAddLine,
+      io: { ask: async (q) => { asked.push(q); return "asked-handle"; } },
+    });
+    expect(listLines(m)[0]!.config!.handle).toBe("asked-handle");
+    expect(asked.length).toBeGreaterThan(0);
   });
 
   it("detects the agent kind via injectable hasBin when --agent is omitted", async () => {
-    const home = mkdtempSync(join(tmpdir(), "agentcall-setup-"));
-    process.env.AGENTCALL_HOME = home;
-    try {
-      const relay = await fakeRelay();
-      await runSetup({
-        verify: false,
-        handle: "ken2",
-        relay,
-        snippet: false,
-        skipLaunchd: true,
-        hasBin: (name) => name === "codex",
-        io: { ask: async () => "y" },
-      });
-      const p = getPaths(home);
-      const cfg = JSON.parse(readFileSync(p.configFile, "utf8"));
-      expect(cfg.agent_kind).toBe("codex");
-    } finally {
-      delete process.env.AGENTCALL_HOME;
-    }
+    await runSetup({
+      handle: "ken2", relay: R, snippet: false, verify: false, skipLaunchd: true, addLineFn: fakeAddLine,
+      hasBin: (name) => name === "codex",
+      io: { ask: async () => "y" },
+    });
+    expect(listLines(m)[0]!.name).toBe("codex");
+    expect(listLines(m)[0]!.config!.agent_kind).toBe("codex");
   });
 
   it("falls back to caller-only with a notice when neither agent is found", async () => {
-    const home = mkdtempSync(join(tmpdir(), "agentcall-setup-"));
-    process.env.AGENTCALL_HOME = home;
     const logs: string[] = [];
     const spy = vi.spyOn(console, "log").mockImplementation((...a: unknown[]) => {
       logs.push(a.map(String).join(" "));
     });
     try {
-      const relay = await fakeRelay();
       let launchdCalled = false;
       await runSetup({
-        verify: false,
-        handle: "ken3",
-        relay,
-        snippet: false,
+        handle: "ken3", relay: R, snippet: false, verify: false, addLineFn: fakeAddLine,
         hasBin: () => false,
         installLaunchAgentFn: () => { launchdCalled = true; },
       });
-      const p = getPaths(home);
-      const cfg = JSON.parse(readFileSync(p.configFile, "utf8"));
-      expect(cfg.agent_kind).toBeUndefined();
+      expect(listLines(m)[0]!.config!.agent_kind).toBeUndefined();
       expect(launchdCalled).toBe(false);
       expect(logs.some((l) => l.includes("caller-only"))).toBe(true);
     } finally {
       spy.mockRestore();
-      delete process.env.AGENTCALL_HOME;
     }
   });
 
+  // Regression coverage for the extraPathDirs fix made alongside this
+  // rewrite: addLine doesn't compute these itself (see line-cmd.test.ts's
+  // "forwards extraPathDirs" test for that half) — setup must still resolve
+  // them from the detected agent/npx bins and thread them through, or an
+  // nvm/fnm-managed toolchain leaves the LaunchAgent unable to find its own
+  // agent binary at spawn time.
   it("passes resolved agent/npx bin dirs as extraPathDirs to installLaunchAgent", async () => {
-    const home = mkdtempSync(join(tmpdir(), "agentcall-setup-"));
-    process.env.AGENTCALL_HOME = home;
-    try {
-      const relay = await fakeRelay();
-      let captured: string[] | undefined;
-      await runSetup({
-        verify: false,
-        handle: "ken4",
-        agent: "claude",
-        relay,
-        snippet: false,
-        resolveBin: (name) =>
-          name === "claude" || name === "npx" ? `/Users/x/.local/bin/${name}` : null,
-        installLaunchAgentFn: (_p, _execCmd, extraPathDirs) => {
-          captured = extraPathDirs;
-        },
-      });
-      expect(captured).toEqual(["/Users/x/.local/bin"]);
-    } finally {
-      delete process.env.AGENTCALL_HOME;
-    }
+    let captured: string[] | undefined;
+    await runSetup({
+      handle: "ken4", agent: "claude", relay: R, snippet: false, verify: false, addLineFn: fakeAddLine,
+      resolveBin: (name) => (name === "claude" || name === "npx" ? `/Users/x/.local/bin/${name}` : null),
+      installLaunchAgentFn: (_m, _execCmd, extraPathDirs) => { captured = extraPathDirs; },
+    });
+    expect(captured).toEqual(["/Users/x/.local/bin"]);
   });
 
+  // policy.json/tasksDir/card-publish are addLine's own responsibility now
+  // (see commands/line.ts), but nothing in line-cmd.test.ts currently
+  // exercises them — kept here so the behavior stays covered somewhere.
   it("seeds policy.json + tasks dir and publishes the card", async () => {
-    const home = mkdtempSync(join(tmpdir(), "agentcall-setup-"));
-    process.env.AGENTCALL_HOME = home;
-    try {
-      const requests: { method?: string; url?: string; body?: string }[] = [];
-      const relay = await fakeRelayRecording(requests);
-      await runSetup({ verify: false, handle: "ken", agent: "claude", relay, snippet: false, skipLaunchd: true });
-      const p = getPaths(home);
-      expect(existsSync(p.tasksDir)).toBe(true);
-      const policy = JSON.parse(readFileSync(p.policyFile, "utf8"));
-      expect(policy.default_offer).toEqual(["ask"]);
-      const cardPut = requests.find((r) => r.method === "PUT" && r.url === "/v1/card");
-      expect(cardPut).toBeDefined();
-      expect(JSON.parse(cardPut!.body!)).toMatchObject({ agent_kind: "claude", default_offer: ["ask"] });
-      expect(existsSync(p.cardSnapshotFile)).toBe(true);
-    } finally {
-      delete process.env.AGENTCALL_HOME;
-    }
-  });
-
-  it("does not overwrite an existing policy.json on re-run", async () => {
-    const home = mkdtempSync(join(tmpdir(), "agentcall-setup-"));
-    process.env.AGENTCALL_HOME = home;
-    try {
-      const relay = await fakeRelay();
-      await runSetup({ verify: false, handle: "ken", agent: "claude", relay, snippet: false, skipLaunchd: true });
-      const p = getPaths(home);
-      const custom = { description: "custom", default_offer: ["ask"], callers: { mia: { offer: ["x"], block: false } } };
-      writeFileSync(p.policyFile, JSON.stringify(custom));
-      await runSetup({ verify: false, handle: "ken", agent: "claude", relay, snippet: false, skipLaunchd: true });
-      expect(JSON.parse(readFileSync(p.policyFile, "utf8"))).toEqual(custom);
-    } finally {
-      delete process.env.AGENTCALL_HOME;
-    }
+    const cardCalls: LineConfig[] = [];
+    await runSetup({
+      handle: "ken", agent: "claude", relay: R, snippet: false, verify: false, skipLaunchd: true,
+      addLineFn: (m2, opts) =>
+        addLine(m2, { ...opts, register: stubRegister, publishCardFn: async (cfg) => { cardCalls.push(cfg); } }),
+    });
+    const lp = getLinePaths(m, "claude");
+    expect(existsSync(lp.tasksDir)).toBe(true);
+    const policy = JSON.parse(readFileSync(lp.policyFile, "utf8"));
+    expect(policy.default_offer).toEqual(["ask"]);
+    expect(cardCalls).toHaveLength(1);
+    expect(cardCalls[0]).toMatchObject({ agent_kind: "claude", relay: R });
   });
 });
 
 describe("setup progress output", () => {
   it("prints a progress line before registering with the relay", async () => {
-    const home = mkdtempSync(join(tmpdir(), "agentcall-setup-"));
-    process.env.AGENTCALL_HOME = home;
     const logs: string[] = [];
     const spy = vi.spyOn(console, "log").mockImplementation((...a: unknown[]) => {
       logs.push(a.map(String).join(" "));
     });
     try {
-      const relay = await fakeRelay();
-      await runSetup({ verify: false, handle: "ken9", agent: "claude", relay, snippet: false, skipLaunchd: true });
+      await runSetup({
+        handle: "ken9", agent: "claude", relay: R, snippet: false, verify: false, skipLaunchd: true,
+        addLineFn: fakeAddLine,
+      });
       expect(logs.some((l) => l.includes("Registering ken9"))).toBe(true);
     } finally {
       spy.mockRestore();
-      delete process.env.AGENTCALL_HOME;
     }
   });
 });
@@ -330,244 +238,76 @@ describe("resolveExtraPathDirs", () => {
 });
 
 describe("caller-only setup", () => {
-  it("--caller-only registers without agent_kind and skips publicDir/launchd", async () => {
-    const home = mkdtempSync(join(tmpdir(), "agentcall-setup-"));
-    process.env.AGENTCALL_HOME = home;
-    try {
-      const relay = await fakeRelay();
-      registerBodies.length = 0;
-      let launchdCalled = false;
-      await runSetup({
-        verify: false,
-        handle: "solo",
-        callerOnly: true,
-        relay,
-        snippet: false,
-        hasBin: () => false, // no agent installed at all
-        installLaunchAgentFn: () => { launchdCalled = true; },
-      });
-      expect(registerBodies).toEqual([{ handle: "solo" }]);
-      const p = getPaths(home);
-      const cfg = JSON.parse(readFileSync(p.configFile, "utf8"));
-      expect(cfg).toEqual({ handle: "solo", token: "tok-123", relay });
-      expect(existsSync(p.publicDir)).toBe(false);
-      expect(launchdCalled).toBe(false);
-    } finally {
-      delete process.env.AGENTCALL_HOME;
-    }
-  });
-
   it("prints a caller-only summary with an upgrade hint instead of 'share your address'", async () => {
-    const home = mkdtempSync(join(tmpdir(), "agentcall-setup-"));
-    process.env.AGENTCALL_HOME = home;
     const logs: string[] = [];
     const spy = vi.spyOn(console, "log").mockImplementation((...a: unknown[]) => {
       logs.push(a.map(String).join(" "));
     });
     try {
-      const relay = await fakeRelay();
-      await runSetup({ verify: false, handle: "solo2", callerOnly: true, relay, snippet: false, hasBin: () => false });
+      await runSetup({
+        handle: "solo2", callerOnly: true, relay: R, snippet: false, verify: false, addLineFn: fakeAddLine,
+        hasBin: () => false,
+      });
       const summary = logs.join("\n");
       expect(summary).toContain("caller-only");
       expect(summary).toContain("agentcall setup");
       expect(summary).not.toContain("Share your address");
     } finally {
       spy.mockRestore();
-      delete process.env.AGENTCALL_HOME;
-    }
-  });
-
-  it("re-running --caller-only setup reuses the config, asks nothing, stays caller-only", async () => {
-    const home = mkdtempSync(join(tmpdir(), "agentcall-setup-"));
-    process.env.AGENTCALL_HOME = home;
-    try {
-      const relay = await fakeRelay();
-      await runSetup({ verify: false, handle: "solo3", callerOnly: true, relay, snippet: false, hasBin: () => false });
-      const p = getPaths(home);
-      const firstCfg = JSON.parse(readFileSync(p.configFile, "utf8"));
-
-      const badRelay = await fakeRelay409();
-      const asked: string[] = [];
-      await runSetup({
-        verify: false,
-        callerOnly: true,
-        relay: badRelay,
-        snippet: false,
-        hasBin: () => false,
-        io: { ask: async (q) => { asked.push(q); return ""; } },
-      });
-      expect(asked).toEqual([]);
-      expect(JSON.parse(readFileSync(p.configFile, "utf8"))).toEqual(firstCfg);
-    } finally {
-      delete process.env.AGENTCALL_HOME;
     }
   });
 
   it("asks 'Make your agent callable' and answering n yields caller-only", async () => {
-    const home = mkdtempSync(join(tmpdir(), "agentcall-setup-"));
-    process.env.AGENTCALL_HOME = home;
-    try {
-      const relay = await fakeRelay();
-      const asked: string[] = [];
-      let launchdCalled = false;
-      await runSetup({
-        verify: false,
-        handle: "asker",
-        relay,
-        snippet: false,
-        hasBin: () => true, // agents ARE installed; user still opts out
-        io: { ask: async (q) => { asked.push(q); return "n"; } },
-        installLaunchAgentFn: () => { launchdCalled = true; },
-      });
-      expect(asked.some((q) => q.includes("callable"))).toBe(true);
-      const p = getPaths(home);
-      const cfg = JSON.parse(readFileSync(p.configFile, "utf8"));
-      expect(cfg.agent_kind).toBeUndefined();
-      expect(launchdCalled).toBe(false);
-    } finally {
-      delete process.env.AGENTCALL_HOME;
-    }
+    const asked: string[] = [];
+    let launchdCalled = false;
+    await runSetup({
+      handle: "asker", relay: R, snippet: false, verify: false, addLineFn: fakeAddLine,
+      hasBin: () => true, // agents ARE installed; user still opts out
+      io: { ask: async (q) => { asked.push(q); return "n"; } },
+      installLaunchAgentFn: () => { launchdCalled = true; },
+    });
+    expect(asked.some((q) => q.includes("callable"))).toBe(true);
+    expect(listLines(m)[0]!.config!.agent_kind).toBeUndefined();
+    expect(launchdCalled).toBe(false);
   });
 
   it("an empty answer defaults to callable", async () => {
-    const home = mkdtempSync(join(tmpdir(), "agentcall-setup-"));
-    process.env.AGENTCALL_HOME = home;
-    try {
-      const relay = await fakeRelay();
-      await runSetup({
-        verify: false,
-        handle: "defaulter",
-        relay,
-        snippet: false,
-        skipLaunchd: true,
-        hasBin: (name) => name === "claude",
-        io: { ask: async () => "" },
-      });
-      const p = getPaths(home);
-      const cfg = JSON.parse(readFileSync(p.configFile, "utf8"));
-      expect(cfg.agent_kind).toBe("claude");
-      expect(existsSync(p.publicDir)).toBe(true);
-    } finally {
-      delete process.env.AGENTCALL_HOME;
-    }
-  });
-
-  it("re-running setup upgrades a caller-only config to callable, keeping handle and token", async () => {
-    const home = mkdtempSync(join(tmpdir(), "agentcall-setup-"));
-    process.env.AGENTCALL_HOME = home;
-    try {
-      const relay = await fakeRelay();
-      await runSetup({ verify: false, handle: "upg", callerOnly: true, relay, snippet: false, hasBin: () => false });
-      const p = getPaths(home);
-      expect(JSON.parse(readFileSync(p.configFile, "utf8")).agent_kind).toBeUndefined();
-
-      // The upgrade run points at a relay that 409s every register call —
-      // it must reuse the existing handle/token, not re-register.
-      const badRelay = await fakeRelay409();
-      let launchdCalled = false;
-      await runSetup({
-        verify: false,
-        relay: badRelay,
-        snippet: false,
-        hasBin: (name) => name === "claude",
-        io: { ask: async () => "y" },
-        installLaunchAgentFn: () => { launchdCalled = true; },
-      });
-      const cfg = JSON.parse(readFileSync(p.configFile, "utf8"));
-      expect(cfg.handle).toBe("upg");
-      expect(cfg.token).toBe("tok-123");
-      expect(cfg.agent_kind).toBe("claude");
-      expect(existsSync(p.publicDir)).toBe(true);
-      expect(existsSync(p.publicDir)).toBe(true);
-      expect(launchdCalled).toBe(true);
-    } finally {
-      delete process.env.AGENTCALL_HOME;
-    }
-  });
-
-  it("--caller-only against an already-callable config makes no changes and points at uninstall", async () => {
-    const home = mkdtempSync(join(tmpdir(), "agentcall-setup-"));
-    process.env.AGENTCALL_HOME = home;
-    const errors: string[] = [];
-    const spy = vi.spyOn(console, "error").mockImplementation((...a: unknown[]) => {
-      errors.push(a.map(String).join(" "));
+    await runSetup({
+      handle: "defaulter", relay: R, snippet: false, verify: false, skipLaunchd: true, addLineFn: fakeAddLine,
+      hasBin: (name) => name === "claude",
+      io: { ask: async () => "" },
     });
-    try {
-      const relay = await fakeRelay();
-      await runSetup({ verify: false, handle: "full", agent: "claude", relay, snippet: false, skipLaunchd: true });
-      const p = getPaths(home);
-      const before = readFileSync(p.configFile, "utf8");
-
-      const result = await runSetup({ verify: false, callerOnly: true, relay, snippet: false, hasBin: () => true });
-
-      expect(readFileSync(p.configFile, "utf8")).toBe(before);
-      expect(errors.some((l) => l.includes("uninstall"))).toBe(true);
-      expect(result.ready).toBe(false);
-    } finally {
-      spy.mockRestore();
-      delete process.env.AGENTCALL_HOME;
-    }
-  });
-
-  it("refuses a caller-only setup under a new handle when the machine already answers calls", async () => {
-    const home = mkdtempSync(join(tmpdir(), "agentcall-setup-"));
-    process.env.AGENTCALL_HOME = home;
-    const errors: string[] = [];
-    const spy = vi.spyOn(console, "error").mockImplementation((...a: unknown[]) => {
-      errors.push(a.map(String).join(" "));
-    });
-    try {
-      const relay = await fakeRelay();
-      await runSetup({ verify: false, handle: "resident", agent: "claude", relay, snippet: false, skipLaunchd: true });
-      const p = getPaths(home);
-      const before = readFileSync(p.configFile, "utf8");
-
-      const result = await runSetup({ verify: false, handle: "other", callerOnly: true, relay, snippet: false, hasBin: () => false });
-
-      expect(readFileSync(p.configFile, "utf8")).toBe(before);
-      expect(errors.some((l) => l.includes("uninstall") && l.includes("resident"))).toBe(true);
-      expect(result.ready).toBe(false);
-    } finally {
-      spy.mockRestore();
-      delete process.env.AGENTCALL_HOME;
-    }
+    expect(listLines(m)[0]!.config!.agent_kind).toBe("claude");
   });
 });
 
 describe("runSetup verification", () => {
   it("passing verification: reports ready:true and prints the verified line", async () => {
-    const home = mkdtempSync(join(tmpdir(), "agentcall-setup-"));
-    process.env.AGENTCALL_HOME = home;
     const logs: string[] = [];
-    const logSpy = vi.spyOn(console, "log").mockImplementation((m) => {
-      logs.push(String(m));
+    const logSpy = vi.spyOn(console, "log").mockImplementation((msg) => {
+      logs.push(String(msg));
     });
     try {
-      const relay = await fakeRelay();
       const result = await runSetup({
-        handle: "ken", agent: "claude", relay, snippet: false, skipLaunchd: true,
+        handle: "ken", agent: "claude", relay: R, snippet: false, skipLaunchd: true, addLineFn: fakeAddLine,
         verifyFns: { resolveBin: () => "/fake/bin/claude", runFn: async () => ({ text: "OK" }) },
       });
       expect(result.ready).toBe(true);
       expect(logs.join("\n")).toContain("agent verified");
     } finally {
       logSpy.mockRestore();
-      delete process.env.AGENTCALL_HOME;
     }
   });
 
-  it("failing verification: still saves config + installs launchd, but reports NOT ready", async () => {
-    const home = mkdtempSync(join(tmpdir(), "agentcall-setup-"));
-    process.env.AGENTCALL_HOME = home;
+  it("failing verification: still saves the line + installs launchd, but reports NOT ready", async () => {
     const errors: string[] = [];
-    const errSpy = vi.spyOn(console, "error").mockImplementation((m) => {
-      errors.push(String(m));
+    const errSpy = vi.spyOn(console, "error").mockImplementation((msg) => {
+      errors.push(String(msg));
     });
     try {
-      const relay = await fakeRelay();
       const installed: string[] = [];
       const result = await runSetup({
-        handle: "ken", agent: "claude", relay, snippet: false,
+        handle: "ken", agent: "claude", relay: R, snippet: false, addLineFn: fakeAddLine,
         installLaunchAgentFn: () => {
           installed.push("yes");
         },
@@ -582,8 +322,7 @@ describe("runSetup verification", () => {
         },
       });
       expect(result.ready).toBe(false);
-      const p = getPaths(home);
-      expect(existsSync(p.configFile)).toBe(true);
+      expect(listLines(m)[0]!.ok).toBe(true);
       expect(installed).toEqual(["yes"]);
       const out = errors.join("\n");
       expect(out).toContain("NOT ready");
@@ -591,53 +330,39 @@ describe("runSetup verification", () => {
       expect(out).toContain("agentcall doctor");
     } finally {
       errSpy.mockRestore();
-      delete process.env.AGENTCALL_HOME;
     }
   });
 
   it("--no-verify (verify:false) skips verification entirely", async () => {
-    const home = mkdtempSync(join(tmpdir(), "agentcall-setup-"));
-    process.env.AGENTCALL_HOME = home;
-    try {
-      const relay = await fakeRelay();
-      let ran = false;
-      const result = await runSetup({
-        handle: "ken", agent: "claude", relay, snippet: false, skipLaunchd: true, verify: false,
-        verifyFns: {
-          resolveBin: () => "/fake/bin/claude",
-          runFn: async () => {
-            ran = true;
-            return { text: "OK" };
-          },
+    let ran = false;
+    const result = await runSetup({
+      handle: "ken", agent: "claude", relay: R, snippet: false, skipLaunchd: true, verify: false,
+      addLineFn: fakeAddLine,
+      verifyFns: {
+        resolveBin: () => "/fake/bin/claude",
+        runFn: async () => {
+          ran = true;
+          return { text: "OK" };
         },
-      });
-      expect(result.ready).toBe(true);
-      expect(ran).toBe(false);
-    } finally {
-      delete process.env.AGENTCALL_HOME;
-    }
+      },
+    });
+    expect(result.ready).toBe(true);
+    expect(ran).toBe(false);
   });
 
   it("caller-only setup never verifies", async () => {
-    const home = mkdtempSync(join(tmpdir(), "agentcall-setup-"));
-    process.env.AGENTCALL_HOME = home;
-    try {
-      const relay = await fakeRelay();
-      let ran = false;
-      const result = await runSetup({
-        handle: "solo", relay, snippet: false, skipLaunchd: true, callerOnly: true,
-        verifyFns: {
-          resolveBin: () => "/fake/bin/claude",
-          runFn: async () => {
-            ran = true;
-            return { text: "OK" };
-          },
+    let ran = false;
+    const result = await runSetup({
+      handle: "solo", relay: R, snippet: false, skipLaunchd: true, callerOnly: true, addLineFn: fakeAddLine,
+      verifyFns: {
+        resolveBin: () => "/fake/bin/claude",
+        runFn: async () => {
+          ran = true;
+          return { text: "OK" };
         },
-      });
-      expect(result.ready).toBe(true);
-      expect(ran).toBe(false);
-    } finally {
-      delete process.env.AGENTCALL_HOME;
-    }
+      },
+    });
+    expect(result.ready).toBe(true);
+    expect(ran).toBe(false);
   });
 });

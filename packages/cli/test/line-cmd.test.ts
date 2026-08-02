@@ -97,6 +97,20 @@ describe("addLine", () => {
       register: ok, installLaunchAgentFn: () => { installed = true; }, publishCardFn: async () => undefined, verify: false });
     expect(installed).toBe(false);
   });
+
+  // Regression: a nvm/fnm-managed node install (or claude/npx living outside
+  // /opt/homebrew/bin and /usr/local/bin) needs its dir on the LaunchAgent's
+  // PATH, or the supervised listener can't find its own agent binary at
+  // spawn time. setup used to compute this and pass it straight through;
+  // addLine must accept and forward it too, or every line loses the fix.
+  it("forwards extraPathDirs into the installLaunchAgent seam", async () => {
+    let captured: string[] | undefined;
+    await addLine(m, { name: "codex", handle: "ken-cdx", agent: "codex", relay: "https://r.example",
+      register: ok, publishCardFn: async () => undefined, verify: false,
+      extraPathDirs: ["/Users/x/.nvm/versions/node/v24/bin"],
+      installLaunchAgentFn: (_m, _execCmd, extraPathDirs) => { captured = extraPathDirs; } });
+    expect(captured).toEqual(["/Users/x/.nvm/versions/node/v24/bin"]);
+  });
 });
 
 describe("removeLine", () => {

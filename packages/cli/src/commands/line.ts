@@ -27,6 +27,11 @@ export interface AddLineOpts {
   register?: typeof registerHandle;
   publishCardFn?: (cfg: LineConfig, p: LinePaths) => Promise<unknown>;
   installLaunchAgentFn?: typeof installLaunchAgent;
+  // Dirs (an agent/npx binary resolved outside launchd's fixed base PATH)
+  // to prepend to the LaunchAgent's plist PATH — see setup.ts's
+  // resolveExtraPathDirs. Threaded straight through to installLaunchAgent;
+  // addLine doesn't compute these itself, callers do.
+  extraPathDirs?: string[];
 }
 
 // A handle that is `<existing>-<something>` is guessable from an address the
@@ -80,7 +85,7 @@ export async function addLine(m: MachinePaths, opts: AddLineOpts): Promise<{ add
         `Warning: could not publish the card (${String(e)}). Run \`agentcall card push --line ${opts.name}\` later.`,
       );
     }
-    (opts.installLaunchAgentFn ?? installLaunchAgent)(m);
+    (opts.installLaunchAgentFn ?? installLaunchAgent)(m, undefined, opts.extraPathDirs);
   }
 
   // person.json is written LAST, and only for the first line, so a failed
