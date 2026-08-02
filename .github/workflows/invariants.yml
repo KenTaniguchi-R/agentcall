@@ -24,11 +24,17 @@ jobs:
 
       - name: Protocol frames must live in packages/shared
         run: |
-          # A frame is identifiable by its `type:` discriminator -- z.literal().
-          # Anywhere outside packages/shared that means a frame shape was
-          # redefined locally instead of imported from the single source of
-          # truth. Baseline at time of writing: zero occurrences.
-          hits=$(grep -rn 'z\.literal(' apps/relay/src packages/cli/src || true)
+          # A frame is identifiable by its `type:` discriminator, which is
+          # always a STRING literal -- z.literal("call_request"). Anywhere
+          # outside packages/shared that means a frame shape was redefined
+          # locally instead of imported from the single source of truth.
+          #
+          # Matching bare `z.literal(` instead flagged `version: z.literal(1)`
+          # in packages/cli/src/rosters.ts -- a local file-format version tag,
+          # not a protocol frame. All 13 discriminators in protocol.ts are
+          # string literals and it declares no numeric ones, so requiring the
+          # quote costs no coverage.
+          hits=$(grep -rn 'z\.literal("' apps/relay/src packages/cli/src || true)
           if [ -n "$hits" ]; then
             echo "$hits" | while IFS=: read -r file line _; do
               echo "::error file=$file,line=$line::Protocol frame defined outside packages/shared. Frame shapes are declared once in packages/shared/src/protocol.ts and imported -- see CLAUDE.md."

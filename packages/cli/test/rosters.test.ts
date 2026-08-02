@@ -84,6 +84,22 @@ describe("memberships (user data)", () => {
     // The original membership must survive the rejected write.
     expect(loadMemberships(p)).toEqual([{ name: "acme", relay: "https://r.test", roster_id: "a".repeat(22) }]);
   });
+
+  // Same name and same roster_id but a DIFFERENT relay is not idempotent —
+  // it is a different roster that happens to share an id. `relayUrl(cfg)`
+  // moves between invocations via AGENTCALL_RELAY or an edited config, so
+  // this is reachable without a genuine 16-byte id collision. Treated as a
+  // conflict for the same reason readCached validates all three of
+  // (relay, caller, roster_id): the symptom of overwriting the relay is the
+  // roster quietly vanishing from `agentcall search`, which filters by the
+  // current relay — confusing, and silent.
+  it("throws rather than silently overwriting a name's relay", () => {
+    const p = paths();
+    saveMembership(p, { name: "acme", relay: "https://r.test", roster_id: "a".repeat(22) });
+    expect(() => saveMembership(p, { name: "acme", relay: "https://other.test", roster_id: "a".repeat(22) }))
+      .toThrow(/already recorded|different roster/i);
+    expect(loadMemberships(p)).toEqual([{ name: "acme", relay: "https://r.test", roster_id: "a".repeat(22) }]);
+  });
 });
 
 describe("bundle cache (derived data)", () => {

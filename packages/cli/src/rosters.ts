@@ -76,11 +76,20 @@ export function saveMembership(p: Paths, m: Membership): void {
   // `roster join`, so the happy path for joining a SECOND roster without
   // `--as` would otherwise silently destroy the first one's roster_id here —
   // unrecoverable, because the join secret is discarded at join time. Same
-  // name + same id stays idempotent (rejoining what you already belong to);
-  // same name + a different id is the collision this throws on.
-  if (prior && prior.roster_id !== m.roster_id) {
+  // name + same id + same relay stays idempotent (rejoining what you already
+  // belong to); any other reuse of the name is the collision this throws on.
+  //
+  // Relay is part of the comparison for the same reason readCached validates
+  // all three of (relay, caller, roster_id): a roster is identified by its id
+  // *on a relay*, not by its id alone. `relayUrl(cfg)` moves between
+  // invocations via AGENTCALL_RELAY or an edited config, so without this a
+  // re-save silently rewrites the relay field — and since `agentcall search`
+  // filters memberships by the current relay, the roster just quietly stops
+  // appearing in results instead of reporting anything.
+  if (prior && (prior.roster_id !== m.roster_id || prior.relay !== m.relay)) {
+    const what = prior.roster_id !== m.roster_id ? "a different roster" : `a different relay (${prior.relay})`;
     throw new Error(
-      `"${m.name}" is already recorded for a different roster. Run \`agentcall roster forget ${m.name}\` first, or pick a different --as name.`,
+      `"${m.name}" is already recorded for ${what}. Run \`agentcall roster forget ${m.name}\` first, or pick a different --as name.`,
     );
   }
   const rosters = existing.filter((r) => r.name.toLowerCase() !== m.name.toLowerCase());
