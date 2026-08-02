@@ -517,35 +517,45 @@ disabled/deferred so it cannot bypass an IT-pinned version.
     `--ignore-user-config` stops that config being *loaded*, not being *read*.
 
 **Tool guard.** Tool calls a caller's agent makes on your machine are checked before
-they run. File reads, writes, searches, and listings that reach credential paths
-(`~/.ssh`, `~/.aws`, `.env`, Keychains, `~/.agentcall`, `~/.claude`, `~/.codex`), the guard's own
-installed code, `~/AgentCall/tasks`, `~/Library/LaunchAgents`, and shell startup files
-are refused. For Claude, file-shaped tools outside the resolved task workdir are
-also refused, and every tool call reaching the guard is recorded to
-`~/.agentcall/tools.log`. `agentcall doctor` verifies the guard is in force: it asks a
-real `claude` spawn to read a canary `.env` and requires the denial to appear in the
+they run. For Claude, file reads, writes, searches, and listings that reach
+credential paths (`~/.ssh`, `~/.aws`, `.env`, Keychains, `~/.agentcall`,
+`~/.claude`, `~/.codex`), the guard's own installed code, `~/AgentCall/tasks`,
+`~/Library/LaunchAgents`, and shell startup files
+are refused, and file-shaped tools outside the resolved task workdir are
+also refused. Every tool call reaching the guard is recorded to
+`~/.agentcall/tools.log`; on verified codex-cli 0.146.0, Codex runs the same
+hook in observe-only mode so long as `allow_managed_hooks_only` is not enabled,
+so it records attempts but does not refuse them.
+`agentcall doctor` verifies the
+Claude guard is in force: it asks a real `claude` spawn to read a canary `.env`
+and requires the denial to appear in the
 log. When the model refuses that read on its own the guard is never consulted and the
 run proves nothing, so doctor falls back to invoking the guard directly and reports
 `!` — unverified, not broken.
 
 Two limits, stated plainly:
 
-- **A task that grants `exec` has no read floor.** Shell commands are recorded, not
-  blocked — pattern-matching a command string is too weak to be a boundary and too
-  eager to be harmless. The control on `exec` is which tasks you choose to write.
-- **A Codex answering agent is neither guarded nor, today, observed.** The same hook is
-  registered on the Codex spawn in *observe* mode — record, never block — but Codex
-  gates hooks on persisted trust and agentcall supplies its hook inline via `-c`, which
-  has never been trusted, so **Codex skips it silently and the Codex spawn produces no
-  `tools.log` telemetry at all** ([issue #4](https://github.com/KenTaniguchi-R/agentcall/issues/4)).
-  The mechanism itself is sound: forced to run, the guard does see the whole surface,
-  including bundled MCP calls such as `mcp__codex_apps__sites__list_sites`. It is the
-  trust gate, not the guard, that is missing. Codex has no `Read`/`Grep`/`Glob` tools, and most of
-  what it does reach the filesystem with is `Bash` (`sed -n '1,200p' file`) — exactly
+- **A task that grants `exec` has no read floor.** On Claude — and on the
+  verified Codex release when session hooks are enabled — shell commands are
+  recorded, not blocked. Pattern-matching a command string is too weak to be a
+  boundary and too eager to be harmless. The control on `exec` is which tasks
+  you choose to write.
+- **A Codex answering agent is observed, not guarded.** AgentCall trusts only its exact
+  inline session hook by supplying Codex's normalized hook-identity hash; it does not
+  use the blanket `--dangerously-bypass-hook-trust` flag, so user, project,
+  plugin, and managed hooks do not inherit trust from AgentCall's grant. Hooks
+  independently trusted by the owner or administrator can still run. The guard runs in *observe* mode — record,
+  never block — and writes tool attempts that emit `PreToolUse` to `tools.log`. This is
+  pinned and behaviorally verified against codex-cli 0.146.0. AgentCall does not
+  claim observation on other releases: a changed normalization makes the hash
+  mismatch and the hook skip silently rather than widening trust. An administrator
+  setting `allow_managed_hooks_only = true` also disables this session hook;
+  managed-hook installation or detection remains future work. Codex has no
+  `Read`/`Grep`/`Glob` tools, and much of what it does reach the filesystem with is
+  `Bash` (`sed -n '1,200p' file`) — exactly
   the surface the point above says cannot be bounded by matching command strings. Its
   `--sandbox` level confines writes but not reads: `codex exec --sandbox read-only`
-  still reads `~/.ssh`. **A Codex answering agent therefore has no read floor — and
-  until #4 is fixed, no record of what it did either.**
+  still reads `~/.ssh`. **A Codex answering agent therefore has no read floor.**
 - **Codex does not reach the filesystem only through `Bash`, and the non-shell routes
   are not recorded at all.** `view_image` reads any absolute path and returns the raw
   bytes — it does not check that the file is an image, so it is a general file-read

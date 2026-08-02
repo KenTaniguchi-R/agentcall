@@ -5,7 +5,8 @@ import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
 import { buildPrompt } from "../src/prompt.js";
 import {
-  buildSpawnSpec, claudeAllowedTools, guardCodexConfigArg, guardSettingsJson, GUARD_TIMEOUT_S,
+  buildSpawnSpec, claudeAllowedTools, codexHookTrustedHash, guardCodexConfigArg,
+  guardCodexTrustArg, guardSettingsJson, GUARD_TIMEOUT_S,
   codexThreadingEnabled, CODEX_THREADING_VERIFIED_VERSION,
   parseClaudeJson, parseCodexJsonl, runAgent, truncateUtf8,
 } from "../src/runner.js";
@@ -119,9 +120,9 @@ describe("buildSpawnSpec", () => {
     expect(s.cmd).toBe("/abs/path/to/codex");
     // The `-c` payload is asserted in "guard hook wiring" rather than pinned
     // here, so this stays a test of the spawn shape.
-    expect(s.args.filter((a) => a !== guardCodexConfigArg())).toEqual([
+    expect(s.args.filter((a) => ![guardCodexConfigArg(), guardCodexTrustArg()].includes(a))).toEqual([
       "exec", "--ignore-user-config", "--sandbox", "workspace-write", "--cd", WORKDIR,
-      "--skip-git-repo-check", "--json", "-c", "PROMPT",
+      "--skip-git-repo-check", "--json", "-c", "-c", "PROMPT",
     ]);
     expect(s.cwd).toBe(WORKDIR);
   });
@@ -457,6 +458,21 @@ describe("guard hook wiring", () => {
     expect(spec.env?.AGENTCALL_CALL_ID).toBe("call-9");
   });
 
+  it("matches codex-cli 0.146.0's normalized hook identity hash", () => {
+    expect(codexHookTrustedHash("/usr/bin/touch /private/tmp/agentcall-issue4-own.marker"))
+      .toBe("sha256:d2f79e214fce245f65d8f1aa644e557bd09d402da9653ecab48cc5ce6e3f1f01");
+  });
+
+  it("trusts only the exact inline guard hook via a whole state-table override", () => {
+    const trust = guardCodexTrustArg();
+    expect(trust).toMatch(/^hooks\.state=\{"\/<session-flags>\/config\.toml:pre_tool_use:0:0"=\{trusted_hash="sha256:[a-f0-9]{64}"\}\}$/);
+
+    const spec = buildSpawnSpec("codex", "hi", WORKDIR, () => "/bin/codex");
+    const overrides = spec.args.flatMap((arg, i) => arg === "-c" ? [spec.args[i + 1]!] : []);
+    expect(overrides).toEqual([guardCodexConfigArg(), trust]);
+    expect(spec.args).not.toContain("--dangerously-bypass-hook-trust");
+  });
+
   // The guard is not codex's read boundary — codex's own deny_read is — so it
   // must not deny tools it cannot classify and take the runtime down with it.
   it("runs the codex guard in observe mode", () => {
@@ -536,6 +552,7 @@ describe("buildSpawnSpec resume (codex)", () => {
     const spec = buildSpawnSpec("codex", "hi", "/w", bin, { caps: ["read"] }, "c1", "sess-abc");
     expect(spec.args).toContain("--ignore-user-config");
     expect(spec.args.some((a) => a.startsWith("hooks.PreToolUse="))).toBe(true);
+    expect(spec.args.some((a) => a.startsWith("hooks.state="))).toBe(true);
   });
 
   it("puts the prompt last", () => {

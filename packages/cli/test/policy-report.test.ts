@@ -83,7 +83,11 @@ describe("renderPolicyReport", () => {
     expect(report).toContain("read-only or workspace-write sandbox");
     expect(report).toContain("fetch and exec are not separate Codex controls");
     expect(report).toContain("Codex can execute shell commands whether or not a task declares exec");
-    expect(report).toContain("Those shell actions are not currently recorded");
+    expect(report).toContain("On verified codex-cli 0.146.0");
+    expect(report).toContain("shell tool attempts are recorded by an observe-only hook");
+    expect(report).toContain("unless managed-only hooks are required");
+    expect(report).toContain("Other Codex releases or allow_managed_hooks_only=true may silently skip that hook");
+    expect(report).toContain("non-hooked read routes remain unrecorded");
     expect(report).not.toContain("shell actions are recorded, not blocked");
   });
 });
