@@ -62,30 +62,30 @@ export function mountRoster(app: Hono<{ Bindings: Env }>): void {
     const body = JoinRosterRequest.safeParse(await c.req.json().catch(() => null));
     if (!body.success) return c.json(NOT_FOUND, 404);
 
-    const row = await c.env.DB.prepare("SELECT secret_hash FROM rosters WHERE id = ? AND org = ?")
-      .bind(id, org).first<{ secret_hash: string }>();
-    // Hash the supplied secret even when the roster is missing, so the two
-    // paths cost the same. Never log the secret or its digest.
     const supplied = await sha256Hex(body.data.secret);
-    if (!row || !constantTimeEqual(row.secret_hash, supplied)) return c.json(NOT_FOUND, 404);
+    // Authorization and capacity are evaluated by SQLite at INSERT time, not
+    // by Worker reads that concurrent joins or a secret rotation can straddle.
+    // Comparing secret_hash in SQL is deliberately acceptable here: both
+    // operands are fixed-length SHA-256 digests of an unguessable 32-byte
+    // token, so SQLite's byte-wise early exit reveals no usable secret prefix.
+    const inserted = await c.env.DB.prepare(
+      "INSERT OR IGNORE INTO roster_members (roster_id, org, handle, joined_at) " +
+        "SELECT r.id, r.org, ?, ? FROM rosters r " +
+        "WHERE r.id = ? AND r.org = ? AND r.secret_hash = ? " +
+        "AND (SELECT COUNT(*) FROM roster_members WHERE roster_id = r.id) < ?",
+    ).bind(handle, Date.now(), id, org, supplied, MAX_ROSTER_MEMBERS).run();
+    if ((inserted.meta.changes ?? 0) === 1) return c.json({ ok: true });
 
-    // Past this point the caller has proved the secret, so revealing that the
-    // roster exists and is full costs nothing.
-    const already = await c.env.DB.prepare(
-      "SELECT 1 FROM roster_members WHERE roster_id = ? AND org = ? AND handle = ?",
-    ).bind(id, org, handle).first();
-    if (!already) {
-      const count = await c.env.DB.prepare("SELECT COUNT(*) AS n FROM roster_members WHERE roster_id = ?")
-        .bind(id).first<{ n: number }>();
-      if ((count?.n ?? 0) >= MAX_ROSTER_MEMBERS) return c.json({ error: "roster full" }, 409);
-      // OR IGNORE: two concurrent joins by the same handle can both pass the
-      // membership check above and then race on the (roster_id, handle)
-      // primary key. This endpoint documents itself as idempotent, so the
-      // loser of that race must not 500.
-      await c.env.DB.prepare("INSERT OR IGNORE INTO roster_members (roster_id, org, handle, joined_at) VALUES (?, ?, ?, ?)")
-        .bind(id, org, handle, Date.now()).run();
-    }
-    return c.json({ ok: true });
+    // Zero changes has three meanings. This read chooses the response only;
+    // it cannot authorize a write, so racing it cannot bypass the atomic gate.
+    const state = await c.env.DB.prepare(
+      "SELECT r.secret_hash, EXISTS(" +
+        "SELECT 1 FROM roster_members m WHERE m.roster_id = r.id AND m.org = r.org AND m.handle = ?" +
+        ") AS member FROM rosters r WHERE r.id = ? AND r.org = ?",
+    ).bind(handle, id, org).first<{ secret_hash: string; member: number }>();
+    if (!state || !constantTimeEqual(state.secret_hash, supplied)) return c.json(NOT_FOUND, 404);
+    if (state.member === 1) return c.json({ ok: true });
+    return c.json({ error: "roster full" }, 409);
   });
 
   app.get("/v1/roster/:id/bundle", async (c) => {
