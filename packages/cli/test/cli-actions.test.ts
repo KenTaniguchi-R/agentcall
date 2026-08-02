@@ -152,6 +152,31 @@ describe.sequential("CLI command actions", () => {
     expect(out.stderr).toMatch(/required option.*--secret/i);
   });
 
+  it("prints one-time roster credentials before a colliding local save can fail", async () => {
+    let creates = 0;
+    const relay = await startRelay(() => {
+      creates += 1;
+      return {
+        status: 200,
+        body: { roster_id: B, join_secret: "join-once", admin_secret: "admin-once" },
+      };
+    });
+    const testHome = home();
+    seedConfig(testHome, relay);
+    saveMembership(getPaths(testHome), { name: "roster", relay, roster_id: A });
+
+    const out = await runCommand(testHome, ["roster", "create"]);
+
+    expect(creates).toBe(1);
+    expect(out.code).toBe(1);
+    expect(out.stdout).toContain(B);
+    expect(out.stdout).toContain("join-once");
+    expect(out.stdout).toContain("admin-once");
+    expect(out.stderr).toMatch(/roster was created.*not saved locally/is);
+    expect(out.stderr).toContain(`agentcall roster join ${B}`);
+    expect(loadMemberships(getPaths(testHome))).toEqual([{ name: "roster", relay, roster_id: A }]);
+  });
+
   it("persists a roster only after the relay accepts the join", async () => {
     let seen: { url?: string; method?: string; body?: string } = {};
     const relay = await startRelay((url, method, body) => {
@@ -182,7 +207,8 @@ describe.sequential("CLI command actions", () => {
 
     expect(joins).toBe(1); // Relay membership happened; there is no rollback operation.
     expect(out.code).toBe(1);
-    expect(out.stderr).toMatch(/roster forget/);
+    expect(out.stderr).toMatch(/joined.*not saved locally/is);
+    expect(out.stderr).toContain(`agentcall roster join ${B}`);
     expect(loadMemberships(getPaths(testHome))).toEqual([{ name: "acme", relay, roster_id: A }]);
   });
 
