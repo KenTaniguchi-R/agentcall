@@ -105,7 +105,12 @@ export async function checkAgentSpawn(
   kind: AgentKind, workdir: string, runFn: typeof runAgent = runAgent,
 ): Promise<VerifyCheck> {
   try {
-    await runFn(kind, VERIFY_PROMPT, workdir, VERIFY_TIMEOUT_MS, undefined, ASK_TASK.envelope);
+    // GUARD_PROBE_LINE (below): this spawn has no real line behind it either —
+    // same reasoning as the guard probes further down this file — and
+    // runAgent's lineName is a required argument specifically so this call
+    // can't silently fall back to the old "" default (which fails the guard
+    // closed on every tool call).
+    await runFn(kind, VERIFY_PROMPT, workdir, VERIFY_TIMEOUT_MS, undefined, ASK_TASK.envelope, "unknown", undefined, GUARD_PROBE_LINE);
     return { name: "agent run", ok: true };
   } catch (e) {
     return { name: "agent run", ok: false, detail: short(e), hint: classifyAgentFailure(kind, e) };
@@ -189,11 +194,14 @@ const GUARD_UNVERIFIED_HINT =
   "this is not an install problem — the guard denied a direct probe, it simply never got asked during the " +
   "spawn probe. Re-running doctor may resolve it; a real call is unaffected.";
 
-// The synthetic line name both probes below run under. Doctor's probes have
-// no real line to hand the guard — they invent a temp home from scratch — so
-// this is a fixed, self-contained name rather than anything read from disk.
-// It only needs to satisfy LINE_NAME_RE and agree with deniedInLog below,
-// which reads the calls.log this name resolves to.
+// The synthetic line name every verification spawn in this file runs under —
+// the two guard probes below, and checkAgentSpawn above. None of them have a
+// real line to hand the guard: the guard probes invent a temp home from
+// scratch, and checkAgentSpawn is a generic health check called from setup
+// and doctor before any particular line is necessarily relevant. So this is a
+// fixed, self-contained name rather than anything read from disk. It only
+// needs to satisfy LINE_NAME_RE and agree with deniedInLog below, which reads
+// the calls.log this name resolves to.
 export const GUARD_PROBE_LINE = "doctor-probe";
 
 // Spawns a real `claude -p` against a canary `.env` file and asserts the read

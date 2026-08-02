@@ -4,8 +4,8 @@ import WebSocket from "ws";
 import {
   AGENT_TIMEOUT_MS, RelayToListenerFrame, safeParseFrame,
 } from "@benree/agentcall-shared";
-import { resolveWorkdir, type CallableConfig } from "./config.js";
-import type { Paths } from "./paths.js";
+import { resolveLineWorkdir, type CallableLineConfig } from "./config.js";
+import type { LinePaths } from "./paths.js";
 import { buildPrompt } from "./prompt.js";
 import { AgentRunError, runAgent } from "./runner.js";
 import { SerialQueue } from "./queue.js";
@@ -14,19 +14,22 @@ import { loadTasks } from "./tasks.js";
 
 export interface ListenerDeps {
   relay: string;
-  config: CallableConfig;
-  paths: Paths;
+  paths: LinePaths;
+  /** Called on every (re)connect — a rotated token takes effect without a restart. */
+  loadConfig: () => CallableLineConfig;
   run?: typeof runAgent;
   maxPending?: number;
   backoffMs?: (attempt: number) => number;
+  // Test seam so a test can assert on what each (re)connect sends — a
+  // WebSocketServer round-trip works but makes asserting per-attempt
+  // Authorization headers awkward. Production leaves this unset and gets a
+  // real `ws` socket.
+  socketFactory?: (url: string, opts: { headers: Record<string, string> }) => WebSocket;
 }
 
 export function startListener(deps: ListenerDeps): { stop(): void } {
   const run = deps.run ?? runAgent;
-  // Resolved once, up front: a bad `workdir` in config.json should stop
-  // `agentcall listen` with a clear message, not fail every inbound call
-  // individually. Changing it therefore needs a listener restart.
-  const workdir = resolveWorkdir(deps.config, deps.paths);
+  const newSocket = deps.socketFactory ?? ((url: string, opts: { headers: Record<string, string> }) => new WebSocket(url, opts));
   const queue = new SerialQueue(deps.maxPending ?? 0);
   const backoff = deps.backoffMs ?? ((n) => Math.min(1000 * 2 ** n, 60_000) + Math.random() * 500);
   let stopped = false;
@@ -39,11 +42,25 @@ export function startListener(deps: ListenerDeps): { stop(): void } {
     appendFileSync(deps.paths.callsLog, JSON.stringify({ ts: new Date().toISOString(), ...entry }) + "\n");
   };
 
+  // Config (and therefore workdir) is re-read on every (re)connect, not just
+  // once at startup: a rotated token (`agentcall rotate`) or an edited
+  // workdir then takes effect on the next reconnect instead of needing the
+  // whole multi-line process restarted. A bad workdir/config still stops the
+  // FIRST connect() (called synchronously below, not through
+  // scheduleReconnect) with a thrown error — same "fail loudly at start"
+  // contract `agentcall listen` had before lines existed. A config that goes
+  // bad LATER, discovered on a scheduled reconnect, must NOT throw all the
+  // way out: this one process holds every line's socket, and an uncaught
+  // throw from inside a bare `setTimeout` callback would crash all of them,
+  // not just the line whose config broke — see scheduleReconnect below,
+  // which is what catches that case.
   const connect = () => {
     if (stopped) return;
+    const config = deps.loadConfig();
+    const workdir = resolveLineWorkdir(config, deps.paths);
     const url = deps.relay.replace(/^http/, "ws") + "/v1/ws?role=listen";
-    ws = new WebSocket(url, {
-      headers: { Authorization: `Bearer ${deps.config.token}`, "X-AgentCall-Handle": deps.config.handle },
+    ws = newSocket(url, {
+      headers: { Authorization: `Bearer ${config.token}`, "X-AgentCall-Handle": config.handle },
     });
     ws.on("open", () => {
       attempt = 0;
@@ -108,18 +125,18 @@ export function startListener(deps: ListenerDeps): { stop(): void } {
         send({ type: "call_started", call_id });
         try {
           const out = await run(
-            deps.config.agent_kind,
-            buildPrompt(deps.config.handle, from, message, task, workdir),
+            config.agent_kind,
+            buildPrompt(config.handle, from, message, task, workdir),
             workdir.dir,
             timeoutMs,
             undefined,
             task.envelope,
             call_id,
             signal,
-            // No LinePaths reachable from here yet — Task 8 rewires the
-            // listener to be per-line. An empty AGENTCALL_LINE just means
-            // the guard subprocess fails closed, which is safe.
-            "",
+            // The line this call came in on — required (see runner.ts): the
+            // PreToolUse guard needs it to know which line's calls.log and
+            // task dirs it's policing, and fails closed without it.
+            deps.paths.name,
           );
           send({ type: "call_result", call_id, text: out.text, session_id: out.session_id, task: task.id });
           audit({ call_id, from, message: message.slice(0, 500), task: task.id, status: "ok", duration_ms: Date.now() - started });
@@ -147,7 +164,20 @@ export function startListener(deps: ListenerDeps): { stop(): void } {
     const scheduleReconnect = () => {
       if (pingTimer) clearInterval(pingTimer);
       if (stopped) return;
-      setTimeout(connect, backoff(attempt++)).unref?.();
+      setTimeout(() => {
+        try {
+          connect();
+        } catch (e) {
+          // loadConfig/resolveLineWorkdir threw on this reconnect attempt —
+          // corrupt config.json, a workdir deleted out from under a running
+          // listener, etc. See the comment above connect(): this must not
+          // propagate, or one line's bad config takes down every other
+          // line's socket in this same process. Audit it and keep retrying
+          // with the normal backoff, the same as a network-level ws error.
+          audit({ type: "reconnect_error", error: String(e).slice(0, 2000) });
+          scheduleReconnect();
+        }
+      }, backoff(attempt++)).unref?.();
     };
     ws.on("close", scheduleReconnect);
     ws.on("error", () => { /* close fires next */ });

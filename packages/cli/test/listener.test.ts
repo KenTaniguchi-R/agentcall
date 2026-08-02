@@ -3,11 +3,11 @@ import { mkdirSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { WebSocketServer, type WebSocket as WsSocket } from "ws";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { startListener } from "../src/listener.js";
-import { getPaths } from "../src/paths.js";
+import { getLinePaths, getMachinePaths, type LinePaths, type MachinePaths } from "../src/paths.js";
 import { AgentRunError } from "../src/runner.js";
-import type { CallableConfig } from "../src/config.js";
+import type { CallableLineConfig } from "../src/config.js";
 
 let httpServer: Server;
 let stopper: { stop(): void } | undefined;
@@ -30,10 +30,11 @@ function fakeRelay(onConn: (ws: WsSocket) => void): Promise<string> {
   });
 }
 
-// CallableConfig, not Config: `startListener` only accepts a config that has
-// already passed `assertCallableConfig`, and annotating the fixture as the
-// wider `Config` widens agent_kind back to optional at every spread site.
-const cfg: CallableConfig = { handle: "ken", token: "tok", agent_kind: "claude", relay: "unused" };
+// CallableLineConfig, not LineConfig: `startListener` only accepts a config
+// that has already passed `assertCallableLine`, and annotating the fixture as
+// the wider `LineConfig` widens agent_kind back to optional at every spread
+// site.
+const cfg: CallableLineConfig = { handle: "ken", token: "tok", agent_kind: "claude", relay: "unused" };
 
 function frames(ws: WsSocket, n: number): Promise<any[]> {
   return new Promise((resolve) => {
@@ -47,46 +48,53 @@ function frames(ws: WsSocket, n: number): Promise<any[]> {
   });
 }
 
-// Fresh ~/.agentcall-shaped tmp root, no policy/task seeded — loadPolicy and
-// loadTasks both fall back to their built-in defaults (default_offer: ["ask"],
-// the built-in "ask" task), which is enough for a plain message to resolve.
-function seededPaths(): ReturnType<typeof getPaths> {
-  return getPaths(mkdtempSync(join(tmpdir(), "agentcall-l-")));
+// Fresh ~/.agentcall-shaped tmp root, isolated as both stateRoot and userHome
+// so nothing in these tests can accidentally touch the real machine.
+function freshMachine(): MachinePaths {
+  const root = mkdtempSync(join(tmpdir(), "agentcall-l-"));
+  return getMachinePaths(root, root);
+}
+
+// No policy/task seeded — loadPolicy and loadTasks both fall back to their
+// built-in defaults (default_offer: ["ask"], the built-in "ask" task), which
+// is enough for a plain message to resolve.
+function seededPaths(): LinePaths {
+  return getLinePaths(freshMachine(), "claude");
 }
 
 // The one way call-flow tests assemble listener deps: default config wired to
-// the relay under test, plus a freshly seeded paths root. Tests needing a
+// the relay under test, plus a freshly seeded line-paths root. Tests needing a
 // custom config field (e.g. workdir) or seeded policy/tasks spread this and
 // override, or seed onto `.paths` before calling startListener.
 function baseDeps(relay: string) {
-  return { config: { ...cfg, relay }, paths: seededPaths(), relay };
+  const paths = seededPaths();
+  return { paths, relay, loadConfig: () => ({ ...cfg, relay }) };
 }
 
 describe("startListener workdir", () => {
   // Resolved once at startup so a typo'd workdir stops `agentcall listen`
   // with a clear message instead of failing every inbound call individually.
   it("throws at start rather than per call when workdir is unusable", () => {
-    const paths = getPaths(mkdtempSync(join(tmpdir(), "agentcall-l-")));
     expect(() =>
       startListener({
-        relay: "http://127.0.0.1:1", paths,
-        config: { ...cfg, workdir: "/no/such/project" },
+        relay: "http://127.0.0.1:1", paths: seededPaths(),
+        loadConfig: () => ({ ...cfg, workdir: "/no/such/project" }),
         run: async () => ({ text: "unused" }),
       }),
     ).toThrow(/does not exist/i);
   });
 
   it("spawns in the configured workdir and drops the confinement line from the prompt", async () => {
-    const home = mkdtempSync(join(tmpdir(), "agentcall-l-"));
-    const paths = getPaths(home);
-    const project = join(home, "code", "api");
+    const machine = freshMachine();
+    const paths = getLinePaths(machine, "claude");
+    const project = join(machine.stateRoot, "code", "api");
     mkdirSync(project, { recursive: true });
     const seen: { workdir?: string; prompt?: string } = {};
     const relayReady = new Promise<WsSocket>((resolveWs) => {
       void fakeRelay((ws) => resolveWs(ws)).then((url) => {
         stopper = startListener({
           relay: url, paths,
-          config: { ...cfg, workdir: project },
+          loadConfig: () => ({ ...cfg, workdir: project }),
           run: async (_k, prompt, workdir) => {
             seen.prompt = prompt; seen.workdir = workdir;
             return { text: "ok" };
@@ -106,7 +114,7 @@ describe("startListener workdir", () => {
 
 describe("startListener", () => {
   it("answers an incoming call: accepted -> started -> result, and audits", async () => {
-    let paths!: ReturnType<typeof getPaths>;
+    let paths!: LinePaths;
     const relayReady = new Promise<WsSocket>((resolveWs) => {
       void fakeRelay((ws) => resolveWs(ws)).then((url) => {
         const deps = baseDeps(url);
@@ -151,7 +159,7 @@ describe("startListener", () => {
   });
 
   it("maps runner failures to call_failed with the runner's code, without leaking stderr to the caller", async () => {
-    let paths!: ReturnType<typeof getPaths>;
+    let paths!: LinePaths;
     const relayReady = new Promise<WsSocket>((resolveWs) => {
       void fakeRelay((ws) => resolveWs(ws)).then((url) => {
         const deps = baseDeps(url);
@@ -210,7 +218,7 @@ describe("startListener acceptance and cancellation", () => {
 
   it("acknowledges cancellation of a running call only after the agent exits", async () => {
     let exited = false;
-    let paths!: ReturnType<typeof getPaths>;
+    let paths!: LinePaths;
     const relayReady = new Promise<WsSocket>((resolveWs) => {
       void fakeRelay((ws) => resolveWs(ws)).then((url) => {
         const deps = baseDeps(url);
@@ -252,12 +260,12 @@ describe("startListener acceptance and cancellation", () => {
   });
 });
 
-function seedPolicy(paths: ReturnType<typeof getPaths>, policy: object) {
+function seedPolicy(paths: LinePaths, policy: object) {
   mkdirSync(paths.dir, { recursive: true });
   writeFileSync(paths.policyFile, JSON.stringify(policy));
 }
 
-function seedTask(paths: ReturnType<typeof getPaths>, id: string, frontmatter: string[], body = "do it\n") {
+function seedTask(paths: LinePaths, id: string, frontmatter: string[], body = "do it\n") {
   const dir = join(paths.tasksDir, id);
   mkdirSync(dir, { recursive: true });
   writeFileSync(join(dir, "SKILL.md"), ["---", ...frontmatter, "---", body].join("\n"));
@@ -266,7 +274,7 @@ function seedTask(paths: ReturnType<typeof getPaths>, id: string, frontmatter: s
 describe("startListener task resolution", () => {
   it("refuses a blocked caller without spawning, and audits it", async () => {
     let spawned = false;
-    let paths!: ReturnType<typeof getPaths>;
+    let paths!: LinePaths;
     const relayReady = new Promise<WsSocket>((resolveWs) => {
       void fakeRelay((ws) => resolveWs(ws)).then((url) => {
         const deps = baseDeps(url);
@@ -305,7 +313,7 @@ describe("startListener task resolution", () => {
 
   it("runs a granted task with its envelope and timeout, echoing task in call_result", async () => {
     const seen: { prompt?: string; timeout?: number; envelope?: unknown } = {};
-    let paths!: ReturnType<typeof getPaths>;
+    let paths!: LinePaths;
     const relayReady = new Promise<WsSocket>((resolveWs) => {
       void fakeRelay((ws) => resolveWs(ws)).then((url) => {
         const deps = baseDeps(url);
@@ -358,7 +366,7 @@ describe("startListener task resolution", () => {
 
   it("maps a corrupt policy file to call_failed agent_error without spawning, and without leaking the parse error", async () => {
     let spawned = false;
-    let paths!: ReturnType<typeof getPaths>;
+    let paths!: LinePaths;
     const relayReady = new Promise<WsSocket>((resolveWs) => {
       void fakeRelay((ws) => resolveWs(ws)).then((url) => {
         const deps = baseDeps(url);
@@ -377,5 +385,67 @@ describe("startListener task resolution", () => {
     expect(spawned).toBe(false);
     const audit = readFileSync(paths.callsLog, "utf8").trim().split("\n").map((l) => JSON.parse(l));
     expect(audit[0].error).toMatch(/JSON|SyntaxError/i);
+  });
+});
+
+// Minimal fake WebSocket for tests that need to assert on what each
+// (re)connect sends without a full WebSocketServer round-trip — in
+// particular, per-attempt Authorization headers, which fakeRelay's real
+// handshake makes awkward to inspect per reconnect. `.emit` is test-only, not
+// part of the `ws` API surface: it lets a test fire the same events
+// startListener listens for (`open`, `message`, `close`) synchronously.
+function fakeSocketFactory(onConnect: (url: string, opts: { headers: Record<string, string> }) => void) {
+  const sockets: FakeSocket[] = [];
+  class FakeSocket {
+    private listeners: Record<string, ((...a: unknown[]) => void)[]> = {};
+    on(event: string, cb: (...a: unknown[]) => void) { (this.listeners[event] ??= []).push(cb); return this; }
+    send() { /* nothing to deliver in this fake */ }
+    close() { /* nothing to tear down in this fake */ }
+    emit(event: string, ...args: unknown[]) { (this.listeners[event] ?? []).forEach((cb) => cb(...args)); }
+  }
+  const factory = (url: string, opts: { headers: Record<string, string> }) => {
+    onConnect(url, opts);
+    const s = new FakeSocket();
+    sockets.push(s);
+    return s as unknown as import("ws").WebSocket;
+  };
+  return { factory, last: () => sockets.at(-1)! };
+}
+
+describe("startListener config reload", () => {
+  let linePaths: LinePaths;
+  beforeEach(() => { linePaths = seededPaths(); });
+
+  // Config used to be resolved once at startListener() startup and captured
+  // by the whole function — a rotated token (`agentcall rotate`) then only
+  // took effect after the background listener was restarted. loadConfig is
+  // now called fresh inside connect() on every attempt, including reconnects,
+  // so a new token reaches the relay on the very next reconnect with no
+  // restart needed.
+  it("re-reads config on each reconnect so a rotated token takes effect", async () => {
+    let token = "old";
+    const seen: string[] = [];
+    const sockets = fakeSocketFactory((_url, opts) => {
+      seen.push(String(opts.headers.Authorization));
+    });
+    const l = startListener({
+      relay: "https://r.example",
+      paths: linePaths,
+      loadConfig: () => ({ handle: "ken", token, relay: "https://r.example", agent_kind: "claude" }),
+      socketFactory: sockets.factory,
+      backoffMs: () => 0,
+    });
+    sockets.last().emit("close");          // force a reconnect
+    // scheduleReconnect defers the next connect() through a real
+    // `setTimeout`, even with backoffMs returning 0 — a 0ms timer still
+    // doesn't fire until the current synchronous block finishes, so a tick
+    // has to be awaited before the next `sockets.last()` reflects it.
+    await new Promise((r) => setTimeout(r, 0));
+    token = "new";
+    sockets.last().emit("close");
+    await new Promise((r) => setTimeout(r, 0));
+    l.stop();
+    expect(seen[0]).toBe("Bearer old");
+    expect(seen.at(-1)).toBe("Bearer new");
   });
 });

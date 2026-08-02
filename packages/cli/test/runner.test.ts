@@ -5,14 +5,38 @@ import { describe, expect, it } from "vitest";
 import { buildPrompt } from "../src/prompt.js";
 import {
   buildSpawnSpec, claudeAllowedTools, guardCodexConfigArg, guardSettingsJson, GUARD_TIMEOUT_S,
-  parseClaudeJson, parseCodexJsonl, runAgent, truncateUtf8,
+  parseClaudeJson, parseCodexJsonl, runAgent, truncateUtf8, type AgentKind, type SpawnSpec,
 } from "../src/runner.js";
+import { resolveAgentBin } from "../src/bin.js";
 import { getPaths } from "../src/paths.js";
 import { ASK_TASK, FULL_ACCESS_ENVELOPE, type Envelope, type Task } from "../src/tasks.js";
 
 const p = getPaths("/tmp/fakehome");
 // runAgent/buildSpawnSpec take the resolved working directory, not Paths.
 const WORKDIR = p.publicDir;
+
+// Both buildSpawnSpec and runAgent take lineName as a REQUIRED trailing
+// argument in production (see runner.ts) — no default, on purpose, so the
+// listener can't silently forget it and get a fail-closed guard. Most tests
+// below aren't about line-name behavior at all (that's its own describe
+// block, "AGENTCALL_LINE propagation"), so these thin wrappers restore an
+// ergonomic default line name for everything else, instead of threading a
+// throwaway value through dozens of call sites.
+const LINE = "line";
+function spawnSpec(
+  kind: AgentKind, prompt: string, workdir: string,
+  resolveBin: (kind: AgentKind) => string = resolveAgentBin,
+  envelope: Envelope = FULL_ACCESS_ENVELOPE, callId: string = "unknown", lineName: string = LINE,
+): SpawnSpec {
+  return buildSpawnSpec(kind, prompt, workdir, resolveBin, envelope, callId, lineName);
+}
+function agentRun(
+  kind: AgentKind, prompt: string, workdir: string, timeoutMs: number,
+  specOverride?: SpawnSpec, envelope: Envelope = FULL_ACCESS_ENVELOPE, callId: string = "unknown",
+  signal?: AbortSignal, lineName: string = LINE,
+): ReturnType<typeof runAgent> {
+  return runAgent(kind, prompt, workdir, timeoutMs, specOverride, envelope, callId, signal, lineName);
+}
 
 describe("buildPrompt", () => {
   it("includes handle, caller, divider, and message", () => {
@@ -66,7 +90,7 @@ describe("buildSpawnSpec", () => {
   // listener runs under launchd's fixed PATH, where a bare name can fail to
   // resolve even though an interactive shell finds it.
   it("spawns claude directly with the resolved absolute agent path", () => {
-    const s = buildSpawnSpec("claude", "PROMPT", WORKDIR, () => "/abs/path/to/claude");
+    const s = spawnSpec("claude", "PROMPT", WORKDIR, () => "/abs/path/to/claude");
     expect(s.cmd).toBe("/abs/path/to/claude");
     expect(s.args).toEqual([
       "-p", "PROMPT", "--output-format", "json",
@@ -88,17 +112,17 @@ describe("buildSpawnSpec", () => {
   // for a different purpose, so it's excluded from this regression check.
   it("does not wrap the spawn in the sandbox runtime", () => {
     for (const kind of ["claude", "codex"] as const) {
-      const s = buildSpawnSpec(kind, "PROMPT", WORKDIR, () => `/abs/${kind}`);
+      const s = spawnSpec(kind, "PROMPT", WORKDIR, () => `/abs/${kind}`);
       expect(s.cmd).not.toBe("npx");
       expect(s.args.join(" ")).not.toContain("sandbox-runtime");
       expect(s.args.join(" ")).not.toContain("@anthropic-ai/sandbox-runtime");
     }
-    const codex = buildSpawnSpec("codex", "PROMPT", WORKDIR, () => "/abs/codex");
+    const codex = spawnSpec("codex", "PROMPT", WORKDIR, () => "/abs/codex");
     expect(codex.args).not.toContain("--settings");
   });
 
   it("spawns codex directly, keeping its native sandbox level as the write cap", () => {
-    const s = buildSpawnSpec("codex", "PROMPT", WORKDIR, () => "/abs/path/to/codex");
+    const s = spawnSpec("codex", "PROMPT", WORKDIR, () => "/abs/path/to/codex");
     expect(s.cmd).toBe("/abs/path/to/codex");
     // The `-c` payload is asserted in "guard hook wiring" rather than pinned
     // here, so this stays a test of the spawn shape.
@@ -113,7 +137,7 @@ describe("buildSpawnSpec", () => {
     // "node" stands in for a real agent kind: guaranteed to be on PATH
     // wherever this suite runs, so the production default resolver
     // (resolveAgentBin) can be exercised without claude/codex installed.
-    const s = buildSpawnSpec("node" as unknown as "claude" | "codex", "PROMPT", WORKDIR);
+    const s = spawnSpec("node" as unknown as "claude" | "codex", "PROMPT", WORKDIR);
     expect(isAbsolute(s.cmd)).toBe(true);
   });
 });
@@ -172,14 +196,14 @@ describe("runAgent (with a fake agent binary)", () => {
 
   it("rejects with canceled when the signal aborts", async () => {
     const ac = new AbortController();
-    const p = runAgent("claude", "p", WORKDIR, 60_000, hangingSpec(), FULL_ACCESS_ENVELOPE, "c1", ac.signal);
+    const p = agentRun("claude", "p", WORKDIR, 60_000, hangingSpec(), FULL_ACCESS_ENVELOPE, "c1", ac.signal);
     ac.abort();
     await expect(p).rejects.toMatchObject({ code: "canceled" });
   });
 
   it("only settles after the process has actually exited", async () => {
     const ac = new AbortController();
-    const p = runAgent("claude", "p", WORKDIR, 60_000, hangingSpec(), FULL_ACCESS_ENVELOPE, "c1", ac.signal);
+    const p = agentRun("claude", "p", WORKDIR, 60_000, hangingSpec(), FULL_ACCESS_ENVELOPE, "c1", ac.signal);
     let settled = false;
     void p.catch(() => { settled = true; });
     await new Promise((r) => setTimeout(r, 20));
@@ -194,7 +218,7 @@ describe("runAgent (with a fake agent binary)", () => {
 
   it("ignores an abort that arrives after the agent already finished", async () => {
     const ac = new AbortController();
-    const out = await runAgent("claude", "p", WORKDIR, 60_000, okSpec("done"), FULL_ACCESS_ENVELOPE, "c1", ac.signal);
+    const out = await agentRun("claude", "p", WORKDIR, 60_000, okSpec("done"), FULL_ACCESS_ENVELOPE, "c1", ac.signal);
     expect(out.text).toBe("done");
     ac.abort();                            // must not throw or produce an unhandled rejection
   });
@@ -203,12 +227,12 @@ describe("runAgent (with a fake agent binary)", () => {
     // fake spec via kind override: use claude spec but point PATH at a script? Simpler:
     // runAgent accepts an optional spawnSpec override for tests.
     await expect(
-      runAgent("claude", "x", WORKDIR, 300, { cmd: "sleep", args: ["5"], cwd: "/tmp" }),
+      agentRun("claude", "x", WORKDIR, 300, { cmd: "sleep", args: ["5"], cwd: "/tmp" }),
     ).rejects.toMatchObject({ code: "timeout" });
   }, 15_000);
   it("captures stdout of a real process", async () => {
     const fakeOut = JSON.stringify({ type: "result", result: "hi", session_id: "s" });
-    const res = await runAgent("claude", "x", WORKDIR, 5000, {
+    const res = await agentRun("claude", "x", WORKDIR, 5000, {
       cmd: "node", args: ["-e", `console.log(${JSON.stringify(fakeOut)})`], cwd: "/tmp",
     });
     expect(res.text).toBe("hi");
@@ -225,12 +249,12 @@ describe("runAgent (with a fake agent binary)", () => {
       process.stdout.write(full.subarray(0, splitAt));
       setTimeout(() => process.stdout.write(full.subarray(splitAt)), 20);
     `;
-    const res = await runAgent("claude", "x", WORKDIR, 5000, { cmd: "node", args: ["-e", script], cwd: "/tmp" });
+    const res = await agentRun("claude", "x", WORKDIR, 5000, { cmd: "node", args: ["-e", script], cwd: "/tmp" });
     expect(res.text).toBe("日本語");
   });
   it("rejects agent_error on nonzero exit", async () => {
     await expect(
-      runAgent("claude", "x", WORKDIR, 5000, { cmd: "node", args: ["-e", "process.exit(3)"], cwd: "/tmp" }),
+      agentRun("claude", "x", WORKDIR, 5000, { cmd: "node", args: ["-e", "process.exit(3)"], cwd: "/tmp" }),
     ).rejects.toMatchObject({ code: "agent_error" });
   });
   it("falls back to stdout for the error message when stderr is empty", async () => {
@@ -241,7 +265,7 @@ describe("runAgent (with a fake agent binary)", () => {
     const stdout = JSON.stringify({ type: "result", is_error: true, result: "Not logged in · Please run /login" });
     const script = `process.stdout.write(${JSON.stringify(stdout)}); process.exit(1);`;
     await expect(
-      runAgent("claude", "x", WORKDIR, 5000, { cmd: "node", args: ["-e", script], cwd: "/tmp" }),
+      agentRun("claude", "x", WORKDIR, 5000, { cmd: "node", args: ["-e", script], cwd: "/tmp" }),
     ).rejects.toMatchObject({ code: "agent_error", message: expect.stringContaining("Not logged in") });
   });
   it("kills the whole process group on timeout, so a grandchild holding stdout doesn't hang the promise", async () => {
@@ -262,7 +286,7 @@ describe("runAgent (with a fake agent binary)", () => {
     `;
     const start = Date.now();
     await expect(
-      runAgent("claude", "x", WORKDIR, 500, { cmd: "node", args: ["-e", script], cwd: "/tmp" }),
+      agentRun("claude", "x", WORKDIR, 500, { cmd: "node", args: ["-e", script], cwd: "/tmp" }),
     ).rejects.toMatchObject({ code: "timeout" });
     expect(Date.now() - start).toBeLessThan(5000);
     const grandchildPid = Number(readFileSync(marker, "utf8"));
@@ -279,7 +303,7 @@ describe("runAgent (with a fake agent binary)", () => {
     `;
     const start = Date.now();
     await expect(
-      runAgent("claude", "x", WORKDIR, 20_000, { cmd: "node", args: ["-e", script], cwd: "/tmp" }),
+      agentRun("claude", "x", WORKDIR, 20_000, { cmd: "node", args: ["-e", script], cwd: "/tmp" }),
     ).rejects.toMatchObject({ code: "agent_error" });
     // Should be caught by the 10MB cap almost immediately, well before the
     // 20s timeout — proves the cap tripped, not the timeout.
@@ -297,20 +321,20 @@ describe("envelope-scoped spawn spec", () => {
   });
 
   it("read-only envelope restricts claude's allowedTools", () => {
-    const s = buildSpawnSpec("claude", "PROMPT", WORKDIR, () => "/abs/claude", READ_ONLY);
+    const s = spawnSpec("claude", "PROMPT", WORKDIR, () => "/abs/claude", READ_ONLY);
     const idx = s.args.indexOf("--allowedTools");
     expect(s.args[idx + 1]).toBe("Read,Grep,Glob,LS");
     expect(s.args).toContain("dontAsk");
   });
 
   it("codex gets --sandbox read-only when the envelope has no write cap", () => {
-    const s = buildSpawnSpec("codex", "PROMPT", WORKDIR, () => "/abs/codex", READ_ONLY);
+    const s = spawnSpec("codex", "PROMPT", WORKDIR, () => "/abs/codex", READ_ONLY);
     const idx = s.args.indexOf("--sandbox");
     expect(s.args[idx + 1]).toBe("read-only");
   });
 
   it("codex keeps workspace-write when the envelope has the write cap", () => {
-    const s = buildSpawnSpec("codex", "PROMPT", WORKDIR, () => "/abs/codex", FULL_ACCESS_ENVELOPE);
+    const s = spawnSpec("codex", "PROMPT", WORKDIR, () => "/abs/codex", FULL_ACCESS_ENVELOPE);
     const idx = s.args.indexOf("--sandbox");
     expect(s.args[idx + 1]).toBe("workspace-write");
   });
@@ -352,7 +376,7 @@ describe("guard hook wiring", () => {
   });
 
   it("passes --settings and the call id when spawning claude", () => {
-    const spec = buildSpawnSpec("claude", "hi", WORKDIR, () => "/bin/claude", FULL_ACCESS_ENVELOPE, "call-9");
+    const spec = spawnSpec("claude", "hi", WORKDIR, () => "/bin/claude", FULL_ACCESS_ENVELOPE, "call-9");
     const i = spec.args.indexOf("--settings");
     expect(i).toBeGreaterThan(-1);
     expect(JSON.parse(spec.args[i + 1]!).hooks.PreToolUse).toBeDefined();
@@ -360,7 +384,7 @@ describe("guard hook wiring", () => {
   });
 
   it("does not pass claude's --settings to codex, which would not parse it", () => {
-    const spec = buildSpawnSpec("codex", "hi", WORKDIR, () => "/bin/codex", FULL_ACCESS_ENVELOPE, "call-9");
+    const spec = spawnSpec("codex", "hi", WORKDIR, () => "/bin/codex", FULL_ACCESS_ENVELOPE, "call-9");
     expect(spec.args).not.toContain("--settings");
   });
 
@@ -369,7 +393,7 @@ describe("guard hook wiring", () => {
   // edit the owner's real configuration, which claude's inline --settings
   // deliberately avoids.
   it("registers the guard on the codex spawn via an inline -c override", () => {
-    const spec = buildSpawnSpec("codex", "hi", WORKDIR, () => "/bin/codex", FULL_ACCESS_ENVELOPE, "call-9");
+    const spec = spawnSpec("codex", "hi", WORKDIR, () => "/bin/codex", FULL_ACCESS_ENVELOPE, "call-9");
     const i = spec.args.indexOf("-c");
     expect(i).toBeGreaterThan(-1);
     const override = spec.args[i + 1]!;
@@ -382,19 +406,19 @@ describe("guard hook wiring", () => {
   // The guard is not codex's read boundary — codex's own deny_read is — so it
   // must not deny tools it cannot classify and take the runtime down with it.
   it("runs the codex guard in observe mode", () => {
-    const spec = buildSpawnSpec("codex", "hi", WORKDIR, () => "/bin/codex", FULL_ACCESS_ENVELOPE, "call-9");
+    const spec = spawnSpec("codex", "hi", WORKDIR, () => "/bin/codex", FULL_ACCESS_ENVELOPE, "call-9");
     expect(spec.env?.AGENTCALL_GUARD_MODE).toBe("observe");
   });
 
   it("leaves the claude spawn in enforcing mode", () => {
-    const spec = buildSpawnSpec("claude", "hi", WORKDIR, () => "/bin/claude", FULL_ACCESS_ENVELOPE, "call-9");
+    const spec = spawnSpec("claude", "hi", WORKDIR, () => "/bin/claude", FULL_ACCESS_ENVELOPE, "call-9");
     expect(spec.env?.AGENTCALL_GUARD_MODE).toBeUndefined();
   });
 
   // The prompt is positional and codex reads the last one, so an override
   // appended after it would be taken as the prompt instead.
   it("keeps the prompt last, after the -c override", () => {
-    const spec = buildSpawnSpec("codex", "PROMPT", WORKDIR, () => "/bin/codex");
+    const spec = spawnSpec("codex", "PROMPT", WORKDIR, () => "/bin/codex");
     expect(spec.args.at(-1)).toBe("PROMPT");
   });
 });
@@ -407,7 +431,7 @@ describe("guard hook wiring", () => {
 // the only lever is to not load them.
 describe("codex user-config isolation", () => {
   it("ignores the owner's codex config when answering a remote call", () => {
-    const spec = buildSpawnSpec("codex", "hi", WORKDIR, () => "/bin/codex");
+    const spec = spawnSpec("codex", "hi", WORKDIR, () => "/bin/codex");
     expect(spec.args).toContain("--ignore-user-config");
   });
 });
@@ -425,8 +449,10 @@ describe("AGENTCALL_LINE propagation", () => {
     expect(spec.env?.AGENTCALL_GUARD_MODE).toBe("observe");
   });
 
-  it("defaults to an empty line name when none is given", () => {
-    const spec = buildSpawnSpec("claude", "hi", "/work", () => "/bin/claude");
-    expect(spec.env?.AGENTCALL_LINE).toBe("");
-  });
+  // There used to be a third case here, "defaults to an empty line name when
+  // none is given" — buildSpawnSpec's lineName had a "" default. That default
+  // is gone: lineName is now a required argument (see runner.ts), specifically
+  // so a caller can no longer silently end up with "", which makes the
+  // PreToolUse guard fail closed on every tool call (Task 7). There is no
+  // longer a default to test.
 });

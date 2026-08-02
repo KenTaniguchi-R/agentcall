@@ -2,10 +2,10 @@ import { rmSync } from "node:fs";
 import { Command } from "commander";
 import type { AgentKind } from "@benree/agentcall-shared";
 import { getPaths, getMachinePaths } from "./paths.js";
-import { loadConfig, saveConfig, relayUrl, assertCallableConfig } from "./config.js";
+import { loadConfig, saveConfig, relayUrl } from "./config.js";
 import { callAgent, CallError } from "./callClient.js";
 import { getStatus, fetchCard, rotateToken, ApiError } from "./api.js";
-import { startListener } from "./listener.js";
+import { startAllListeners } from "./listenAll.js";
 import { runSetup } from "./setup.js";
 import { installLaunchAgent, isLaunchAgentInstalled, uninstallLaunchAgent } from "./launchd.js";
 import { publishCard } from "./card.js";
@@ -301,11 +301,10 @@ program
   .command("listen")
   .description("run the foreground listener (launchd runs this in the background after setup)")
   .action(() => {
-    const paths = getPaths();
-    const cfg = loadConfig(paths);
-    assertCallableConfig(cfg);
-    console.log(`agentcall listener starting for ${cfg.handle} -> ${relayUrl(cfg)}`);
-    const l = startListener({ relay: relayUrl(cfg), config: cfg, paths });
+    // One process, every callable line: startAllListeners enumerates
+    // ~/.agentcall/lines itself and opens one socket per callable line, so
+    // there's no single config/paths pair to load up front here anymore.
+    const l = startAllListeners(getMachinePaths());
     process.on("SIGTERM", () => {
       l.stop();
       process.exit(0);

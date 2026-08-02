@@ -3,7 +3,6 @@ import { join } from "node:path";
 import { z } from "zod";
 import { parse as parseYaml } from "yaml";
 import { TASK_ID_RE } from "@benree/agentcall-shared";
-import type { Paths } from "./paths.js";
 
 export const CAPS = ["read", "write", "fetch", "exec"] as const;
 export type Cap = (typeof CAPS)[number];
@@ -67,11 +66,17 @@ export const ASK_TASK: Task = {
   skill: "",
 };
 
+// Structural, not `Paths`: both the legacy flat `Paths` and the per-line
+// `LinePaths` carry a `tasksDir`, and this is the only field either function
+// below touches. A named type here would force a choice between the two
+// shapes; this accepts whichever the caller has.
+interface HasTasksDir { tasksDir: string }
+
 // Reads ~/AgentCall/tasks/<id>/SKILL.md (YAML frontmatter + body). Invalid
 // or duplicate entries are skipped with a warning rather than failing the
 // whole listener: one broken manifest must not take every other task
 // offline.
-export function loadTasks(p: Paths, warn: (msg: string) => void = console.error): Task[] {
+export function loadTasks(p: HasTasksDir, warn: (msg: string) => void = console.error): Task[] {
   const tasks: Task[] = [ASK_TASK];
   if (!existsSync(p.tasksDir)) return tasks;
   for (const entry of readdirSync(p.tasksDir, { withFileTypes: true })) {
@@ -139,7 +144,7 @@ agent verbatim when a caller invokes the task.
 // file path. Never overwrites; never touches policy — a scaffolded task is
 // invisible to callers until the owner runs `agentcall offer <id>` or
 // `agentcall allow <handle> <id>` (create ≠ publish).
-export function scaffoldTask(p: Paths, id: string): string {
+export function scaffoldTask(p: HasTasksDir, id: string): string {
   if (!TASK_ID_RE.test(id)) {
     throw new Error(`"${id}" is not a valid task id: lowercase letters, digits, and hyphens, starting with a letter or digit.`);
   }

@@ -106,7 +106,7 @@ export function claudeAllowedTools(envelope: Envelope): string {
 // between a caller and the machine.
 export function buildSpawnSpec(
   kind: AgentKind, prompt: string, workdir: string, resolveBin: (kind: AgentKind) => string = resolveAgentBin,
-  envelope: Envelope = FULL_ACCESS_ENVELOPE, callId: string = "unknown", lineName: string = "",
+  envelope: Envelope = FULL_ACCESS_ENVELOPE, callId: string = "unknown", lineName: string,
 ): SpawnSpec {
   if (kind === "claude") {
     return {
@@ -181,9 +181,19 @@ export function truncateUtf8(text: string, maxBytes: number): string {
   return buf.subarray(0, maxBytes).toString("utf8").replace(/�+$/, "");
 }
 
+// specOverride and signal are given explicit `= undefined` defaults, not `?`,
+// so lineName below can be a trailing REQUIRED parameter: TS forbids a
+// required parameter from following a `?`-marked one, but not one that
+// follows a defaulted one. lineName has no default on purpose — it used to
+// (silently defaulting to "", which makes the PreToolUse guard fail closed on
+// every tool call, see runner.ts history) — so the only production caller
+// (the listener) is forced to pass the real line name or fail to compile,
+// instead of a caller forgetting it and getting a silently-broken guard.
 export function runAgent(
-  kind: AgentKind, prompt: string, workdir: string, timeoutMs: number = AGENT_TIMEOUT_MS, specOverride?: SpawnSpec,
-  envelope: Envelope = FULL_ACCESS_ENVELOPE, callId: string = "unknown", signal?: AbortSignal, lineName: string = "",
+  kind: AgentKind, prompt: string, workdir: string, timeoutMs: number = AGENT_TIMEOUT_MS,
+  specOverride: SpawnSpec | undefined = undefined,
+  envelope: Envelope = FULL_ACCESS_ENVELOPE, callId: string = "unknown",
+  signal: AbortSignal | undefined = undefined, lineName: string,
 ): Promise<AgentOutput> {
   const spec = specOverride ?? buildSpawnSpec(kind, prompt, workdir, resolveAgentBin, envelope, callId, lineName);
   return new Promise<AgentOutput>((resolve, reject) => {
