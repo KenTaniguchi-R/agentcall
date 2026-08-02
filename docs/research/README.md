@@ -9,8 +9,8 @@ are research notes, not decisions.** No implementation follows from them without
 a separate call.
 
 Docs #1–6 date from 2026-07-31 and were produced together; read them as one body of
-work rather than six independent studies. #7 is a later addition and is the only one
-that carries a backlog. #8 records the protocol and positioning implications of MCP
+work rather than six independent studies. #7 is a later addition and the first of the
+two that carry a backlog; #10 is the other. #8 records the protocol and positioning implications of MCP
 tunnels and Enterprise-Managed Authorization. #9 is the exception to the
 "not decisions" rule above — an approved decision followed it the same day, and it
 carries a forward amendment saying which of its recommendations that decision
@@ -51,7 +51,7 @@ Eight notes on the sequence:
   Every other doc assumes the caller already knows the address. In a 500-person company
   they do not, and that is the asker's half of the #2 pain in #1. Discovery is a
   separate problem from calling, and only calling is built.
-- **#7 amends #3 and is the only doc with a backlog.** #3 scored Cotal as
+- **#7 amends #3 and is the first doc with a backlog.** #3 scored Cotal as
   inside-your-own-perimeter and therefore disjoint from us. The enterprise pivot makes
   that deployment shape ours too, so #7 re-runs the comparison and turns the differences
   into checklist items. Read it last; it depends on #1–#6 and cites them by section.
@@ -70,11 +70,15 @@ Eight notes on the sequence:
   senior-time recovery, and preserve the narrower no-retained-call-corpus/no-connected-
   system-indexing distinction. The absolute “we do not ingest employee data” line is
   retired. See the [GTM sequencing decision](../superpowers/specs/2026-08-03-gtm-sequencing-design.md).
-- **#10 asks whether any of this needs building.** #1–#9 establish a gap and assume we
-  fill it. #10 walks the third-party landscape for the pieces that are already for sale,
-  and applies the test that decides it either way: whether a bought component survives
-  the enterprise security review we are selling into. It sits last because it is only
-  answerable once #1–#9 have said what the parts are.
+- **#10 is the only doc that reads the code, and it is scoped by
+  [reference-implementations](./reference-implementations.md).** #1–#9 study the
+  market and assume we fill the gap; #10 asks which parts of #7's gap are commodity,
+  and deliberately covers only what the reference index does not already assign to a
+  precedent. Read the index first, then #10 — otherwise its recommendations look
+  broader than they are. Its first version was researched against a stale branch and
+  asserted four gaps `main` had already closed; the correction and the rule that
+  followed are recorded in its §5 rather than edited away. Code claims cite
+  `origin/main` @ `af78a87`.
 
 ## The five findings that matter
 
