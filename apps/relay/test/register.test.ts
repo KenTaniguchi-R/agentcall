@@ -1,5 +1,6 @@
 import { env, SELF } from "cloudflare:test";
 import { describe, expect, it, vi } from "vitest";
+import { sha256Hex } from "../src/auth.js";
 import app from "../src/index.js";
 import { issueInvite, registerHandle, wsAuth } from "./helpers.js";
 
@@ -53,6 +54,7 @@ describe("POST /v1/register", () => {
 
   it("logs non-conflict database failures as retryable without consuming the invite", async () => {
     const invite = await issueInvite("acme", "database-failure");
+    const inviteHash = await sha256Hex(invite);
     const failure = new Error("D1_ERROR: no such table: handles; bound=invite-super-secret");
     const db = {
       prepare: env.DB.prepare.bind(env.DB),
@@ -72,8 +74,8 @@ describe("POST /v1/register", () => {
         name: "Error", kind: "schema",
       });
       expect(JSON.stringify(log.mock.calls)).not.toContain("invite-super-secret");
-      const row = await env.DB.prepare("SELECT used_at FROM invites WHERE org = ?")
-        .bind("acme").first<{ used_at: number | null }>();
+      const row = await env.DB.prepare("SELECT used_at FROM invites WHERE token_hash = ?")
+        .bind(inviteHash).first<{ used_at: number | null }>();
       expect(row?.used_at).toBeNull();
     } finally {
       log.mockRestore();

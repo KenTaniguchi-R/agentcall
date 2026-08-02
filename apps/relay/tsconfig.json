@@ -1,7 +1,7 @@
 {
   "extends": "../../tsconfig.base.json",
   "compilerOptions": {
-    "outDir": "dist", "noEmit": true, "types": ["@cloudflare/workers-types/2023-07-01", "@cloudflare/vitest-pool-workers"],
+    "outDir": "dist", "noEmit": true, "types": ["@cloudflare/workers-types", "@cloudflare/vitest-pool-workers/types"],
     "moduleResolution": "Bundler", "module": "ESNext", "verbatimModuleSyntax": false
   },
   "include": ["src", "test"]

@@ -43,6 +43,13 @@ describe("RateLimiterDO", () => {
 });
 
 describe("checkLimit", () => {
+  it("loads every native rate-limit binding from wrangler.jsonc", async () => {
+    const key = crypto.randomUUID();
+    for (const policy of [NATIVE_CARD, NATIVE_READ, NATIVE_ROSTER_READ]) {
+      expect(await checkLimit(env, key, policy)).toBe(true);
+    }
+  });
+
   it("routes credential policies through the Durable Object", async () => {
     const key = crypto.randomUUID();
     for (let attempt = 0; attempt < 5; attempt++) {
