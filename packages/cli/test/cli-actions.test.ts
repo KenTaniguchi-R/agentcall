@@ -148,6 +148,42 @@ describe.sequential("CLI command actions", () => {
     expect(out.stderr).toMatch(/agentcall setup/);
   });
 
+  it("creates, inventories, and revokes organization invites without reprinting secrets", async () => {
+    const id = "d".repeat(64);
+    const secret = "i".repeat(43);
+    const metadata = {
+      id, description: "contractor", created_by: "ken", created_at: 1,
+      expires_at: 2_000_000_000_000, used_at: null, used_by: null, revoked_at: null,
+    };
+    const requests: Array<{ url: string; body: string }> = [];
+    const relay = await startRelay((url, _method, body) => {
+      requests.push({ url, body });
+      if (url.endsWith("/list")) return { status: 200, body: { invites: [metadata] } };
+      if (url.endsWith("/revoke")) return { status: 200, body: { id, revoked_at: 3 } };
+      return { status: 200, body: { invite: secret, metadata } };
+    });
+    const testHome = home();
+    seedConfig(testHome, relay);
+
+    const created = await runCommand(testHome, [
+      "invite", "create", "--description", "contractor", "--expires-in-days", "30",
+    ]);
+    const listed = await runCommand(testHome, ["invite", "list"]);
+    const revoked = await runCommand(testHome, ["invite", "revoke", id]);
+
+    expect(created).toMatchObject({ code: 0, stdout: secret });
+    expect(created.stderr).toContain(`ID ${id}`);
+    expect(listed.code).toBe(0);
+    expect(JSON.parse(listed.stdout)).toEqual([metadata]);
+    expect(listed.stdout).not.toContain(secret);
+    expect(revoked).toMatchObject({ code: 0, stdout: expect.stringContaining(`Revoked ${id}`) });
+    expect(requests).toEqual([
+      { url: "/v1/invites", body: JSON.stringify({ description: "contractor", expires_in_days: 30 }) },
+      { url: "/v1/invites/list", body: "" },
+      { url: `/v1/invites/${id}/revoke`, body: "" },
+    ]);
+  });
+
   it("captures Commander validation failures without exiting the process", async () => {
     const out = await runCommand(home(), ["roster", "join", A]);
     expect(out.code).toBe(1);

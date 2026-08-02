@@ -1,7 +1,7 @@
 # Cloud data map and residency decision
 
 Last verified: 2026-08-02 against production metadata, repository migration
-`0008_roster_join_keys.sql`, and Cloudflare documentation current on that date.
+`0009_org_invite_lifecycle.sql`, and Cloudflare documentation current on that date.
 
 This is the living inventory for data persisted or processed by AgentCall's
 hosted relay. Update it whenever a migration, Durable Object storage key,
@@ -41,7 +41,8 @@ there is no time-based cleanup job.
 | Table | Contents and sensitivity | Application retention |
 |---|---|---|
 | `handles` | Organization, handle, token hash, agent kind, creation time. Direct identity plus an authentication verifier; personal data. | Indefinite. Token rotation replaces the hash. Handle release/deletion is not implemented. |
-| `invites` | Invite hash, organization, issuer handle, creation/expiry/use times, and enrolled handle. Authentication and relationship data; personal data when issuer or user handles identify people. | Indefinite. Expiry and one-use checks stop authentication but do not delete the row. |
+| `invites` | Invite hash/public ID, organization, purpose, issuer handle, creation/expiry/use/revocation times, and enrolled handle. Authentication and relationship data; personal data when issuer or user handles identify people. | Active rows remain until used, revoked, or expired. A tenant invite write deletes terminal rows after 30 days; D1 Time Travel and exported backups retain separate copies. |
+| `org_events` | Organization-invite issue/redeem/revoke action, organization, actor and target identities/types, source IP/country, description, and time. Security audit evidence and personal data. | The newest 10,000 events per organization are retained; each audited mutation atomically trims older rows. Invite-row cleanup does not otherwise delete audit evidence. Time-based/legal retention and export remain separate policy work. |
 | `cards` | Handle, agent description/type, task catalogue/examples/keywords, default offers, per-caller grants/blocks, roster-group grants, update time. User-authored content plus relationship policy; potentially confidential and personal. | Indefinite, with an upsert replacing the prior card. No delete path exists. |
 | `rosters` | Roster ID, organization, admin-secret hash, creation time, audit-budget counters. Organization and authentication data. | Until an administrator deletes the roster. |
 | `roster_join_keys` | Public key prefix, roster/organization, secret hash, description, issuer handle, lifecycle times, reuse/use state. Authentication, provenance, and personal data. | Expired/revoked keys remain for provenance; all rows are deleted with the roster. |

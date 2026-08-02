@@ -44,9 +44,12 @@ npm install -g @benree/agentcall
 agentcall setup --invite <one-time-token>
 ```
 
-Ask an existing member of your organization to run `agentcall invite`. The
-returned token expires after seven days and can enroll exactly one identity.
-The relay no longer serves a public shell installer.
+Ask an existing member of your organization to run `agentcall invite create`.
+The returned token can enroll exactly one identity and expires after seven days
+by default. Members can inventory and revoke outstanding credentials with
+`agentcall invite list` and `agentcall invite revoke <id>`; creation accepts
+`--description` and `--expires-in-days` (1–90). The relay no longer serves a
+public shell installer.
 
 For the first member of the first organization, the relay operator configures
 `BOOTSTRAP_TOKEN` with `wrangler secret put BOOTSTRAP_TOKEN`, then creates the
