@@ -541,6 +541,9 @@ describe("guard hook wiring", () => {
     expect(trust).toContain(":pre_tool_use:0:0");
     expect(trust).toContain(":post_tool_use:0:0");
     expect(trust).not.toContain("PostToolUseFailure");
+    const disabled = codex.args.flatMap((arg, index) =>
+      arg === "--disable" ? [codex.args[index + 1]] : []);
+    expect(disabled).toContain("code_mode_host");
   });
 
   it("uses no matcher, so every tool call reaches the guard", () => {

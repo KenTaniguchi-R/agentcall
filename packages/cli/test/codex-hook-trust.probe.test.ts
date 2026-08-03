@@ -130,11 +130,16 @@ describe.skipIf(!enabled)("codex exact-hook trust", () => {
       expect(result.error).toBeUndefined();
       expect(result.status, result.stderr).toBe(0);
       const raw = readFileSync(spool.file, "utf8");
-      expect(spool.collect(), `production hook payloads did not pair: ${raw}`).toEqual([
+      const diagnostic = JSON.stringify({
+        spool: raw,
+        stdout: result.stdout.slice(-8_000),
+        stderr: result.stderr.slice(-2_000),
+      });
+      expect(spool.collect(), `production hook payloads did not pair: ${diagnostic}`).toEqual([
         expect.objectContaining({
           callId: "probe-tool-lifecycle",
           toolCallId: expect.stringMatching(/^hmac-sha256:[a-f0-9]{64}$/),
-          toolName: "functions.exec",
+          toolName: "Bash",
           outcome: "success",
         }),
       ]);

@@ -256,6 +256,11 @@ export function buildSpawnSpec(
   const codexRemoteBoundary = [
     "--disable", "apps",
     "--disable", "image_generation",
+    // 0.146.0's code-mode `exec` wrapper completed a nested shell call without
+    // emitting either configured lifecycle hook in the production live probe.
+    // Keep Codex on its native exec_command handler, whose stable hook adapter
+    // emits the paired canonical Bash events this telemetry relies on.
+    ...(toolTelemetryFile ? ["--disable", "code_mode_host"] : []),
     "-c", `web_search="disabled"`,
     "--strict-config",
   ];
