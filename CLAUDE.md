@@ -31,10 +31,19 @@ worked on *by decision* — reopen the decision before touching it). `kind:*` ma
 Dependencies are written into issue bodies as "Blocked by #n" — GitHub has no native
 dependency field, so keep them there when you add an issue.
 
-Two standing constraints that aren't any single issue's property:
+Three standing constraints that aren't any single issue's property:
 
-- **Public or enterprise deployment is blocked on #1–#8 (the C track) and #10.** A
-  passing TCK says nothing about safe prompt execution.
+- **Cross-organization routing is a non-goal.** Not deferred, not gated — the
+  organization is the outermost boundary AgentCall routes within, and a human
+  belongs to exactly one. Don't design for an external caller, don't add a
+  federation flag, and if you find a cross-org path, **delete it rather than
+  disable it**. The A2A track (#9, #11, #101, #179) is where this creeps back
+  in: A2A is an *in-organization* protocol surface here. See the
+  [federation non-goal](./docs/superpowers/specs/2026-08-02-cross-organization-federation-non-goal.md).
+- **Public or enterprise deployment is blocked on #1–#8 (the C track).** A
+  passing TCK says nothing about safe prompt execution. (#10 was part of this
+  gate until the federation non-goal closed it — in-organization callers are
+  already resolved by `authenticateRequest`, and there are no external ones.)
 - **Some issues collide in `apps/relay`.** #16 touches Durable Object addressing, which
   the A2A track is actively changing. Coordinate — and use one worktree per session, per
   [CONTRIBUTING.md](./CONTRIBUTING.md#one-worktree-per-session).
