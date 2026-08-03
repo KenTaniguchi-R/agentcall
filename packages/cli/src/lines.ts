@@ -1,4 +1,4 @@
-import { chmodSync, existsSync, mkdirSync, readdirSync, readFileSync, renameSync, writeFileSync } from "node:fs";
+import { chmodSync, existsSync, lstatSync, mkdirSync, readdirSync, readFileSync, renameSync, writeFileSync } from "node:fs";
 import { z } from "zod";
 import { AgentKindSchema, ORG_RE } from "@benree/agentcall-shared";
 import { getLinePaths, type LinePaths, type MachinePaths } from "./paths.js";
@@ -39,6 +39,17 @@ export const LineConfigSchema = z.object({
 export function loadLineConfig(l: LinePaths): LineConfig {
   if (!existsSync(l.configFile)) {
     throw new Error(`Line "${l.name}" has no config.json — it was never finished. Remove it with \`agentcall line remove ${l.name}\`.`);
+  }
+  // Validate shape before readFileSync. Besides refusing config indirection,
+  // this prevents a planted FIFO/device from blocking every command that
+  // enumerates lines (including doctor) before it can report the problem.
+  const dir = lstatSync(l.dir);
+  if (!dir.isDirectory() || dir.isSymbolicLink()) {
+    throw new Error(`Line "${l.name}" directory at ${l.dir} must be a real directory, not a symlink.`);
+  }
+  const file = lstatSync(l.configFile);
+  if (!file.isFile() || file.isSymbolicLink()) {
+    throw new Error(`Line "${l.name}" config at ${l.configFile} must be a regular file, not a symlink.`);
   }
   let raw: unknown;
   try {
@@ -95,7 +106,9 @@ export interface LineSummary {
 export function listLines(m: MachinePaths): LineSummary[] {
   if (!existsSync(m.linesDir)) return [];
   const names = readdirSync(m.linesDir, { withFileTypes: true })
-    .filter((e) => e.isDirectory() && LINE_NAME_RE.test(e.name))
+    // Include validly named symlinks so they become explicit broken lines
+    // through loadLineConfig instead of disappearing from doctor/list output.
+    .filter((e) => (e.isDirectory() || e.isSymbolicLink()) && LINE_NAME_RE.test(e.name))
     .map((e) => e.name)
     .sort();
   return names.map((name) => {
