@@ -1,5 +1,10 @@
 import { closeSync, fstatSync, openSync, readSync } from "node:fs";
 import { basename } from "node:path";
+import {
+  isAbuseFlag, isAbuseSeverity, maxAbuseSeverity,
+  signalForInboundStatus,
+  type AbuseFlag, type AbuseSeverity,
+} from "./abuse-signals.js";
 
 const HISTORY_SCAN_BYTES = 4 * 1024 * 1024;
 const GUARD_EVENT_TYPES = new Set(["tool_denied", "tool_flagged", "tool_attempt_flagged"]);
@@ -15,6 +20,8 @@ export interface LocalHistoryEntry {
   duration_ms?: number;
   tool_attempts: number;
   tools_denied: number;
+  flags?: AbuseFlag[];
+  severity?: AbuseSeverity;
 }
 
 type JsonLines = {
@@ -85,9 +92,21 @@ function toCallEntry(row: Record<string, unknown>): LocalHistoryEntry | undefine
     typeof row.status !== "string" ||
     (row.reply !== undefined && typeof row.reply !== "string") ||
     (row.task !== undefined && typeof row.task !== "string") ||
+    (row.flags !== undefined &&
+      (!Array.isArray(row.flags) || !row.flags.every(isAbuseFlag))) ||
+    (row.severity !== undefined && !isAbuseSeverity(row.severity)) ||
     (row.duration_ms !== undefined &&
       (typeof row.duration_ms !== "number" || !Number.isFinite(row.duration_ms)))
   ) return undefined;
+  const expectedSignal = signalForInboundStatus(row.status);
+  if (row.flags !== undefined) {
+    const flags = row.flags as AbuseFlag[];
+    if (
+      flags.length !== expectedSignal.flags.length ||
+      flags.some((flag, index) => flag !== expectedSignal.flags[index])
+    ) return undefined;
+  }
+  if (row.severity !== undefined && row.severity !== expectedSignal.severity) return undefined;
   return {
     ts: row.ts,
     call_id: row.call_id,
@@ -99,13 +118,20 @@ function toCallEntry(row: Record<string, unknown>): LocalHistoryEntry | undefine
     ...(typeof row.duration_ms === "number" ? { duration_ms: row.duration_ms } : {}),
     tool_attempts: 0,
     tools_denied: 0,
+    ...(expectedSignal.flags.length > 0
+      ? { flags: [...expectedSignal.flags] }
+      : {}),
+    ...(expectedSignal.severity ? { severity: expectedSignal.severity } : {}),
   };
 }
 
 function validToolEvent(row: Record<string, unknown>): boolean {
   return row.type === "tool_call" && typeof row.ts === "string" &&
     typeof row.call_id === "string" && typeof row.tool === "string" &&
-    (typeof row.allowed === "boolean" || row.mode === "observe");
+    (
+      (typeof row.allowed === "boolean" && row.mode === undefined) ||
+      (row.allowed === undefined && row.mode === "observe")
+    );
 }
 
 export interface LocalHistory {
@@ -116,7 +142,11 @@ export interface LocalHistory {
 
 // Structural, not `LinePaths`: this only ever reads the two logs, and both are
 // per-line. Kept narrow so a caller cannot hand it a mismatched pair.
-export function loadLocalHistory(paths: { callsLog: string; toolsLog: string }, limit: number): LocalHistory {
+export function loadLocalHistory(
+  paths: { callsLog: string; toolsLog: string },
+  limit: number,
+  options: { flaggedOnly?: boolean } = {},
+): LocalHistory {
   const callsLog = readRecentJsonLines(paths.callsLog);
   let malformed = callsLog.malformed;
   const calls: LocalHistoryEntry[] = [];
@@ -129,8 +159,7 @@ export function loadLocalHistory(paths: { callsLog: string; toolsLog: string }, 
     if (entry) calls.push(entry);
     else malformed++;
   }
-  const entries = calls.slice(-limit).reverse();
-  const selected = new Map(entries.map((entry) => [entry.call_id, entry]));
+  const selected = new Map(calls.map((entry) => [entry.call_id, entry]));
 
   const toolsLog = readRecentJsonLines(paths.toolsLog);
   malformed += toolsLog.malformed;
@@ -142,8 +171,17 @@ export function loadLocalHistory(paths: { callsLog: string; toolsLog: string }, 
     const entry = selected.get(row.call_id as string);
     if (!entry) continue;
     entry.tool_attempts++;
-    if (row.allowed === false) entry.tools_denied++;
+    if (row.allowed === false) {
+      entry.tools_denied++;
+      entry.flags = [...new Set([...(entry.flags ?? []), "tool_policy_denial" as const])];
+      entry.severity = maxAbuseSeverity(entry.severity, "high");
+    }
   }
+
+  const matching = options.flaggedOnly
+    ? calls.filter((entry) => (entry.flags?.length ?? 0) > 0)
+    : calls;
+  const entries = matching.slice(-limit).reverse();
 
   return {
     entries,
@@ -169,6 +207,9 @@ export function renderLocalHistory(entries: LocalHistoryEntry[]): string {
     ];
     if (entry.reply !== undefined) lines.push(`  Replied: ${oneLine(entry.reply)}`);
     lines.push(`  Tools: ${entry.tool_attempts} attempts, ${entry.tools_denied} denied`);
+    if (entry.flags?.length) {
+      lines.push(`  Flags: ${entry.flags.map(oneLine).join(", ")} (${entry.severity ?? "low"})`);
+    }
     return lines.join("\n");
   }).join("\n\n");
 }

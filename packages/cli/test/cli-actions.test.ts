@@ -382,6 +382,11 @@ describe.sequential("CLI command actions", () => {
         message: "wrong type", status: "ok",
       }),
       JSON.stringify({
+        ts: "2026-08-02T19:45:00.000Z", call_id: "forged", from: "mallory",
+        message: "ordinary", status: "ok",
+        flags: ["blocked_caller_attempt"], severity: "high",
+      }),
+      JSON.stringify({
         ts: "2026-08-02T20:00:00.000Z", call_id: "new", from: "bob",
         message: "new question", reply: "new answer", task: "ask", status: "ok", duration_ms: 2,
       }),
@@ -393,12 +398,50 @@ describe.sequential("CLI command actions", () => {
     const out = await runCommand(testHome, ["history", "--limit", "1", "--json"]);
 
     expect(out.code).toBe(0);
-    expect(out.stderr).toContain("Skipped 3 malformed local history records");
+    expect(out.stderr).toContain("Skipped 4 malformed local history records");
     expect(JSON.parse(out.stdout)).toEqual([{
       ts: "2026-08-02T20:00:00.000Z", call_id: "new", from: "bob",
       message: "new question", reply: "new answer", task: "ask", status: "ok",
       duration_ms: 2, tool_attempts: 0, tools_denied: 0,
     }]);
+  });
+
+  it("filters objective local abuse signals and derives tool denials", async () => {
+    const testHome = home();
+    const paths = seedConfig(testHome, "https://relay.example");
+    mkdirSync(paths.dir, { recursive: true });
+    writeFileSync(paths.callsLog, [
+      JSON.stringify({
+        ts: "2026-08-02T19:00:00.000Z", call_id: "ordinary", from: "alice",
+        message: "normal question", task: "ask", status: "ok",
+      }),
+      JSON.stringify({
+        ts: "2026-08-02T19:30:00.000Z", call_id: "blocked", from: "mallory",
+        message: "try anyway", task: "ask", status: "blocked",
+        flags: ["blocked_caller_attempt"], severity: "high",
+      }),
+      JSON.stringify({
+        ts: "2026-08-02T20:00:00.000Z", call_id: "denied-tool", from: "bob",
+        message: "read it", task: "ask", status: "ok",
+      }),
+    ].join("\n") + "\n");
+    writeFileSync(paths.toolsLog, JSON.stringify({
+      ts: "2026-08-02T20:00:00.001Z", type: "tool_call",
+      call_id: "denied-tool", tool: "Read", allowed: false,
+    }) + "\n" + JSON.stringify({
+      ts: "2026-08-02T19:00:00.001Z", type: "tool_call",
+      call_id: "ordinary", tool: "Bash", mode: "observe", allowed: false,
+    }) + "\n");
+
+    const out = await runCommand(testHome, ["history", "--flagged", "--json"]);
+
+    expect(out.code).toBe(0);
+    expect(out.stderr).toContain("Skipped 1 malformed local history record");
+    expect(JSON.parse(out.stdout)).toMatchObject([
+      { call_id: "denied-tool", flags: ["tool_policy_denial"], severity: "high" },
+      { call_id: "blocked", flags: ["blocked_caller_attempt"], severity: "high" },
+    ]);
+    expect(out.stdout).not.toContain("ordinary");
   });
 
   it("bounds local history scanning and discloses partial logs", async () => {

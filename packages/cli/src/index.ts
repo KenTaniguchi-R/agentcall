@@ -505,10 +505,11 @@ program
   .command("history")
   .description("show call activity stored locally on this machine")
   .option("--limit <count>", "maximum newest calls to show (1-100)", "20")
+  .option("--flagged", "show only calls with objective local abuse signals")
   .option("--json", "print machine-readable local history")
   // calls.log/tools.log are per line, so history is too.
   .option("--line <name>", "line whose history to show (defaults to the primary line)")
-  .action((o: { limit: string; json?: boolean; line?: string }) => {
+  .action((o: { limit: string; flagged?: boolean; json?: boolean; line?: string }) => {
     const limit = Number(o.limit);
     if (!Number.isInteger(limit) || limit < 1 || limit > 100) {
       console.error("History limit must be an integer from 1 to 100.");
@@ -517,7 +518,7 @@ program
     }
     const ctx = lineFor(o.line);
     if (!ctx) return;
-    const history = loadLocalHistory(ctx.paths, limit);
+    const history = loadLocalHistory(ctx.paths, limit, { flaggedOnly: o.flagged });
     if (history.malformed > 0) {
       console.error(`Skipped ${history.malformed} malformed local history record${history.malformed === 1 ? "" : "s"}.`);
     }
