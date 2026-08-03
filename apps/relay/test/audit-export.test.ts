@@ -24,6 +24,153 @@ async function seedRosterEvent(org: string, at: number, rosterId: string) {
 }
 
 describe("organization audit export", () => {
+  it("acknowledges only a complete unfiltered export with a tenant-bound receipt", async () => {
+    const org = "ack-org";
+    const token = await registerHandle("ack-admin", "claude", org, "admin");
+    const headers = wsAuth("ack-admin", token, org);
+    await seedOrgEvent(org, 1_000, "first");
+    await seedRosterEvent(org, 2_000, "roster-first");
+
+    const first = await SELF.fetch("https://relay.test/v1/audit/events?page_size=1", { headers });
+    expect(first.status).toBe(200);
+    const firstPage = await first.json<any>();
+    expect(firstPage.next_page_token).toEqual(expect.any(String));
+    expect(firstPage.completion_receipt).toBeNull();
+    expect(firstPage.acknowledged_checkpoint).toBeNull();
+
+    let pageToken = firstPage.next_page_token;
+    let terminalPage: any;
+    do {
+      const terminal = await SELF.fetch(
+        `https://relay.test/v1/audit/events?page_size=1&page_token=${encodeURIComponent(pageToken)}`,
+        { headers },
+      );
+      expect(terminal.status).toBe(200);
+      terminalPage = await terminal.json<any>();
+      pageToken = terminalPage.next_page_token;
+    } while (pageToken);
+    expect(terminalPage.next_page_token).toBe("");
+    expect(terminalPage.completion_receipt).toEqual(expect.any(String));
+    expect(terminalPage.completion_receipt.length).toBeLessThanOrEqual(1_024);
+    const receiptPayload = JSON.parse(atob(terminalPage.completion_receipt.split(".")[0]
+      .replaceAll("-", "+").replaceAll("_", "/")
+      .padEnd(Math.ceil(terminalPage.completion_receipt.split(".")[0].length / 4) * 4, "=")));
+    expect(receiptPayload).toEqual({
+      version: 1,
+      org,
+      checkpoint: {
+        orgEventId: terminalPage.checkpoint.org_event_id,
+        orgEventCount: terminalPage.checkpoint.org_event_count,
+        rosterEventId: terminalPage.checkpoint.roster_event_id,
+        rosterEventCount: terminalPage.checkpoint.roster_event_count,
+      },
+    });
+
+    const acknowledged = await SELF.fetch("https://relay.test/v1/audit/export-acknowledgements", {
+      method: "POST",
+      headers: { ...headers, "content-type": "application/json" },
+      body: JSON.stringify({ completion_receipt: terminalPage.completion_receipt }),
+    });
+    expect(acknowledged.status).toBe(200);
+    expect(acknowledged.headers.get("cache-control")).toBe("no-store");
+    const acknowledgement = await acknowledged.json<any>();
+    expect(acknowledgement).toMatchObject({
+      acknowledged_checkpoint: terminalPage.checkpoint,
+      acknowledged_by: "ack-admin",
+      acknowledged_at: expect.any(Number),
+    });
+
+    const stored = await env.DB.prepare(
+      "SELECT org_event_id, org_event_count, roster_event_id, roster_event_count, acknowledged_by " +
+        "FROM audit_export_acknowledgements WHERE org = ?",
+    ).bind(org).first<any>();
+    expect(stored).toEqual({
+      org_event_id: terminalPage.checkpoint.org_event_id,
+      org_event_count: terminalPage.checkpoint.org_event_count,
+      roster_event_id: terminalPage.checkpoint.roster_event_id,
+      roster_event_count: terminalPage.checkpoint.roster_event_count,
+      acknowledged_by: "ack-admin",
+    });
+
+    const repeated = await SELF.fetch("https://relay.test/v1/audit/export-acknowledgements", {
+      method: "POST",
+      headers: { ...headers, "content-type": "application/json" },
+      body: JSON.stringify({ completion_receipt: terminalPage.completion_receipt }),
+    });
+    expect(repeated.status).toBe(200);
+    expect(await repeated.json()).toEqual(acknowledgement);
+
+    const afterAck = await SELF.fetch("https://relay.test/v1/audit/events", { headers });
+    expect((await afterAck.json<any>()).acknowledged_checkpoint).toEqual(terminalPage.checkpoint);
+  });
+
+  it("rejects unsafe audit export acknowledgements", async () => {
+    const org = "unsafe-ack-org";
+    const token = await registerHandle("unsafe-ack-admin", "claude", org, "admin");
+    const headers = wsAuth("unsafe-ack-admin", token, org);
+    await seedOrgEvent(org, 1_000, "first");
+
+    for (const suffix of ["?before=2000", "?after=1000", "?actor=admin", "?event=org.invite.issue", "?actor_ip=203.0.113.10"]) {
+      const response = await SELF.fetch(`https://relay.test/v1/audit/events${suffix}`, { headers });
+      expect(response.status).toBe(200);
+      expect((await response.json<any>()).completion_receipt).toBeNull();
+    }
+
+    const complete = await SELF.fetch("https://relay.test/v1/audit/events", { headers });
+    const oldPage = await complete.json<any>();
+    expect(oldPage.completion_receipt).toEqual(expect.any(String));
+
+    const forged = `${oldPage.completion_receipt.slice(0, -1)}${oldPage.completion_receipt.endsWith("A") ? "B" : "A"}`;
+    expect((await SELF.fetch("https://relay.test/v1/audit/export-acknowledgements", {
+      method: "POST", headers: { ...headers, "content-type": "application/json" },
+      body: JSON.stringify({ completion_receipt: forged }),
+    })).status).toBe(400);
+
+    // A 32-byte signature has two unused bits in its final base64url
+    // character. Changing only those bits decodes to the same bytes, but the
+    // noncanonical signed-token alias must still be rejected as tampering.
+    const [receiptPayload, receiptSignature] = oldPage.completion_receipt.split(".");
+    const alphabet = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_";
+    const finalIndex = alphabet.indexOf(receiptSignature.at(-1));
+    expect(finalIndex % 4).toBe(0);
+    const noncanonicalPadBits =
+      `${receiptPayload}.${receiptSignature.slice(0, -1)}${alphabet[finalIndex + 1]}`;
+    expect((await SELF.fetch("https://relay.test/v1/audit/export-acknowledgements", {
+      method: "POST", headers: { ...headers, "content-type": "application/json" },
+      body: JSON.stringify({ completion_receipt: noncanonicalPadBits }),
+    })).status).toBe(400);
+
+    const otherToken = await registerHandle("other-ack-admin", "claude", "other-ack-org", "admin");
+    expect((await SELF.fetch("https://relay.test/v1/audit/export-acknowledgements", {
+      method: "POST",
+      headers: { ...wsAuth("other-ack-admin", otherToken, "other-ack-org"), "content-type": "application/json" },
+      body: JSON.stringify({ completion_receipt: oldPage.completion_receipt }),
+    })).status).toBe(400);
+
+    const memberToken = await registerHandle("unsafe-ack-member", "claude", org, "member");
+    expect((await SELF.fetch("https://relay.test/v1/audit/export-acknowledgements", {
+      method: "POST",
+      headers: { ...wsAuth("unsafe-ack-member", memberToken, org), "content-type": "application/json" },
+      body: JSON.stringify({ completion_receipt: oldPage.completion_receipt }),
+    })).status).toBe(403);
+
+    const oldAck = await SELF.fetch("https://relay.test/v1/audit/export-acknowledgements", {
+      method: "POST", headers: { ...headers, "content-type": "application/json" },
+      body: JSON.stringify({ completion_receipt: oldPage.completion_receipt }),
+    });
+    expect(oldAck.status).toBe(200);
+    await seedOrgEvent(org, 2_000, "second");
+    const newPage = await (await SELF.fetch("https://relay.test/v1/audit/events", { headers })).json<any>();
+    expect((await SELF.fetch("https://relay.test/v1/audit/export-acknowledgements", {
+      method: "POST", headers: { ...headers, "content-type": "application/json" },
+      body: JSON.stringify({ completion_receipt: newPage.completion_receipt }),
+    })).status).toBe(200);
+    expect((await SELF.fetch("https://relay.test/v1/audit/export-acknowledgements", {
+      method: "POST", headers: { ...headers, "content-type": "application/json" },
+      body: JSON.stringify({ completion_receipt: oldPage.completion_receipt }),
+    })).status).toBe(409);
+  });
+
   it("supports private conditional polling with strong response validators", async () => {
     const org = "etag-org";
     const token = await registerHandle("etag-admin", "claude", org, "admin");

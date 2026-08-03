@@ -381,6 +381,8 @@ describe.sequential("CLI command actions", () => {
         }],
         checkpoint: { org_event_id: 1, org_event_count: 1, roster_event_id: 1, roster_event_count: 1 },
         next_page_token: second ? "" : "next",
+        completion_receipt: null,
+        acknowledged_checkpoint: null,
       } };
     });
     const testHome = home();
@@ -411,6 +413,8 @@ describe.sequential("CLI command actions", () => {
         }],
         checkpoint: { org_event_id: 1, org_event_count: 1, roster_event_id: 0, roster_event_count: 0 },
         next_page_token: "",
+        completion_receipt: null,
+        acknowledged_checkpoint: null,
       } };
     });
     const testHome = home();
@@ -462,6 +466,8 @@ describe.sequential("CLI command actions", () => {
         }],
         checkpoint: { org_event_id: 2, org_event_count: 2, roster_event_id: 0, roster_event_count: 0 },
         next_page_token: "next",
+        completion_receipt: null,
+        acknowledged_checkpoint: null,
       } });
     const testHome = home();
     seedConfig(testHome, relay);

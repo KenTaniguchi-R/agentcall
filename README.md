@@ -178,6 +178,16 @@ return `200` with a new validator. Responses are private and require
 revalidation. `agentcall audit export` remains a one-shot complete-stream
 client rather than a polling daemon.
 
+A terminal page of an unfiltered, all-time API export also returns a signed
+`completion_receipt`. After the client has durably stored every page, an
+administrator can POST that opaque value as `completion_receipt` to
+`/v1/audit/export-acknowledgements`. The relay then advances both tenant ledger
+watermarks atomically. Partial, filtered, date-bounded, forged, cross-tenant,
+or stale-regressing receipts cannot advance the watermark. Export responses
+expose the current `acknowledged_checkpoint`; this is the export-before-expiry
+prerequisite for future retention, not a deletion request or proof about
+external backup storage.
+
 The generated [audit event catalog](docs/site/reference/audit-events.mdx) is the
 exhaustive contract for event availability, collection-to-export lag, snapshot
 ordering, and evidence that is not yet centrally retained.
@@ -1051,7 +1061,10 @@ disabled whenever managed policy is present so IT can pin the deployed version.
   audit rows are retained indefinitely; organization audit rows keep the newest
   10,000 events per organization but have no time-based window. There is no
   customer deletion endpoint or scheduled cleanup. The administrator audit
-  export provides a checkpointed copy of retained rows, but roster deletion
+  export provides a checkpointed copy of retained rows, and a completed
+  unfiltered API export can be explicitly acknowledged as the tenant's
+  monotonic export watermark. No retention job consumes that watermark yet;
+  roster deletion
   deliberately preserves its evidence, and the service cannot guarantee
   end-to-end erasure across D1 and backup copies. See the
   [audit retention policy](./docs/security/audit-retention.md) for the current

@@ -58,6 +58,9 @@ which are released together.
 - Let API clients conditionally poll exact audit pages with strong response
   ETags and private revalidation, without weakening authorization, rate limits,
   cursor validation, or checkpoint-gap detection.
+- Issue a tenant-bound completion receipt only for terminal unfiltered exports,
+  and let administrators explicitly advance an atomic, monotonic per-ledger
+  acknowledgement watermark as the export-before-expiry retention prerequisite.
 
 ### Experimental customer-owned Cloudflare relay
 
