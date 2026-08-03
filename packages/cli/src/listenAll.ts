@@ -5,7 +5,7 @@ import type { MachinePaths } from "./paths.js";
 import { assertCallableLine, relayUrl } from "./config.js";
 
 export interface ListenAllDeps {
-  start?: (deps: ListenerDeps) => { stop(): void };
+  start?: (deps: ListenerDeps) => { stop(): void | Promise<void> };
   log?: (line: string) => void;
 }
 
@@ -14,10 +14,10 @@ export interface ListenAllDeps {
 // need N sockets — not N supervised services.
 export function startAllListeners(
   m: MachinePaths, deps: ListenAllDeps = {},
-): { stop(): void; started: string[] } {
+): { stop(): Promise<void>; started: string[] } {
   const start = deps.start ?? startListener;
   const log = deps.log ?? console.log;
-  const handles: { stop(): void }[] = [];
+  const handles: { stop(): void | Promise<void> }[] = [];
   const started: string[] = [];
   let attempted = 0;
 
@@ -79,5 +79,8 @@ export function startAllListeners(
     throw new Error(`agentcall: every callable line (${attempted}) failed to start — see the errors above.`);
   }
   if (started.length === 0) log("no callable lines — nothing to listen on.");
-  return { stop: () => handles.forEach((h) => h.stop()), started };
+  return {
+    stop: async () => { await Promise.all(handles.map((h) => h.stop())); },
+    started,
+  };
 }

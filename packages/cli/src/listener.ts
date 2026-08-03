@@ -14,6 +14,9 @@ import { SerialQueue } from "./queue.js";
 import { loadPolicy, resolveTask } from "./policy.js";
 import { loadTasks } from "./tasks.js";
 import { appendPrivateLogLine } from "./audit-log.js";
+import {
+  getTelemetry, shutdownTelemetry, telemetrySafely, type AgentCallTelemetry,
+} from "./telemetry.js";
 
 export interface ListenerDeps {
   relay: string;
@@ -30,12 +33,16 @@ export interface ListenerDeps {
   // real `ws` socket.
   socketFactory?: (url: string, opts: { headers: Record<string, string> }) => WebSocket;
   codexThreadingEnabled?: () => boolean;
+  telemetry?: AgentCallTelemetry;
 }
 
-export function startListener(deps: ListenerDeps): { stop(): void } {
+export function startListener(deps: ListenerDeps): { stop(): Promise<void> } {
   const run = deps.run ?? runAgent;
   const newSocket = deps.socketFactory ?? ((url: string, opts: { headers: Record<string, string> }) => new WebSocket(url, opts));
   const persistContexts = deps.saveContexts ?? saveContexts;
+  const telemetry = deps.telemetry ?? getTelemetry(process.env, {
+    healthFile: deps.paths.machine.telemetryHealthFile,
+  });
   // Validate before opening the socket. Hot edits are still loaded per call
   // below, but a listener must never advertise availability when its initial
   // effective policy (user layer + the machine's managed ceiling) is malformed
@@ -140,7 +147,14 @@ export function startListener(deps: ListenerDeps): { stop(): void } {
         return;
       }
 
-      const { call_id, from, groups, message, task: requestedTask, context_id } = frame;
+      const inboundSpan = telemetrySafely(() => telemetry?.startInbound(frame));
+      let admissionOutcome = "agent_error";
+      try {
+      const {
+        call_id, correlation_id, from, groups, message,
+        task: requestedTask, context_id,
+      } = frame;
+      const correlation = correlation_id ? { correlation_id } : {};
       const started = Date.now();
 
       // Resolve caller -> task -> envelope BEFORE the message is placed in any
@@ -150,13 +164,15 @@ export function startListener(deps: ListenerDeps): { stop(): void } {
       try {
         resolution = resolveTask(loadPolicy(deps.paths), loadTasks(deps.paths), from, requestedTask, groups);
       } catch (e) {
+        admissionOutcome = "policy_error";
         send({ type: "call_failed", call_id, code: "agent_error", detail: "A local policy error prevented this call from completing." });
-        audit({ call_id, from, message: message.slice(0, 500), status: "policy_error", duration_ms: 0, error: String(e).slice(0, 2000) });
+        audit({ call_id, ...correlation, from, message: message.slice(0, 500), status: "policy_error", duration_ms: 0, error: String(e).slice(0, 2000) });
         return;
       }
       if (!resolution.ok) {
+        admissionOutcome = resolution.code;
         send({ type: "call_failed", call_id, code: resolution.code, offered: resolution.offered });
-        audit({ call_id, from, message: message.slice(0, 500), task: requestedTask, status: resolution.code, duration_ms: 0 });
+        audit({ call_id, ...correlation, from, message: message.slice(0, 500), task: requestedTask, status: resolution.code, duration_ms: 0 });
         return;
       }
       const task = resolution.task;
@@ -199,8 +215,9 @@ export function startListener(deps: ListenerDeps): { stop(): void } {
         // this FAILS the call rather than quietly starting a fresh session,
         // because a silent almost-right answer is the #43/#51 failure mode.
         if (!binding) {
+          admissionOutcome = "context_unknown";
           send({ type: "call_failed", call_id, code: "context_unknown" });
-          audit({ call_id, from, message: message.slice(0, 500), task: task.id,
+          audit({ call_id, ...correlation, from, message: message.slice(0, 500), task: task.id,
                   status: "context_unknown", duration_ms: 0 });
           return;
         }
@@ -222,6 +239,13 @@ export function startListener(deps: ListenerDeps): { stop(): void } {
         // raising maxPending.
         send({ type: "call_accepted", call_id });
         send({ type: "call_started", call_id });
+        const invocationSpan = telemetrySafely(() => inboundSpan?.startInvocation({
+          task: task.id,
+          runtime: config.agent_kind,
+          callId: call_id,
+          correlationId: correlation_id,
+          contextId: binding?.context_id,
+        }));
         try {
           const out = await run(
             config.agent_kind,
@@ -237,6 +261,7 @@ export function startListener(deps: ListenerDeps): { stop(): void } {
             // task dirs it's policing, and fails closed without it.
             deps.paths.name,
             binding?.agent_session_id,
+            correlation_id,
           );
 
           // Mint on a fresh threadable call; roll the existing binding forward
@@ -282,8 +307,9 @@ export function startListener(deps: ListenerDeps): { stop(): void } {
           // thing that travels. The audit log gets the same treatment — it is
           // the owner's file, but it is also what gets pasted into a bug report.
           send({ type: "call_result", call_id, text: out.text, context_id: contextId, task: task.id });
+          telemetrySafely(() => invocationSpan?.end("success", contextId));
           audit({
-            call_id, from, message: message.slice(0, 500), reply: out.text.slice(0, 500),
+            call_id, ...correlation, from, message: message.slice(0, 500), reply: out.text.slice(0, 500),
             task: task.id, status: "ok",
             duration_ms: Date.now() - started,
             context_id: contextId, turn: (binding?.turns ?? 0) + 1,
@@ -291,11 +317,12 @@ export function startListener(deps: ListenerDeps): { stop(): void } {
           });
         } catch (e) {
           const code = e instanceof AgentRunError ? e.code : "agent_error";
+          telemetrySafely(() => invocationSpan?.end(code));
           // runAgent settles from the child's exit handler, so reaching here
           // with "canceled" means the process group is actually gone.
           if (code === "canceled") {
             send({ type: "call_cancelled", call_id, phase: "running" });
-            audit({ call_id, from, message: message.slice(0, 500), task: task.id, status: "canceled", duration_ms: Date.now() - started });
+            audit({ call_id, ...correlation, from, message: message.slice(0, 500), task: task.id, status: "canceled", duration_ms: Date.now() - started });
             return;
           }
           send({ type: "call_failed", call_id, code, detail: "The agent hit an internal error while answering." });
@@ -309,14 +336,18 @@ export function startListener(deps: ListenerDeps): { stop(): void } {
             ? String(e).replaceAll(binding.agent_session_id, "<session>")
             : String(e);
           audit({
-            call_id, from, message: message.slice(0, 500), task: task.id, status: code,
+            call_id, ...correlation, from, message: message.slice(0, 500), task: task.id, status: code,
             duration_ms: Date.now() - started, error: err.slice(0, 2000),
           });
         }
       });
+      admissionOutcome = accepted ? "accepted" : "busy";
       if (!accepted) {
         send({ type: "call_failed", call_id, code: "busy" });
-        audit({ call_id, from, message: message.slice(0, 500), task: task.id, status: "busy", duration_ms: 0 });
+        audit({ call_id, ...correlation, from, message: message.slice(0, 500), task: task.id, status: "busy", duration_ms: 0 });
+      }
+      } finally {
+        telemetrySafely(() => inboundSpan?.endAdmission(admissionOutcome));
       }
     });
     const scheduleReconnect = () => {
@@ -353,10 +384,11 @@ export function startListener(deps: ListenerDeps): { stop(): void } {
 
   connect();
   return {
-    stop() {
+    async stop() {
       stopped = true;
       if (pingTimer) clearInterval(pingTimer);
       try { ws?.close(); } catch { /* fine */ }
+      await shutdownTelemetry();
     },
   };
 }

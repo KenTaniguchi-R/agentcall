@@ -5,10 +5,19 @@ import {
   type CallStatusType, type ErrorCodeType,
 } from "@benree/agentcall-shared";
 
-type CallerAttachment = { kind: "caller"; from: string; groups: string[]; call_id?: string; timeoutMs?: number };
+type CallerAttachment = {
+  kind: "caller";
+  from: string;
+  groups: string[];
+  call_id?: string;
+  correlation_id?: string;
+  timeoutMs?: number;
+};
 type ListenerAttachment = { kind: "listener" };
 type CallRecord = {
   call_id: string;
+  // Optional for in-flight records written by a pre-correlation deployment.
+  correlation_id?: string;
   from: string;
   deadline: number;
   // Optional only for in-flight records written by a pre-#89 deployment.
@@ -200,8 +209,15 @@ export class HandleDO extends DurableObject {
     try { ws.send(JSON.stringify(frame)); } catch { /* socket gone */ }
   }
 
-  private fail(ws: WebSocket, code: ErrorCodeType, detail?: string, offered?: string[], close = true): void {
-    this.send(ws, { type: "call_error", code, detail, offered });
+  private fail(
+    ws: WebSocket,
+    code: ErrorCodeType,
+    detail?: string,
+    offered?: string[],
+    close = true,
+    context: { call_id?: string; correlation_id?: string } = {},
+  ): void {
+    this.send(ws, { type: "call_error", code, detail, offered, ...context });
     if (close) { try { ws.close(1000, code); } catch { /* already closed */ } }
   }
 
@@ -221,7 +237,12 @@ export class HandleDO extends DurableObject {
     // Persist before fan-out so a DO restart or duplicate/out-of-order frame
     // cannot move the caller backward after it has observed a later state.
     await this.ctx.storage.put<CallRecord>(`call:${record.call_id}`, { ...record, state });
-    if (caller) this.send(caller, { type: "call_status", state });
+    if (caller) {
+      this.send(caller, {
+        type: "call_status", state, call_id: record.call_id,
+        correlation_id: record.correlation_id,
+      });
+    }
   }
 
   override async webSocketMessage(ws: WebSocket, raw: string | ArrayBuffer): Promise<void> {
@@ -230,8 +251,18 @@ export class HandleDO extends DurableObject {
     if (!att) return;
 
     if (att.kind === "caller") {
+      if (att.call_id) {
+        return this.fail(ws, "protocol_error", undefined, undefined, true, {
+          call_id: att.call_id,
+          correlation_id: att.correlation_id,
+        });
+      }
       const frame = safeParseFrame(CallerFrame, raw);
-      if (!frame || att.call_id) return this.fail(ws, "protocol_error");
+      if (!frame) return this.fail(ws, "protocol_error");
+      // New callers always mint this. During mixed-version overlap, minting at
+      // the first new relay preserves delivery and gives the new listener a
+      // bounded application join key even when the old caller omitted it.
+      const correlation_id = frame.correlation_id ?? crypto.randomUUID().replaceAll("-", "");
 
       // Rate limit is checked before the size check so an over-budget caller
       // is turned away before an oversized-message parse/response cycle, but
@@ -240,25 +271,30 @@ export class HandleDO extends DurableObject {
       // without ever tripping the limit.
       const now = Date.now();
       const stamps = await readLiveRateLimitStamps(this.ctx.storage, att.from, now);
-      if (stamps.length >= RATE_LIMIT_PER_HOUR) return this.fail(ws, "rate_limited");
+      if (stamps.length >= RATE_LIMIT_PER_HOUR) {
+        return this.fail(ws, "rate_limited", undefined, undefined, true, { correlation_id });
+      }
 
       if (new TextEncoder().encode(frame.message).byteLength > MAX_MESSAGE_BYTES) {
         const needsContinuation = await recordRateLimitHit(this.ctx.storage, att.from, stamps, now);
         if (needsContinuation) await this.scheduleNextAlarm();
-        return this.fail(ws, "message_too_large");
+        return this.fail(ws, "message_too_large", undefined, undefined, true, { correlation_id });
       }
       const listener = this.ctx.getWebSockets("listener")[0];
-      if (!listener) return this.fail(ws, "offline");
+      if (!listener) return this.fail(ws, "offline", undefined, undefined, true, { correlation_id });
 
       await recordRateLimitHit(this.ctx.storage, att.from, stamps, now);
       const call_id = crypto.randomUUID();
       const deadline = now + clampTimeoutMs(att.timeoutMs);
-      ws.serializeAttachment({ ...att, call_id });
-      await this.ctx.storage.put<CallRecord>(`call:${call_id}`, { call_id, from: att.from, deadline, state: "ringing" });
+      ws.serializeAttachment({ ...att, call_id, correlation_id });
+      await this.ctx.storage.put<CallRecord>(`call:${call_id}`, {
+        call_id, correlation_id, from: att.from, deadline, state: "ringing",
+      });
       await this.scheduleNextAlarm();
-      this.send(ws, { type: "call_status", state: "ringing" });
+      this.send(ws, { type: "call_status", state: "ringing", call_id, correlation_id });
       this.send(listener, {
-        type: "incoming_call", call_id, from: att.from, groups: att.groups,
+        type: "incoming_call", call_id, correlation_id, traceparent: frame.traceparent,
+        from: att.from, groups: att.groups,
         message: frame.message, context_id: frame.context_id, task: frame.task,
       });
       return;
@@ -285,7 +321,11 @@ export class HandleDO extends DurableObject {
       // Confirmation means a pending job was removed or the running process
       // was observed exited. Only now is it honest to publish a terminal
       // cancellation and release the call record.
-      if (caller) this.fail(caller, "canceled");
+      if (caller) {
+        this.fail(caller, "canceled", undefined, undefined, true, {
+          call_id: frame.call_id, correlation_id: record.correlation_id,
+        });
+      }
       await this.ctx.storage.delete(`call:${frame.call_id}`);
       return;
     }
@@ -299,7 +339,10 @@ export class HandleDO extends DurableObject {
     if (frame.type === "call_result") {
       const text = truncateUtf8Bytes(frame.text, MAX_REPLY_BYTES);
       if (caller) {
-        this.send(caller, { type: "call_reply", call_id: frame.call_id, text, context_id: frame.context_id, task: frame.task });
+        this.send(caller, {
+          type: "call_reply", call_id: frame.call_id, correlation_id: record.correlation_id,
+          text, context_id: frame.context_id, task: frame.task,
+        });
         try { caller.close(1000, "done"); } catch { /* closed */ }
       }
       await this.ctx.storage.delete(`call:${frame.call_id}`);
@@ -310,7 +353,11 @@ export class HandleDO extends DurableObject {
       // text above. sanitizeDetail bounds the string and strips the control
       // characters that would otherwise reach the caller's terminal verbatim.
       const detail = frame.detail === undefined ? undefined : sanitizeDetail(frame.detail);
-      if (caller) this.fail(caller, frame.code, detail, frame.offered);
+      if (caller) {
+        this.fail(caller, frame.code, detail, frame.offered, true, {
+          call_id: frame.call_id, correlation_id: record.correlation_id,
+        });
+      }
       await this.ctx.storage.delete(`call:${frame.call_id}`);
     }
   }
@@ -338,7 +385,11 @@ export class HandleDO extends DurableObject {
     for (const rec of calls.values()) {
       if (rec.deadline <= now) {
         const caller = this.callerFor(rec.call_id);
-        if (caller) this.fail(caller, "timeout");
+        if (caller) {
+          this.fail(caller, "timeout", undefined, undefined, true, {
+            call_id: rec.call_id, correlation_id: rec.correlation_id,
+          });
+        }
         await this.ctx.storage.delete(`call:${rec.call_id}`);
       }
     }

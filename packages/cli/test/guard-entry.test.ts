@@ -74,11 +74,17 @@ function one(home: string, body: string): Promise<void> {
 describe("guard-entry as a real process", () => {
   it("allows an ordinary read and writes tools.log", () => {
     const home = mkdtempSync(join(tmpdir(), "guard-"));
-    const r = run({ tool_name: "Read", tool_input: { file_path: join(home, "a.ts") }, cwd: home }, home);
+    const r = run(
+      { tool_name: "Read", tool_input: { file_path: join(home, "a.ts") }, cwd: home },
+      home,
+      { AGENTCALL_CORRELATION_ID: "a".repeat(32) },
+    );
     expect(r.status).toBe(0);
     expect(r.stdout).toBe("");
     const tools = readFileSync(logPath(home, "tools.log"), "utf8").trim();
-    expect(JSON.parse(tools)).toMatchObject({ type: "tool_call", call_id: "call-abc", allowed: true });
+    expect(JSON.parse(tools)).toMatchObject({
+      type: "tool_call", call_id: "call-abc", correlation_id: "a".repeat(32), allowed: true,
+    });
     expect(statSync(join(home, ".agentcall")).mode & 0o777).toBe(0o700);
     // Per-line now: the log lives under lines/<name>/, not flat in .agentcall.
     expect(statSync(logPath(home, "tools.log")).mode & 0o777).toBe(0o600);

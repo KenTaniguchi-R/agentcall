@@ -49,6 +49,24 @@ describe("startAllListeners", () => {
     expect(stops).toBe(2);
   });
 
+  it("waits for every listener to flush before stop resolves", async () => {
+    saveLineConfig(getLinePaths(m, "claude"), { ...base, handle: "ken" });
+    saveLineConfig(getLinePaths(m, "codex"), { ...base, handle: "ken-cdx" });
+    const releases: Array<() => void> = [];
+    const h = startAllListeners(m, {
+      start: () => ({
+        stop: () => new Promise<void>((resolve) => releases.push(resolve)),
+      }),
+    });
+    let stopped = false;
+    const stopping = h.stop().then(() => { stopped = true; });
+    await Promise.resolve();
+    expect(stopped).toBe(false);
+    for (const release of releases) release();
+    await stopping;
+    expect(stopped).toBe(true);
+  });
+
   // One process now holds every line's socket. Before this test existed,
   // startListener throwing synchronously at startup (its deliberate "a bad
   // workdir fails loud" contract — see listener.ts) for ONE line took the

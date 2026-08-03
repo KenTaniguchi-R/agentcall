@@ -19,6 +19,7 @@ export interface MachinePaths {
   linesDir: string;
   removedDir: string;
   listenerLog: string;
+  telemetryHealthFile: string;
   // Machine-scoped, not line-scoped, on purpose. It is an administrator ceiling:
   // if it were per-line, adding a line would escape it. It is also deliberately
   // independent of stateRoot/AGENTCALL_HOME — see managedPolicyPath below.
@@ -81,6 +82,7 @@ export function getMachinePaths(
     removedDir: join(dir, "removed"),
     // One process serves every line, so there is one listener log.
     listenerLog: join(dir, "listener.log"),
+    telemetryHealthFile: join(dir, "telemetry-health.json"),
     // Deliberately independent of stateRoot and AGENTCALL_HOME: an unprivileged
     // user must not be able to relocate the administrator-owned policy.
     managedPolicyFile: managedPolicyPath(platform),

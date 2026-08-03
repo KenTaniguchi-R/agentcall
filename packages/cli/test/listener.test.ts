@@ -12,13 +12,13 @@ import { loadContexts, mintContextId, saveContexts, type ContextBinding } from "
 import type { CallableLineConfig } from "../src/config.js";
 
 let httpServer: Server;
-let stopper: { stop(): void } | undefined;
+let stopper: { stop(): Promise<void> } | undefined;
 // Resolves immediately when a test never started a relay — `httpServer?.close()`
 // on an undefined server is a silent no-op whose callback never fires, which
 // would hang teardown until vitest's timeout.
-afterEach(() => {
-  stopper?.stop();
-  return new Promise<void>((r) => { if (httpServer) httpServer.close(() => r()); else r(); });
+afterEach(async () => {
+  await stopper?.stop();
+  await new Promise<void>((r) => { if (httpServer) httpServer.close(() => r()); else r(); });
 });
 
 function fakeRelay(onConn: (ws: WsSocket) => void): Promise<string> {
@@ -140,7 +140,10 @@ describe("startListener", () => {
     });
     const ws = await relayReady;
     const expectFrames = frames(ws, 3);
-    ws.send(JSON.stringify({ type: "incoming_call", call_id: "c1", from: "shusaku", message: "q?" }));
+    ws.send(JSON.stringify({
+      type: "incoming_call", call_id: "c1", correlation_id: "b".repeat(32),
+      from: "shusaku", message: "q?",
+    }));
     const [accepted, started, result] = await expectFrames;
     expect(accepted).toMatchObject({ type: "call_accepted", call_id: "c1" });
     expect(started).toMatchObject({ type: "call_started", call_id: "c1" });
@@ -152,7 +155,8 @@ describe("startListener", () => {
     expect(JSON.stringify(result)).not.toContain("agent-session");
     const audit = readFileSync(paths.callsLog, "utf8").trim().split("\n").map((l) => JSON.parse(l));
     expect(audit[0]).toMatchObject({
-      call_id: "c1", from: "shusaku", message: "q?", reply: "the answer", status: "ok",
+      call_id: "c1", correlation_id: "b".repeat(32), from: "shusaku",
+      message: "q?", reply: "the answer", status: "ok",
     });
     expect(statSync(paths.dir).mode & 0o777).toBe(0o700);
     expect(statSync(paths.callsLog).mode & 0o777).toBe(0o600);
@@ -489,16 +493,17 @@ describe("startListener line name propagation", () => {
     const paths = getLinePaths(freshMachine(), "sales");
     const captured: {
       kind?: "claude" | "codex"; prompt?: string; workdir?: string;
-      envelope?: unknown; callId?: string; lineName?: string;
+      envelope?: unknown; callId?: string; lineName?: string; correlationId?: string;
     } = {};
     const relayReady = new Promise<WsSocket>((resolveWs) => {
       void fakeRelay((ws) => resolveWs(ws)).then((url) => {
         stopper = startListener({
           relay: url, paths,
           loadConfig: () => ({ ...cfg, relay: url }),
-          run: async (kind, prompt, workdir, _timeoutMs, _specOverride, envelope, callId, _signal, lineName) => {
+          run: async (kind, prompt, workdir, _timeoutMs, _specOverride, envelope, callId, _signal, lineName, _resume, correlationId) => {
             captured.kind = kind; captured.prompt = prompt; captured.workdir = workdir;
             captured.envelope = envelope; captured.callId = callId; captured.lineName = lineName;
+            captured.correlationId = correlationId;
             return { text: "ok" };
           },
         });
@@ -511,7 +516,10 @@ describe("startListener line name propagation", () => {
     // that's what makes the assertion below able to catch a positional-
     // argument swap, not just an empty string. See the "would this catch an
     // argument-order shift" check below the assertions.
-    ws.send(JSON.stringify({ type: "incoming_call", call_id: "c1", from: "shusaku", message: "hi" }));
+    ws.send(JSON.stringify({
+      type: "incoming_call", call_id: "c1", correlation_id: "a".repeat(32),
+      from: "shusaku", message: "hi",
+    }));
     await done;
 
     // Compared against `paths.name`, the actual source of truth this test is
@@ -544,6 +552,7 @@ describe("startListener line name propagation", () => {
     // with any of the four above fails to typecheck, so it needs no separate
     // runtime assertion here the way callId/workdir/lineName do.
     expect(spec.env?.AGENTCALL_CALL_ID).toBe("c1");
+    expect(captured.correlationId).toBe("a".repeat(32));
   });
 });
 

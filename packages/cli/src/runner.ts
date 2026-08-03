@@ -4,6 +4,7 @@ import { fileURLToPath } from "node:url";
 import { AGENT_TIMEOUT_MS, MAX_REPLY_BYTES, type AgentKind } from "@benree/agentcall-shared";
 import { resolveAgentBin } from "./bin.js";
 import { CAPS, FULL_ACCESS_ENVELOPE, type Cap, type Envelope } from "./tasks.js";
+import { agentChildEnv } from "./telemetry-env.js";
 
 export type { AgentKind };
 
@@ -180,7 +181,10 @@ export function buildSpawnSpec(
   // A caller-supplied context id must never reach this parameter. Sits AFTER
   // lineName so lineName stays the last required parameter — see runAgent.
   resume?: string,
+  correlationId?: string,
 ): SpawnSpec {
+  const childEnv = agentChildEnv(process.env);
+  const correlationEnv = correlationId ? { AGENTCALL_CORRELATION_ID: correlationId } : {};
   if (kind === "claude") {
     return {
       cmd: resolveBin(kind),
@@ -192,7 +196,7 @@ export function buildSpawnSpec(
       ],
       cwd: workdir,
       env: {
-        ...process.env, AGENTCALL_CALL_ID: callId, AGENTCALL_LINE: lineName,
+        ...childEnv, ...correlationEnv, AGENTCALL_CALL_ID: callId, AGENTCALL_LINE: lineName,
         AGENTCALL_ALLOWED_ROOT: workdir,
       },
     };
@@ -219,7 +223,7 @@ export function buildSpawnSpec(
       // AGENTCALL_LINE is as required here as on the non-resume branch: the
       // guard resolves the line's tasksDir from it and fails closed without
       // it, so omitting it would deny every tool call on a resumed session.
-      env: { ...process.env, AGENTCALL_CALL_ID: callId, AGENTCALL_GUARD_MODE: "observe", AGENTCALL_LINE: lineName },
+      env: { ...childEnv, ...correlationEnv, AGENTCALL_CALL_ID: callId, AGENTCALL_GUARD_MODE: "observe", AGENTCALL_LINE: lineName },
     };
   }
   return {
@@ -237,7 +241,7 @@ export function buildSpawnSpec(
       "--skip-git-repo-check", "--json", "-c", guardCodexConfigArg(),
       "-c", guardCodexTrustArg(), prompt],
     cwd: workdir,
-    env: { ...process.env, AGENTCALL_CALL_ID: callId, AGENTCALL_GUARD_MODE: "observe", AGENTCALL_LINE: lineName },
+    env: { ...childEnv, ...correlationEnv, AGENTCALL_CALL_ID: callId, AGENTCALL_GUARD_MODE: "observe", AGENTCALL_LINE: lineName },
   };
 }
 
@@ -302,9 +306,10 @@ export function runAgent(
   // positional parameters and should become an options object. That belongs
   // with the #49 work in #48 Phase 1, not in this change.
   resume?: string,
+  correlationId?: string,
 ): Promise<AgentOutput> {
   const spec = specOverride
-    ?? buildSpawnSpec(kind, prompt, workdir, resolveAgentBin, envelope, callId, lineName, resume);
+    ?? buildSpawnSpec(kind, prompt, workdir, resolveAgentBin, envelope, callId, lineName, resume, correlationId);
   return new Promise<AgentOutput>((resolve, reject) => {
     // detached: true makes the child its own process group leader, so any
     // grandchildren it forks share its process group unless they detach
