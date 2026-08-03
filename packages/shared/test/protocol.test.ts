@@ -7,6 +7,7 @@ import {
   CallAccepted, CallStarted, CancelCall, CallCancelled, CallNotCancelled, RelayToListenerFrame,
   AGENT_KINDS, AgentKindSchema,
   TASK_ID_RE, MAX_TASK_ID_LENGTH,
+  CORRELATION_ID_RE, normalizeTraceparent, IncomingCall, CallStatus,
 } from "../src/index.js";
 
 describe("handle rules", () => {
@@ -60,6 +61,44 @@ describe("frames", () => {
   });
   it("exposes size constants", () => {
     expect(MAX_MESSAGE_BYTES).toBe(64_000);
+  });
+});
+
+describe("call correlation", () => {
+  const correlationId = "1".repeat(32);
+  const parentId = "2".repeat(16);
+  const matching = `00-${correlationId}-${parentId}-01`;
+
+  it("accepts bounded lowercase non-zero correlation ids", () => {
+    expect(CORRELATION_ID_RE.test(correlationId)).toBe(true);
+    expect(CORRELATION_ID_RE.test("0".repeat(32))).toBe(false);
+    expect(CORRELATION_ID_RE.test("A".repeat(32))).toBe(false);
+  });
+
+  it("keeps only a valid version-00 traceparent matching correlation_id", () => {
+    expect(normalizeTraceparent(correlationId, matching)).toBe(matching);
+    expect(normalizeTraceparent(correlationId, `00-${"3".repeat(32)}-${parentId}-01`)).toBeUndefined();
+    expect(normalizeTraceparent(correlationId, `00-${correlationId}-${"0".repeat(16)}-01`)).toBeUndefined();
+    expect(normalizeTraceparent(correlationId, `01-${correlationId}-${parentId}-01`)).toBeUndefined();
+    expect(normalizeTraceparent(correlationId, `${matching}x`)).toBeUndefined();
+    expect(normalizeTraceparent(correlationId, 42)).toBeUndefined();
+  });
+
+  it("ignores invalid optional traceparent without rejecting a valid call", () => {
+    const parsed = CallRequest.parse({
+      type: "call_request", to: "ken", message: "hi", correlation_id: correlationId,
+      traceparent: `00-${"3".repeat(32)}-${parentId}-01`,
+    });
+    expect(parsed).toMatchObject({ correlation_id: correlationId });
+    expect(parsed).not.toHaveProperty("traceparent");
+  });
+
+  it("keeps correlation fields optional on received frames during mixed-version overlap", () => {
+    expect(IncomingCall.safeParse({ type: "incoming_call", call_id: "c1", from: "a", message: "m" }).success).toBe(true);
+    expect(CallStatus.safeParse({ type: "call_status", state: "ringing" }).success).toBe(true);
+    expect(CallStatus.safeParse({
+      type: "call_status", state: "ringing", call_id: "c1", correlation_id: correlationId,
+    }).success).toBe(true);
   });
 });
 

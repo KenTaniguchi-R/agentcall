@@ -1,11 +1,18 @@
 import WebSocket from "ws";
+import { randomBytes } from "node:crypto";
 import {
-  RelayToCallerFrame, safeParseFrame, sanitizeDetail,
+  CORRELATION_ID_RE, RelayToCallerFrame, normalizeTraceparent, safeParseFrame, sanitizeDetail,
   type CallReplyType, type CallStatusType, type ErrorCodeType,
 } from "@benree/agentcall-shared";
 
 export class CallError extends Error {
-  constructor(message: string, public code: ErrorCodeType | "connection_failed", public offered?: string[]) {
+  constructor(
+    message: string,
+    public code: ErrorCodeType | "connection_failed",
+    public offered?: string[],
+    public callId?: string,
+    public correlationId?: string,
+  ) {
     super(message);
   }
 }
@@ -29,7 +36,12 @@ const HUMAN: Record<string, string> = {
 
 export interface CallOpts {
   relay: string; org: string; from: string; token: string; to: string; message: string;
-  contextId?: string; onStatus?: (state: CallStatusType["state"]) => void; timeoutMs?: number;
+  contextId?: string;
+  onStatus?: (state: CallStatusType["state"], frame: CallStatusType) => void;
+  timeoutMs?: number;
+  /** Internal telemetry seam; ordinary callers leave both fields unset. */
+  correlationId?: string;
+  traceparent?: string;
   // Interval for the caller-side keepalive ping below; overridable for tests.
   pingIntervalMs?: number;
   // Task id from the callee's card to perform; omitted lets the callee's
@@ -43,7 +55,15 @@ export function callStatusMessage(state: CallStatusType["state"]): string {
   return "agent working...";
 }
 
+export function createCorrelationId(): string {
+  return randomBytes(16).toString("hex");
+}
+
 export function callAgent(opts: CallOpts): Promise<CallReplyType> {
+  const correlationId = opts.correlationId && CORRELATION_ID_RE.test(opts.correlationId)
+    ? opts.correlationId
+    : createCorrelationId();
+  const traceparent = normalizeTraceparent(correlationId, opts.traceparent);
   const wsUrl = opts.relay.replace(/^http/, "ws") + `/v1/ws?role=call&to=${encodeURIComponent(opts.to)}`;
   return new Promise((resolve, reject) => {
     const ws = new WebSocket(wsUrl, {
@@ -71,7 +91,11 @@ export function callAgent(opts: CallOpts): Promise<CallReplyType> {
     });
     ws.on("error", (e) => finish(() => reject(new CallError(`Connection failed: ${e.message}`, "connection_failed"))));
     ws.on("open", () => {
-      ws.send(JSON.stringify({ type: "call_request", to: opts.to, message: opts.message, context_id: opts.contextId, task: opts.task }));
+      ws.send(JSON.stringify({
+        type: "call_request", to: opts.to, message: opts.message,
+        context_id: opts.contextId, task: opts.task,
+        correlation_id: correlationId, traceparent,
+      }));
       // Cloudflare's idle timeout can drop a long-running call (agent answers
       // can take up to AGENT_TIMEOUT_MS) if the socket goes quiet. Ping keeps
       // it alive; unref() so this timer alone never keeps the process open.
@@ -81,7 +105,7 @@ export function callAgent(opts: CallOpts): Promise<CallReplyType> {
     ws.on("message", (raw) => {
       const frame = safeParseFrame(RelayToCallerFrame, String(raw));
       if (!frame) return;
-      if (frame.type === "call_status") opts.onStatus?.(frame.state);
+      if (frame.type === "call_status") opts.onStatus?.(frame.state, frame);
       else if (frame.type === "call_reply") finish(() => resolve(frame));
       else if (frame.type === "call_error") {
         // Sanitized again here, not just at the relay: the relay and the CLI
@@ -90,7 +114,9 @@ export function callAgent(opts: CallOpts): Promise<CallReplyType> {
         const detail = frame.detail === undefined ? undefined : sanitizeDetail(frame.detail);
         const base = detail ?? HUMAN[frame.code] ?? frame.code;
         const msg = frame.offered?.length ? `${base} Tasks offered to you: ${frame.offered.join(", ")}` : base;
-        finish(() => reject(new CallError(msg, frame.code, frame.offered)));
+        finish(() => reject(new CallError(
+          msg, frame.code, frame.offered, frame.call_id, frame.correlation_id,
+        )));
       }
     });
     ws.on("close", () => finish(() => reject(new CallError("Connection closed before a reply arrived.", "connection_failed"))));

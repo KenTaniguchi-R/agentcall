@@ -34,6 +34,7 @@ import { ask } from "./tty.js";
 import { renderPolicyReport } from "./policy-report.js";
 import { loadLocalHistory, renderLocalHistory } from "./history.js";
 import { sanitizeTerminalOutput, stringifyTerminalSafeJson } from "@benree/agentcall-shared";
+import { getTelemetry, shutdownTelemetry, telemetrySafely } from "./telemetry.js";
 
 export function createProgram(): Command {
 const program = new Command();
@@ -233,6 +234,8 @@ program
       task = prev.task;
     }
 
+    const telemetry = getTelemetry();
+    const callerSpan = telemetrySafely(() => telemetry?.startCaller({ task, relay: relayUrl(cfg) }));
     try {
       const reply = await callAgent({
         relay: relayUrl(cfg),
@@ -243,8 +246,14 @@ program
         message,
         task,
         contextId,
-        onStatus: (s) => console.error(callStatusMessage(s)),
+        correlationId: callerSpan?.correlationId,
+        traceparent: callerSpan?.traceparent,
+        onStatus: (s, frame) => {
+          telemetrySafely(() => callerSpan?.setCallId(frame.call_id));
+          console.error(callStatusMessage(s));
+        },
       });
+      telemetrySafely(() => callerSpan?.endSuccess(reply.call_id));
       if (reply.context_id && reply.task) {
         rememberOutbound(ctx.paths, {
           relay: relayUrl(cfg), from: cfg.handle, to: parsed.handle,
@@ -256,9 +265,15 @@ program
       }
       console.log(o.json ? stringifyTerminalSafeJson(reply) : sanitizeTerminalOutput(reply.text));
     } catch (e) {
+      telemetrySafely(() => callerSpan?.endError(
+        e instanceof CallError ? e.code : "agent_error",
+        e instanceof CallError ? e.callId : undefined,
+      ));
       console.error(e instanceof CallError ? `Call failed (${e.code}): ${e.message}` : String(e));
       process.exitCode = 1;
       return;
+    } finally {
+      await shutdownTelemetry();
     }
   });
 
@@ -1103,7 +1118,7 @@ program
   .option("--line <name>", "run only this line instead of every callable line")
   .action((o: { line?: string }) => {
     const machine = getMachinePaths();
-    let l: { stop(): void };
+    let l: { stop(): Promise<void> };
     if (o.line) {
       // Single-line foreground run: mirrors startAllListeners' own per-line
       // wiring (listenAll.ts) instead of duplicating it — same loadConfig
@@ -1134,14 +1149,15 @@ program
       // there's no single config/paths pair to load up front here.
       l = startAllListeners(machine);
     }
-    process.on("SIGTERM", () => {
-      l.stop();
+    let stopping = false;
+    const stop = async () => {
+      if (stopping) return;
+      stopping = true;
+      await l.stop();
       process.exit(0);
-    });
-    process.on("SIGINT", () => {
-      l.stop();
-      process.exit(0);
-    });
+    };
+    process.once("SIGTERM", () => { void stop(); });
+    process.once("SIGINT", () => { void stop(); });
     // Keep the process alive without a busy loop; setInterval's max delay.
     setInterval(() => {}, 1 << 30);
   });

@@ -2,6 +2,7 @@ import { createServer, type Server } from "node:http";
 import { WebSocketServer } from "ws";
 import { afterEach, describe, expect, it } from "vitest";
 import { callAgent, callStatusMessage, CallError } from "../src/callClient.js";
+import { CORRELATION_ID_RE } from "@benree/agentcall-shared";
 
 let httpServer: Server | undefined;
 afterEach(() => new Promise<void>((resolve) => {
@@ -56,10 +57,12 @@ describe("callAgent", () => {
       ws.on("message", (raw) => {
         const f = JSON.parse(String(raw));
         expect(f).toMatchObject({ type: "call_request", to: "ken", message: "hi" });
-        ws.send(JSON.stringify({ type: "call_status", state: "ringing" }));
-        ws.send(JSON.stringify({ type: "call_status", state: "answered" }));
-        ws.send(JSON.stringify({ type: "call_status", state: "working" }));
-        ws.send(JSON.stringify({ type: "call_reply", call_id: "c1", text: "yo", context_id: "ctx_AAAAAAAAAAAAAAAAAAAAAA" }));
+        expect(f.correlation_id).toMatch(CORRELATION_ID_RE);
+        expect(f).not.toHaveProperty("traceparent");
+        ws.send(JSON.stringify({ type: "call_status", state: "ringing", call_id: "c1", correlation_id: f.correlation_id }));
+        ws.send(JSON.stringify({ type: "call_status", state: "answered", call_id: "c1", correlation_id: f.correlation_id }));
+        ws.send(JSON.stringify({ type: "call_status", state: "working", call_id: "c1", correlation_id: f.correlation_id }));
+        ws.send(JSON.stringify({ type: "call_reply", call_id: "c1", correlation_id: f.correlation_id, text: "yo", context_id: "ctx_AAAAAAAAAAAAAAAAAAAAAA" }));
         ws.close(1000);
       });
     });
@@ -68,6 +71,21 @@ describe("callAgent", () => {
     expect(reply.text).toBe("yo");
     expect(reply.context_id).toBe("ctx_AAAAAAAAAAAAAAAAAAAAAA");
     expect(states).toEqual(["ringing", "answered", "working"]);
+  });
+
+  it("sends an enabled SDK traceparent only with its matching correlation id", async () => {
+    const correlationId = "a".repeat(32);
+    const traceparent = `00-${correlationId}-${"b".repeat(16)}-01`;
+    let captured: any;
+    const relay = await fakeRelayCapture((ws, frame) => {
+      captured = frame;
+      ws.send(JSON.stringify({
+        type: "call_reply", call_id: "c1", correlation_id: correlationId, text: "ok",
+      }));
+    });
+
+    await callAgent({ relay, ...base, correlationId, traceparent });
+    expect(captured).toMatchObject({ correlation_id: correlationId, traceparent });
   });
 
   it("rejects with the relay's error code", async () => {

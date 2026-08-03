@@ -14,21 +14,57 @@ describe("call flow", () => {
   it("relays a full happy-path call", async () => {
     const { callerToken, listener } = await setupPair("h-callee", "h-caller");
     const caller = await openWs("/v1/ws?role=call&to=h-callee", wsAuth("h-caller", callerToken));
-    caller.send(JSON.stringify({ type: "call_request", to: "h-callee", message: "what is 2+2?" }));
+    const correlationId = "1".repeat(32);
+    const traceparent = `00-${correlationId}-${"2".repeat(16)}-01`;
+    caller.send(JSON.stringify({
+      type: "call_request", to: "h-callee", message: "what is 2+2?",
+      correlation_id: correlationId, traceparent,
+    }));
 
-    expect(await nextFrame(caller)).toMatchObject({ type: "call_status", state: "ringing" });
+    const ringing = await nextFrame(caller);
+    expect(ringing).toMatchObject({
+      type: "call_status", state: "ringing", correlation_id: correlationId,
+    });
+    expect(ringing.call_id).toEqual(expect.any(String));
     const incoming = await nextFrame(listener);
-    expect(incoming).toMatchObject({ type: "incoming_call", from: "h-caller", message: "what is 2+2?" });
+    expect(incoming).toMatchObject({
+      type: "incoming_call", call_id: ringing.call_id, from: "h-caller",
+      message: "what is 2+2?", correlation_id: correlationId, traceparent,
+    });
 
     listener.send(JSON.stringify({ type: "call_accepted", call_id: incoming.call_id }));
-    expect(await nextFrame(caller)).toMatchObject({ type: "call_status", state: "answered" });
+    expect(await nextFrame(caller)).toMatchObject({
+      type: "call_status", state: "answered", call_id: incoming.call_id, correlation_id: correlationId,
+    });
     listener.send(JSON.stringify({ type: "call_started", call_id: incoming.call_id }));
-    expect(await nextFrame(caller)).toMatchObject({ type: "call_status", state: "working" });
+    expect(await nextFrame(caller)).toMatchObject({
+      type: "call_status", state: "working", call_id: incoming.call_id, correlation_id: correlationId,
+    });
 
     const ctxId = "ctx_AAAAAAAAAAAAAAAAAAAAAA";
     listener.send(JSON.stringify({ type: "call_result", call_id: incoming.call_id, text: "4", context_id: ctxId }));
-    expect(await nextFrame(caller)).toMatchObject({ type: "call_reply", text: "4", context_id: ctxId });
+    expect(await nextFrame(caller)).toMatchObject({
+      type: "call_reply", call_id: incoming.call_id, text: "4", context_id: ctxId,
+      correlation_id: correlationId,
+    });
     expect((await closed(caller)).code).toBe(1000);
+  });
+
+  it("ignores invalid optional trace context and still delivers the call", async () => {
+    const { callerToken, listener } = await setupPair("trace-callee", "trace-caller");
+    const caller = await openWs("/v1/ws?role=call&to=trace-callee", wsAuth("trace-caller", callerToken));
+    const correlationId = "3".repeat(32);
+    caller.send(JSON.stringify({
+      type: "call_request", to: "trace-callee", message: "hello",
+      correlation_id: correlationId,
+      traceparent: `00-${"4".repeat(32)}-${"5".repeat(16)}-01`,
+    }));
+
+    const ringing = await nextFrame(caller);
+    expect(ringing).toMatchObject({ type: "call_status", state: "ringing", correlation_id: correlationId });
+    const incoming = await nextFrame(listener);
+    expect(incoming).toMatchObject({ type: "incoming_call", correlation_id: correlationId });
+    expect(incoming).not.toHaveProperty("traceparent");
   });
 
   it("keeps accepting the legacy call_answer frame during listener upgrades", async () => {
@@ -167,9 +203,28 @@ describe("call flow", () => {
     const { callerToken } = await setupPair("p-callee", "p-caller");
     const caller = await openWs("/v1/ws?role=call&to=p-callee", wsAuth("p-caller", callerToken));
     caller.send(JSON.stringify({ type: "call_request", to: "p-callee", message: "one" }));
-    await nextFrame(caller); // ringing
+    const ringing = await nextFrame(caller);
     caller.send(JSON.stringify({ type: "call_request", to: "p-callee", message: "two" }));
-    expect(await nextFrame(caller)).toMatchObject({ type: "call_error", code: "protocol_error" });
+    expect(await nextFrame(caller)).toMatchObject({
+      type: "call_error",
+      code: "protocol_error",
+      call_id: ringing.call_id,
+      correlation_id: ringing.correlation_id,
+    });
+  });
+
+  it("retains admitted call context when the second caller frame is malformed", async () => {
+    const { callerToken } = await setupPair("pm-callee", "pm-caller");
+    const caller = await openWs("/v1/ws?role=call&to=pm-callee", wsAuth("pm-caller", callerToken));
+    caller.send(JSON.stringify({ type: "call_request", to: "pm-callee", message: "one" }));
+    const ringing = await nextFrame(caller);
+    caller.send("not json");
+    expect(await nextFrame(caller)).toMatchObject({
+      type: "call_error",
+      code: "protocol_error",
+      call_id: ringing.call_id,
+      correlation_id: ringing.correlation_id,
+    });
   });
 
   it("survives listener reconnect mid-call", async () => {

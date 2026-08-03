@@ -850,6 +850,29 @@ The published tarball is installed and exercised without pnpm on Node 20, 22,
 and 24 in CI, including `agentcall doctor`; this is what enforces the CLI's
 declared `node >=20` runtime promise.
 
+### Local OpenTelemetry (opt-in)
+
+AgentCall initializes no telemetry SDK by default. Set `AGENTCALL_OTEL=1` in
+the caller/listener process to enable its manual OpenTelemetry instrumentation,
+then use the standard `OTEL_SERVICE_NAME`, `OTEL_EXPORTER_OTLP_*`, timeout, and
+sampling environment variables to select an OTLP/HTTP collector. A supervised
+background listener needs these variables in its supervisor environment; a
+shell-only export affects only foreground commands.
+
+The first implementation exports bounded call metadata and span timing, not
+messages, replies, handles, tool arguments/results, paths, policy details, or
+agent session IDs. Collector headers and all other `OTEL_*`/`AGENTCALL_OTEL*`
+settings are removed from the Claude/Codex and hook subprocess environments.
+Remote sampling flags cannot override the listener's locally bounded sampler;
+`AGENTCALL_OTEL_MAX_ROOT_SPANS_PER_MINUTE` sets its absolute root-span token
+bucket (default 60). Export or shutdown failure never changes a call result.
+The listener records only aggregate trace-export failures, metric-export
+failures, and span-queue drops in `~/.agentcall/telemetry-health.json`;
+`agentcall doctor` reports a warning from that local file without making
+telemetry health a call-health requirement.
+See the [observability boundary](./docs/superpowers/specs/2026-08-02-observability-boundary.md)
+for the exact span, metric, privacy, and Cloudflare separation contracts.
+
 Platform installers are deliberately deferred. AgentCall will keep its current
 Commander CLI until the non-macOS service/container work (#14) defines the
 artifacts each platform needs and managed policy (#104) defines who controls

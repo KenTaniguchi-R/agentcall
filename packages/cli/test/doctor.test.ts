@@ -9,6 +9,7 @@ import { getLinePaths, getMachinePaths, type MachinePaths } from "../src/paths.j
 import { GUARD_PROBE_LINE } from "../src/verify.js";
 import { LAUNCH_LABEL } from "../src/launchd.js";
 import type { AgentKind } from "../src/runner.js";
+import { TelemetryHealthReporter } from "../src/telemetry-health.js";
 
 // A single-line machine, still used by tests that only care about one line's
 // checks. Multi-line behavior gets its own describe block below.
@@ -73,6 +74,24 @@ function failingVerifyFor(kind: AgentKind) {
 }
 
 describe("runDoctor", () => {
+  it("surfaces persistent local telemetry degradation without failing doctor", async () => {
+    const m = freshMachine();
+    saveLineConfig(getLinePaths(m, "caller"), {
+      org: "acme", handle: "solo", token: "t", relay: "https://relay.example",
+    });
+    const health = new TelemetryHealthReporter(m.telemetryHealthFile, () => {});
+    health.recordFailure("trace_export");
+    health.recordFailure("span_queue");
+    health.flush();
+    const lines: string[] = [];
+    const code = await runDoctor({ ...baseDeps, machine: m, log: (line) => lines.push(line) });
+    expect(code).toBe(0);
+    const out = lines.join("\n");
+    expect(out).toContain("! local telemetry export");
+    expect(out).toContain("trace export failures 1");
+    expect(out).toContain("span queue drops 1");
+  });
+
   it("exits 0 and runs every check including the relay self-call when all pass", async () => {
     const m = freshMachine();
     saveLineConfig(getLinePaths(m, LINE), { org: "acme", handle: "ken", token: "t", agent_kind: "claude", relay: "https://relay.example" });

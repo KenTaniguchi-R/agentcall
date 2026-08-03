@@ -70,10 +70,10 @@ privacy and size surface without being needed for cross-runtime correlation.
 
 Authenticated callers still supply untrusted remote context. The sampled flag
 is an eligibility hint, not a command. The callee uses a custom bounded sampler:
-it ignores the default parent decision, makes selection with callee-controlled
-randomness (not the caller-controlled trace id), and maintains bounded rolling
-sampled/eligible counters so accepted samples cannot exceed the configured
-local ratio in the window. A strict local token bucket also caps absolute
+it ignores the default parent decision and accrues a local ratio quota (without
+using the caller-controlled trace id). It cannot sample until enough eligible
+calls have accrued to pay for one sample, so every admitted prefix remains at
+or below the configured ratio. A continuously refilled strict local token bucket also caps absolute
 recording/export work. The default parent-based and trace-id-ratio samplers are
 therefore forbidden for untrusted remote contexts. Relay head sampling and
 callee sampling apply independent local ceilings. Rate limits bound call
@@ -261,7 +261,7 @@ The protocol/local implementation must prove:
   listener, while invalid, mismatched, all-zero, or oversized optional
   traceparent is ignored and cannot reject or delay delivery;
 - sampled=1 floods and adversarial caller-chosen trace ids cannot raise local
-  listener recording above its configured rolling ratio and token-bucket
+  listener recording above its configured ratio quota and token-bucket
   ceilings;
 - call id appears on the first post-admission status and every later lifecycle
   frame, while pre-admission errors omit it;

@@ -300,6 +300,7 @@ export function decide(
 export interface GuardDeps {
   line: LinePaths;
   callId: string;
+  correlationId?: string;
   now: () => string;
   realpath: (p: string) => string;
   appendLine: (file: string, line: string) => void;
@@ -357,6 +358,9 @@ export function runGuard(raw: string, deps: GuardDeps, mode: GuardMode = "enforc
     const taskRoots = lineTaskDirs(getMachinePaths(userHome, userHome));
     const verdict = decide(input, userHome, deps.realpath, undefined, deps.allowedRoot, taskRoots);
     const ts = deps.now();
+    const correlation = deps.correlationId
+      ? { correlation_id: deps.correlationId }
+      : {};
     const write = (file: string, obj: Record<string, unknown>) =>
       deps.appendLine(file, JSON.stringify({ ts, ...obj }));
 
@@ -366,8 +370,8 @@ export function runGuard(raw: string, deps: GuardDeps, mode: GuardMode = "enforc
     // may still be stopped downstream by codex's sandbox. Recording `allowed`
     // there would assert an outcome this hook never sees.
     write(deps.line.toolsLog, mode === "observe"
-      ? { type: "tool_call", call_id: deps.callId, tool: input.tool_name, mode }
-      : { type: "tool_call", call_id: deps.callId, tool: input.tool_name, allowed: verdict.allow });
+      ? { type: "tool_call", call_id: deps.callId, ...correlation, tool: input.tool_name, mode }
+      : { type: "tool_call", call_id: deps.callId, ...correlation, tool: input.tool_name, allowed: verdict.allow });
 
     const noteworthy = verdict.allow ? verdict.flag : verdict;
     if (noteworthy) {
@@ -376,7 +380,7 @@ export function runGuard(raw: string, deps: GuardDeps, mode: GuardMode = "enforc
         // denied = we stopped it; flagged = we let it through and noticed;
         // attempt_flagged = we only ever watched.
         type: mode === "observe" ? "tool_attempt_flagged" : verdict.allow ? "tool_flagged" : "tool_denied",
-        call_id: deps.callId, tool: input.tool_name,
+        call_id: deps.callId, ...correlation, tool: input.tool_name,
         rule: noteworthy.rule, detail: noteworthy.detail,
       });
     }

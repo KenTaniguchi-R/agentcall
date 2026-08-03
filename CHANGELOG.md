@@ -6,6 +6,21 @@ which are released together.
 
 ## Unreleased
 
+### Opt-in local OpenTelemetry
+
+- Propagate a bounded caller correlation ID across relay, listener, lifecycle
+  status, reply/failure, audit, and tool-attempt records; post-admission status
+  frames now include the relay-minted call ID.
+- Add explicit opt-in caller/listener OpenTelemetry spans and bounded custom
+  invocation metrics. Invalid optional trace context is ignored without
+  affecting delivery, and untrusted remote sampling cannot exceed local ratio
+  and token-bucket ceilings.
+- Keep prompts, replies, handles, paths, policy details, sessions, and exporter
+  credentials out of telemetry; answering agent and hook subprocesses inherit
+  correlation but no `OTEL_*` or AgentCall exporter configuration.
+- Persist bounded local exporter/queue degradation counters for
+  `agentcall doctor`, and await a bounded telemetry flush during listener shutdown.
+
 ### Nested-call interlock and egress boundary
 
 - Refuse the normal `agentcall call` path inside an inbound answering process,

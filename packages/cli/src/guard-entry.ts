@@ -40,6 +40,7 @@ if (!LINE_NAME_RE.test(lineName)) {
     appendFileSync(machine.listenerLog, JSON.stringify({
       ts: new Date().toISOString(), type: "guard_unwired",
       call_id: process.env.AGENTCALL_CALL_ID ?? "unknown",
+      correlation_id: process.env.AGENTCALL_CORRELATION_ID,
     }) + "\n");
   } catch { /* the exit below still fails closed regardless */ }
   process.stderr.write(FAIL_CLOSED_REASON + "\n");
@@ -53,6 +54,7 @@ try {
   const out = runGuard(raw, {
     line: getLinePaths(machine, lineName),
     callId: process.env.AGENTCALL_CALL_ID ?? "unknown",
+    correlationId: process.env.AGENTCALL_CORRELATION_ID,
     now: () => new Date().toISOString(),
     // Plain realpathSync, which THROWS on a path that does not exist. That is
     // required: canonical() catches it and walks up to the longest existing

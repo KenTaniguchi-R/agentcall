@@ -26,6 +26,29 @@ export const MAX_DETAIL_LENGTH = 500;
 // that it selects a resumable agent session, a malformed value is rejected at
 // the schema boundary — before it reaches any store lookup.
 export const CONTEXT_ID_RE = /^ctx_[A-Za-z0-9_-]{22}$/;
+export const CORRELATION_ID_RE = /^(?!0{32}$)[0-9a-f]{32}$/;
+const TRACEPARENT_V00_RE = /^00-([0-9a-f]{32})-([0-9a-f]{16})-(0[01])$/;
+
+export function normalizeTraceparent(correlationId: string | undefined, value: unknown): string | undefined {
+  if (correlationId === undefined || typeof value !== "string") return undefined;
+  const match = TRACEPARENT_V00_RE.exec(value);
+  if (!match || match[1] !== correlationId || /^0{16}$/.test(match[2]!)) return undefined;
+  return value;
+}
+
+function normalizeTraceContext(input: unknown): unknown {
+  if (typeof input !== "object" || input === null || Array.isArray(input)) return input;
+  const frame = { ...input } as Record<string, unknown>;
+  const traceparent = normalizeTraceparent(
+    typeof frame.correlation_id === "string" ? frame.correlation_id : undefined,
+    frame.traceparent,
+  );
+  if (traceparent === undefined) delete frame.traceparent;
+  else frame.traceparent = traceparent;
+  return frame;
+}
+
+const CorrelationId = z.string().regex(CORRELATION_ID_RE);
 
 // A context is a follow-up within one sitting, not a durable relationship. See
 // the "Out of scope" section of the multi-turn design for why cross-day
@@ -60,20 +83,25 @@ export const ErrorCode = z.enum([
 // Generic call_failed must not bypass that confirmation contract.
 export const CallFailureCode = ErrorCode.exclude(["canceled"]);
 
-export const CallRequest = z.object({
+export const CallRequest = z.preprocess(normalizeTraceContext, z.object({
   type: z.literal("call_request"),
   to: z.string().regex(HANDLE_RE),
   message: z.string().min(1),
   context_id: z.string().regex(CONTEXT_ID_RE).optional(),
   task: z.string().regex(TASK_ID_RE).optional(),
-});
+  correlation_id: CorrelationId.optional(),
+  traceparent: z.string().optional(),
+}));
 export const CallStatus = z.object({
   type: z.literal("call_status"),
   state: z.enum(["ringing", "answered", "working"]),
+  call_id: z.string().optional(),
+  correlation_id: CorrelationId.optional(),
 });
 export const CallReply = z.object({
   type: z.literal("call_reply"),
   call_id: z.string(),
+  correlation_id: CorrelationId.optional(),
   text: z.string(),
   context_id: z.string().regex(CONTEXT_ID_RE).optional(),
   task: z.string().regex(TASK_ID_RE).optional(),
@@ -87,12 +115,16 @@ export const CallReply = z.object({
 export const CallError = z.object({
   type: z.literal("call_error"),
   code: ErrorCode,
+  call_id: z.string().optional(),
+  correlation_id: CorrelationId.optional(),
   detail: z.string().max(MAX_DETAIL_LENGTH).optional(),
   offered: z.array(z.string().regex(TASK_ID_RE)).max(MAX_OFFERED_TASKS).optional(),
 });
-export const IncomingCall = z.object({
+export const IncomingCall = z.preprocess(normalizeTraceContext, z.object({
   type: z.literal("incoming_call"),
   call_id: z.string(),
+  correlation_id: CorrelationId.optional(),
+  traceparent: z.string().optional(),
   from: z.string(),
   message: z.string(),
   // Relay-attested opaque roster ids. The caller never sends this field: the
@@ -101,7 +133,7 @@ export const IncomingCall = z.object({
   groups: z.array(z.string().regex(/^[A-Za-z0-9_-]{16,64}$/)).max(MAX_CALLER_GROUPS).default([]),
   context_id: z.string().regex(CONTEXT_ID_RE).optional(),
   task: z.string().regex(TASK_ID_RE).optional(),
-});
+}));
 export const CallAnswer = z.object({ type: z.literal("call_answer"), call_id: z.string() });
 export const CallResult = z.object({
   type: z.literal("call_result"),
@@ -142,13 +174,17 @@ export const CallNotCancelled = z.object({
   reason: z.enum(["already_terminal", "unknown", "too_late"]),
 });
 
-export const CallerFrame = z.discriminatedUnion("type", [CallRequest]);
+// CallRequest and IncomingCall preprocess optional trace context, so they are
+// not valid options for z.discriminatedUnion even though their `type` fields
+// remain literal. A single caller frame needs no union; the two relay frames
+// use a regular bounded union.
+export const CallerFrame = CallRequest;
 export const ListenerToRelayFrame = z.discriminatedUnion("type", [
   CallAnswer, CallResult, CallFailed,
   CallAccepted, CallStarted, CallCancelled, CallNotCancelled,
 ]);
 export const RelayToCallerFrame = z.discriminatedUnion("type", [CallStatus, CallReply, CallError]);
-export const RelayToListenerFrame = z.discriminatedUnion("type", [IncomingCall, CancelCall]);
+export const RelayToListenerFrame = z.union([IncomingCall, CancelCall]);
 
 export const AGENT_KINDS = ["claude", "codex"] as const;
 export type AgentKind = (typeof AGENT_KINDS)[number];

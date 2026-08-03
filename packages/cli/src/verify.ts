@@ -11,6 +11,7 @@ import {
 } from "./runner.js";
 import { resolveAgentBin } from "./bin.js";
 import { ASK_TASK } from "./tasks.js";
+import { agentChildEnv } from "./telemetry-env.js";
 
 // One row of verification output, shared by `setup` and `agentcall doctor`.
 export interface VerifyCheck {
@@ -121,7 +122,7 @@ export function runCodexGuardProbe(
       // config diagnostic cannot leak through doctor or fill an unread pipe.
       cwd,
       detached,
-      env: { ...process.env, CODEX_HOME: codexHome },
+    env: { ...agentChildEnv(process.env), CODEX_HOME: codexHome },
       stdio: ["pipe", "pipe", "ignore"],
     });
 
@@ -450,7 +451,7 @@ const defaultGuardProbe: GuardProbeFn = async (settings) => {
      "--permission-mode", "dontAsk", "--allowedTools", "Read", "--settings", settings],
     {
       cwd: home,
-      env: { ...process.env, AGENTCALL_HOME: home, AGENTCALL_LINE: GUARD_PROBE_LINE },
+      env: { ...agentChildEnv(process.env), AGENTCALL_HOME: home, AGENTCALL_LINE: GUARD_PROBE_LINE },
       encoding: "utf8", stdio: ["ignore", "pipe", "pipe"],
     },
   );
@@ -490,7 +491,7 @@ const defaultGuardBinaryProbe: GuardBinaryProbeFn = async () => {
     // absent or malformed value makes guard-entry fail closed before it ever
     // calls decide(), which happens to also deny, but for the wrong reason:
     // guardDenied() would then read as "broken guard" on a healthy install.
-    env: { ...process.env, AGENTCALL_HOME: home, AGENTCALL_GUARD_MODE: "enforce", AGENTCALL_LINE: GUARD_PROBE_LINE },
+      env: { ...agentChildEnv(process.env), AGENTCALL_HOME: home, AGENTCALL_GUARD_MODE: "enforce", AGENTCALL_LINE: GUARD_PROBE_LINE },
     encoding: "utf8",
     stdio: ["pipe", "pipe", "pipe"],
   });

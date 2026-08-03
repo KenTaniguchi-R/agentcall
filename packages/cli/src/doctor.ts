@@ -6,6 +6,7 @@ import { isLaunchAgentInstalled, LAUNCH_LABEL } from "./launchd.js";
 import { listLines } from "./lines.js";
 import type { MachinePaths } from "./paths.js";
 import type { AgentKind } from "./runner.js";
+import { readTelemetryHealth } from "./telemetry-health.js";
 import {
   checkCodexGuard, checkGuard, checkRelaySelfCall, formatCheck, short, verifyAgent,
   type CodexGuardProbeFn, type GuardBinaryProbeFn, type GuardProbeFn,
@@ -79,6 +80,22 @@ export async function runDoctor(deps: DoctorDeps): Promise<number> {
           : "run `agentcall setup`",
       });
     }
+  }
+
+  const telemetryHealth = readTelemetryHealth(deps.machine.telemetryHealthFile);
+  if (telemetryHealth) {
+    const { trace_export, metric_export, span_queue } = telemetryHealth.failures;
+    report({
+      name: "local telemetry export",
+      ok: true,
+      warn: telemetryHealth.status === "degraded",
+      detail: telemetryHealth.status === "ok"
+        ? "no local export degradation recorded"
+        : `degraded — trace export failures ${trace_export}, metric export failures ${metric_export}, span queue drops ${span_queue}`,
+      hint: telemetryHealth.status === "degraded"
+        ? "check the local OTLP endpoint and ~/.agentcall/listener.log"
+        : undefined,
+    });
   }
 
   const lineList = listLines(deps.machine);
