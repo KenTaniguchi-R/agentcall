@@ -1,6 +1,6 @@
 # Audit retention policy
 
-Last verified: 2026-08-03 against repository migration `0013_org_roles.sql`.
+Last verified: 2026-08-03 against repository migration `0015_audit_export_acknowledgements.sql`.
 
 This document is the current retention contract for the hosted relay's D1
 security-audit ledgers. It describes implemented behavior, not a compliance
@@ -24,8 +24,17 @@ page size. The CLI streams NDJSON by default and CSV with `--format csv`; both
 formats preserve the same snapshot contract. A concurrent append cannot enter
 an in-progress export. Every continuation also recounts rows at or below the
 checkpoint and aborts with `409` if retention removed one, so a caller must
-discard partial output unless the stream reaches its final checkpoint. The
-hosted service still cannot promise a tenant-level,
+discard partial output unless the stream reaches its final checkpoint.
+
+An unfiltered, all-time export that reaches its terminal page receives a signed
+completion receipt containing only its tenant and per-ledger ID/count
+checkpoint. After storing the full stream, an administrator can explicitly
+acknowledge that receipt. The relay atomically advances a monotonic checkpoint
+in `audit_export_acknowledgements`; partial, filtered, date-bounded, forged,
+cross-tenant, and stale-regressing receipts cannot advance it. This watermark
+is implemented evidence for a future retention cutoff, but no deletion job
+consumes it and the acknowledgement cannot prove the state of an external
+archive or backup. The hosted service still cannot promise a tenant-level,
 person-level, or time-based erasure request. That is a product/compliance
 blocker for an organization that requires one.
 
@@ -79,9 +88,11 @@ must not ship independently. Expiry is safe only when all of these are true:
 1. **Implemented:** the supported export combines `roster_events` and
    `org_events` into one ordered, tenant-scoped contract while preserving each
    event's ledger/scope.
-2. **Implemented for export:** each stream carries stable per-ledger checkpoints.
-   Retention automation must still persist and verify the relevant completed
-   checkpoint before deleting through a cutoff.
+2. **Implemented:** each stream carries stable per-ledger checkpoints, and a
+   terminal unfiltered export can produce a tenant-bound completion receipt
+   that advances an atomic, monotonic acknowledgement watermark. Retention
+   automation must require and verify that watermark before deleting through a
+   cutoff.
 3. A documented default window and a bounded configurable window are applied
    uniformly by event time. Configuration changes are themselves audited.
 4. Deletion runs in bounded batches, resumes safely after interruption, exposes

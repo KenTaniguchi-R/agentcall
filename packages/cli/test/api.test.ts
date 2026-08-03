@@ -237,6 +237,8 @@ describe("api client", () => {
       }],
       checkpoint: { org_event_id: 1, org_event_count: 1, roster_event_id: 0, roster_event_count: 0 },
       next_page_token: "next",
+      completion_receipt: null,
+      acknowledged_checkpoint: null,
     };
     const relay = await startServer((req, res) => {
       seen = req.url ?? "";
@@ -275,6 +277,8 @@ describe("api client", () => {
       events: [],
       checkpoint: { org_event_id: 0, org_event_count: 0, roster_event_id: 0, roster_event_count: 0 },
       next_page_token: "",
+      completion_receipt: "receipt",
+      acknowledged_checkpoint: null,
     };
     const relay = await startServer((_req, res) => {
       calls += 1;
