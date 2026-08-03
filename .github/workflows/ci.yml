@@ -4,6 +4,7 @@ on:
   push:
     branches: [main]
   pull_request:
+  workflow_dispatch:
 
 # A new push to the same branch supersedes the run in flight.
 concurrency:
@@ -99,3 +100,90 @@ jobs:
             exit 1
           fi
           grep -F "No agentcall config found" "$RUNNER_TEMP/status-output"
+
+  # Compatibility evidence only: #251 owns functional Windows support. Keep
+  # the published OS restriction in place and force-install only the tarball
+  # whose startup surface this job probes.
+  windows-compat:
+    needs: verify
+    runs-on: windows-2025
+    strategy:
+      fail-fast: false
+      matrix:
+        node: [20, 22, 24]
+    defaults:
+      run:
+        shell: pwsh
+    steps:
+      # Node 24 carries the platform-neutral source gate. Node 20 and 22 only
+      # exercise the packed artifact, avoiding three copies of the slow suite.
+      - if: matrix.node == 24
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+      - if: matrix.node == 24
+        uses: pnpm/action-setup@0ebf47130e4866e96fce0953f49152a61190b271 # v6
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7
+        with:
+          node-version: ${{ matrix.node }}
+      - if: matrix.node == 24
+        run: pnpm install --frozen-lockfile
+      - if: matrix.node == 24
+        run: pnpm -r build
+      - if: matrix.node == 24
+        run: pnpm -r typecheck
+      - name: Platform-neutral tests
+        if: matrix.node == 24
+        run: |
+          pnpm --filter @benree/agentcall-shared test
+          pnpm --filter @benree/agentcall test:windows
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8
+        with:
+          name: packed-cli
+          path: ${{ runner.temp }}/agentcall-packages
+      - name: "Packaged CLI startup and #251 blocker inventory"
+        env:
+          AGENTCALL_HOME: ${{ runner.temp }}/agentcall home with spaces
+          NPM_CONFIG_ENGINE_STRICT: "true"
+        run: |
+          $packDir = Join-Path $env:RUNNER_TEMP "agentcall-packages"
+          $shared = (Get-ChildItem $packDir -Filter "benree-agentcall-shared-*.tgz" | Select-Object -First 1).FullName
+          $cli = (Get-ChildItem $packDir -Filter "benree-agentcall-*.tgz" |
+            Where-Object Name -NotLike "*shared*" | Select-Object -First 1).FullName
+          if (-not $shared -or -not $cli) { throw "packed CLI artifacts are missing" }
+
+          # The ordinary install must remain blocked until functional support
+          # lands in #251; a surprise success would overstate package support.
+          $normalPrefix = Join-Path $env:RUNNER_TEMP "agentcall normal install"
+          $normalOutput = (& npm.cmd install --global --prefix $normalPrefix $shared $cli 2>&1 | Out-String)
+          $normalCode = $LASTEXITCODE
+          if ($normalCode -eq 0) { throw "Windows install unexpectedly succeeded before #251" }
+          if ($normalOutput -notmatch "EBADPLATFORM|Unsupported platform") {
+            throw "Windows install failed outside the documented #251 platform gate: $normalOutput"
+          }
+
+          # Force is a harness-only escape hatch. The clean prefix and HOME both
+          # contain spaces so npm's .cmd shim and PowerShell quoting are real.
+          $forcedPrefix = Join-Path $env:RUNNER_TEMP "agentcall forced install"
+          npm.cmd install --global --force --prefix $forcedPrefix $shared $cli
+          if ($LASTEXITCODE -ne 0) { throw "forced packed install failed" }
+          $agentcall = Join-Path $forcedPrefix "agentcall.cmd"
+          if (-not (Test-Path $agentcall)) { throw "npm did not create agentcall.cmd" }
+          & $agentcall --version
+          if ($LASTEXITCODE -ne 0) { throw "agentcall --version failed" }
+          & $agentcall --help
+          if ($LASTEXITCODE -ne 0) { throw "agentcall --help failed" }
+
+          function Assert-BlockedBy251([string] $name, [string[]] $commandArgs) {
+            $output = (& $agentcall @commandArgs 2>&1 | Out-String)
+            $code = $LASTEXITCODE
+            if ($code -eq 0) { throw "$name unexpectedly succeeded before #251" }
+            if ($output -notmatch "Managed policy is not supported on win32") {
+              throw "$name failed outside the documented #251 blocker: $output"
+            }
+          }
+          Assert-BlockedBy251 "setup" @(
+            "setup", "--invite", "unused", "--handle", "windows-probe",
+            "--agent", "claude", "--relay", "https://relay.example",
+            "--skip-service", "--no-snippet", "--no-verify"
+          )
+          Assert-BlockedBy251 "doctor" @("doctor")
+          Assert-BlockedBy251 "listen" @("listen")

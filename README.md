@@ -328,7 +328,9 @@ observability spec records the rationale that preceded this implementation.
 ## Limitations
 
 - The hosted service and customer-owned relay path are pre-production.
-- Native listeners support macOS and Linux, not Windows.
+- Native listeners support macOS and Linux, not Windows. The
+  [native-Windows compatibility harness](./docs/windows-compatibility.md)
+  records current CI evidence and the remaining implementation blockers.
 - Calls are synchronous; there is no store-and-forward mailbox.
 - Each listener handles one call at a time. A concurrent call returns `busy`.
 - Handles cannot currently be released or reclaimed.

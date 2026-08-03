@@ -29,6 +29,7 @@
   "scripts": {
     "build": "tsc -p tsconfig.json",
     "test": "vitest run",
+    "test:windows": "vitest run test/abuse-signals.test.ts test/prompt.test.ts test/queue.test.ts test/search-scope.test.ts test/telemetry.test.ts test/verbs.test.ts",
     "typecheck": "tsc -p tsconfig.json --noEmit && tsc -p tsconfig.test.json"
   },
   "dependencies": {
