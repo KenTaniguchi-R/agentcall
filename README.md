@@ -390,10 +390,12 @@ and coarse liveness tracking. See the
 agentcall doctor
 ```
 
-`agentcall doctor` verifies your install can answer calls (auth, agent spawn,
-listener, relay self-call) — run it whenever calls to you start failing. `✓` is a
-pass and `✗` is a failure with a fix; a `!` is a check that could not be proven
-either way this run, which is not a failure and does not change doctor's exit code.
+`agentcall doctor` reports the installed package and real CLI entry that answered,
+warns when a different install also appears on `PATH`, and verifies your install can
+answer calls (auth, agent spawn, listener, relay self-call). Run it whenever setup or
+calls to you start failing. `✓` is a pass and `✗` is a failure with a fix; a `!` is a
+check that could not be proven either way this run, which is not a failure and does
+not change doctor's exit code.
 
 ```bash
 # Review the newest activity recorded on this machine
