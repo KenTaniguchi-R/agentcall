@@ -17,6 +17,7 @@ export interface MachinePaths {
   personFile: string;
   contactsFile: string;
   knownPeersFile: string;
+  replayReservationsFile: string;
   linesDir: string;
   removedDir: string;
   listenerLog: string;
@@ -80,6 +81,7 @@ export function getMachinePaths(
     personFile: join(dir, "person.json"),
     contactsFile: join(dir, "contacts.json"),
     knownPeersFile: join(dir, "known_peers.json"),
+    replayReservationsFile: join(dir, "replay_reservations.json"),
     linesDir: join(dir, "lines"),
     removedDir: join(dir, "removed"),
     // One process serves every line, so there is one listener log.
