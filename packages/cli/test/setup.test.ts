@@ -2,7 +2,7 @@ import { existsSync, mkdirSync, mkdtempSync, readFileSync, writeFileSync } from 
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { runSetup, warnIfOutsideLaunchdPath, type SetupOpts } from "../src/setup.js";
+import { runSetup, warnIfEphemeralServiceBin, type SetupOpts } from "../src/setup.js";
 import { getLinePaths, getMachinePaths, type MachinePaths } from "../src/paths.js";
 import { listLines, saveLineConfig } from "../src/lines.js";
 import { loadPerson, savePerson } from "../src/person.js";
@@ -11,21 +11,21 @@ import type { LineConfig } from "../src/config.js";
 import { AgentRunError } from "../src/runner.js";
 
 // addLine/removeLine (and so runSetup, which delegates to addLine) fall back
-// to the real installLaunchAgent/uninstallLaunchAgent whenever a seam is
+// to the real installListenerService/uninstallListenerService whenever a seam is
 // omitted — and the real ones shell out to the actual `launchctl bootstrap`/
 // `bootout` on whoever's machine runs this suite, regardless of how
 // sandboxed MachinePaths.userHome is (only the plist *file* path is
 // sandboxed; the launchd *session* is the real logged-in user's). This is
 // the same guard line-cmd.test.ts carries, added there after this exact
 // class of bug booted out the developer's real listener — every test below
-// must pass its own skipLaunchd/installLaunchAgentFn, or fail loudly here
+// must pass its own skipService/installListenerServiceFn, or fail loudly here
 // instead of silently reaching the real thing.
-vi.mock("../src/launchd.js", () => ({
-  installLaunchAgent: () => {
-    throw new Error("real installLaunchAgent reached in a test — pass skipLaunchd or installLaunchAgentFn");
+vi.mock("../src/listener-service.js", () => ({
+  installListenerService: () => {
+    throw new Error("real installListenerService reached in a test — pass skipService or installListenerServiceFn");
   },
-  uninstallLaunchAgent: () => {
-    throw new Error("real uninstallLaunchAgent reached in a test — pass an uninstall seam");
+  uninstallListenerService: () => {
+    throw new Error("real uninstallListenerService reached in a test — pass an uninstall seam");
   },
 }));
 
@@ -43,13 +43,13 @@ const base: LineConfig = { org: "acme", handle: "ken", token: "t", relay: R, age
 
 // The real addLine, wired to stubRegister instead of the network. Used as
 // the `addLineFn` seam by every test below unless a test needs to observe
-// one of addLine's own callbacks (publishCardFn, installLaunchAgentFn) —
+// one of addLine's own callbacks (publishCardFn, installListenerServiceFn) —
 // those pass their own wrapper built the same way.
 const fakeAddLine = (m: MachinePaths, opts: AddLineOpts) =>
   addLine(m, { ...opts, register: stubRegister, publishCardFn: opts.publishCardFn ?? (async () => undefined) });
 
-// addLine derives extraPathDirs (launchPathDirs, see launchPath.ts) eagerly
-// as an argument expression, so it runs even when installLaunchAgentFn is a
+// addLine derives extraPathDirs (listenerPathDirs, see listenerPath.ts) eagerly
+// as an argument expression, so it runs even when installListenerServiceFn is a
 // total no-op — and by default that derivation falls back to the real
 // `which` via defaultResolveBin. run() below defaults resolveBin to this so
 // no test in this file shells out by accident; "threads its resolveBin
@@ -81,7 +81,7 @@ describe("runSetup", () => {
   it("creates person.json plus one line, and marks it primary", async () => {
     await run({
       handle: "ken", agent: "claude", relay: R, yes: true, snippet: false, verify: false,
-      addLineFn: fakeAddLine, skipLaunchd: true,
+      addLineFn: fakeAddLine, skipService: true,
     });
     expect(loadPerson(m).primary_line).toBe("claude");
     expect(listLines(m).map((l) => l.name)).toEqual(["claude"]);
@@ -94,7 +94,7 @@ describe("runSetup", () => {
   it("names the line after the agent kind", async () => {
     await run({
       handle: "ken", agent: "codex", relay: R, yes: true, snippet: false, verify: false,
-      addLineFn: fakeAddLine, skipLaunchd: true,
+      addLineFn: fakeAddLine, skipService: true,
     });
     expect(listLines(m).map((l) => l.name)).toEqual(["codex"]);
   });
@@ -124,13 +124,29 @@ describe("runSetup", () => {
     const res = await run({
       handle: base.handle, agent: "codex", relay: base.relay, yes: true, snippet: false, verify: false,
       addLineFn: () => { throw new Error("must not re-register on a second run"); },
-      skipLaunchd: true, log: (s) => out.push(s),
+      skipService: true, log: (s) => out.push(s),
     });
     expect(listLines(m).map((l) => l.name)).toEqual(["claude"]);
     expect(readFileSync(lp.configFile, "utf8")).toBe(before);
     expect(readFileSync(lp.policyFile, "utf8")).toBe(customPolicy);
     expect(out.join("\n")).toMatch(/agentcall line add/);
     expect(res.ready).toBe(true);
+  });
+
+  it("repairs the background service on a second run for an existing callable line", async () => {
+    saveLineConfig(getLinePaths(m, "claude"), base);
+    savePerson(m, { primary_line: "claude" });
+    let installed = 0;
+
+    await run({
+      relay: R,
+      snippet: false,
+      verify: false,
+      installListenerServiceFn: () => { installed += 1; },
+      log: () => {},
+    });
+
+    expect(installed).toBe(1);
   });
 
   // Re-homed from main's "refuses to overwrite a corrupt credential config as
@@ -149,7 +165,7 @@ describe("runSetup", () => {
     const res = await run({
       agent: "claude", yes: true, snippet: false, verify: false,
       addLineFn: () => { throw new Error("must not register against a corrupt line"); },
-      skipLaunchd: true, log: () => {},
+      skipService: true, log: () => {},
     });
 
     expect(res.ready).toBe(true);
@@ -160,7 +176,7 @@ describe("runSetup", () => {
   it("creates an agentless line under --caller-only", async () => {
     await run({
       handle: "ken", callerOnly: true, relay: R, yes: true, snippet: false, verify: false,
-      addLineFn: fakeAddLine, skipLaunchd: true,
+      addLineFn: fakeAddLine, skipService: true,
     });
     expect(listLines(m)[0]!.config!.agent_kind).toBeUndefined();
     // The caller-only half of the old flat-config test: no agent means no
@@ -182,7 +198,7 @@ describe("runSetup", () => {
     const before = readFileSync(lp.configFile, "utf8");
 
     await expect(run({
-      relay: "https://other.example", snippet: false, verify: false, skipLaunchd: true,
+      relay: "https://other.example", snippet: false, verify: false, skipService: true,
       addLineFn: () => { throw new Error("must not register"); },
     })).rejects.toThrow(/no line on.*agentcall line add/i);
 
@@ -196,7 +212,7 @@ describe("runSetup", () => {
     const before = readFileSync(lp.configFile, "utf8");
 
     await expect(run({
-      handle: "someone-else", snippet: false, verify: false, skipLaunchd: true,
+      handle: "someone-else", snippet: false, verify: false, skipService: true,
       addLineFn: () => { throw new Error("must not register"); },
     })).rejects.toThrow(/holds no line for the handle.*agentcall line add/i);
 
@@ -212,7 +228,7 @@ describe("runSetup", () => {
     savePerson(m, { primary_line: "claude" });
     const asked: string[] = [];
     await run({
-      relay: R, snippet: false, verify: false, skipLaunchd: true, addLineFn: fakeAddLine,
+      relay: R, snippet: false, verify: false, skipService: true, addLineFn: fakeAddLine,
       hasBin: () => true, // both claude and codex on PATH — would normally prompt
       io: { ask: async (q) => { asked.push(q); return "claude"; } },
     });
@@ -222,7 +238,7 @@ describe("runSetup", () => {
   it("prompts for a missing handle via io.ask", async () => {
     const asked: string[] = [];
     await run({
-      agent: "claude", relay: R, snippet: false, verify: false, skipLaunchd: true, addLineFn: fakeAddLine,
+      agent: "claude", relay: R, snippet: false, verify: false, skipService: true, addLineFn: fakeAddLine,
       io: { ask: async (q) => { asked.push(q); return "asked-handle"; } },
     });
     expect(listLines(m)[0]!.config!.handle).toBe("asked-handle");
@@ -243,7 +259,7 @@ describe("runSetup", () => {
 
   it("detects the agent kind via injectable hasBin when --agent is omitted", async () => {
     await run({
-      handle: "ken2", relay: R, snippet: false, verify: false, skipLaunchd: true, addLineFn: fakeAddLine,
+      handle: "ken2", relay: R, snippet: false, verify: false, skipService: true, addLineFn: fakeAddLine,
       hasBin: (name) => name === "codex",
       io: { ask: async () => "y" },
     });
@@ -257,33 +273,33 @@ describe("runSetup", () => {
       logs.push(a.map(String).join(" "));
     });
     try {
-      let launchdCalled = false;
+      let serviceInstallCalled = false;
       await run({
         handle: "ken3", relay: R, snippet: false, verify: false, addLineFn: fakeAddLine,
         hasBin: () => false,
-        installLaunchAgentFn: () => { launchdCalled = true; },
+        installListenerServiceFn: () => { serviceInstallCalled = true; },
       });
       expect(listLines(m)[0]!.config!.agent_kind).toBeUndefined();
-      expect(launchdCalled).toBe(false);
+      expect(serviceInstallCalled).toBe(false);
       expect(logs.some((l) => l.includes("caller-only"))).toBe(true);
     } finally {
       spy.mockRestore();
     }
   });
 
-  // The extraPathDirs derivation itself lives in launchPath.ts's
-  // launchPathDirs, exercised directly in launchPath.test.ts and via
+  // The extraPathDirs derivation itself lives in listenerPath.ts's
+  // listenerPathDirs, exercised directly in listenerPath.test.ts and via
   // addLine in line-cmd.test.ts. This just proves setup threads its
   // resolveBin seam all the way down to that derivation rather than letting
   // addLine fall back to the real `which` — the fake resolveBin below would
   // never match a real machine's paths, so a non-empty, exact-match result
   // is only possible if the seam actually reached addLine.
-  it("threads its resolveBin seam through to installLaunchAgent's extraPathDirs", async () => {
+  it("threads its resolveBin seam through to installListenerService's extraPathDirs", async () => {
     let captured: string[] | undefined;
     await run({
       handle: "ken4", agent: "claude", relay: R, snippet: false, verify: false, addLineFn: fakeAddLine,
       resolveBin: (name) => (name === "claude" || name === "npx" ? `/Users/x/.local/bin/${name}` : null),
-      installLaunchAgentFn: (_m, _execCmd, extraPathDirs) => { captured = extraPathDirs; },
+      installListenerServiceFn: (_m, options) => { captured = options?.extraPathDirs; },
     });
     expect(captured).toEqual(["/Users/x/.local/bin"]);
   });
@@ -294,7 +310,7 @@ describe("runSetup", () => {
   it("seeds policy.json + tasks dir and publishes the card", async () => {
     const cardCalls: LineConfig[] = [];
     await run({
-      handle: "ken", agent: "claude", relay: R, snippet: false, verify: false, skipLaunchd: true,
+      handle: "ken", agent: "claude", relay: R, snippet: false, verify: false, skipService: true,
       addLineFn: (m2, opts) =>
         addLine(m2, { ...opts, register: stubRegister, publishCardFn: async (cfg) => { cardCalls.push(cfg); } }),
     });
@@ -320,7 +336,7 @@ describe("setup progress output", () => {
     });
     try {
       await run({
-        handle: "ken9", agent: "claude", relay: R, snippet: false, verify: false, skipLaunchd: true,
+        handle: "ken9", agent: "claude", relay: R, snippet: false, verify: false, skipService: true,
         addLineFn: fakeAddLine,
       });
       expect(logs.some((l) => l.includes("Registering ken9"))).toBe(true);
@@ -331,26 +347,36 @@ describe("setup progress output", () => {
   });
 });
 
-describe("warnIfOutsideLaunchdPath", () => {
-  it("prints one short line with a copy-pasteable symlink fix", () => {
+describe("warnIfEphemeralServiceBin", () => {
+  it("stays silent for a durable bin directory because the service PATH includes it", () => {
+    const spy = vi.spyOn(console, "error").mockImplementation(() => {});
+    try {
+      warnIfEphemeralServiceBin("claude", () => "/home/ken/.local/bin/claude");
+      expect(spy).not.toHaveBeenCalled();
+    } finally {
+      spy.mockRestore();
+    }
+  });
+
+  it("warns when a binary resolves only from an ephemeral directory", () => {
     const errors: string[] = [];
     const spy = vi.spyOn(console, "error").mockImplementation((...a: unknown[]) => {
       errors.push(a.map(String).join(" "));
     });
     try {
-      warnIfOutsideLaunchdPath("claude", () => "/Users/x/.local/bin/claude");
+      warnIfEphemeralServiceBin("claude", () => "/tmp/session/bin/claude");
     } finally {
       spy.mockRestore();
     }
     expect(errors).toHaveLength(1);
-    expect(errors[0]).toContain("ln -s /Users/x/.local/bin/claude /opt/homebrew/bin/claude");
+    expect(errors[0]).toContain("install claude in a durable location");
     expect(errors[0]!.length).toBeLessThan(200);
   });
 
-  it("stays silent when the binary is inside launchd's search path", () => {
+  it("stays silent when the binary is in a native service path", () => {
     const spy = vi.spyOn(console, "error").mockImplementation(() => {});
     try {
-      warnIfOutsideLaunchdPath("claude", () => "/opt/homebrew/bin/claude");
+      warnIfEphemeralServiceBin("claude", () => "/opt/homebrew/bin/claude");
       expect(spy).not.toHaveBeenCalled();
     } finally {
       spy.mockRestore();
@@ -390,21 +416,21 @@ describe("caller-only setup", () => {
 
   it("asks 'Make your agent callable' and answering n yields caller-only", async () => {
     const asked: string[] = [];
-    let launchdCalled = false;
+    let serviceInstallCalled = false;
     await run({
       handle: "asker", relay: R, snippet: false, verify: false, addLineFn: fakeAddLine,
       hasBin: () => true, // agents ARE installed; user still opts out
       io: { ask: async (q) => { asked.push(q); return "n"; } },
-      installLaunchAgentFn: () => { launchdCalled = true; },
+      installListenerServiceFn: () => { serviceInstallCalled = true; },
     });
     expect(asked.some((q) => q.includes("callable"))).toBe(true);
     expect(asked.some((q) => /run automatically without per-call approval/i.test(q))).toBe(true);
     expect(listLines(m)[0]!.config!.agent_kind).toBeUndefined();
-    expect(launchdCalled).toBe(false);  });
+    expect(serviceInstallCalled).toBe(false);  });
 
   it("an empty answer defaults to callable", async () => {
     await run({
-      handle: "defaulter", relay: R, snippet: false, verify: false, skipLaunchd: true, addLineFn: fakeAddLine,
+      handle: "defaulter", relay: R, snippet: false, verify: false, skipService: true, addLineFn: fakeAddLine,
       hasBin: (name) => name === "claude",
       io: { ask: async () => "" },
     });
@@ -438,7 +464,7 @@ describe("runSetup verification", () => {
     });
     try {
       const result = await run({
-        handle: "ken", agent: "claude", relay: R, snippet: false, skipLaunchd: true, addLineFn: fakeAddLine,
+        handle: "ken", agent: "claude", relay: R, snippet: false, skipService: true, addLineFn: fakeAddLine,
         verifyFns: { resolveBin: () => "/fake/bin/claude", runFn: async () => ({ text: "OK" }) },
       });
       expect(result.ready).toBe(true);
@@ -457,7 +483,7 @@ describe("runSetup verification", () => {
       const installed: string[] = [];
       const result = await run({
         handle: "ken", agent: "claude", relay: R, snippet: false, addLineFn: fakeAddLine,
-        installLaunchAgentFn: () => {
+        installListenerServiceFn: () => {
           installed.push("yes");
         },
         verifyFns: {
@@ -485,7 +511,7 @@ describe("runSetup verification", () => {
   it("--no-verify (verify:false) skips verification entirely", async () => {
     let ran = false;
     const result = await run({
-      handle: "ken", agent: "claude", relay: R, snippet: false, skipLaunchd: true, verify: false,
+      handle: "ken", agent: "claude", relay: R, snippet: false, skipService: true, verify: false,
       addLineFn: fakeAddLine,
       verifyFns: {
         resolveBin: () => "/fake/bin/claude",
@@ -502,7 +528,7 @@ describe("runSetup verification", () => {
   it("caller-only setup never verifies", async () => {
     let ran = false;
     const result = await run({
-      handle: "solo", relay: R, snippet: false, skipLaunchd: true, callerOnly: true, addLineFn: fakeAddLine,
+      handle: "solo", relay: R, snippet: false, skipService: true, callerOnly: true, addLineFn: fakeAddLine,
       verifyFns: {
         resolveBin: () => "/fake/bin/claude",
         runFn: async () => {

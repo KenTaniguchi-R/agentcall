@@ -7,17 +7,12 @@ import { resolveLine } from "./lineContext.js";
 import { getMachinePaths } from "./paths.js";
 import { ask as ttyAsk } from "./tty.js";
 import { addressHost, relayUrl, resolveLineWorkdir, type LineConfig } from "./config.js";
-import { defaultResolveBin } from "./launchPath.js";
+import { defaultResolveBin, listenerPathDirs } from "./listenerPath.js";
+import { isEphemeralDir } from "./bin.js";
 import { host } from "./outbound.js";
 import { appendSnippet } from "./snippet.js";
-import { installLaunchAgent } from "./launchd.js";
+import { installListenerService } from "./listener-service.js";
 import { formatCheck, verifyAgent, type VerifyCheck, type VerifyFns } from "./verify.js";
-
-// Directories launchd's fixed PATH (see launchd.ts's plistContent) actually
-// searches. If claude/codex/npx resolve outside of these, the background
-// listener won't find them even though an interactive shell (with nvm/fnm
-// on PATH) does.
-const LAUNCHD_PATH_DIRS = ["/opt/homebrew/bin", "/usr/local/bin"];
 
 export interface SetupOpts {
   invite?: string;
@@ -26,7 +21,7 @@ export interface SetupOpts {
   yes?: boolean;
   snippet?: boolean;
   relay?: string;
-  skipLaunchd?: boolean;
+  skipService?: boolean;
   callerOnly?: boolean;
   // false skips post-setup agent verification (commander's --no-verify).
   verify?: boolean;
@@ -34,7 +29,7 @@ export interface SetupOpts {
   // Test seams — production callers should leave these as the defaults.
   hasBin?: (name: string) => boolean;
   resolveBin?: (name: string) => string | null;
-  installLaunchAgentFn?: typeof installLaunchAgent;
+  installListenerServiceFn?: typeof installListenerService;
   verifyFns?: VerifyFns;
   addLineFn?: typeof addLine;
   log?: (s: string) => void;
@@ -65,13 +60,13 @@ async function detectAgentKind(
   );
 }
 
-export function warnIfOutsideLaunchdPath(name: string, resolveBin: (n: string) => string | null): void {
+export function warnIfEphemeralServiceBin(name: string, resolveBin: (n: string) => string | null): void {
   const path = resolveBin(name);
   if (!path) return; // already surfaced via detectAgentKind's error, or not required (e.g. npx)
-  if (!LAUNCHD_PATH_DIRS.includes(dirname(path))) {
+  if (isEphemeralDir(dirname(path))) {
     console.error(
-      `Warning: ${name} is outside the background listener's PATH — if calls fail with ` +
-        `"command not found", run: ln -s ${path} ${LAUNCHD_PATH_DIRS[0]}/${name}`,
+      `Warning: ${name} resolves from an ephemeral directory (${path}); ` +
+        `install ${name} in a durable location before starting the background listener.`,
     );
   }
 }
@@ -153,6 +148,11 @@ export async function runSetup(opts: SetupOpts): Promise<{ ready: boolean }> {
       log(`  ${row.name.padEnd(10)} ${row.address}${row.primary ? "   primary" : ""}`);
     }
     log(`\nTo add another address:  agentcall line add <name> --handle <handle>`);
+    if (!opts.skipService && ready.some((line) => line.config!.agent_kind)) {
+      (opts.installListenerServiceFn ?? installListenerService)(machine, {
+        extraPathDirs: listenerPathDirs(machine, resolveBinFn),
+      });
+    }
     if (opts.snippet !== false) {
       appendSnippet(join(homedir(), ".claude", "CLAUDE.md"));
       appendSnippet(join(homedir(), ".codex", "AGENTS.md"));
@@ -172,8 +172,8 @@ export async function runSetup(opts: SetupOpts): Promise<{ ready: boolean }> {
   // and points at `line add`.
   const agentKind = callable ? await detectAgentKind(opts, hasBinFn, ask) : undefined;
   if (agentKind) {
-    warnIfOutsideLaunchdPath(agentKind, resolveBinFn);
-    warnIfOutsideLaunchdPath("npx", resolveBinFn);
+    warnIfEphemeralServiceBin(agentKind, resolveBinFn);
+    warnIfEphemeralServiceBin("npx", resolveBinFn);
   }
 
   // Checked before the handle prompt so a run that cannot possibly register
@@ -188,10 +188,10 @@ export async function runSetup(opts: SetupOpts): Promise<{ ready: boolean }> {
   const name = agentKind ?? "caller";
 
   log(`Registering ${handle} with ${relay} ...`);
-  // extraPathDirs (widening the LaunchAgent's PATH past its fixed base dirs
+  // extraPathDirs (widening the listener service's PATH past its fixed base dirs
   // for an agent/npx binary resolved outside them, e.g. an nvm/fnm-managed
   // install) is NOT computed here: addLine derives it itself from every
-  // ready line on the machine (launchPathDirs), not just the one being
+  // ready line on the machine (listenerPathDirs), not just the one being
   // created — one process serves every line, so a single-line computation
   // would drop coverage the moment a second line runs a different agent.
   // resolveBin is threaded through so a test override still reaches that
@@ -203,7 +203,7 @@ export async function runSetup(opts: SetupOpts): Promise<{ ready: boolean }> {
     invite,
     agent: agentKind,
     callerOnly: !callable,
-    installLaunchAgentFn: opts.skipLaunchd ? () => {} : opts.installLaunchAgentFn,
+    installListenerServiceFn: opts.skipService ? () => {} : opts.installListenerServiceFn,
     resolveBin: resolveBinFn,
     // addLine has its own post-registration verify step (AddLineOpts.verify,
     // default on) — always false here because runSetup below does its own,

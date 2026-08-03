@@ -47,10 +47,20 @@ function actionReferences(value: unknown): string[] {
 }
 
 describe("npm release workflow", () => {
+  it("publishes the CLI for both supported listener platforms", () => {
+    const manifest = JSON.parse(readFileSync(join(root, "packages/cli/package.json"), "utf8"));
+    expect(manifest.os).toEqual(["darwin", "linux"]);
+  });
+
   it("tests the packed CLI and doctor at the declared Node version floor", () => {
     expect(ciWorkflow).toContain("node: [20, 22, 24]");
     expect(ciWorkflow).toContain('"$agentcall_bin" doctor');
     expect(ciWorkflow).toContain('grep -F "No agentcall config found" "$RUNNER_TEMP/doctor-output"');
+  });
+
+  it("installs the packed CLI on macOS and Linux", () => {
+    expect(ciWorkflow).toContain("os: [macos-latest, ubuntu-latest]");
+    expect(ciWorkflow).toContain("runs-on: ${{ matrix.os }}");
   });
 
   it("binds both published packages to their monorepo source", () => {

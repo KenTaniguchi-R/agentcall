@@ -11,7 +11,7 @@ import { getStatus, fetchCard, createInvite, listInvites, revokeInvite, createRo
 import { startAllListeners } from "./listenAll.js";
 import { startListener } from "./listener.js";
 import { runSetup } from "./setup.js";
-import { uninstallLaunchAgent } from "./launchd.js";
+import { uninstallListenerService } from "./listener-service.js";
 import { publishCard } from "./card.js";
 import { loadPolicy, loadUserPolicy, savePolicy, validatePolicy } from "./policy.js";
 import { assertValidLineName, loadLineConfig, readyLines } from "./lines.js";
@@ -48,7 +48,7 @@ program
   .option("--agent <agent>", "agent kind: claude or codex (auto-detected if omitted)")
   .option("--relay <url>", "relay URL to register against")
   .option("--no-snippet", "skip appending the agentcall usage snippet to CLAUDE.md/AGENTS.md")
-  .option("--skip-launchd", "skip installing the launchd background listener")
+  .option("--skip-service", "skip installing the background listener service")
   .option("--caller-only", "register a handle to call others without making your own agent callable")
   .option("--no-verify", "skip verifying the agent can answer a test call")
   .action(
@@ -58,7 +58,7 @@ program
       agent?: string;
       relay?: string;
       snippet?: boolean;
-      skipLaunchd?: boolean;
+      skipService?: boolean;
       callerOnly?: boolean;
       verify?: boolean;
     }) => {
@@ -68,7 +68,7 @@ program
         agent: o.agent as AgentKind | undefined,
         relay: o.relay,
         snippet: o.snippet,
-        skipLaunchd: o.skipLaunchd,
+        skipService: o.skipService,
         callerOnly: o.callerOnly,
         verify: o.verify,
       });
@@ -982,12 +982,12 @@ line
   .option("--agent <agent>", "agent kind: claude or codex (omit with --caller-only)")
   .option("--relay <url>", "relay URL to register against")
   .option("--caller-only", "register a handle to call others without making this line's agent callable")
-  .option("--skip-launchd", "skip reinstalling the background listener")
+  .option("--skip-service", "skip reinstalling the background listener service")
   .option("--no-verify", "skip verifying the agent can answer a test call")
   .action(
     async (
       name: string,
-      o: { handle?: string; invite?: string; agent?: string; relay?: string; callerOnly?: boolean; skipLaunchd?: boolean; verify?: boolean },
+      o: { handle?: string; invite?: string; agent?: string; relay?: string; callerOnly?: boolean; skipService?: boolean; verify?: boolean },
     ) => {
       const machine = getMachinePaths();
       if (!o.callerOnly && o.agent !== "claude" && o.agent !== "codex") {
@@ -1032,7 +1032,7 @@ line
           agent: o.callerOnly ? undefined : (o.agent as AgentKind),
           callerOnly: o.callerOnly,
           verify: o.verify,
-          installLaunchAgentFn: o.skipLaunchd ? () => {} : undefined,
+          installListenerServiceFn: o.skipService ? () => {} : undefined,
         });
         console.log(`Added line "${name}": ${address}`);
       } catch (e) {
@@ -1114,7 +1114,7 @@ line
 
 program
   .command("listen")
-  .description("run the foreground listener (launchd runs this in the background after setup)")
+  .description("run the foreground listener (the platform service runs this after setup)")
   .option("--line <name>", "run only this line instead of every callable line")
   .action((o: { line?: string }) => {
     const machine = getMachinePaths();
@@ -1179,7 +1179,7 @@ program
       // The multi-line listener (Task 8) re-reads each line's config.json on
       // every reconnect, so a running listener — foreground or under launchd —
       // picks up the new token on its own; no restart needed here. This is
-      // what replaced main's explicit installLaunchAgent() restart: the
+      // what replaced main's explicit installListenerService() restart: the
       // restart existed only because the old single listener read its token
       // once at startup.
       await rotateLine(ctx);
@@ -1195,7 +1195,7 @@ program
   .option("--purge", "also delete ~/.agentcall (config, token, logs)")
   .action((o: { purge?: boolean }) => {
     const machine = getMachinePaths();
-    uninstallLaunchAgent(machine);
+    uninstallListenerService(machine);
     if (o.purge) rmSync(machine.dir, { recursive: true, force: true });
     console.log("agentcall listener removed." + (o.purge ? " Config purged." : ""));
   });

@@ -1,0 +1,24 @@
+services:
+  listener:
+    build:
+      context: .
+      dockerfile: Dockerfile.listener
+      args:
+        AGENT_PACKAGE: ${AGENTCALL_AGENT_PACKAGE:?Set AGENTCALL_AGENT_PACKAGE to an exact supported package version}
+    init: true
+    restart: unless-stopped
+    environment:
+      HOME: /home/agentcall
+      AGENTCALL_HOME: /home/agentcall
+    working_dir: ${AGENTCALL_WORKDIR:?Set AGENTCALL_WORKDIR to the absolute host project path}
+    volumes:
+      # Enrollment and agent login happen inside the container. This named
+      # volume deliberately does not import the host's AgentCall/Claude/Codex
+      # credentials into a new execution boundary.
+      - agentcall-listener-home:/home/agentcall
+      # Read-only is the safe default. An owner who deliberately grants write
+      # tasks can remove :ro after reviewing that larger host boundary.
+      - ${AGENTCALL_WORKDIR}:${AGENTCALL_WORKDIR}:ro
+
+volumes:
+  agentcall-listener-home:

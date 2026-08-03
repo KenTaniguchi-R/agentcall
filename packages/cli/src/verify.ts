@@ -32,8 +32,8 @@ export const HINTS = {
     "(or run `claude setup-token`, or set ANTHROPIC_API_KEY).",
   codexAuth: "codex is not authenticated — run `codex login` (on a headless machine: `codex login --device-auth`).",
   pathMissing:
-    "the agent binary wasn't found when spawned — see setup's PATH warning: " +
-    "symlink the binary into /opt/homebrew/bin so the background listener can find it.",
+    "the agent binary wasn't found when spawned — install it in a durable PATH directory, " +
+    "then re-run `agentcall setup` to rebuild the background listener's PATH.",
   timeout: "the agent started but didn't finish in time — check your network, then try again.",
 } as const;
 
@@ -336,7 +336,7 @@ export async function checkAgentSpawn(
 }
 
 // Injection seams for tests and for setup/doctor callers; production leaves
-// all three unset (same pattern as SetupOpts.installLaunchAgentFn).
+// all three unset (same pattern as SetupOpts.installListenerServiceFn).
 export interface VerifyFns {
   runFn?: typeof runAgent;
   execFn?: ExecFn;

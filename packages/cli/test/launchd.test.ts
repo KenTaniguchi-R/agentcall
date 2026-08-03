@@ -130,7 +130,8 @@ describe("install/uninstall", () => {
 
 // This module is the only thing that should know the listener is a macOS
 // LaunchAgent — callers ask whether it's installed rather than building a
-// plist path themselves, so a non-macOS supervisor can be added alongside.
+// plist path themselves; the platform-neutral listener module now selects
+// this adapter on macOS and the systemd sibling on Linux.
 describe("isLaunchAgentInstalled", () => {
   it("reports false before install and true once the plist exists", () => {
     const home = mkdtempSync(join(tmpdir(), "agentcall-ld-"));

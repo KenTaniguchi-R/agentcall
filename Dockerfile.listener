@@ -1,0 +1,44 @@
+# syntax=docker/dockerfile:1
+
+FROM node:24-bookworm-slim AS build
+RUN corepack enable
+WORKDIR /src
+
+COPY package.json pnpm-lock.yaml pnpm-workspace.yaml tsconfig.base.json ./
+COPY packages/shared/package.json packages/shared/package.json
+COPY packages/cli/package.json packages/cli/package.json
+RUN pnpm install --frozen-lockfile
+
+COPY packages/shared packages/shared
+COPY packages/cli packages/cli
+RUN pnpm -r build && \
+    mkdir -p /packs && \
+    pnpm --filter @benree/agentcall-shared pack --pack-destination /packs && \
+    pnpm --filter @benree/agentcall pack --pack-destination /packs
+
+FROM node:24-bookworm-slim AS runtime
+
+# Require an exact, operator-reviewed agent package version. Leaving the
+# answering agent at "latest" would make a listener restart an unreviewed
+# security-boundary upgrade.
+ARG AGENT_PACKAGE
+RUN printf '%s\n' "$AGENT_PACKAGE" | \
+      grep -Eq '^(@anthropic-ai/claude-code|@openai/codex)@[0-9]+\.[0-9]+\.[0-9]+([-+][0-9A-Za-z.-]+)?$' || \
+    { echo >&2 "AGENT_PACKAGE must be an exact @anthropic-ai/claude-code@VERSION or @openai/codex@VERSION"; exit 2; }
+
+COPY --from=build /packs/*.tgz /tmp/agentcall-packages/
+RUN npm install --global \
+      /tmp/agentcall-packages/benree-agentcall-shared-*.tgz \
+      /tmp/agentcall-packages/benree-agentcall-[0-9]*.tgz \
+      "$AGENT_PACKAGE" && \
+    rm -rf /tmp/agentcall-packages /root/.npm
+
+RUN groupadd --gid 10001 agentcall && \
+    useradd --uid 10001 --gid 10001 --create-home --home-dir /home/agentcall agentcall && \
+    chown -R agentcall:agentcall /home/agentcall
+
+ENV HOME=/home/agentcall \
+    AGENTCALL_HOME=/home/agentcall
+WORKDIR /home/agentcall
+USER agentcall
+ENTRYPOINT ["agentcall", "listen"]

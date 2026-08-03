@@ -6,6 +6,20 @@ which are released together.
 
 ## Unreleased
 
+### Linux and isolated container listeners
+
+- Publish the CLI for Linux and install one restartable systemd user service
+  there, while keeping launchd as the macOS adapter behind the same listener
+  service interface.
+- Teach setup, line management, uninstall, and doctor to use the active
+  platform adapter; replace the launchd-specific `--skip-launchd` option with
+  `--skip-service`.
+- Add a source-built, non-root container listener that requires an exact agent
+  package version, keeps enrollment/authentication in an isolated named volume,
+  and mounts the selected project read-only by default.
+- Test packed CLI installation on both macOS and Linux, and prevent Claude's
+  enforcing guard from rewriting Linux systemd user units.
+
 ### Documentation — GTM sequencing and privacy positioning
 
 - Keep the first design-partner segment focused on non-EU, non-unionized
@@ -73,7 +87,7 @@ which are released together.
 
 ### Added — Multiple lines: several agentcall addresses on one machine
 
-A single Mac can now hold more than one agentcall address ("line"), each with its
+A single machine can now hold more than one agentcall address ("line"), each with its
 own handle, relay token, agent kind (or none, for caller-only), policy, tasks, and
 working directory under `~/.agentcall/lines/<name>/`. One supervised process still
 runs — `agentcall listen` now opens one socket per callable line instead of

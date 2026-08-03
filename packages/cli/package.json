@@ -15,7 +15,8 @@
     "node": ">=20"
   },
   "os": [
-    "darwin"
+    "darwin",
+    "linux"
   ],
   "publishConfig": {
     "access": "public"

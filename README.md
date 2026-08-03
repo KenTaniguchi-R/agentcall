@@ -1,8 +1,8 @@
 # agentcall
 
-Call another person's coding agent (Claude Code or Codex) on their Mac, across the
+Call another person's coding agent (Claude Code or Codex) on their machine, across the
 public internet, like a phone call. Install with one command, get an address
-(`ken@acme.agentcall.benree.tech`), share it. When someone calls your address, your Mac
+(`ken@acme.agentcall.benree.tech`), share it. When someone calls your address, your machine
 spawns an agent that answers, even while you're away.
 
 ## How a call works
@@ -12,7 +12,7 @@ sequenceDiagram
     participant A as A's Claude Code
     participant CLI as agentcall call (A's Mac)
     participant Relay as Cloudflare Worker + DO
-    participant L as agentcall listen (B's Mac, LaunchAgent)
+    participant L as agentcall listen (B's machine, supervised)
     participant Agent as claude -p / codex exec
 
     A->>CLI: agentcall call ken@acme.agentcall.benree.tech "msg"
@@ -34,8 +34,8 @@ understands `call_answer`, so it never emits `call_status answered` today; the
 caller-facing `answered` status is dark until the relay picks up the new
 frames.
 
-Non-goals for v1: store-and-forward, non-macOS platforms, anonymous callers,
-payment/reputation.
+Non-goals for v1: store-and-forward, Windows listener installation, anonymous
+callers, payment/reputation.
 
 ## Install
 
@@ -65,7 +65,9 @@ is not configured.
   handle, token, agent kind, and relay URL — `<name>` defaults to the agent kind
   (e.g. `claude`); see "Several agents, several addresses" below for adding more
 - create `~/AgentCall/<name>/public/`, the callee agent's working directory
-- install and load the `tech.benree.agentcall.listener` LaunchAgent
+- install and start one background listener: the
+  `tech.benree.agentcall.listener` LaunchAgent on macOS or
+  `agentcall-listener.service` systemd user unit on Linux
 - offer to append a short usage snippet to `~/.claude/CLAUDE.md` / `~/.codex/AGENTS.md`
   so *your own* agent knows how to call other people
 - print your address, e.g. `ken@acme.agentcall.benree.tech`
@@ -73,6 +75,61 @@ is not configured.
 Setup verifies by default that your agent — claude or codex — can actually
 answer a call, including that it's authenticated. Pass `--no-verify`
 to skip the post-setup test call (e.g. when provisioning before logging in).
+Pass `--skip-service` only when another supervisor, such as a container
+runtime, will own the foreground `agentcall listen` process.
+
+### Linux listener
+
+The npm package supports Linux as well as macOS. On Linux, callable setup writes
+`~/.config/systemd/user/agentcall-listener.service`, enables it, and restarts it
+through `systemctl --user`. The unit has the same one-process/many-lines model as
+the macOS LaunchAgent, restarts on failure, and appends stdout/stderr to
+`~/.agentcall/listener.log`.
+
+For a headless account, make sure its systemd user manager survives logout. The
+usual host-level configuration is `loginctl enable-linger <user>`; whether users
+may enable lingering themselves is an administrator policy. Diagnose either
+platform with `agentcall doctor`. `agentcall uninstall` stops and removes the
+active platform's listener definition.
+
+### Container listener
+
+[`Dockerfile.listener`](./Dockerfile.listener) builds AgentCall from this checkout
+and installs one exact, operator-reviewed Claude Code or Codex package version.
+[`compose.listener.yaml`](./compose.listener.yaml) runs `agentcall listen` directly
+as a non-root process; it does not run systemd inside the container.
+
+The container deliberately gets a new named home volume. It does **not** mount
+the host's existing `.agentcall`, `.claude`, or `.codex` credentials. Enroll and
+authenticate inside that isolated volume, then start the listener:
+
+```bash
+export AGENTCALL_AGENT_PACKAGE='@openai/codex@<exact-version>' # or @anthropic-ai/claude-code@<exact-version>
+export AGENTCALL_WORKDIR=/absolute/path/to/project
+
+docker compose -f compose.listener.yaml build
+docker compose -f compose.listener.yaml run --rm --entrypoint codex listener login
+docker compose -f compose.listener.yaml run --rm --entrypoint agentcall listener \
+  setup --skip-service --invite <one-time-token> --agent codex --handle <handle>
+docker compose -f compose.listener.yaml up -d
+```
+
+For Claude, select an exact `@anthropic-ai/claude-code` package version, then
+authenticate interactively and complete `/login` inside the Claude session:
+
+```bash
+docker compose -f compose.listener.yaml run --rm --entrypoint claude listener
+# At the Claude prompt: /login
+docker compose -f compose.listener.yaml run --rm --entrypoint agentcall listener \
+  setup --skip-service --invite <one-time-token> --agent claude --handle <handle>
+docker compose -f compose.listener.yaml up -d
+```
+
+The selected project is mounted read-only by default. That supports answering and
+review tasks without widening the host write boundary; remove `:ro` from the
+workdir mount only after deliberately granting write-capable tasks. Keep the
+named home volume backed up according to the same credential policy as a native
+installation.
 
 Handles are unique within an organization, not globally: Acme and Beta can
 both register `ken`. Hosted addresses carry the tenant in the hostname
@@ -314,11 +371,11 @@ listener from starting. Hot edits are also rechecked before every call.
 
 ## Several agents, several addresses
 
-One Mac can hold more than one address — one per "line". A line is a full
+One machine can hold more than one address — one per "line". A line is a full
 identity: its own handle, relay token, agent kind (or none, if it's caller-only),
 policy, tasks, and working directory, stored under `~/.agentcall/lines/<name>/`.
-One process (`agentcall listen`, run for you by the LaunchAgent) opens one socket
-per callable line, so a single Mac can answer as `ken@...` on one address and
+One supervised process (`agentcall listen`) opens one socket per callable line,
+so a single machine can answer as `ken@...` on one address and
 `ken-codex@...` on another at the same time.
 
 ```bash
@@ -345,14 +402,14 @@ skips the post-registration test call, same as `setup --no-verify`. `--invite` i
 required: every line enrols in its own organization, so a second line needs its
 own invite even on a machine that already has one — it may be joining a
 different tenant entirely, and only the relay can say which. Like `line
-remove` below, a callable `line add` reinstalls the LaunchAgent afterward
-(`--skip-launchd` to skip it) — since one process serves every line, adding one
+remove` below, a callable `line add` reinstalls the platform listener service
+afterward (`--skip-service` to skip it) — since one process serves every line, adding one
 briefly drops every other line's socket and any calls in flight on them too.
 
 `agentcall line list` shows every line's name, address, online/offline/caller-only/
 broken state, and which one is primary. `agentcall line remove <name> --yes`
 archives that line's `calls.log` under `~/.agentcall/removed/` (or deletes it
-outright with `--purge`) and reinstalls the LaunchAgent to stop serving it — the
+outright with `--purge`) and reinstalls the listener service to stop serving it — the
 `--yes` isn't a formality: **handle release isn't implemented (see
 Limitations), so a removed handle is gone for good, not freed for reuse.** You
 can't remove your only line or the current primary; promote another first with
@@ -492,9 +549,10 @@ and never leave your machine.
 
 ## How the callee side works
 
-- `agentcall listen` runs continuously as a LaunchAgent (`KeepAlive`,
-  `RunAtLoad`, logs to `~/.agentcall/listener.log`), holding a WebSocket open
-  to the relay so calls are delivered instantly instead of polled.
+- `agentcall listen` runs continuously under launchd on macOS or a systemd user
+  unit on Linux (or directly under the container runtime), logs to
+  `~/.agentcall/listener.log` for native services, and holds a WebSocket open to
+  the relay so calls are delivered instantly instead of polled.
 - It queues at most 1 running call + 0 pending; a second concurrent caller
   gets an immediate `busy` reply. With a 5-minute agent timeout running
   against a 6-minute relay deadline, a queued call would not have enough
@@ -695,7 +753,7 @@ organization administrator, and the relay operator can see—read the
     write-only call cannot rewrite an already-offered task's capability
     envelope, which is read verbatim from frontmatter — not just the answering
     line's own tasks, since a caller could otherwise widen a *different*
-    line's grants), to `~/Library/LaunchAgents`, and to shell startup files
+    line's grants), to `~/Library/LaunchAgents`, to `~/.config/systemd/user`, and to shell startup files
     (`.zshrc` and friends). This risk remains live via `exec` and on a Codex
     answering agent, which has no read guard.
   - `~/.codex` is refused for a Claude answering agent, but a **Codex**
@@ -706,7 +764,7 @@ organization administrator, and the relay operator can see—read the
 they run. File reads, writes, searches, and listings that reach credential paths
 (`~/.ssh`, `~/.aws`, `.env`, Keychains, `~/.agentcall`, `~/.claude`, `~/.codex`), the guard's own
 installed code, `~/AgentCall/<line>/tasks` for every line, `~/Library/LaunchAgents`,
-and shell startup files are refused. For Claude, file-shaped tools outside the
+`~/.config/systemd/user`, and shell startup files are refused. For Claude, file-shaped tools outside the
 resolved task workdir are also refused. Every tool call reaching the guard is
 recorded to that line's `~/.agentcall/lines/<line>/tools.log`; on verified
 codex-cli 0.146.0, Codex runs the same hook in observe-only mode so long as
@@ -881,16 +939,17 @@ telemetry health a call-health requirement.
 See the [observability boundary](./docs/superpowers/specs/2026-08-02-observability-boundary.md)
 for the exact span, metric, privacy, and Cloudflare separation contracts.
 
-Platform installers are deliberately deferred. AgentCall will keep its current
-Commander CLI until the non-macOS service/container work (#14) defines the
-artifacts each platform needs and managed policy (#104) defines who controls
-versions and updates. A future self-update mechanism must be disabled whenever
-managed policy is present so IT can pin the deployed version.
+Signed platform installers remain deliberately deferred. Linux systemd and the
+container runtime now define the service artifacts, but managed policy (#104)
+still needs to define who controls versions and updates before AgentCall adopts
+an installer framework or self-update mechanism. Any future self-update must be
+disabled whenever managed policy is present so IT can pin the deployed version.
 
 ## Limitations
 
-- **macOS only.** The LaunchAgent listener is Mac-specific; there's no
-  Linux/Windows callee support yet.
+- **No Windows listener installer.** Native background listeners are supported
+  on macOS (launchd) and Linux (systemd user service); Windows remains
+  unsupported. Containers run the Linux listener in the foreground.
 - **The relay operator sees message plaintext.** Calls are relayed through a
   single shared Cloudflare Worker (Ryusei-hosted); there's no end-to-end
   encryption, so treat call content as visible to the relay operator.

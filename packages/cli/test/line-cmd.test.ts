@@ -11,9 +11,9 @@ import {
   type AddLineOpts, type RemoveLineOpts,
 } from "../src/commands/line.js";
 
-// addLine/removeLine fall back to the real installLaunchAgent/
-// uninstallLaunchAgent whenever a test omits its opts seam
-// (installLaunchAgentFn/uninstallFn/installFn) — and the real ones shell out
+// addLine/removeLine fall back to the real installListenerService/
+// uninstallListenerService whenever a test omits its opts seam
+// (installListenerServiceFn/uninstallFn/installFn) — and the real ones shell out
 // to the actual `launchctl bootstrap`/`bootout` on whoever's machine runs
 // this suite, regardless of how sandboxed MachinePaths.userHome is (the
 // launchd *session* is the real logged-in user's; only the plist file path
@@ -22,12 +22,12 @@ import {
 // pointing at a since-deleted tmp dir. Mocking the module here turns a
 // missing seam into an immediate, loud test failure instead of a silent
 // real-system side effect — every test below must pass its own no-op.
-vi.mock("../src/launchd.js", () => ({
-  installLaunchAgent: () => {
-    throw new Error("real installLaunchAgent reached in a test — pass installLaunchAgentFn/installFn");
+vi.mock("../src/listener-service.js", () => ({
+  installListenerService: () => {
+    throw new Error("real installListenerService reached in a test — pass installListenerServiceFn/installFn");
   },
-  uninstallLaunchAgent: () => {
-    throw new Error("real uninstallLaunchAgent reached in a test — pass uninstallFn");
+  uninstallListenerService: () => {
+    throw new Error("real uninstallListenerService reached in a test — pass uninstallFn");
   },
 }));
 
@@ -41,10 +41,10 @@ beforeEach(() => {
 const ok = async () => ({ org: "acme", token: "tok", address: "ken-cdx@r.example" });
 const base = { org: "acme", handle: "ken", token: "t", relay: "https://r.example", agent_kind: "claude" as const };
 
-// launchPathDirs (addLine's/removeLine's extraPathDirs default — see
-// launchPath.ts) falls back to the real `which` via defaultResolveBin
+// listenerPathDirs (addLine's/removeLine's extraPathDirs default — see
+// listenerPath.ts) falls back to the real `which` via defaultResolveBin
 // whenever resolveBin/extraPathDirs is omitted, and it's evaluated eagerly
-// as an argument expression, so it runs even when installLaunchAgentFn/
+// as an argument expression, so it runs even when installListenerServiceFn/
 // installFn is a total no-op. These wrappers default resolveBin to a
 // deterministic no-op so no test below shells out by accident; the two
 // tests that assert on the derivation itself pass their own resolveBin,
@@ -65,7 +65,7 @@ function removeLine(m: MachinePaths, name: string, opts: RemoveLineOpts = {}): v
 describe("addLine", () => {
   it("registers, then writes config.json as the first thing on disk", async () => {
     await addLine(m, { name: "codex", handle: "ken-cdx", agent: "codex", relay: "https://r.example",
-      register: ok, installLaunchAgentFn: () => {}, publishCardFn: async () => undefined, verify: false });
+      register: ok, installListenerServiceFn: () => {}, publishCardFn: async () => undefined, verify: false });
     const l = getLinePaths(m, "codex");
     expect(JSON.parse(readFileSync(l.configFile, "utf8")).token).toBe("tok");
   });
@@ -73,7 +73,7 @@ describe("addLine", () => {
   it("leaves the disk untouched when the handle is taken", async () => {
     const taken = async () => { throw new Error("Handle \"ken-cdx\" is already taken."); };
     await expect(addLine(m, { name: "codex", handle: "ken-cdx", agent: "codex", relay: "https://r.example",
-      register: taken, installLaunchAgentFn: () => {}, publishCardFn: async () => undefined, verify: false }))
+      register: taken, installListenerServiceFn: () => {}, publishCardFn: async () => undefined, verify: false }))
       .rejects.toThrow(/already taken/);
     expect(readdirSync(m.linesDir)).toEqual([]);
   });
@@ -82,7 +82,7 @@ describe("addLine", () => {
     let called = false;
     await expect(addLine(m, { name: "../evil", handle: "x", agent: "codex", relay: "https://r.example",
       register: async () => { called = true; return { org: "acme", token: "t", address: "a" }; },
-      installLaunchAgentFn: () => {}, publishCardFn: async () => undefined, verify: false }))
+      installListenerServiceFn: () => {}, publishCardFn: async () => undefined, verify: false }))
       .rejects.toThrow(/line name/i);
     expect(called).toBe(false);
   });
@@ -92,7 +92,7 @@ describe("addLine", () => {
     let called = false;
     await expect(addLine(m, { name: "codex", handle: "other", agent: "codex", relay: "https://r.example",
       register: async () => { called = true; return { org: "acme", token: "t", address: "a" }; },
-      installLaunchAgentFn: () => {}, publishCardFn: async () => undefined, verify: false }))
+      installListenerServiceFn: () => {}, publishCardFn: async () => undefined, verify: false }))
       .rejects.toThrow(/already/);
     expect(called).toBe(false);
   });
@@ -102,7 +102,7 @@ describe("addLine", () => {
     let called = false;
     await expect(addLine(m, { name: "codex", handle: "ken-cdx", agent: "codex", relay: "https://r.example",
       register: async () => { called = true; return { org: "acme", token: "t", address: "a" }; },
-      installLaunchAgentFn: () => {}, publishCardFn: async () => undefined, verify: false }))
+      installListenerServiceFn: () => {}, publishCardFn: async () => undefined, verify: false }))
       .rejects.toThrow(/ken-cdx/);
     expect(called).toBe(false);
   });
@@ -111,7 +111,7 @@ describe("addLine", () => {
     saveLineConfig(getLinePaths(m, "claude"), { ...base, handle: "ken" });
     const warnings: string[] = [];
     await addLine(m, { name: "codex", handle: "ken-codex", agent: "codex", relay: "https://r.example",
-      register: ok, installLaunchAgentFn: () => {}, publishCardFn: async () => undefined, verify: false,
+      register: ok, installListenerServiceFn: () => {}, publishCardFn: async () => undefined, verify: false,
       warn: (s) => warnings.push(s) });
     expect(warnings.join(" ")).toMatch(/guess/i);
   });
@@ -119,27 +119,27 @@ describe("addLine", () => {
   it("installs no launch agent for a caller-only line", async () => {
     let installed = false;
     await addLine(m, { name: "caller", handle: "ken-c", relay: "https://r.example", callerOnly: true,
-      register: ok, installLaunchAgentFn: () => { installed = true; }, publishCardFn: async () => undefined, verify: false });
+      register: ok, installListenerServiceFn: () => { installed = true; }, publishCardFn: async () => undefined, verify: false });
     expect(installed).toBe(false);
   });
 
   // Regression: a nvm/fnm-managed node install (or claude/npx living outside
-  // /opt/homebrew/bin and /usr/local/bin) needs its dir on the LaunchAgent's
+  // /opt/homebrew/bin and /usr/local/bin) needs its dir on the listener service's
   // PATH, or the supervised listener can't find its own agent binary at
   // spawn time. setup used to compute this and pass it straight through;
   // addLine must accept and forward it too, or every line loses the fix.
-  it("forwards extraPathDirs into the installLaunchAgent seam", async () => {
+  it("forwards extraPathDirs into the installListenerService seam", async () => {
     let captured: string[] | undefined;
     await addLine(m, { name: "codex", handle: "ken-cdx", agent: "codex", relay: "https://r.example",
       register: ok, publishCardFn: async () => undefined, verify: false,
       extraPathDirs: ["/Users/x/.nvm/versions/node/v24/bin"],
-      installLaunchAgentFn: (_m, _execCmd, extraPathDirs) => { captured = extraPathDirs; } });
+      installListenerServiceFn: (_m, options) => { captured = options?.extraPathDirs; } });
     expect(captured).toEqual(["/Users/x/.nvm/versions/node/v24/bin"]);
   });
 
   // The motivating case for this whole feature: claude on one line, codex on
   // another. When extraPathDirs isn't explicitly given, addLine must derive
-  // it from EVERY ready line on the machine (via launchPathDirs), not just
+  // it from EVERY ready line on the machine (via listenerPathDirs), not just
   // the one it's currently adding — otherwise the shared plist only ever
   // learns about whichever agent's line was created/reinstalled most
   // recently.
@@ -153,7 +153,7 @@ describe("addLine", () => {
         : name === "codex" ? "/opt/codex-dir/codex"
         : name === "npx" ? "/opt/npx-dir/npx"
         : null,
-      installLaunchAgentFn: (_m, _execCmd, extraPathDirs) => { captured = extraPathDirs; } });
+      installListenerServiceFn: (_m, options) => { captured = options?.extraPathDirs; } });
     expect(captured?.slice().sort()).toEqual(["/opt/claude-dir", "/opt/codex-dir", "/opt/npx-dir"].sort());
   });
 
@@ -167,7 +167,7 @@ describe("addLine", () => {
       const warnings: string[] = [];
       await expect(addLine(m, {
         name: "codex", handle: "ken-cdx", agent: "codex", relay: "https://r.example",
-        register: ok, installLaunchAgentFn: () => {}, publishCardFn: async () => undefined,
+        register: ok, installListenerServiceFn: () => {}, publishCardFn: async () => undefined,
         warn: (s) => warnings.push(s),
         verifyFns: { resolveBin: () => { throw new Error("no codex binary on PATH"); } },
       })).resolves.toBeDefined();
@@ -178,7 +178,7 @@ describe("addLine", () => {
       const logs: string[] = [];
       await addLine(m, {
         name: "codex", handle: "ken-cdx", agent: "codex", relay: "https://r.example",
-        register: ok, installLaunchAgentFn: () => {}, publishCardFn: async () => undefined,
+        register: ok, installListenerServiceFn: () => {}, publishCardFn: async () => undefined,
         log: (s) => logs.push(s),
         verifyFns: { resolveBin: () => "/fake/bin/codex", execFn: () => {}, runFn: async () => ({ text: "OK" }) },
       });
@@ -189,7 +189,7 @@ describe("addLine", () => {
       let touched = false;
       await addLine(m, {
         name: "codex", handle: "ken-cdx", agent: "codex", relay: "https://r.example",
-        register: ok, installLaunchAgentFn: () => {}, publishCardFn: async () => undefined, verify: false,
+        register: ok, installListenerServiceFn: () => {}, publishCardFn: async () => undefined, verify: false,
         verifyFns: { resolveBin: () => { touched = true; throw new Error("must not run"); } },
       });
       expect(touched).toBe(false);
@@ -199,7 +199,7 @@ describe("addLine", () => {
       let touched = false;
       await addLine(m, {
         name: "caller", handle: "ken-c", relay: "https://r.example", callerOnly: true,
-        register: ok, installLaunchAgentFn: () => {}, publishCardFn: async () => undefined,
+        register: ok, installListenerServiceFn: () => {}, publishCardFn: async () => undefined,
         verifyFns: { resolveBin: () => { touched = true; throw new Error("must not run"); } },
       });
       expect(touched).toBe(false);
@@ -288,11 +288,11 @@ describe("removeLine", () => {
     expect(() => removeLine(m, "claude", { confirm: true, uninstallFn: () => {} })).toThrow(/uninstall --purge/);
   });
 
-  // Regression: the reinstall branch used to call installLaunchAgent(m) with
+  // Regression: the reinstall branch used to call installListenerService(m) with
   // no extraPathDirs at all, which rewrites the plist with an EMPTY PATH —
   // clobbering the surviving line's agent dir, not just failing to add the
   // removed one's. By the time this branch runs, the removed line's
-  // directory is already gone, so launchPathDirs(m) here must reflect only
+  // directory is already gone, so listenerPathDirs(m) here must reflect only
   // what's left.
   it("reinstall derives extraPathDirs from the surviving line, not an empty list", () => {
     saveLineConfig(getLinePaths(m, "claude"), { ...base, agent_kind: "claude" });
@@ -302,8 +302,8 @@ describe("removeLine", () => {
     removeLine(m, "codex", {
       confirm: true,
       uninstallFn: () => {},
-      installFn: (_m, _execCmd, extraPathDirs) => { captured = extraPathDirs; },
-      // codex resolves to a real dir too, not null — if launchPathDirs ran
+      installFn: (_m, options) => { captured = options?.extraPathDirs; },
+      // codex resolves to a real dir too, not null — if listenerPathDirs ran
       // BEFORE the archive (i.e. against a machine state that still has
       // codex), codex's dir would leak into the result and this assertion
       // would fail. A resolveBin that only resolves the survivor would let

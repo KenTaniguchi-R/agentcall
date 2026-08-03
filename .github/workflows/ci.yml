@@ -53,10 +53,11 @@ jobs:
 
   packed-cli-consumer:
     needs: verify
-    runs-on: macos-latest
+    runs-on: ${{ matrix.os }}
     strategy:
       fail-fast: false
       matrix:
+        os: [macos-latest, ubuntu-latest]
         node: [20, 22, 24]
     steps:
       # No checkout or pnpm: this job exercises only what npm users receive.

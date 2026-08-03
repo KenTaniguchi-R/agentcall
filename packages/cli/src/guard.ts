@@ -46,6 +46,7 @@ const DENIED_DIRS = [
   ".claude",      // executable configuration; cf. CVE-2025-59536
   ".codex",       // auth.json, plus a config.toml that routinely holds API keys
   "Library/LaunchAgents",  // how the listener itself gets launched
+  ".config/systemd/user",  // Linux user units can replace the listener command
   // Legacy flat layout. As of Task 12, nothing in this codebase reads or
   // writes this path anymore — card.ts, index.ts, and lint.ts all moved to
   // the per-line AgentCall/<line>/tasks layout, and setup.ts no longer
@@ -111,9 +112,9 @@ const NO_PATH_SURFACE = new Set(["WebSearch"]);
 // can climb out of that root entirely. LS has no selector.
 const SELECTOR_KEY: Record<string, string> = { Grep: "glob", Glob: "pattern" };
 
-// package.json pins os: ["darwin"], and the default macOS filesystem is
-// case-INsensitive — ~/.SSH opens ~/.ssh. Folding can over-deny on a
-// case-sensitive volume, which is the safe direction for a floor.
+// The default macOS filesystem is case-INsensitive — ~/.SSH opens ~/.ssh.
+// Linux is commonly case-sensitive; folding can over-deny there, which is the
+// safe direction for a security floor shared by both supported platforms.
 const fold = (p: string) => p.toLowerCase();
 
 // Denied roots are canonicalized alongside the targets they get compared with.

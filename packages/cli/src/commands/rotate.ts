@@ -1,12 +1,13 @@
 import { rotateToken } from "../api.js";
 import { relayUrl } from "../config.js";
-import { LAUNCH_LABEL } from "../launchd.js";
 import type { LineContext } from "../lineContext.js";
+import { listenerServiceRestartCommand } from "../listener-service.js";
 import { saveLineConfig } from "../lines.js";
 
 export interface RotateDeps {
   rotate?: typeof rotateToken;
   log?: (line: string) => void;
+  platform?: NodeJS.Platform;
 }
 
 // One line's token, rewritten in place. The multi-line listener (Task 8)
@@ -27,12 +28,15 @@ export async function rotateLine(ctx: LineContext, deps: RotateDeps = {}): Promi
   // about a listener this line doesn't have. Pre-lines code guarded this with
   // `else if (cfg.agent_kind)`; only print it for a line that can actually be
   // listening.
+  const restartCommand = listenerServiceRestartCommand(deps.platform);
+  const backgroundGuidance = restartCommand
+    ? `, or for the background one, \`${restartCommand}\``
+    : "";
   const listenerGuidance = ctx.config.agent_kind
     ? `, but this line's listener won't use the new one until its next reconnect — other lines are ` +
       `unaffected either way.\n` +
       `If the old token may have leaked, restart the listener now to force it off the relay immediately ` +
-      `instead of waiting for that reconnect: \`agentcall listen\` in the foreground, or for the background ` +
-      `one, \`launchctl kickstart -k gui/$UID/${LAUNCH_LABEL}\`.`
+      `instead of waiting for that reconnect: \`agentcall listen\` in the foreground${backgroundGuidance}.`
     : ".";
   log(`Token rotated for line "${ctx.name}" (${ctx.config.handle}). The old token is invalid for new connections immediately${listenerGuidance}`);
 }
