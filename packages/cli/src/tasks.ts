@@ -3,7 +3,7 @@ import { isAbsolute, join } from "node:path";
 import { z } from "zod";
 import { parse as parseYaml } from "yaml";
 import { MAX_KEYWORD_LENGTH, MAX_TASK_KEYWORDS, TASK_ID_RE } from "@benree/agentcall-shared";
-import type { Paths } from "./paths.js";
+import type { LinePaths } from "./paths.js";
 
 export const CAPS = ["read", "write", "fetch", "exec"] as const;
 export type Cap = (typeof CAPS)[number];
@@ -95,11 +95,11 @@ export function deriveThreadable(caps: Cap[], explicit?: boolean): boolean {
   return !caps.includes("write") && !caps.includes("exec");
 }
 
-// Reads ~/AgentCall/tasks/<id>/SKILL.md (YAML frontmatter + body). Invalid
-// or duplicate entries are skipped with a warning rather than failing the
-// whole listener: one broken manifest must not take every other task
-// offline.
-export function loadTasks(p: Paths, warn: (msg: string) => void = console.error): Task[] {
+// Reads ~/AgentCall/<line>/tasks/<id>/SKILL.md (YAML frontmatter + body).
+// Invalid or duplicate entries are skipped with a warning rather than
+// failing the whole listener: one broken manifest must not take every other
+// task offline.
+export function loadTasks(p: LinePaths, warn: (msg: string) => void = console.error): Task[] {
   const tasks: Task[] = [ASK_TASK];
   if (!existsSync(p.tasksDir)) return tasks;
   for (const entry of readdirSync(p.tasksDir, { withFileTypes: true })) {
@@ -176,11 +176,11 @@ Describe how your agent should perform it. This text is given to the
 agent verbatim when a caller invokes the task.
 `;
 
-// Creates ~/AgentCall/tasks/<id>/SKILL.md from the template and returns the
-// file path. Never overwrites; never touches policy — a scaffolded task is
-// invisible to callers until the owner runs `agentcall offer <id>` or
-// `agentcall allow <handle> <id>` (create ≠ publish).
-export function scaffoldTask(p: Paths, id: string): string {
+// Creates ~/AgentCall/<line>/tasks/<id>/SKILL.md from the template and
+// returns the file path. Never overwrites; never touches policy — a
+// scaffolded task is invisible to callers until the owner runs
+// `agentcall offer <id>` or `agentcall allow <handle> <id>` (create ≠ publish).
+export function scaffoldTask(p: LinePaths, id: string): string {
   if (!TASK_ID_RE.test(id)) {
     throw new Error(`"${id}" is not a valid task id: lowercase letters, digits, and hyphens, starting with a letter or digit.`);
   }

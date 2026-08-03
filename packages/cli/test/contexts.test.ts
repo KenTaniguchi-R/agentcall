@@ -7,7 +7,7 @@ import {
   admitContext, loadContexts, mintContextId, pruneContexts, saveContexts, upsertContext,
   type ContextBinding,
 } from "../src/contexts.js";
-import { getPaths } from "../src/paths.js";
+import { getLinePaths, getMachinePaths } from "../src/paths.js";
 
 const NOW = 1_800_000_000_000;
 
@@ -129,7 +129,10 @@ describe("upsertContext", () => {
 });
 
 describe("load/save", () => {
-  const paths = () => getPaths(mkdtempSync(join(tmpdir(), "agentcall-ctx-")));
+  const paths = () => {
+    const root = mkdtempSync(join(tmpdir(), "agentcall-ctx-"));
+    return getLinePaths(getMachinePaths(root, root), "claude");
+  };
 
   it("round-trips", () => {
     const p = paths();

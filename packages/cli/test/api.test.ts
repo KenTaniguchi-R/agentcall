@@ -5,7 +5,7 @@ import { registerHandle, getStatus, fetchCard, pushCard, rotateToken, createInvi
   fetchRosterBundle, issueRosterJoinKey, listRosterJoinKeys, revokeRosterJoinKey } from "../src/api.js";
 import { generateIdentityKeys, type StoredKeys } from "../src/keys.js";
 import { fetchKeys, publishEncryptionKey, publishIdentityKey } from "../src/api.js";
-import { getPaths } from "../src/paths.js";
+import { getLinePaths, getMachinePaths } from "../src/paths.js";
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -392,13 +392,16 @@ async function buildValidKeysResponse(
   return { identity, encryption: { record, signature } };
 }
 
+// The identity key is line-scoped, so every case here works through a line.
+function linePaths(root: string) { return getLinePaths(getMachinePaths(root, root), "claude"); }
+
 describe("key publication", () => {
   const auth = { org: "acme", handle: "ken", token: "t0ken" };
 
   it("PUTs an identity record whose address carries the relay host", async () => {
     const home = mkdtempSync(join(tmpdir(), "agentcall-api-"));
     try {
-      const keys = await generateIdentityKeys(getPaths(home));
+      const keys = await generateIdentityKeys(linePaths(home));
       let seen: { url: string; body: string } | undefined;
       const fetchMock = vi.fn(async (url: string, init: RequestInit) => {
         seen = { url, body: String(init.body) };
@@ -431,7 +434,7 @@ describe("key publication", () => {
   it("PUTs an encryption record with a signature the relay can verify", async () => {
     const home = mkdtempSync(join(tmpdir(), "agentcall-api-"));
     try {
-      const keys = await generateIdentityKeys(getPaths(home));
+      const keys = await generateIdentityKeys(linePaths(home));
       let seen: string | undefined;
       vi.stubGlobal("fetch", vi.fn(async (_url: string, init: RequestInit) => {
         seen = String(init.body);
@@ -471,7 +474,7 @@ describe("key publication", () => {
   it("round-trips a well-formed 200 response into the typed identity and encryption records", async () => {
     const home = mkdtempSync(join(tmpdir(), "agentcall-api-"));
     try {
-      const keys = await generateIdentityKeys(getPaths(home));
+      const keys = await generateIdentityKeys(linePaths(home));
       const response = await buildValidKeysResponse(keys, "ken@relay.test");
       vi.stubGlobal("fetch", vi.fn(async () => new Response(JSON.stringify(response), { status: 200 })));
 
@@ -489,7 +492,7 @@ describe("key publication", () => {
   it("rejects a 200 response whose identity record is missing a required field", async () => {
     const home = mkdtempSync(join(tmpdir(), "agentcall-api-"));
     try {
-      const keys = await generateIdentityKeys(getPaths(home));
+      const keys = await generateIdentityKeys(linePaths(home));
       const response = await buildValidKeysResponse(keys, "ken@relay.test");
       const brokenIdentity: Record<string, unknown> = { ...response.identity };
       delete brokenIdentity.identity_pub;
@@ -506,7 +509,7 @@ describe("key publication", () => {
   it("rejects a 200 response whose encryption record has an invalid key_id", async () => {
     const home = mkdtempSync(join(tmpdir(), "agentcall-api-"));
     try {
-      const keys = await generateIdentityKeys(getPaths(home));
+      const keys = await generateIdentityKeys(linePaths(home));
       const response = await buildValidKeysResponse(keys, "ken@relay.test");
       const malformed = {
         ...response,
@@ -528,7 +531,7 @@ describe("key publication", () => {
     // Sarah while believing it is talking to ken.
     const home = mkdtempSync(join(tmpdir(), "agentcall-api-"));
     try {
-      const keys = await generateIdentityKeys(getPaths(home));
+      const keys = await generateIdentityKeys(linePaths(home));
       const response = await buildValidKeysResponse(keys, "sarah@relay.test");
       vi.stubGlobal("fetch", vi.fn(async () => new Response(JSON.stringify(response), { status: 200 })));
 
@@ -545,7 +548,7 @@ describe("key publication", () => {
     // same failure with an extra step.
     const home = mkdtempSync(join(tmpdir(), "agentcall-api-"));
     try {
-      const keys = await generateIdentityKeys(getPaths(home));
+      const keys = await generateIdentityKeys(linePaths(home));
       const response = await buildValidKeysResponse(keys, "ken@relay.test");
       const other = await buildValidKeysResponse(keys, "sarah@relay.test");
       const mixed = { identity: response.identity, encryption: other.encryption };
@@ -561,7 +564,7 @@ describe("key publication", () => {
   it("rejects a 200 response whose encryption signature is not a string", async () => {
     const home = mkdtempSync(join(tmpdir(), "agentcall-api-"));
     try {
-      const keys = await generateIdentityKeys(getPaths(home));
+      const keys = await generateIdentityKeys(linePaths(home));
       const response = await buildValidKeysResponse(keys, "ken@relay.test");
       const malformed = { ...response, encryption: { ...response.encryption, signature: 12345 } };
       vi.stubGlobal("fetch", vi.fn(async () => new Response(JSON.stringify(malformed), { status: 200 })));

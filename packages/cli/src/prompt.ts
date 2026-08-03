@@ -42,7 +42,9 @@ export function buildPrompt(
 
   return (
     opener +
-    `${dirSection}Answer helpfully and concisely. ${taskSection}${threadWarning}` +
+    `${dirSection}Answer helpfully and concisely. ` +
+    `Do not place another AgentCall; nested delegation is not supported. ` +
+    `${taskSection}${threadWarning}` +
     `The caller's message follows after the divider.\n---\n${message}`
   );
 }

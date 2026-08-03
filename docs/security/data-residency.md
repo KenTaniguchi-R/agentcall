@@ -1,7 +1,7 @@
 # Cloud data map and residency decision
 
 Last verified: 2026-08-02 against production metadata, repository migration
-`0010_key_publication.sql`, and Cloudflare documentation current on that date.
+`0012_key_publication.sql`, and Cloudflare documentation current on that date.
 
 This is the living inventory for data persisted or processed by AgentCall's
 hosted relay. Update it whenever a migration, Durable Object storage key,
@@ -31,6 +31,26 @@ request-processing, and logging data outside the claim. A regional offering
 must be a planned new deployment or migration covering every row below and the
 non-database surfaces, not a one-line `.jurisdiction()` change.
 
+## Accepted lifecycle direction — not implemented
+
+AgentCall has committed to a supported subject-erasure path and bounded retention;
+indefinite retention is current behavior, not the target policy. The accepted
+[subject-erasure and retention design](../superpowers/specs/2026-08-02-subject-erasure-and-retention-design.md)
+chooses:
+
+- a disclosed, potentially personal but identity-unlinked address quarantine that is
+  hard-deleted after 30 days, then organization-authorized reclaim onto a fresh
+  `agent_id` and Durable Object;
+- immediate deletion of subject-owned active data and inbound policy references;
+- crypto-shredding of readable identity fields in append-only audit events, with
+  source IP/country moved to a deletable 30-day sidecar;
+- a 400-day audit-event default and 30-day ordinary maximum for audit network evidence;
+- explicit pending/held results for Analytics Engine, logs, Time Travel, backups, or
+  legal holds that prevent verified completion.
+
+None of that workflow exists yet. The tables below continue to describe deployed
+behavior. Do not promise erasure, expiry, or an SLA from the accepted design alone.
+
 ## D1 inventory
 
 D1 is the durable identity and relationship system of record. Token, recovery,
@@ -50,12 +70,20 @@ there is no time-based cleanup job.
 | `roster_join_keys` | Public key prefix, roster/organization, secret hash, description, issuer handle, lifecycle times, reuse/use state. Authentication, provenance, and personal data. | Expired/revoked keys remain for provenance; all rows are deleted with the roster. |
 | `roster_members` | Roster/organization/handle membership, join time, and admitting key prefix. Personal relationship and provenance data. | Until leave, expulsion, key-based eviction, or roster deletion. |
 | `roster_events` | Append-only mutation event/action, roster/organization, actor and target identities/types, source IP/country, human-readable description, time. Security audit evidence and personal data. | Indefinite, including after roster deletion. The per-roster 10,000-event counter gates member-driven join/leave churn; administrator and system events remain appendable for recovery and are not bounded by that counter. The counter is not a row-count ceiling. |
+| `telemetry_health` | Sink name, cumulative locally observed write-failure count, and first/last failure times. Non-personal operational health metadata; it contains no tenant, subject, outcome, route, or network dimension. | Indefinite. There is no reset or application deletion path. It proves only that the Worker observed a binding-call failure, not how many events Analytics Engine later sampled or lost. |
+
+The current operational and future deletion rules for both event ledgers are
+defined in the [audit retention policy](./audit-retention.md). In particular,
+the repository has no automated expiry or supported erasure path today;
+count-bounding `org_events` is a capacity control, not a retention period.
 
 Cloudflare also maintains `d1_migrations`, which records applied migration
 filenames and is operational metadata rather than end-user data. D1 Time Travel,
-Cloudflare backups, account audit logs, and exported SQL backups create copies
-with their own vendor/operator retention; this repository does not configure a
-deletion schedule for those copies.
+Cloudflare backups, and exported SQL backups may create copies of table rows
+with their own vendor/operator retention. Cloudflare account audit logs are
+separate operational records that may independently contain personal metadata.
+This repository does not configure a deletion schedule for any of those
+surfaces.
 
 ## Durable Object inventory
 
@@ -70,7 +98,7 @@ object is restricted.
 |---|---|---|
 | WebSocket state and serialized attachments | Live listener/caller sockets; caller handle, relay-attested roster IDs, call ID, and test timeout. Personal/relationship metadata. Messages and replies pass over these sockets in plaintext but are not written to application storage. | Socket lifetime; attachments support hibernation and disappear with the socket. |
 | `call:*` | Call ID, caller handle, deadline, and call state. Personal activity metadata; no prompt or reply body. | Deleted on result, failure, confirmed cancellation, or caller close. Otherwise an alarm is scheduled for the configured six-minute deadline; alarm delivery may be delayed or retried, so six minutes is the logical timeout rather than a strict physical-retention maximum. |
-| `rl:*` | Per-caller timestamps inside the callee's object. Personal activity metadata. | Timestamps older than one hour are logically ignored, but the physical array is only rewritten when that caller next incurs a charged call. It can therefore remain indefinitely for an inactive caller. |
+| `rl:*` | Per-caller timestamps inside the callee's object. Personal activity metadata. | One-hour logical window. A charged call starts an expired-key sweep at most once per minute; each event processes at most four 128-key pages. A short-lived cursor (temporarily repeating one `rl:<handle>` key) and alarm continue larger backlogs in bounded events until complete, then delete the cursor. An idle object with no pending sweep can retain stale keys until its next charged call, but cannot accumulate while idle. A non-identifying timestamp throttles new sweeps. |
 
 ### `RateLimiterDO`
 
@@ -91,8 +119,8 @@ documentation does not provide an application-level deletion control for it.
 
 | Surface | Contents and sensitivity | Retention/location control |
 |---|---|---|
-| `agentcall_status_reads` (Workers Analytics Engine) | Organization, viewer handle, target handle, allowed/denied result, source IP/country, timestamp. Personal security telemetry; online/offline state is deliberately omitted. | Cloudflare retains Analytics Engine data for three months. WAE has only caveated Customer Metadata Boundary support and is unavailable outside the US region under CMB; it has no per-dataset jurisdiction setting in this repository. |
-| Workers invocation/custom/error logs | Request metadata can contain handle/roster route parameters. Explicit errors may contain organization, handle, outcome, and error class, but never card bodies or raw database errors. | Workers Logs retain up to 3 days on Free or 7 days on Paid when enabled. This repository does not declare observability, sampling, Logpush, or a destination, so dashboard/account state must be verified separately. |
+| `agentcall_status_reads` (Workers Analytics Engine) | Identity-unlinked allowed/denied outcome points and timestamps. This is sampled statistical product telemetry, not an access ledger; online/offline state, tenant, subject, route, IP, and country are deliberately omitted. Exact timestamps may still be correlated with information held elsewhere. | Cloudflare retains Analytics Engine data for three months, samples at write and query time, and does not guarantee retrieval of individual records. WAE is unavailable outside the US region under CMB and has no per-dataset jurisdiction setting in this repository. |
+| Workers invocation/custom/error logs | Request metadata can contain handle/roster route parameters. The status-telemetry error contains only error class and whether the D1 health counter was recorded; it never contains tenant, subject, outcome, card body, or raw error. | Workers Logs retain up to 3 days on Free or 7 days on Paid when enabled. This repository does not declare observability, sampling, Logpush, or a destination, so dashboard/account state must be verified separately. |
 | In-flight call content | Caller message and callee reply traverse the Worker, `HandleDO`, and WebSockets in plaintext. | Not written by application code to D1, DO storage, Analytics Engine, or console logs. It is still processed by Cloudflare and visible to the relay operator; transport processing location is separate from storage residency. |
 | Worker code and `BOOTSTRAP_TOKEN` | Deployed code plus the operator secret that can mint the first organization invite. | Cloudflare documents that Workers code and secrets are deployed globally even when Regional Services restricts execution. Customer Metadata Boundary does not cover customer configuration or operational debugging metadata. |
 
@@ -124,6 +152,7 @@ Official references:
 - [Regionalizing Workers](https://developers.cloudflare.com/data-localization/how-to/workers/)
 - [Customer Metadata Boundary](https://developers.cloudflare.com/data-localization/metadata-boundary/)
 - [Workers Analytics Engine limits and retention](https://developers.cloudflare.com/analytics/analytics-engine/limits/)
+- [Workers Analytics Engine sampling](https://developers.cloudflare.com/analytics/analytics-engine/sampling/)
 - [Workers Logs](https://developers.cloudflare.com/workers/observability/logs/workers-logs/)
 - [Logpush](https://developers.cloudflare.com/logs/logpush/)
 

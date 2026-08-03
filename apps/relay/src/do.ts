@@ -21,6 +21,120 @@ const STATUS_RANK: Record<CallStatusType["state"], number> = {
   working: 2,
 };
 
+export const RATE_LIMIT_WINDOW_MS = 3_600_000;
+const RATE_LIMIT_PRUNE_INTERVAL_MS = 60_000;
+const RATE_LIMIT_PRUNE_PAGE_SIZE = 128;
+export const RATE_LIMIT_PRUNE_MAX_PAGES = 4;
+const RATE_LIMIT_PREFIX = "rl:";
+const RATE_LIMIT_PRUNED_AT_KEY = "meta:rl-pruned-at";
+const RATE_LIMIT_MAINTENANCE_KEY = "meta:rl-maintenance";
+const RATE_LIMIT_PRUNE_CONTINUE_DELAY_MS = 1_000;
+type RateLimitMaintenance = { cursor: string; due: number };
+
+export interface RateLimitStorage {
+  get<T>(key: string): Promise<T | undefined>;
+  list<T>(options?: DurableObjectListOptions): Promise<Map<string, T>>;
+  delete(keys: string[]): Promise<number>;
+  put<T>(key: string, value: T): Promise<void>;
+}
+
+export async function readRateLimitMaintenance(
+  storage: RateLimitStorage,
+): Promise<RateLimitMaintenance | undefined> {
+  const stored = await storage.get<unknown>(RATE_LIMIT_MAINTENANCE_KEY);
+  if (stored === undefined) return undefined;
+  if (
+    typeof stored === "object" && stored !== null &&
+    typeof (stored as Partial<RateLimitMaintenance>).cursor === "string" &&
+    typeof (stored as Partial<RateLimitMaintenance>).due === "number" &&
+    Number.isFinite((stored as Partial<RateLimitMaintenance>).due)
+  ) {
+    return stored as RateLimitMaintenance;
+  }
+  await storage.delete([RATE_LIMIT_MAINTENANCE_KEY]);
+  return undefined;
+}
+
+async function pruneStaleRateLimitKeys(storage: RateLimitStorage, now: number): Promise<boolean> {
+  const storedLastPrunedAt = await storage.get<unknown>(RATE_LIMIT_PRUNED_AT_KEY);
+  const lastPrunedAt = typeof storedLastPrunedAt === "number" && Number.isFinite(storedLastPrunedAt)
+    ? storedLastPrunedAt
+    : undefined;
+  const maintenance = await readRateLimitMaintenance(storage);
+  const cursor = maintenance?.cursor;
+  if (cursor === undefined && lastPrunedAt !== undefined && now - lastPrunedAt < RATE_LIMIT_PRUNE_INTERVAL_MS) {
+    return false;
+  }
+
+  let startAfter = cursor;
+  let complete = false;
+  for (let pageNumber = 0; pageNumber < RATE_LIMIT_PRUNE_MAX_PAGES; pageNumber++) {
+    const page = await storage.list<number[]>({
+      prefix: RATE_LIMIT_PREFIX,
+      startAfter,
+      limit: RATE_LIMIT_PRUNE_PAGE_SIZE,
+    });
+    if (page.size === 0) {
+      complete = true;
+      break;
+    }
+
+    const keys = [...page.keys()];
+    startAfter = keys[keys.length - 1]!;
+    const stale = [...page.entries()]
+      .filter(([, stamps]) => !Array.isArray(stamps) || !stamps.some(
+        (stamp) => typeof stamp === "number" && Number.isFinite(stamp) && now - stamp < RATE_LIMIT_WINDOW_MS,
+      ))
+      .map(([key]) => key);
+    if (stale.length > 0) await storage.delete(stale);
+    if (page.size < RATE_LIMIT_PRUNE_PAGE_SIZE) {
+      complete = true;
+      break;
+    }
+  }
+
+  await storage.put(RATE_LIMIT_PRUNED_AT_KEY, now);
+  if (complete) {
+    await storage.delete([RATE_LIMIT_MAINTENANCE_KEY]);
+    return false;
+  }
+
+  // The cursor can temporarily contain one `rl:<handle>` key, but only while
+  // a scheduled bounded continuation is draining the sweep. It is deleted as
+  // soon as the end of the prefix is reached, never retained as an audit log.
+  await storage.put<RateLimitMaintenance>(RATE_LIMIT_MAINTENANCE_KEY, {
+    cursor: startAfter!,
+    due: now + RATE_LIMIT_PRUNE_CONTINUE_DELAY_MS,
+  });
+  return true;
+}
+
+export async function readLiveRateLimitStamps(
+  storage: RateLimitStorage, caller: string, now: number,
+): Promise<number[]> {
+  const stored = await storage.get<unknown>(`${RATE_LIMIT_PREFIX}${caller}`);
+  if (!Array.isArray(stored)) return [];
+  return stored.filter(
+    (stamp): stamp is number => typeof stamp === "number" && Number.isFinite(stamp) && now - stamp < RATE_LIMIT_WINDOW_MS,
+  );
+}
+
+export async function recordRateLimitHit(
+  storage: RateLimitStorage, caller: string, liveStamps: number[], now: number,
+): Promise<boolean> {
+  const needsContinuation = await pruneStaleRateLimitKeys(storage, now);
+  await storage.put(`${RATE_LIMIT_PREFIX}${caller}`, [...liveStamps, now]);
+  return needsContinuation;
+}
+
+export async function continueRateLimitMaintenance(
+  storage: RateLimitStorage, now: number,
+): Promise<boolean> {
+  const maintenance = await readRateLimitMaintenance(storage);
+  if (!maintenance || maintenance.due > now) return false;
+  return pruneStaleRateLimitKeys(storage, now);
+}
+
 /**
  * Clamp a caller-requested (test-only) timeout so it can only SHORTEN the
  * deadline, never extend it past RELAY_CALL_TIMEOUT_MS. Prevents a client
@@ -125,20 +239,18 @@ export class HandleDO extends DurableObject {
       // below — otherwise unlimited oversized frames could be sent for free
       // without ever tripping the limit.
       const now = Date.now();
-      const rlKey = `rl:${att.from}`;
-      const stamps = ((await this.ctx.storage.get<number[]>(rlKey)) ?? []).filter((t) => now - t < 3_600_000);
+      const stamps = await readLiveRateLimitStamps(this.ctx.storage, att.from, now);
       if (stamps.length >= RATE_LIMIT_PER_HOUR) return this.fail(ws, "rate_limited");
 
       if (new TextEncoder().encode(frame.message).byteLength > MAX_MESSAGE_BYTES) {
-        stamps.push(now);
-        await this.ctx.storage.put(rlKey, stamps);
+        const needsContinuation = await recordRateLimitHit(this.ctx.storage, att.from, stamps, now);
+        if (needsContinuation) await this.scheduleNextAlarm();
         return this.fail(ws, "message_too_large");
       }
       const listener = this.ctx.getWebSockets("listener")[0];
       if (!listener) return this.fail(ws, "offline");
 
-      stamps.push(now);
-      await this.ctx.storage.put(rlKey, stamps);
+      await recordRateLimitHit(this.ctx.storage, att.from, stamps, now);
       const call_id = crypto.randomUUID();
       const deadline = now + clampTimeoutMs(att.timeoutMs);
       ws.serializeAttachment({ ...att, call_id });
@@ -215,6 +327,8 @@ export class HandleDO extends DurableObject {
     const calls = await this.ctx.storage.list<CallRecord>({ prefix: "call:" });
     let min = Infinity;
     for (const rec of calls.values()) min = Math.min(min, rec.deadline);
+    const maintenance = await readRateLimitMaintenance(this.ctx.storage);
+    if (maintenance) min = Math.min(min, maintenance.due);
     if (min !== Infinity) await this.ctx.storage.setAlarm(min);
   }
 
@@ -228,6 +342,7 @@ export class HandleDO extends DurableObject {
         await this.ctx.storage.delete(`call:${rec.call_id}`);
       }
     }
+    await continueRateLimitMaintenance(this.ctx.storage, now);
     await this.scheduleNextAlarm();
   }
 }

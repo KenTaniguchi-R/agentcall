@@ -109,6 +109,31 @@ Encryption-key validity is bounded: `not_after - not_before` must not exceed 30
 days. Rotation cadence within that bound is an implementation choice, but a
 record outside it is rejected.
 
+### One identity key per line, not per machine
+
+A **line** is exactly one handle on one relay, and one machine may hold several.
+Both key pairs are therefore stored per line — `~/.agentcall/lines/<name>/identity.key.json` —
+not once per install.
+
+This follows from what an identity key *is*. It is the trust root **for an
+address**, and every record it signs names an address. A machine-scoped
+identity key would put one private key behind two addresses, so the holder of
+line A could mint a valid, correctly-signed encryption-key record for line B's
+address; contacts who pinned that key for A would accept it for B. The relay is
+modeled as an adversary here, and this would hand it a second address for free
+every time a user added a line.
+
+It is also the same rule the rest of the per-line state already follows:
+rosters, the bundle cache, and the context stores are all keyed to an audience,
+and machine-scoping any of them leaks one audience into another. The identity
+key is the sharpest case, because what leaks is signing authority rather than
+data.
+
+Consequences: each line generates, publishes, and rotates its own keys, and its
+own epoch counter. Two lines on one machine are cryptographically unrelated,
+which is the intent — nothing should let a contact of one line prove the other
+belongs to the same person.
+
 ### Records
 
 Published at registration, pinned on first contact:

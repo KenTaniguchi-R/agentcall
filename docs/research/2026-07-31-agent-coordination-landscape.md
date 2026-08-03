@@ -29,7 +29,13 @@
 > since been confirmed to ship durable delivery, the availability axis we were losing on.
 > See [cotal-enterprise-installability](./2026-08-01-cotal-enterprise-installability.md).
 >
-> Read in sequence — see [README](./README.md); this is #3 of 7.
+> **Amended 2026-08-02 on MCP specifically.** Anthropic's MCP Tunnels research preview
+> makes cross-network MCP reachability a substitute, so reachability is no longer an
+> AgentCall differentiator. The remaining gap is governed delegation across a human
+> boundary. See [the primary-source research](./2026-08-02-mcp-tunnels-ema-positioning.md)
+> and [product decision](../superpowers/specs/2026-08-02-mcp-positioning-design.md).
+>
+> Read in sequence — see [README](./README.md); this is #3 of 8.
 
 **Date:** 2026-07-31
 **Question:** Who else is doing agent-to-agent coordination, and is anyone doing
@@ -85,6 +91,15 @@ cross-person agent-to-agent delegation — your agent talks to my agent, neither
 human in the loop. Narrow (calendars) and transported over email/Slack rather
 than a dedicated relay, but a Sequoia partner left the firm to build it. The
 category is considered real.
+
+### High-threat substitute: MCP Tunnels
+
+Anthropic's MCP Tunnels research preview gives an MCP client access to a remote MCP
+server without inbound ports or user-managed deployment. It ships the reachability
+sentence AgentCall previously risked treating as differentiation. It does not provide
+AgentCall's person-scoped address, caller-specific pre-prompt grants, callee-owned agent
+context, or delegation audit model, so it belongs in the substitute set rather than the
+direct-competitor table. See the [2026-08-02 research note](./2026-08-02-mcp-tunnels-ema-positioning.md).
 
 ### Unverified — worth a manual look
 

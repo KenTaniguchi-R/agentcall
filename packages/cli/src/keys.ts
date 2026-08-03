@@ -5,7 +5,7 @@ import {
   toBase64Url,
 } from "@benree/agentcall-shared";
 import { writeJsonAtomic } from "./json-store.js";
-import type { Paths } from "./paths.js";
+import type { LinePaths } from "./paths.js";
 
 const StoredKeysSchema = z.object({
   identity_pkcs8: z.string().min(1),
@@ -29,7 +29,7 @@ async function exportPrivate(key: CryptoKey): Promise<string> {
  * the relay will not replace a published one — regenerating it does not start
  * over, it bricks the handle. Rotation is `rotateEncryptionKey`.
  */
-export async function generateIdentityKeys(paths: Paths): Promise<StoredKeys> {
+export async function generateIdentityKeys(paths: LinePaths): Promise<StoredKeys> {
   if (keysExist(paths)) {
     throw new Error(
       `${paths.identityKeyFile} already exists. Refusing to overwrite it: replacing the ` +
@@ -56,7 +56,7 @@ export async function generateIdentityKeys(paths: Paths): Promise<StoredKeys> {
  * encryption record, so replacing it here would make the record unverifiable
  * against the identity key contacts already pinned.
  */
-export async function rotateEncryptionKey(paths: Paths): Promise<StoredKeys> {
+export async function rotateEncryptionKey(paths: LinePaths): Promise<StoredKeys> {
   const current = loadKeys(paths);
   const encryption = await generateEncryptionKeyPair();
   const keys: StoredKeys = {
@@ -70,7 +70,7 @@ export async function rotateEncryptionKey(paths: Paths): Promise<StoredKeys> {
   return keys;
 }
 
-export function keysExist(paths: Paths): boolean {
+export function keysExist(paths: LinePaths): boolean {
   return existsSync(paths.identityKeyFile);
 }
 
@@ -79,7 +79,7 @@ export function keysExist(paths: Paths): boolean {
  * that became group- or world-readable after the fact is exactly as exposed as
  * one written that way.
  */
-export function loadKeys(paths: Paths): StoredKeys {
+export function loadKeys(paths: LinePaths): StoredKeys {
   // Checked before statSync so a missing file gets this module's prose rather
   // than a raw ENOENT stack from node:fs.
   if (!keysExist(paths)) {

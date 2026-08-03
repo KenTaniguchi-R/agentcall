@@ -182,8 +182,8 @@ describe("roster lifecycle", () => {
     expect((await join(r.roster_id, "budget-member", memberToken, r.join_key)).status).toBe(200);
     expect((await join(r.roster_id, "budget-waiting", waitingToken, r.join_key)).status).toBe(409);
     expect((await join(r.roster_id, "budget-waiting", waitingToken, r.join_key)).status).toBe(409);
-    expect((await mutate(r.roster_id, "leave", "budget-owner", r.token, {})).status).toBe(409);
-    expect(await isMember(r.roster_id, "budget-owner")).toBe(true);
+    expect((await mutate(r.roster_id, "leave", "budget-owner", r.token, {})).status).toBe(200);
+    expect(await isMember(r.roster_id, "budget-owner")).toBe(false);
     expect(await isMember(r.roster_id, "budget-waiting")).toBe(false);
 
     const exhausted = await env.DB.prepare(
@@ -201,6 +201,50 @@ describe("roster lifecycle", () => {
     expect((await mutate(r.roster_id, "delete", "budget-owner", r.token, {
       admin_secret: r.admin_secret,
     })).status).toBe(200);
+  });
+
+  it("lets an administrator auditably reset an exhausted membership audit budget", async () => {
+    const r = await create("reset-owner");
+    const waitingToken = await registerHandle("reset-waiting");
+    await env.DB.prepare("UPDATE rosters SET audit_budget_used = ? WHERE id = ?")
+      .bind(MAX_ROSTER_AUDIT_EVENTS, r.roster_id).run();
+
+    const blocked = await join(r.roster_id, "reset-waiting", waitingToken, r.join_key);
+    expect(blocked.status).toBe(409);
+    expect(await blocked.json()).toMatchObject({
+      error: "roster event budget exhausted",
+      recovery: "ask a roster administrator to reset the audit budget",
+    });
+
+    const denied = await mutate(r.roster_id, "audit-budget/reset", "reset-owner", r.token, {
+      admin_secret: r.join_key,
+    });
+    const missing = await mutate("C".repeat(22), "audit-budget/reset", "reset-owner", r.token, {
+      admin_secret: r.join_key,
+    });
+    expect(Object.fromEntries(denied.headers)).toEqual(Object.fromEntries(missing.headers));
+    expect([denied.status, await denied.text()]).toEqual([missing.status, await missing.text()]);
+
+    const reset = await mutate(r.roster_id, "audit-budget/reset", "reset-owner", r.token, {
+      admin_secret: r.admin_secret,
+    });
+    expect(reset.status).toBe(200);
+    expect(await reset.json()).toEqual({ ok: true, reset: true, audit_budget_used: 0 });
+    expect((await join(r.roster_id, "reset-waiting", waitingToken, r.join_key)).status).toBe(200);
+    expect(await env.DB.prepare(
+      "SELECT audit_budget_used, audit_budget_exhausted_at FROM rosters WHERE id = ?",
+    ).bind(r.roster_id).first()).toEqual({ audit_budget_used: 1, audit_budget_exhausted_at: null });
+    expect(await env.DB.prepare(
+      "SELECT COUNT(*) AS n FROM roster_events WHERE roster_id = ? AND event = 'roster.audit_budget_reset'",
+    ).bind(r.roster_id).first()).toEqual({ n: 1 });
+
+    const noOp = await mutate(r.roster_id, "audit-budget/reset", "reset-owner", r.token, {
+      admin_secret: r.admin_secret,
+    });
+    expect(await noOp.json()).toEqual({ ok: true, reset: false, audit_budget_used: 1 });
+    expect(await env.DB.prepare(
+      "SELECT COUNT(*) AS n FROM roster_events WHERE roster_id = ? AND event = 'roster.audit_budget_reset'",
+    ).bind(r.roster_id).first()).toEqual({ n: 1 });
   });
 
   it("deletes live state but retains append-only audit events", async () => {

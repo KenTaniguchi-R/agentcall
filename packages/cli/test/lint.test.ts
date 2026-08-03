@@ -4,25 +4,34 @@ import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 import { buildCardReport } from "../src/lint.js";
 import { publishCard } from "../src/card.js";
-import { getPaths } from "../src/paths.js";
-import type { Config } from "../src/config.js";
+import { getLinePaths, getMachinePaths } from "../src/paths.js";
+import type { LineConfig } from "../src/config.js";
 
-const cfg: Config = { org: "acme", handle: "ken", token: "t", agent_kind: "claude", relay: "https://r" };
+const cfg: LineConfig = { org: "acme", handle: "ken", token: "t", agent_kind: "claude", relay: "https://r" };
 
+function linePaths(h: string) {
+  return getLinePaths(getMachinePaths(h, h), "line");
+}
+// The managed ceiling is machine-scoped and unredirectable in production, so
+// tests override it on MachinePaths rather than through AGENTCALL_HOME.
+function managedLinePaths(h: string) {
+  const m = getMachinePaths(h, h);
+  return getLinePaths({ ...m, managedPolicyFile: join(h, "managed-policy.json") }, "line");
+}
 function home() {
   const h = mkdtempSync(join(tmpdir(), "agentcall-lint-"));
-  mkdirSync(join(h, ".agentcall"), { recursive: true });
+  mkdirSync(linePaths(h).dir, { recursive: true });
   return h;
 }
 function writeSkill(h: string, id: string, skillMd: string) {
-  const dir = join(h, "AgentCall", "tasks", id);
+  const dir = join(h, "AgentCall", "line", "tasks", id);
   mkdirSync(dir, { recursive: true });
   writeFileSync(join(dir, "SKILL.md"), skillMd);
 }
 
 describe("buildCardReport", () => {
   it("renders the default menu and a never-pushed notice on a fresh install", () => {
-    const p = getPaths(home());
+    const p = linePaths(home());
     const r = buildCardReport(cfg, p);
     expect(r.menu.join("\n")).toContain("ask");
     expect(r.problems).toEqual([]);
@@ -32,13 +41,13 @@ describe("buildCardReport", () => {
   it("surfaces skipped-manifest warnings as problems", () => {
     const h = home();
     writeSkill(h, "broken", "# no frontmatter\n");
-    const r = buildCardReport(cfg, getPaths(h));
+    const r = buildCardReport(cfg, linePaths(h));
     expect(r.problems.join("\n")).toContain("broken");
   });
 
   it("flags policy references to tasks that do not exist", () => {
     const h = home();
-    const p = getPaths(h);
+    const p = linePaths(h);
     writeFileSync(p.policyFile, JSON.stringify({
       default_offer: ["ask", "gone"], callers: { mia: { offer: ["also-gone"], block: false } },
     }));
@@ -49,7 +58,7 @@ describe("buildCardReport", () => {
 
   it("flags group grants to missing tasks even when an assertion accepts them", () => {
     const h = home();
-    const p = getPaths(h);
+    const p = linePaths(h);
     writeFileSync(p.policyFile, JSON.stringify({
       default_offer: ["ask"],
       groups: { eng: { roster_id: "e".repeat(22), offer: ["group-gone"] } },
@@ -60,14 +69,14 @@ describe("buildCardReport", () => {
   });
 
   it("reports a malformed policy file as a problem instead of throwing", () => {
-    const p = getPaths(home());
+    const p = linePaths(home());
     writeFileSync(p.policyFile, "{corrupt");
     const r = buildCardReport(cfg, p);
     expect(r.problems.join("\n")).toContain("policy.json");
   });
 
   it("reports a broken policy assertion as a problem", () => {
-    const p = getPaths(home());
+    const p = linePaths(home());
     writeFileSync(p.policyFile, JSON.stringify({
       default_offer: ["ask"], tests: [{ caller: "mia", deny: ["ask"] }],
     }));
@@ -77,7 +86,7 @@ describe("buildCardReport", () => {
 
   it("is quiet after a push and stale after a change", async () => {
     const h = home();
-    const p = getPaths(h);
+    const p = linePaths(h);
     await publishCard(cfg, p, async () => {});
     expect(buildCardReport(cfg, p).notices).toEqual([]);
     writeSkill(h, "intro", "---\ndescription: d\n---\nbody\n");
@@ -87,7 +96,7 @@ describe("buildCardReport", () => {
   });
 
   it("reports an unreadable card snapshot as a notice, not a problem", () => {
-    const p = getPaths(home());
+    const p = linePaths(home());
     writeFileSync(p.cardSnapshotFile, "{corrupt");
     const r = buildCardReport(cfg, p);
     expect(r.notices.join("\n")).toContain("snapshot unreadable");
@@ -97,9 +106,9 @@ describe("buildCardReport", () => {
   it("warns that codex gives no per-tool exec restriction when a task's tools exclude exec", () => {
     const h = home();
     writeSkill(h, "intro", "---\ndescription: d\ntools: [read]\n---\n");
-    const p = getPaths(h);
+    const p = linePaths(h);
     writeFileSync(p.policyFile, JSON.stringify({ default_offer: ["ask", "intro"], callers: {} }));
-    const codexCfg: Config = { ...cfg, agent_kind: "codex" };
+    const codexCfg: LineConfig = { ...cfg, agent_kind: "codex" };
     const r = buildCardReport(codexCfg, p);
     expect(r.notices.join("\n")).toMatch(/intro/);
     expect(r.notices.join("\n")).toMatch(/codex/i);
@@ -108,7 +117,7 @@ describe("buildCardReport", () => {
   it("does not warn about the codex exec gap for a claude-backed agent", () => {
     const h = home();
     writeSkill(h, "intro", "---\ndescription: d\ntools: [read]\n---\n");
-    const p = getPaths(h);
+    const p = linePaths(h);
     writeFileSync(p.policyFile, JSON.stringify({ default_offer: ["ask", "intro"], callers: {} }));
     const r = buildCardReport(cfg, p);
     expect(r.notices.join("\n")).not.toMatch(/codex/i);
@@ -117,16 +126,16 @@ describe("buildCardReport", () => {
   it("does not warn about the ask task itself, and not about a task that already declares exec", () => {
     const h = home();
     writeSkill(h, "runner", "---\ndescription: d\ntools: [read, exec]\n---\n");
-    const p = getPaths(h);
+    const p = linePaths(h);
     writeFileSync(p.policyFile, JSON.stringify({ default_offer: ["ask", "runner"], callers: {} }));
-    const codexCfg: Config = { ...cfg, agent_kind: "codex" };
+    const codexCfg: LineConfig = { ...cfg, agent_kind: "codex" };
     const r = buildCardReport(codexCfg, p);
     expect(r.notices.join("\n")).not.toMatch(/codex/i);
   });
 
   it("lists per-caller grants and blocked callers in the menu", () => {
     const h = home();
-    const p = getPaths(h);
+    const p = linePaths(h);
     writeSkill(h, "intro", "---\ndescription: d\n---\n");
     writeFileSync(p.policyFile, JSON.stringify({
       default_offer: ["ask"],
@@ -139,10 +148,10 @@ describe("buildCardReport", () => {
 
   it("renders the administrator-filtered menu rather than raw user grants", () => {
     const h = home();
-    const p = { ...getPaths(h), managedPolicyFile: join(h, "managed-policy.json") };
+    const p = managedLinePaths(h);
     writeSkill(h, "intro", "---\ndescription: d\n---\n");
     writeFileSync(p.policyFile, JSON.stringify({ default_offer: ["ask", "intro"] }));
-    writeFileSync(p.managedPolicyFile, JSON.stringify({ version: 1, allowed_tasks: ["ask"] }));
+    writeFileSync(p.machine.managedPolicyFile, JSON.stringify({ version: 1, allowed_tasks: ["ask"] }));
 
     const text = buildCardReport(cfg, p).menu.join("\n");
     expect(text).toContain("ask");

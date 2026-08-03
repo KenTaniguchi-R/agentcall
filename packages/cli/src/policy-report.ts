@@ -1,9 +1,9 @@
-import type { CallableConfig } from "./config.js";
+import type { CallableLineConfig } from "./config.js";
 import { offeredFor, stripPlus, type Policy } from "./policy.js";
 import { CAPS, type Cap, type Task } from "./tasks.js";
 
 export interface PolicyReportOptions {
-  agentKind: CallableConfig["agent_kind"];
+  agentKind: CallableLineConfig["agent_kind"];
   managed: boolean;
   defaultWorkdir: string;
 }
@@ -99,6 +99,7 @@ export function renderPolicyReport(
   if (options.agentKind === "claude") {
     lines.push(
       "  Claude denies first-class tools not named by the task.",
+      "  A fetch grant enables Claude's web tools but does not restrict them to an AgentCall domain allowlist.",
       "  An exec grant includes practical read, write, and network power through Bash, even when those caps are absent.",
       "  Bash is recorded, not blocked, and is not confined to the task working directory.",
     );
@@ -107,6 +108,7 @@ export function renderPolicyReport(
       "  Codex only enforces the write boundary with a read-only or workspace-write sandbox;",
       "  fetch and exec are not separate Codex controls, and read access is not confined to the working directory.",
       "  Codex can execute shell commands whether or not a task declares exec.",
+      "  AgentCall does not impose or audit a domain allowlist on Codex network access.",
       "  On verified codex-cli 0.146.0, shell tool attempts are recorded by an observe-only hook unless managed-only hooks are required.",
       "  Other Codex releases or allow_managed_hooks_only=true may silently skip that hook; non-hooked read routes remain unrecorded.",
       "  Run agentcall doctor to verify the exact Codex session hook is active and trusted on this machine.",

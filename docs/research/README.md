@@ -10,7 +10,8 @@ a separate call.
 
 Docs #1–6 date from 2026-07-31 and were produced together; read them as one body of
 work rather than six independent studies. #7 is a later addition and is the only one
-that carries a backlog.
+that carries a backlog. #8 records the protocol and positioning implications of MCP
+tunnels and Enterprise-Managed Authorization.
 
 ## Reading order
 
@@ -28,8 +29,9 @@ produced in. Later research revised earlier conclusions, so the production order
 | 5 | [claude-code-enforcement-surfaces](./2026-07-31-claude-code-enforcement-surfaces.md) | With the OS sandbox gone, what can actually enforce policy — and what can't? |
 | 6 | [lessons-from-composio](./2026-07-31-lessons-from-composio.md) | How does a shipping Claude Code plugin do this, and what should we copy? |
 | 7 | [cotal-enterprise-installability](./2026-08-01-cotal-enterprise-installability.md) | Which tool does an enterprise actually install — and what has to be true for it to be ours? |
+| 8 | [mcp-tunnels-ema-positioning](./2026-08-02-mcp-tunnels-ema-positioning.md) | What did MCP tunnels and EMA actually ship, and where should MCP sit beside A2A? |
 
-Four notes on the sequence:
+Five notes on the sequence:
 
 - **#3 predates two decisions made the same day.** `agent-coordination-landscape` was
   written before the sandbox was dropped and before Q&A-first was chosen. Its
@@ -48,6 +50,10 @@ Four notes on the sequence:
   inside-your-own-perimeter and therefore disjoint from us. The enterprise pivot makes
   that deployment shape ours too, so #7 re-runs the comparison and turns the differences
   into checklist items. Read it last; it depends on #1–#6 and cites them by section.
+- **#8 narrows the position after a protocol release.** MCP Tunnels makes
+  private-network reachability a substitute rather than differentiation. EMA supplies a
+  useful enterprise-authorization shape, but no non-MCP compatibility claim. The
+  companion decision keeps A2A as the public protocol and defers an MCP facade.
 
 ## The five findings that matter
 

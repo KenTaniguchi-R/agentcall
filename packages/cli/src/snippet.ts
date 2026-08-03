@@ -20,6 +20,8 @@ address, like a phone call:
 - \`agentcall status <name-or-handle@host>\` — check if their agent is online first.
 - \`agentcall contacts add <name> <handle@host> --note "<who they are>"\` — when
   the user gives an address for someone new, offer to save it for next time.
+- \`agentcall line list\` — the addresses this machine answers on. Calls go out as
+  the primary line unless you pass \`--as <line>\`.
 
 Relay errors are printed to stderr (offline / busy / timeout) — report them to
 the user, don't retry more than once.

@@ -3,12 +3,12 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 import { buildCardUpload, publishCard } from "../src/card.js";
-import { getPaths } from "../src/paths.js";
+import { getLinePaths, getMachinePaths } from "../src/paths.js";
 import { ASK_TASK, type Task } from "../src/tasks.js";
 import type { Policy } from "../src/policy.js";
-import type { Config } from "../src/config.js";
+import type { LineConfig } from "../src/config.js";
 
-const cfg: Config = { org: "acme", handle: "ken", token: "t", agent_kind: "claude", relay: "https://r" };
+const cfg: LineConfig = { org: "acme", handle: "ken", token: "t", agent_kind: "claude", relay: "https://r" };
 const intro: Task = {
   id: "owner-introduction", name: "Intro", description: "Introduce the owner.",
   examples: ["who is ken?"], keywords: [], envelope: { caps: ["read"] }, threadable: true, skill: "secret steps",
@@ -69,14 +69,11 @@ describe("buildCardUpload", () => {
 
 describe("publishCard", () => {
   function tempPaths() {
-    const p = getPaths(mkdtempSync(join(tmpdir(), "agentcall-pub-")));
+    const root = mkdtempSync(join(tmpdir(), "agentcall-pub-"));
+    const p = getLinePaths(getMachinePaths(root, root), "claude");
     mkdirSync(p.dir, { recursive: true });
     return p;
   }
-
-  it("exposes the snapshot path on Paths", () => {
-    expect(getPaths("/tmp/fakehome").cardSnapshotFile).toBe("/tmp/fakehome/.agentcall/card.pushed.json");
-  });
 
   it("pushes the built upload and writes the snapshot", async () => {
     const p = tempPaths();

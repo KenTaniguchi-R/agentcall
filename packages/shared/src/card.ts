@@ -1,5 +1,5 @@
 import { z } from "zod";
-import { HANDLE_RE, TASK_ID_RE } from "./protocol.js";
+import { AgentKindSchema, HANDLE_RE, TASK_ID_RE } from "./protocol.js";
 
 export const MAX_CARD_TASKS = 50;
 export const MAX_CARD_GROUPS = 50;
@@ -26,7 +26,7 @@ export const CardTask = z.object({
 // What a callee pushes to the relay: full task list + visibility policy.
 export const CardUpload = z.object({
   description: z.string().max(500).default(""),
-  agent_kind: z.enum(["claude", "codex"]),
+  agent_kind: AgentKindSchema,
   tasks: z.array(CardTask).max(MAX_CARD_TASKS),
   default_offer: z.array(z.string().regex(TASK_ID_RE)).max(MAX_CARD_TASKS),
   grants: z.record(z.string().regex(HANDLE_RE), z.array(z.string().regex(TASK_ID_RE)).max(MAX_CARD_TASKS)).default({}),
@@ -45,7 +45,7 @@ export const CardUpload = z.object({
 export const AgentCard = z.object({
   handle: z.string().regex(HANDLE_RE),
   description: z.string(),
-  agent_kind: z.enum(["claude", "codex"]),
+  agent_kind: AgentKindSchema,
   tasks: z.array(CardTask),
   updated_at: z.number(),
 });

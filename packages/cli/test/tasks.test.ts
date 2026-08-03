@@ -3,26 +3,22 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 import { ASK_TASK, deriveThreadable, FULL_ACCESS_ENVELOPE, loadTasks, scaffoldTask, SkillFrontmatter, splitFrontmatter } from "../src/tasks.js";
-import { getPaths } from "../src/paths.js";
+import { getLinePaths, getMachinePaths } from "../src/paths.js";
 
 function tempHome() { return mkdtempSync(join(tmpdir(), "agentcall-tasks-")); }
 
+// tasksDir/policyFile's exact shape (AgentCall/<line>/tasks, .agentcall/lines/<line>/policy.json)
+// is asserted once, in paths.test.ts's getLinePaths tests — this just needs a
+// LinePaths to hand to loadTasks/scaffoldTask below.
+function linePaths(home: string) {
+  return getLinePaths(getMachinePaths(home, home), "line");
+}
+
 function writeSkill(home: string, id: string, skillMd: string) {
-  const dir = join(home, "AgentCall", "tasks", id);
+  const dir = join(home, "AgentCall", "line", "tasks", id);
   mkdirSync(dir, { recursive: true });
   writeFileSync(join(dir, "SKILL.md"), skillMd);
 }
-
-describe("paths", () => {
-  it("keeps the managed policy outside user-controlled home relocation", () => {
-    const p = getPaths("/tmp/fakehome", "darwin");
-    expect(p.tasksDir).toBe("/tmp/fakehome/AgentCall/tasks");
-    expect(p.policyFile).toBe("/tmp/fakehome/.agentcall/policy.json");
-    expect(p.managedPolicyFile).toBe("/Library/Application Support/agentcall/policy.json");
-    expect(getPaths("/tmp/other-home", "darwin").managedPolicyFile).toBe(p.managedPolicyFile);
-    expect(getPaths("/tmp/fakehome", "linux").managedPolicyFile).toBe("/etc/agentcall/policy.json");
-  });
-});
 
 describe("splitFrontmatter", () => {
   it("splits meta and body", () => {
@@ -86,7 +82,7 @@ describe("SkillFrontmatter", () => {
 
 describe("loadTasks", () => {
   it("always includes the built-in ask task, even with no tasks dir", () => {
-    const tasks = loadTasks(getPaths(tempHome()), () => {});
+    const tasks = loadTasks(linePaths(tempHome()), () => {});
     expect(tasks.map((t) => t.id)).toEqual(["ask"]);
   });
   it("loads a frontmatter SKILL.md; dir name is the id; name defaults to id", () => {
@@ -101,7 +97,7 @@ describe("loadTasks", () => {
       "# Check the calendar first",
       "",
     ].join("\n"));
-    const tasks = loadTasks(getPaths(home), () => {});
+    const tasks = loadTasks(linePaths(home), () => {});
     const t = tasks.find((x) => x.id === "schedule-meeting")!;
     expect(t.name).toBe("schedule-meeting");
     expect(t.envelope).toEqual({ caps: ["read", "fetch"] });
@@ -111,14 +107,14 @@ describe("loadTasks", () => {
   it("uses an explicit name when given", () => {
     const home = tempHome();
     writeSkill(home, "intro", "---\nname: Owner introduction\ndescription: d\n---\nbody\n");
-    expect(loadTasks(getPaths(home), () => {}).find((t) => t.id === "intro")!.name).toBe("Owner introduction");
+    expect(loadTasks(linePaths(home), () => {}).find((t) => t.id === "intro")!.name).toBe("Owner introduction");
   });
   it("loads an absolute existing workdir", () => {
     const home = tempHome();
     const project = join(home, "code", "payments");
     mkdirSync(project, { recursive: true });
     writeSkill(home, "payments", `---\ndescription: d\nworkdir: ${project}\n---\nbody\n`);
-    expect(loadTasks(getPaths(home), () => {}).find((t) => t.id === "payments")!.workdir).toBe(project);
+    expect(loadTasks(linePaths(home), () => {}).find((t) => t.id === "payments")!.workdir).toBe(project);
   });
 
   it("skips task workdirs that are relative, missing, or not directories", () => {
@@ -129,18 +125,18 @@ describe("loadTasks", () => {
     writeSkill(home, "missing", "---\ndescription: d\nworkdir: /no/such/project\n---\n");
     writeSkill(home, "file", `---\ndescription: d\nworkdir: ${file}\n---\n`);
     const warnings: string[] = [];
-    const ids = loadTasks(getPaths(home), (warning) => warnings.push(warning)).map((t) => t.id);
+    const ids = loadTasks(linePaths(home), (warning) => warnings.push(warning)).map((t) => t.id);
     expect(ids).toEqual(["ask"]);
     expect(warnings).toHaveLength(3);
   });
   it("skips missing SKILL.md, missing frontmatter, bad YAML, and schema violations — each with a warning", () => {
     const home = tempHome();
-    mkdirSync(join(home, "AgentCall", "tasks", "empty-dir"), { recursive: true });
+    mkdirSync(join(home, "AgentCall", "line", "tasks", "empty-dir"), { recursive: true });
     writeSkill(home, "no-fm", "# bare markdown, no frontmatter\n");
     writeSkill(home, "bad-yaml", "---\ndescription: [unclosed\n---\nbody\n");
     writeSkill(home, "bad-schema", "---\nname: X\n---\nbody\n"); // missing description
     const warnings: string[] = [];
-    const tasks = loadTasks(getPaths(home), (m) => warnings.push(m));
+    const tasks = loadTasks(linePaths(home), (m) => warnings.push(m));
     expect(tasks.map((t) => t.id)).toEqual(["ask"]);
     expect(warnings).toHaveLength(4);
     expect(warnings.some((w) => w.includes("no-fm"))).toBe(true);
@@ -150,7 +146,7 @@ describe("loadTasks", () => {
     writeSkill(home, "Bad_Name", "---\ndescription: d\n---\n");
     writeSkill(home, "ask", "---\ndescription: override\n---\n");
     const warnings: string[] = [];
-    const tasks = loadTasks(getPaths(home), (m) => warnings.push(m));
+    const tasks = loadTasks(linePaths(home), (m) => warnings.push(m));
     expect(tasks.map((t) => t.id)).toEqual(["ask"]);
     expect(tasks[0]!.name).toBe(ASK_TASK.name);
     expect(warnings).toHaveLength(2);
@@ -181,30 +177,30 @@ describe("loadTasks threadable", () => {
   it("derives threadable from tools when frontmatter omits it", () => {
     const home = tempHome();
     writeSkill(home, "readonly-task", "---\ndescription: d\ntools: [read]\n---\nbody");
-    expect(loadTasks(getPaths(home)).find((t) => t.id === "readonly-task")!.threadable).toBe(true);
+    expect(loadTasks(linePaths(home)).find((t) => t.id === "readonly-task")!.threadable).toBe(true);
   });
 
   it("derives false for an exec task", () => {
     const home = tempHome();
     writeSkill(home, "exec-task", "---\ndescription: d\ntools: [read, exec]\n---\nbody");
-    expect(loadTasks(getPaths(home)).find((t) => t.id === "exec-task")!.threadable).toBe(false);
+    expect(loadTasks(linePaths(home)).find((t) => t.id === "exec-task")!.threadable).toBe(false);
   });
 
   it("honours an explicit override", () => {
     const home = tempHome();
     writeSkill(home, "opt-in", "---\ndescription: d\ntools: [read, exec]\nthreadable: true\n---\nbody");
-    expect(loadTasks(getPaths(home)).find((t) => t.id === "opt-in")!.threadable).toBe(true);
+    expect(loadTasks(linePaths(home)).find((t) => t.id === "opt-in")!.threadable).toBe(true);
   });
 
   it("makes the built-in ask task threadable", () => {
-    expect(loadTasks(getPaths(tempHome())).find((t) => t.id === "ask")!.threadable).toBe(true);
+    expect(loadTasks(linePaths(tempHome())).find((t) => t.id === "ask")!.threadable).toBe(true);
   });
 });
 
 describe("scaffoldTask", () => {
   it("creates a SKILL.md that loadTasks accepts as a valid task", () => {
     const home = tempHome();
-    const p = getPaths(home);
+    const p = linePaths(home);
     const file = scaffoldTask(p, "schedule-meeting");
     expect(file).toBe(join(p.tasksDir, "schedule-meeting", "SKILL.md"));
     const warnings: string[] = [];
@@ -215,7 +211,7 @@ describe("scaffoldTask", () => {
     expect(t.envelope).toEqual({ caps: ["read"] });
   });
   it("refuses invalid ids, the reserved ask id, and existing directories", () => {
-    const p = getPaths(tempHome());
+    const p = linePaths(tempHome());
     expect(() => scaffoldTask(p, "Bad_Id")).toThrow(/valid task id/i);
     expect(() => scaffoldTask(p, "ask")).toThrow(/reserved/i);
     scaffoldTask(p, "twice");
@@ -239,14 +235,14 @@ describe("keywords frontmatter", () => {
       "---",
       "body",
     ].join("\n"));
-    const task = loadTasks(getPaths(home)).find((t) => t.id === "adr")!;
+    const task = loadTasks(linePaths(home)).find((t) => t.id === "adr")!;
     expect(task.keywords).toEqual(["auth", "migration", "adr"]);
   });
 
   it("defaults keywords to [] when the frontmatter omits them", () => {
     const home = tempHome();
     writeSkill(home, "plain", ["---", "description: A task.", "---", "body"].join("\n"));
-    expect(loadTasks(getPaths(home)).find((t) => t.id === "plain")!.keywords).toEqual([]);
+    expect(loadTasks(linePaths(home)).find((t) => t.id === "plain")!.keywords).toEqual([]);
   });
 
   it("skips a task whose keywords exceed the cap, without killing others", () => {
@@ -256,7 +252,7 @@ describe("keywords frontmatter", () => {
       `keywords: [${Array.from({ length: 21 }, (_, i) => `k${i}`).join(", ")}]`,
       "---", "body",
     ].join("\n"));
-    const ids = loadTasks(getPaths(home), () => {}).map((t) => t.id);
+    const ids = loadTasks(linePaths(home), () => {}).map((t) => t.id);
     expect(ids).toContain("ask");     // built-in survives
     expect(ids).not.toContain("bad"); // one broken manifest never takes the rest offline
   });

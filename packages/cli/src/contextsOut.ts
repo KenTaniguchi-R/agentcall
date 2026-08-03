@@ -1,7 +1,7 @@
 import { chmodSync, existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { z } from "zod";
 import { CONTEXT_ID_RE } from "@benree/agentcall-shared";
-import type { Paths } from "./paths.js";
+import type { LinePaths } from "./paths.js";
 
 // The caller's half, and deliberately a separate file from contexts.ts: this
 // holds only opaque tokens the callee issued us, so losing it costs one
@@ -28,7 +28,7 @@ const sameTarget = (a: OutboundContext, k: OutboundKey) =>
 // Fails SAFE, same posture as loadContexts: an unreadable or malformed store
 // yields no entries, so --continue reports "nothing stored" instead of
 // resuming against garbage.
-export function loadOutbound(p: Paths): OutboundContext[] {
+export function loadOutbound(p: LinePaths): OutboundContext[] {
   if (!existsSync(p.contextsOutFile)) return [];
   try {
     const parsed = z.array(OutboundContextSchema).safeParse(JSON.parse(readFileSync(p.contextsOutFile, "utf8")));
@@ -45,7 +45,7 @@ export function findOutbound(list: OutboundContext[], key: OutboundKey): Outboun
 // One open conversation per callee. A second call to the same address
 // replaces the first rather than accumulating, so --continue never has to
 // guess which of several threads was meant.
-export function rememberOutbound(p: Paths, entry: OutboundContext): void {
+export function rememberOutbound(p: LinePaths, entry: OutboundContext): void {
   const next = [entry, ...loadOutbound(p).filter((e) => !sameTarget(e, entry))];
   // Same posture as contexts.ts's saveContexts: mkdirSync's mode is silently
   // ignored when the directory already exists, so chmodSync is the actual

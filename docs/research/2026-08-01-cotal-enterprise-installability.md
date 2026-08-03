@@ -137,6 +137,11 @@ review; **D** is competitive parity; **E** is positioning.
 
 ### E. Positioning
 
+> **Amended 2026-08-02.** Private-network reachability is no longer defensible
+> positioning after MCP Tunnels. Lead with governed, person-scoped delegation: the
+> callee's own agent and context, caller-specific pre-prompt authorization, and evidence.
+> See [the MCP positioning decision](../superpowers/specs/2026-08-02-mcp-positioning-design.md).
+
 - [ ] **Adopt the A2A `AgentCard` shape for `agentcall card`.** Ours is already
       semantically the same object. Conforming buys interop cheaply and avoids competing
       in the standards game — which is Cotal's fight against Google's A2A, and the

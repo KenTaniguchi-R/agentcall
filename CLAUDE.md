@@ -85,6 +85,18 @@ cd packages/cli && pnpm test    # vitest, mocked ws/fs — no live agent spawn
 `apps/relay && pnpm dev` runs the Worker locally against `wrangler dev` for manual
 testing (WS auth, register, status).
 
+### `apps/relay && pnpm dev` needs local D1 migrations applied first
+
+`wrangler dev` does not apply `apps/relay/migrations/*.sql` to the local D1
+instance for you. If any migration is missing — e.g. `0002_agent_kind_nullable.sql`
+(makes `agent_kind` nullable for caller-only lines) or `0003_cards.sql` (adds
+the `cards` table) — `/v1/register`'s `INSERT INTO handles` throws (missing
+table, or a NOT NULL violation on a caller-only registration), and the handler
+(`apps/relay/src/index.ts`, the `/v1/register` route) turns ANY insert failure
+into a 409 `"handle taken"`. That looks exactly like a real handle collision
+and is not one. Run `wrangler d1 migrations apply agentcall --local` from
+`apps/relay` before registering anything against a fresh local D1.
+
 Before calling any task done: `pnpm -r build && pnpm -r typecheck && pnpm -r test`
 must all pass at the repo root. **Build first** — `packages/cli` typechecks against
 `packages/shared`'s built `dist`, so running build last checks the *previous* run's
@@ -96,6 +108,20 @@ script runs after the src pass; `apps/relay` already had `test` in its main
 `tsconfig.json`. Keep it that way: without it, changing a function signature leaves
 `pnpm typecheck` green while every stale call site in `test/` fails at runtime
 instead — vitest strips types without checking them.
+
+### `packages/cli/test/runner.test.ts`'s process-group-kill test has a known flake
+
+`"kills the whole process group on timeout, so a grandchild holding stdout doesn't
+hang the promise"` spawns a real detached child (which spawns its own grandchild),
+waits for a real 500ms `runAgent` timeout to fire, asserts the whole thing completed
+in under 5s, then sleeps 300ms and asserts the grandchild is actually gone
+(`process.kill(pid, 0)` throws). All four numbers are wall-clock, not mocked, so
+under load — several vitest workers doing real process spawns/kills at once, as
+happens repeatedly running the full suite in this repo — either the 5s ceiling or the
+300ms post-SIGTERM grace period can be missed even though the kill logic itself is
+correct. Seen failing standalone and passing when re-run in isolation; not
+node-version dependent. The fix is to make the deadlines a mockable/injectable clock
+rather than real timers, not chase a bigger margin.
 
 ## TDD
 

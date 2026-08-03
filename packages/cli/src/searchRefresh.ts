@@ -1,7 +1,7 @@
 import type { BundleEntryType } from "@benree/agentcall-shared";
 import { ApiError, fetchRosterBundle, type Auth } from "./api.js";
 import { CACHE_TTL_MS, deleteCached, readCached, writeCached } from "./rosters.js";
-import type { Paths } from "./paths.js";
+import type { LinePaths } from "./paths.js";
 
 export interface RefreshOptions {
   fetcher?: typeof fetchRosterBundle;
@@ -24,7 +24,7 @@ export interface RefreshResult {
 // telling us the caller's ACCESS changed, and serving stale results would
 // advertise people they can no longer reach.
 export async function refreshRoster(
-  p: Paths,
+  p: LinePaths,
   name: string,
   rosterId: string,
   identity: { relay: string; caller: string },

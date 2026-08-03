@@ -1,26 +1,39 @@
 import { existsSync, rmSync } from "node:fs";
 import { Command, CommanderError } from "commander";
-import { getPaths } from "./paths.js";
-import { addressHost, loadConfig, saveConfig, relayUrl, assertCallableConfig, resolveWorkdir } from "./config.js";
+import type { AgentKind } from "@benree/agentcall-shared";
+import { getMachinePaths, type LinePaths } from "./paths.js";
+import { addressHost, assertCallableLine, relayUrl, resolveLineWorkdir, type LineConfig } from "./config.js";
 import { callAgent, callStatusMessage, CallError } from "./callClient.js";
-import { getStatus, fetchCard, rotateToken, createInvite, listInvites, revokeInvite, createRoster, joinRoster, leaveRoster,
+// No rotateToken here: `rotate` goes through commands/rotate.ts's rotateLine,
+// which owns the per-line config write and calls the api helper itself.
+import { getStatus, fetchCard, createInvite, listInvites, revokeInvite, createRoster, joinRoster, leaveRoster,
   expelRosterMember, issueRosterJoinKey, listRosterJoinKeys, revokeRosterJoinKey, deleteRoster, ApiError } from "./api.js";
+import { startAllListeners } from "./listenAll.js";
 import { startListener } from "./listener.js";
 import { runSetup } from "./setup.js";
-import { installLaunchAgent, isLaunchAgentInstalled, uninstallLaunchAgent } from "./launchd.js";
+import { uninstallLaunchAgent } from "./launchd.js";
 import { publishCard } from "./card.js";
 import { loadPolicy, loadUserPolicy, savePolicy, validatePolicy } from "./policy.js";
+import { assertValidLineName, loadLineConfig, readyLines } from "./lines.js";
 import { loadTasks, scaffoldTask } from "./tasks.js";
 import { execVerb, type Verb } from "./verbs.js";
 import { buildCardReport } from "./lint.js";
 import { runDoctor } from "./doctor.js";
 import { loadContacts, addContact, removeContact, resolveAddress } from "./contacts.js";
+import { resolveLine } from "./lineContext.js";
+import type { LineContext } from "./lineContext.js";
+import { pickOutboundLine } from "./outbound.js";
+import { rotateLine } from "./commands/rotate.js";
+import { addLine, listLinesReport, removeLine, setPrimary } from "./commands/line.js";
+import { ask as ttyAsk } from "./tty.js";
 import { findOutbound, loadOutbound, rememberOutbound } from "./contextsOut.js";
 import { deleteCached, forgetMembership, loadMemberships, saveMembership } from "./rosters.js";
 import { allRostersFailed, DEFAULT_SEARCH_LIMIT, rank, renderResults, sanitize, toEntries, type RosterStatus, type SearchEntry } from "./search.js";
 import { refreshRoster } from "./searchRefresh.js";
 import { ask } from "./tty.js";
 import { renderPolicyReport } from "./policy-report.js";
+import { loadLocalHistory, renderLocalHistory } from "./history.js";
+import { sanitizeTerminalOutput, stringifyTerminalSafeJson } from "@benree/agentcall-shared";
 
 export function createProgram(): Command {
 const program = new Command();
@@ -51,7 +64,7 @@ program
       const result = await runSetup({
         invite: o.invite,
         handle: o.handle,
-        agent: o.agent as "claude" | "codex" | undefined,
+        agent: o.agent as AgentKind | undefined,
         relay: o.relay,
         snippet: o.snippet,
         skipLaunchd: o.skipLaunchd,
@@ -62,6 +75,10 @@ program
     },
   );
 
+// An invite enrolls someone into ONE tenant, and the tenant is a property of
+// the line (see config.ts) — so every subcommand here takes `--line`. A machine
+// with lines in two orgs must be told which org it is acting in; defaulting to
+// the primary silently would invite people into the wrong tenant.
 const invite = program.command("invite").description("manage one-time organization invites");
 
 invite
@@ -69,8 +86,11 @@ invite
   .description("create a one-time invite")
   .option("--description <text>", "purpose shown in the organization invite inventory", "")
   .option("--expires-in-days <days>", "expiry from 1 to 90 days", "7")
-  .action(async (o: { description: string; expiresInDays: string }) => {
-    const cfg = loadConfig(getPaths());
+  .option("--line <name>", "line whose organization to invite into (defaults to the primary line)")
+  .action(async (o: { description: string; expiresInDays: string; line?: string }) => {
+    const ctx = lineFor(o.line);
+    if (!ctx) return;
+    const cfg = ctx.config;
     try {
       const created = await createInvite(
         relayUrl(cfg), { org: cfg.org, handle: cfg.handle, token: cfg.token },
@@ -88,8 +108,11 @@ invite
 invite
   .command("list")
   .description("list organization invite lifecycle metadata")
-  .action(async () => {
-    const cfg = loadConfig(getPaths());
+  .option("--line <name>", "line whose organization to list (defaults to the primary line)")
+  .action(async (o: { line?: string }) => {
+    const ctx = lineFor(o.line);
+    if (!ctx) return;
+    const cfg = ctx.config;
     try {
       const invites = await listInvites(relayUrl(cfg), { org: cfg.org, handle: cfg.handle, token: cfg.token });
       console.log(JSON.stringify(invites, null, 2));
@@ -103,8 +126,11 @@ invite
   .command("revoke")
   .description("revoke an unused organization invite")
   .argument("<id>", "64-character invite ID from `agentcall invite list`")
-  .action(async (id: string) => {
-    const cfg = loadConfig(getPaths());
+  .option("--line <name>", "line whose organization the invite belongs to (defaults to the primary line)")
+  .action(async (id: string, o: { line?: string }) => {
+    const ctx = lineFor(o.line);
+    if (!ctx) return;
+    const cfg = ctx.config;
     try {
       const revoked = await revokeInvite(
         relayUrl(cfg), { org: cfg.org, handle: cfg.handle, token: cfg.token }, id,
@@ -123,19 +149,59 @@ program
   .argument("<message...>", "message to send")
   .option("--json", "print the full reply envelope instead of just the text")
   .option("--task <id>", "task from the callee's card to perform (see: agentcall card <address>)")
+  .option("--as <line>", "line to call from (defaults to the primary line on the destination's relay)")
   .option("--continue", "continue the last conversation with this address")
   .option("--context <id>", "continue a specific conversation by id")
-  .action(async (address: string, messageParts: string[], o: { json?: boolean; task?: string; continue?: boolean; context?: string }) => {
-    const paths = getPaths();
-    // Config is loaded before resolution so the address can be checked against
-    // the relay this call will actually dial (see resolveAddress).
-    const cfg = loadConfig(paths);
-    const parsed = resolveAddress(paths, address, relayUrl(cfg), cfg.org);
+  .action(async (address: string, messageParts: string[], o: { json?: boolean; task?: string; as?: string; continue?: boolean; context?: string }) => {
+    // Answering agents do not yet receive a relay-minted run credential or an
+    // attested delegation chain. Letting the ordinary CLI silently reuse the
+    // owner's line token here would erase the original caller and permit
+    // accidental A -> B -> A loops. This environment check prevents the
+    // supported CLI path, not a hostile process: an agent with shell/read
+    // access can remove the variable and reuse config credentials. Structural
+    // enforcement requires the brokered design recorded by issue #112.
+    if (process.env.AGENTCALL_CALL_ID !== undefined) {
+      console.error(
+        "Nested agentcall calls are disabled until relay-attested chains and secret-isolated per-run credentials exist.",
+      );
+      process.exitCode = 1;
+      return;
+    }
+    const machine = getMachinePaths();
+    // The address is resolved BEFORE line selection now: which line places
+    // this call depends on the destination's host (pickOutboundLine matches
+    // it against each line's own relay), so the destination has to be known
+    // first. No relay or org is passed on THIS pass — with several lines
+    // possibly on several relays and in several tenants, "the configured
+    // relay" isn't a single thing to compare against anymore; pickOutboundLine's
+    // own error already names which relays this machine actually holds lines on
+    // when none fit.
+    const firstPass = resolveAddress(machine, address);
+    if (!firstPass.ok) {
+      console.error(firstPass.error);
+      process.exitCode = 1;
+      return;
+    }
+    let ctx: LineContext;
+    try {
+      ctx = pickOutboundLine(machine, `https://${firstPass.host}`, { as: o.as });
+    } catch (e) {
+      console.error(String(e instanceof Error ? e.message : e));
+      process.exitCode = 1;
+      return;
+    }
+    const cfg = ctx.config;
+    // Second pass, now that the calling line — and therefore the tenant — is
+    // known. This is what carries #66's cross-tenant refusal into the per-line
+    // model: resolveAddress stays the single resolution path (see contacts.ts)
+    // rather than growing a second, drifting copy of the org comparison here.
+    const parsed = resolveAddress(machine, address, relayUrl(cfg), cfg.org);
     if (!parsed.ok) {
       console.error(parsed.error);
       process.exitCode = 1;
       return;
     }
+    if (parsed.warning) console.error(parsed.warning);
     const message = messageParts.join(" ");
 
     // --continue resolves against what the callee told us last time. The task
@@ -150,7 +216,7 @@ program
         process.exitCode = 1;
         return;
       }
-      const prev = findOutbound(loadOutbound(paths), {
+      const prev = findOutbound(loadOutbound(ctx.paths), {
         relay: relayUrl(cfg), from: cfg.handle, to: parsed.handle,
       });
       if (!prev) {
@@ -180,7 +246,7 @@ program
         onStatus: (s) => console.error(callStatusMessage(s)),
       });
       if (reply.context_id && reply.task) {
-        rememberOutbound(paths, {
+        rememberOutbound(ctx.paths, {
           relay: relayUrl(cfg), from: cfg.handle, to: parsed.handle,
           task: reply.task, context_id: reply.context_id, at: Date.now(),
         });
@@ -188,7 +254,7 @@ program
         // the existing "ringing..." / "answered" convention.
         console.error("conversation open — add --continue to follow up");
       }
-      console.log(o.json ? JSON.stringify(reply) : reply.text);
+      console.log(o.json ? stringifyTerminalSafeJson(reply) : sanitizeTerminalOutput(reply.text));
     } catch (e) {
       console.error(e instanceof CallError ? `Call failed (${e.code}): ${e.message}` : String(e));
       process.exitCode = 1;
@@ -200,18 +266,39 @@ program
   .command("status")
   .description("check whether a handle's agent is currently online")
   .argument("<address>", "contact name or handle@host to check")
-  .action(async (address: string) => {
-    const paths = getPaths();
-    // Presence is self-or-shared-roster on the relay, so status needs the
-    // viewer's credentials rather than a default relay with no config.
-    const cfg = loadConfig(paths);
+  .option("--as <line>", "line to check from (defaults to the primary line on the destination's relay)")
+  .action(async (address: string, o: { as?: string }) => {
+    const machine = getMachinePaths();
+    // Presence is self-or-shared-roster on the relay (#116), so status needs
+    // the viewer's credentials — and WHICH line's credentials matters twice
+    // over: it decides both which relay is asked and whether the viewer shares
+    // a roster with the target. Same reasoning as `call` above for resolving
+    // the address before the line: which line has credentials for this relay
+    // depends on the destination's host. The second pass below re-checks the
+    // address against the chosen line's tenant, exactly as `call` does.
+    const firstPass = resolveAddress(machine, address);
+    if (!firstPass.ok) {
+      console.error(firstPass.error);
+      process.exitCode = 1;
+      return;
+    }
+    let ctx: LineContext;
+    try {
+      ctx = pickOutboundLine(machine, `https://${firstPass.host}`, { as: o.as });
+    } catch (e) {
+      console.error(String(e instanceof Error ? e.message : e));
+      process.exitCode = 1;
+      return;
+    }
+    const cfg = ctx.config;
     const cfgRelay = relayUrl(cfg);
-    const parsed = resolveAddress(paths, address, cfgRelay, cfg.org);
+    const parsed = resolveAddress(machine, address, cfgRelay, cfg.org);
     if (!parsed.ok) {
       console.error(parsed.error);
       process.exitCode = 1;
       return;
     }
+    if (parsed.warning) console.error(parsed.warning);
     try {
       const { online } = await getStatus(cfgRelay, parsed.handle, { org: cfg.org, handle: cfg.handle, token: cfg.token });
       console.log(online ? "online" : "offline");
@@ -226,18 +313,54 @@ program
   .command("doctor")
   .description("verify this install can answer calls: binary, auth, agent spawn, tool telemetry, listener, relay self-call")
   .action(async () => {
-    process.exitCode = await runDoctor({ paths: getPaths() });
+    process.exitCode = await runDoctor({ machine: getMachinePaths() });
   });
 
-const reviewOwnCard = () => {
-  const paths = getPaths();
-  const cfg = loadConfig(paths);
-  if (!cfg.agent_kind) {
-    console.error("This handle is caller-only (no agent configured) — no policy or card to review.");
+program
+  .command("history")
+  .description("show call activity stored locally on this machine")
+  .option("--limit <count>", "maximum newest calls to show (1-100)", "20")
+  .option("--json", "print machine-readable local history")
+  // calls.log/tools.log are per line, so history is too.
+  .option("--line <name>", "line whose history to show (defaults to the primary line)")
+  .action((o: { limit: string; json?: boolean; line?: string }) => {
+    const limit = Number(o.limit);
+    if (!Number.isInteger(limit) || limit < 1 || limit > 100) {
+      console.error("History limit must be an integer from 1 to 100.");
+      process.exitCode = 1;
+      return;
+    }
+    const ctx = lineFor(o.line);
+    if (!ctx) return;
+    const history = loadLocalHistory(ctx.paths, limit);
+    if (history.malformed > 0) {
+      console.error(`Skipped ${history.malformed} malformed local history record${history.malformed === 1 ? "" : "s"}.`);
+    }
+    if (history.truncatedFiles.length > 0) {
+      console.error(
+        `History scan was limited to the newest 4 MiB of: ${history.truncatedFiles.join(", ")}. ` +
+          "Tool counts may be partial.",
+      );
+    }
+    const entries = history.entries;
+    console.log(o.json
+      ? stringifyTerminalSafeJson(entries)
+      : sanitizeTerminalOutput(renderLocalHistory(entries)));
+  });
+
+// Shared by `lint` and a bare `card`. Per-line, like everything else that
+// reads a policy or a card: `--line` picks which one, defaulting to primary.
+const reviewOwnCard = (o: { line?: string }) => {
+  let ctx: LineContext;
+  try {
+    ctx = resolveLine(getMachinePaths(), { line: o.line });
+    assertCallableLine(ctx.config);
+  } catch (e) {
+    console.error(String(e instanceof Error ? e.message : e));
     process.exitCode = 1;
     return;
   }
-  const report = buildCardReport(cfg, paths);
+  const report = buildCardReport(ctx.config, ctx.paths);
   for (const line of report.menu) console.log(line);
   if (report.problems.length > 0) {
     console.log("\nProblems:");
@@ -253,24 +376,31 @@ const reviewOwnCard = () => {
 program
   .command("lint")
   .description("validate tasks, effective policy assertions, and the published card")
+  .option("--line <name>", "line to lint (defaults to the primary line)")
   .action(reviewOwnCard);
 
 program
   .command("policy")
   .description("show the effective per-caller and per-task capability policy")
-  .action(() => {
-    const paths = getPaths();
-    const cfg = loadConfig(paths);
-    if (!cfg.agent_kind) {
-      console.error("This handle is caller-only (no agent configured) — there is no answering policy to report.");
+  .option("--line <name>", "line to report on (defaults to the primary line)")
+  .action((o: { line?: string }) => {
+    let ctx: LineContext;
+    try {
+      ctx = resolveLine(getMachinePaths(), { line: o.line });
+      assertCallableLine(ctx.config);
+    } catch (e) {
+      console.error(String(e instanceof Error ? e.message : e));
       process.exitCode = 1;
       return;
     }
+    const cfg = ctx.config;
     try {
-      const report = renderPolicyReport(loadPolicy(paths), loadTasks(paths), {
+      const report = renderPolicyReport(loadPolicy(ctx.paths), loadTasks(ctx.paths), {
         agentKind: cfg.agent_kind,
-        managed: existsSync(paths.managedPolicyFile),
-        defaultWorkdir: resolveWorkdir(cfg, paths).dir,
+        // Machine-scoped, not line-scoped: the administrator ceiling applies
+        // to every line on this machine (see paths.ts).
+        managed: existsSync(ctx.paths.machine.managedPolicyFile),
+        defaultWorkdir: resolveLineWorkdir(cfg, ctx.paths).dir,
       });
       console.log(report.trimEnd());
     } catch (e) {
@@ -283,40 +413,59 @@ program
   .command("card")
   .description("show your own card with problems, another agent's menu, or publish yours (push)")
   .argument("[target]", "contact name or handle@host to fetch, 'push' to publish, or omit to review your own card")
-  .action(async (target?: string) => {
-    const paths = getPaths();
+  .option("--line <name>", "line to use (defaults to the primary line)")
+  .action(async (target: string | undefined, o: { line?: string }) => {
+    const machine = getMachinePaths();
     if (target === undefined) {
-      reviewOwnCard();
+      reviewOwnCard(o);
       return;
     }
     if (target === "push") {
-      const cfg = loadConfig(paths);
-      if (!cfg.agent_kind) {
-        console.error("This handle is caller-only (no agent configured) and has nothing to publish a card for.");
+      let ctx: LineContext;
+      try {
+        ctx = resolveLine(machine, { line: o.line });
+        assertCallableLine(ctx.config);
+      } catch (e) {
+        console.error(String(e instanceof Error ? e.message : e));
         process.exitCode = 1;
         return;
       }
-      await publishCard(cfg, paths);
+      await publishCard(ctx.config, ctx.paths);
       console.log("Card published.");
       return;
     }
-    const cfg = loadConfig(paths);
-    const parsed = resolveAddress(paths, target, relayUrl(cfg), cfg.org);
+    // A resolvable line is now REQUIRED to fetch someone else's card: card
+    // reads are authenticated on the relay (fetchCard takes a non-optional
+    // Auth), so the old "resolve if you can, fetch anonymously otherwise"
+    // fallback would only ever produce a 401. Failing here names the actual
+    // problem instead.
+    let ctx: LineContext;
+    try {
+      ctx = resolveLine(machine, { line: o.line });
+    } catch (e) {
+      console.error(String(e instanceof Error ? e.message : e));
+      process.exitCode = 1;
+      return;
+    }
+    const cfg = ctx.config;
+    const parsed = resolveAddress(machine, target, relayUrl(cfg), cfg.org);
     if (!parsed.ok) {
       console.error(`${parsed.error} (or 'push')`);
       process.exitCode = 1;
       return;
     }
+    if (parsed.warning) console.error(parsed.warning);
     try {
       const card = await fetchCard(
         relayUrl(cfg),
         parsed.handle,
         { org: cfg.org, handle: cfg.handle, token: cfg.token },
       );
-      console.log(`${card.handle} (${card.agent_kind})${card.description ? ` — ${card.description}` : ""}`);
+      const description = sanitizeTerminalOutput(card.description);
+      console.log(`${card.handle} (${card.agent_kind})${description ? ` — ${description}` : ""}`);
       for (const t of card.tasks) {
-        console.log(`  ${t.id} — ${t.description}`);
-        for (const ex of t.examples) console.log(`      e.g. ${ex}`);
+        console.log(`  ${t.id} — ${sanitizeTerminalOutput(t.description)}`);
+        for (const ex of t.examples) console.log(`      e.g. ${sanitizeTerminalOutput(ex)}`);
       }
       console.log(`\nCall with: agentcall call ${target} --task <id> "<message>"`);
     } catch (e) {
@@ -334,7 +483,7 @@ contacts
   .option("--note <note>", "who they are and what to ask them about")
   .action((name: string, address: string, o: { note?: string }) => {
     try {
-      const result = addContact(getPaths(), name, address, o.note);
+      const result = addContact(getMachinePaths(), name, address, o.note);
       console.log(`${result === "added" ? "Added" : "Updated"} ${name} -> ${address}`);
     } catch (e) {
       console.error(String(e instanceof Error ? e.message : e));
@@ -347,7 +496,7 @@ contacts
   .option("--json", "print the raw contacts array")
   .action((o: { json?: boolean }) => {
     try {
-      const sorted = [...loadContacts(getPaths()).contacts].sort((a, b) => a.name.localeCompare(b.name));
+      const sorted = [...loadContacts(getMachinePaths()).contacts].sort((a, b) => a.name.localeCompare(b.name));
       if (o.json) {
         console.log(JSON.stringify(sorted));
         return;
@@ -368,7 +517,7 @@ contacts
   .argument("<name>", "contact name to delete")
   .action((name: string) => {
     try {
-      removeContact(getPaths(), name);
+      removeContact(getMachinePaths(), name);
       console.log(`Removed ${name}.`);
     } catch (e) {
       console.error(String(e instanceof Error ? e.message : e));
@@ -376,15 +525,36 @@ contacts
     }
   });
 
+// Rosters are LINE-scoped, not machine-scoped. A roster is membership held by
+// a handle on a relay, and a line is exactly "a handle on a relay" — the
+// bundle cache even validates (relay, caller, roster_id) on every read (see
+// rosters.ts's readCached). Storing memberships per machine would let a line
+// in one tenant read a bundle fetched by a line in another, which is the one
+// thing that validation exists to prevent. Hence `--line` on every command
+// here, and rostersFile/rosterCacheFile living under LinePaths.
 const roster = program.command("roster").description("join and manage discovery rosters for `agentcall search`");
+
+// Resolves the line a roster/search command acts as, or reports and exits.
+// Returns undefined on failure, having already set process.exitCode.
+function lineFor(line: string | undefined): LineContext | undefined {
+  try {
+    return resolveLine(getMachinePaths(), { line });
+  } catch (e) {
+    console.error(String(e instanceof Error ? e.message : e));
+    process.exitCode = 1;
+    return undefined;
+  }
+}
 
 roster
   .command("create")
   .description("create a roster and print its initial reusable join key")
   .option("--as <name>", "local name to record it under", "roster")
-  .action(async (o: { as: string }) => {
-    const paths = getPaths();
-    const cfg = loadConfig(paths);
+  .option("--line <name>", "line to create it as (defaults to the primary line)")
+  .action(async (o: { as: string; line?: string }) => {
+    const ctx = lineFor(o.line);
+    if (!ctx) return;
+    const cfg = ctx.config;
     try {
       const { roster_id, join_key, admin_secret } = await createRoster(relayUrl(cfg), { org: cfg.org, handle: cfg.handle, token: cfg.token });
       console.log("Roster created.\n");
@@ -395,7 +565,7 @@ roster
       console.log("Share only the id and join key with colleagues:");
       console.log(`  agentcall roster join ${roster_id} --key ${join_key} --as ${o.as}`);
       try {
-        saveMembership(paths, { name: o.as, relay: relayUrl(cfg), roster_id });
+        saveMembership(ctx.paths, { name: o.as, relay: relayUrl(cfg), roster_id });
         console.log(`\nSaved locally as "${o.as}".`);
       } catch (e) {
         const message = e instanceof Error ? e.message : String(e);
@@ -417,15 +587,17 @@ roster
   .argument("<roster-id>", "roster id shared by whoever created it")
   .requiredOption("--key <key>", "a roster join key")
   .option("--as <name>", "local name for this roster", "roster")
-  .action(async (rosterId: string, o: { key: string; as: string }) => {
-    const paths = getPaths();
-    const cfg = loadConfig(paths);
+  .option("--line <name>", "line to join as (defaults to the primary line)")
+  .action(async (rosterId: string, o: { key: string; as: string; line?: string }) => {
+    const ctx = lineFor(o.line);
+    if (!ctx) return;
+    const cfg = ctx.config;
     try {
       await joinRoster(relayUrl(cfg), { org: cfg.org, handle: cfg.handle, token: cfg.token }, rosterId, o.key);
       // The key is spent here and never written to disk: from now on the
       // handle token plus the relay-side membership row is what authorizes.
       try {
-        saveMembership(paths, { name: o.as, relay: relayUrl(cfg), roster_id: rosterId });
+        saveMembership(ctx.paths, { name: o.as, relay: relayUrl(cfg), roster_id: rosterId });
         console.log(`Joined. Saved locally as "${o.as}".`);
         console.log(`Try: agentcall search "<what you need to know>"`);
       } catch (e) {
@@ -444,9 +616,12 @@ roster
 
 roster
   .command("list")
-  .description("list rosters this install has joined")
-  .action(() => {
-    const rosters = loadMemberships(getPaths());
+  .description("list rosters this line has joined")
+  .option("--line <name>", "line to list for (defaults to the primary line)")
+  .action((o: { line?: string }) => {
+    const ctx = lineFor(o.line);
+    if (!ctx) return;
+    const rosters = loadMemberships(ctx.paths);
     if (rosters.length === 0) {
       console.log("No rosters joined. Ask a colleague for a roster id and join key, then:\n  agentcall roster join <id> --key <key> --as <name>");
       return;
@@ -458,15 +633,16 @@ roster
   .command("leave")
   .description("leave a roster on the relay and remove its local record")
   .argument("<name>", "local roster name")
-  .action(async (name: string) => {
-    const paths = getPaths();
-    const cfg = loadConfig(paths);
+  .option("--line <name>", "line to leave it for (defaults to the primary line)")
+  .action(async (name: string, o: { line?: string }) => {
+    const ctx = lineFor(o.line);
+    if (!ctx) return;
+    const cfg = ctx.config;
     try {
-      const membership = loadMemberships(paths).find((r) => r.name.toLowerCase() === name.toLowerCase());
-      if (!membership) throw new Error(`No roster named "${name}" — run \`agentcall roster list\`.`);
+      const membership = namedRoster(ctx.paths, name);
       await leaveRoster(membership.relay, { org: cfg.org, handle: cfg.handle, token: cfg.token }, membership.roster_id);
-      forgetMembership(paths, name);
-      deleteCached(paths, name);
+      forgetMembership(ctx.paths, name);
+      deleteCached(ctx.paths, name);
       console.log(`Left "${name}" and removed its local record.`);
     } catch (e) {
       console.error(e instanceof Error ? e.message : String(e));
@@ -488,8 +664,8 @@ async function confirmRoster(name: string, consequence: string, yes?: boolean): 
   if (answer !== name) throw new Error("Confirmation did not match; nothing was changed.");
 }
 
-function namedRoster(name: string) {
-  const membership = loadMemberships(getPaths()).find((r) => r.name.toLowerCase() === name.toLowerCase());
+function namedRoster(paths: LinePaths, name: string) {
+  const membership = loadMemberships(paths).find((r) => r.name.toLowerCase() === name.toLowerCase());
   if (!membership) throw new Error(`No roster named "${name}" — run \`agentcall roster list\`.`);
   return membership;
 }
@@ -500,10 +676,13 @@ roster
   .argument("<name>", "local roster name")
   .argument("<handle>", "member handle to remove")
   .option("--admin-secret <secret>", "admin secret (prefer AGENTCALL_ADMIN_SECRET to avoid shell history)")
-  .action(async (name: string, handle: string, o: { adminSecret?: string }) => {
-    const cfg = loadConfig(getPaths());
+  .option("--line <name>", "line to act as (defaults to the primary line)")
+  .action(async (name: string, handle: string, o: { adminSecret?: string; line?: string }) => {
+    const ctx = lineFor(o.line);
+    if (!ctx) return;
+    const cfg = ctx.config;
     try {
-      const membership = namedRoster(name);
+      const membership = namedRoster(ctx.paths, name);
       await expelRosterMember(membership.relay, { org: cfg.org, handle: cfg.handle, token: cfg.token }, membership.roster_id, handle, await adminSecret(o.adminSecret));
       console.log(`Expelled ${handle}. Revoke any join key they may still know.`);
     } catch (e) { console.error(e instanceof Error ? e.message : String(e)); process.exitCode = 1; }
@@ -519,10 +698,13 @@ rosterKey
   .option("--description <text>", "short label shown by `roster key list`", "")
   .option("--expires-in <days>", "expiry in days (1-90)", (v) => Number.parseInt(v, 10), 30)
   .option("--reusable", "allow more than one member to use this key")
-  .action(async (name: string, o: { adminSecret?: string; description: string; expiresIn: number; reusable?: boolean }) => {
-    const cfg = loadConfig(getPaths());
+  .option("--line <name>", "line to act as (defaults to the primary line)")
+  .action(async (name: string, o: { adminSecret?: string; description: string; expiresIn: number; reusable?: boolean; line?: string }) => {
+    const ctx = lineFor(o.line);
+    if (!ctx) return;
+    const cfg = ctx.config;
     try {
-      const membership = namedRoster(name);
+      const membership = namedRoster(ctx.paths, name);
       if (!Number.isInteger(o.expiresIn) || o.expiresIn < 1 || o.expiresIn > 90) {
         throw new Error("--expires-in must be an integer from 1 to 90.");
       }
@@ -542,10 +724,13 @@ rosterKey
   .description("list join-key metadata without revealing secrets")
   .argument("<name>", "local roster name")
   .option("--admin-secret <secret>", "admin secret (prefer AGENTCALL_ADMIN_SECRET to avoid shell history)")
-  .action(async (name: string, o: { adminSecret?: string }) => {
-    const cfg = loadConfig(getPaths());
+  .option("--line <name>", "line to act as (defaults to the primary line)")
+  .action(async (name: string, o: { adminSecret?: string; line?: string }) => {
+    const ctx = lineFor(o.line);
+    if (!ctx) return;
+    const cfg = ctx.config;
     try {
-      const membership = namedRoster(name);
+      const membership = namedRoster(ctx.paths, name);
       const keys = await listRosterJoinKeys(
         membership.relay, { org: cfg.org, handle: cfg.handle, token: cfg.token }, membership.roster_id,
         await adminSecret(o.adminSecret),
@@ -567,16 +752,19 @@ rosterKey
   .option("--admin-secret <secret>", "admin secret (prefer AGENTCALL_ADMIN_SECRET to avoid shell history)")
   .option("--evict", "remove members admitted by this key")
   .option("--yes", "confirm targeted eviction")
-  .action(async (name: string, prefix: string, o: { adminSecret?: string; evict?: boolean; yes?: boolean }) => {
-    const cfg = loadConfig(getPaths());
+  .option("--line <name>", "line to act as (defaults to the primary line)")
+  .action(async (name: string, prefix: string, o: { adminSecret?: string; evict?: boolean; yes?: boolean; line?: string }) => {
+    const ctx = lineFor(o.line);
+    if (!ctx) return;
+    const cfg = ctx.config;
     try {
-      const membership = namedRoster(name);
+      const membership = namedRoster(ctx.paths, name);
       if (o.evict) await confirmRoster(name, `This removes members admitted by key ${prefix}.`, o.yes);
       const out = await revokeRosterJoinKey(
         membership.relay, { org: cfg.org, handle: cfg.handle, token: cfg.token }, membership.roster_id,
         prefix, await adminSecret(o.adminSecret), Boolean(o.evict),
       );
-      if (o.evict) deleteCached(getPaths(), name);
+      if (o.evict) deleteCached(ctx.paths, name);
       console.log(`Revoked ${out.prefix}.${o.evict ? ` Evicted ${out.evicted} member(s).` : " Existing members were retained."}`);
     } catch (e) { console.error(e instanceof Error ? e.message : String(e)); process.exitCode = 1; }
   });
@@ -587,15 +775,17 @@ roster
   .argument("<name>", "local roster name")
   .option("--admin-secret <secret>", "admin secret (prefer AGENTCALL_ADMIN_SECRET to avoid shell history)")
   .option("--yes", "confirm deletion")
-  .action(async (name: string, o: { adminSecret?: string; yes?: boolean }) => {
-    const paths = getPaths();
-    const cfg = loadConfig(paths);
+  .option("--line <name>", "line to act as (defaults to the primary line)")
+  .action(async (name: string, o: { adminSecret?: string; yes?: boolean; line?: string }) => {
+    const ctx = lineFor(o.line);
+    if (!ctx) return;
+    const cfg = ctx.config;
     try {
-      const membership = namedRoster(name);
+      const membership = namedRoster(ctx.paths, name);
       await confirmRoster(name, "Roster deletion cannot be undone.", o.yes);
       await deleteRoster(membership.relay, { org: cfg.org, handle: cfg.handle, token: cfg.token }, membership.roster_id, await adminSecret(o.adminSecret));
-      forgetMembership(paths, name);
-      deleteCached(paths, name);
+      forgetMembership(ctx.paths, name);
+      deleteCached(ctx.paths, name);
       console.log(`Deleted "${name}"; relay audit events were retained.`);
     } catch (e) { console.error(e instanceof Error ? e.message : String(e)); process.exitCode = 1; }
   });
@@ -604,9 +794,12 @@ roster
   .command("forget")
   .description("drop only the local roster record; use `roster leave` to remove relay membership")
   .argument("<name>", "local roster name")
-  .action((name: string) => {
+  .option("--line <name>", "line to forget it for (defaults to the primary line)")
+  .action((name: string, o: { line?: string }) => {
+    const ctx = lineFor(o.line);
+    if (!ctx) return;
     try {
-      forgetMembership(getPaths(), name);
+      forgetMembership(ctx.paths, name);
       console.log(`Forgot "${name}" locally. Your membership on the relay is unchanged; use \`roster leave\` for removal.`);
     } catch (e) {
       console.error(String(e instanceof Error ? e.message : e));
@@ -622,12 +815,14 @@ program
   .option("--limit <n>", "maximum results", (v) => Number.parseInt(v, 10), DEFAULT_SEARCH_LIMIT)
   .option("--json", "machine-readable output for your own agent")
   .option("--offline", "never refresh; use whatever is cached")
-  .action(async (questionParts: string[], o: { roster?: string; limit: number; json?: boolean; offline?: boolean }) => {
-    const paths = getPaths();
-    const cfg = loadConfig(paths);
+  .option("--line <name>", "line to search as (defaults to the primary line)")
+  .action(async (questionParts: string[], o: { roster?: string; limit: number; json?: boolean; offline?: boolean; line?: string }) => {
+    const ctx = lineFor(o.line);
+    if (!ctx) return;
+    const cfg = ctx.config;
     const relay = relayUrl(cfg);
     const identity = { relay, caller: cfg.handle };
-    const memberships = loadMemberships(paths)
+    const memberships = loadMemberships(ctx.paths)
       .filter((m) => m.relay === relay)
       .filter((m) => !o.roster || m.name.toLowerCase() === o.roster.toLowerCase());
 
@@ -648,7 +843,7 @@ program
       try {
         // Each roster degrades on its own: one unreachable roster must not
         // take down a search across the others.
-        const out = await refreshRoster(paths, m.name, m.roster_id, identity, { org: cfg.org, handle: cfg.handle, token: cfg.token }, { offline: o.offline });
+        const out = await refreshRoster(ctx.paths, m.name, m.roster_id, identity, { org: cfg.org, handle: cfg.handle, token: cfg.token }, { offline: o.offline });
         entries.push(...toEntries(m.name, host, out.entries));
         statuses.push({ name: m.name, ageSeconds: out.ageSeconds, stale: out.stale });
       } catch (e) {
@@ -679,33 +874,40 @@ program
     console.log(renderResults(results, statuses));
   });
 
-function policyVerbAction(verb: Verb) {
-  return async (a: string, b?: string) => {
-    const paths = getPaths();
-    const cfg = loadConfig(paths);
-    if (!cfg.agent_kind) {
-      console.error("This handle is caller-only (no agent configured) — there is no card or policy to manage.");
-      process.exitCode = 1;
-      return;
-    }
+// Shared by allow/revoke/block/unblock/offer/unoffer: resolve exactly once
+// (never once for policy and once for credentials — see LineContext), then
+// require the line be callable before touching its policy or card.
+async function runPolicyVerb(verb: Verb, a: string, b: string | undefined, opts: { line?: string }): Promise<void> {
+  const machine = getMachinePaths();
+  let ctx: LineContext;
+  try {
+    ctx = resolveLine(machine, { line: opts.line });
+    assertCallableLine(ctx.config);
+  } catch (e) {
+    console.error(String(e instanceof Error ? e.message : e));
+    process.exitCode = 1;
+    return;
+  }
+  try {
+    // Mutations edit user intent, never the administrator-filtered view.
+    // Enforcement and card publication apply the machine's managed ceiling
+    // separately. validatePolicy runs BEFORE the write so a change that would
+    // break an assertion leaves the last known-good file (and the listener)
+    // intact.
+    const { policy, lines } = execVerb(loadUserPolicy(ctx.paths), loadTasks(ctx.paths), verb, a, b);
+    validatePolicy(ctx.paths, policy);
+    savePolicy(ctx.paths, policy);
+    for (const line of lines) console.log(line);
     try {
-      // Mutations edit user intent, never the administrator-filtered view.
-      // Enforcement and card publication apply the managed ceiling separately.
-      const { policy, lines } = execVerb(loadUserPolicy(paths), loadTasks(paths), verb, a, b);
-      validatePolicy(paths, policy);
-      savePolicy(paths, policy);
-      for (const line of lines) console.log(line);
-      try {
-        await publishCard(cfg, paths);
-        console.log("Card updated.");
-      } catch (e) {
-        console.error(`Warning: policy saved locally, but the card push failed (${String(e)}). Run \`agentcall card push\` later.`);
-      }
+      await publishCard(ctx.config, ctx.paths);
+      console.log("Card updated.");
     } catch (e) {
-      console.error(String(e instanceof Error ? e.message : e));
-      process.exitCode = 1;
+      console.error(`Warning: policy saved locally, but the card push failed (${String(e)}). Run \`agentcall card push\` later.`);
     }
-  };
+  } catch (e) {
+    console.error(String(e instanceof Error ? e.message : e));
+    process.exitCode = 1;
+  }
 }
 
 const task = program.command("task").description("manage the tasks your agent offers");
@@ -713,10 +915,18 @@ task
   .command("new")
   .description("scaffold a new task (does not publish it)")
   .argument("<id>", "task id: lowercase kebab-case, becomes the directory name")
-  .action((id: string) => {
-    const paths = getPaths();
+  .option("--line <name>", "line to use (defaults to the primary line)")
+  .action((id: string, o: { line?: string }) => {
+    let ctx: LineContext;
     try {
-      const file = scaffoldTask(paths, id);
+      ctx = resolveLine(getMachinePaths(), { line: o.line });
+    } catch (e) {
+      console.error(String(e instanceof Error ? e.message : e));
+      process.exitCode = 1;
+      return;
+    }
+    try {
+      const file = scaffoldTask(ctx.paths, id);
       console.log(`Created ${file}\nEdit it, then:`);
       console.log(`  agentcall card                      # check it validates`);
       console.log(`  agentcall offer ${id}    # offer to everyone, or:`);
@@ -728,27 +938,202 @@ task
   });
 
 program.command("allow").description("grant a caller an extra task (and republish your card)")
-  .argument("<handle>").argument("<task-id>").action(policyVerbAction("allow"));
+  .argument("<handle>").argument("<task-id>").option("--line <name>", "line to use (defaults to the primary line)")
+  .action((handle: string, taskId: string, o: { line?: string }) => runPolicyVerb("allow", handle, taskId, o));
 program.command("revoke").description("remove a caller's task grant")
-  .argument("<handle>").argument("<task-id>").action(policyVerbAction("revoke"));
+  .argument("<handle>").argument("<task-id>").option("--line <name>", "line to use (defaults to the primary line)")
+  .action((handle: string, taskId: string, o: { line?: string }) => runPolicyVerb("revoke", handle, taskId, o));
 program.command("block").description("refuse all calls from a handle")
-  .argument("<handle>").action(policyVerbAction("block"));
+  .argument("<handle>").option("--line <name>", "line to use (defaults to the primary line)")
+  .action((handle: string, o: { line?: string }) => runPolicyVerb("block", handle, undefined, o));
 program.command("unblock").description("lift a block")
-  .argument("<handle>").action(policyVerbAction("unblock"));
+  .argument("<handle>").option("--line <name>", "line to use (defaults to the primary line)")
+  .action((handle: string, o: { line?: string }) => runPolicyVerb("unblock", handle, undefined, o));
 program.command("offer").description("offer a task to any registered caller")
-  .argument("<task-id>").action(policyVerbAction("offer"));
+  .argument("<task-id>").option("--line <name>", "line to use (defaults to the primary line)")
+  .action((taskId: string, o: { line?: string }) => runPolicyVerb("offer", taskId, undefined, o));
 program.command("unoffer").description("stop offering a task publicly")
-  .argument("<task-id>").action(policyVerbAction("unoffer"));
+  .argument("<task-id>").option("--line <name>", "line to use (defaults to the primary line)")
+  .action((taskId: string, o: { line?: string }) => runPolicyVerb("unoffer", taskId, undefined, o));
+
+const line = program.command("line").description("manage the addresses (lines) this machine answers on and calls from");
+
+line
+  .command("add")
+  .description("register another address on this machine")
+  .argument("<name>", "local name for this line, e.g. codex (never shared — the handle is)")
+  .option("--handle <handle>", "handle to register (prompted if omitted)")
+  .option("--invite <token>", "one-time organization invite (required — each line enrolls in its own tenant)")
+  .option("--agent <agent>", "agent kind: claude or codex (omit with --caller-only)")
+  .option("--relay <url>", "relay URL to register against")
+  .option("--caller-only", "register a handle to call others without making this line's agent callable")
+  .option("--skip-launchd", "skip reinstalling the background listener")
+  .option("--no-verify", "skip verifying the agent can answer a test call")
+  .action(
+    async (
+      name: string,
+      o: { handle?: string; invite?: string; agent?: string; relay?: string; callerOnly?: boolean; skipLaunchd?: boolean; verify?: boolean },
+    ) => {
+      const machine = getMachinePaths();
+      if (!o.callerOnly && o.agent !== "claude" && o.agent !== "codex") {
+        console.error("Pass --agent claude or --agent codex, or --caller-only for a line that can only call out.");
+        process.exitCode = 1;
+        return;
+      }
+      // Validated here too, not just inside addLine: addLine's own check
+      // never burns a handle (see its "Validate BEFORE the network call"
+      // comment), but it runs AFTER the handle prompt below — so
+      // `agentcall line add "Bad Name"` would ask the owner to choose a
+      // handle and only then reject the name, wasting a prompt on a doomed
+      // command. Failing fast here is a UX fix, not a safety one.
+      try {
+        assertValidLineName(name);
+      } catch (e) {
+        console.error(String(e instanceof Error ? e.message : e));
+        process.exitCode = 1;
+        return;
+      }
+      // Same reasoning as the line-name check above: addLine re-checks this
+      // before it touches the network, but doing it here too avoids prompting
+      // for a handle on a command that cannot possibly register.
+      if (!o.invite?.trim()) {
+        console.error(`An organization invite is required. Run \`agentcall line add ${name} --invite <token>\`.`);
+        process.exitCode = 1;
+        return;
+      }
+      const handle = o.handle ?? (await ttyAsk(`Choose a handle for "${name}" (e.g. ${name}): `)).trim();
+      if (!handle) {
+        console.error("A handle is required.");
+        process.exitCode = 1;
+        return;
+      }
+      const relay = (o.relay ?? relayUrl()).replace(/\/+$/, "");
+      try {
+        const { address } = await addLine(machine, {
+          name,
+          handle,
+          relay,
+          invite: o.invite,
+          agent: o.callerOnly ? undefined : (o.agent as AgentKind),
+          callerOnly: o.callerOnly,
+          verify: o.verify,
+          installLaunchAgentFn: o.skipLaunchd ? () => {} : undefined,
+        });
+        console.log(`Added line "${name}": ${address}`);
+      } catch (e) {
+        console.error(String(e instanceof Error ? e.message : e));
+        process.exitCode = 1;
+      }
+    },
+  );
+
+line
+  .command("list")
+  .description("list the addresses this machine holds, which is primary, and whether each is online")
+  .option("--json", "print the full row data (name, address, relay, state, primary) as JSON")
+  .action(async (o: { json?: boolean }) => {
+    const machine = getMachinePaths();
+    // listLinesReport's presence callback is synchronous (it's a pure report
+    // over what's already on disk), so the network round-trip has to happen
+    // first: one relay status check per callable line, keyed by handle
+    // (unique per machine — addLine refuses a duplicate) since listLinesReport
+    // re-reads config from disk itself and won't hand back the same object
+    // reference this loop read.
+    const online = new Map<string, boolean>();
+    for (const l2 of readyLines(machine)) {
+      if (!l2.config.agent_kind) continue; // caller-only: nothing listens, nothing to probe
+      try {
+        online.set(
+          l2.config.handle,
+          (await getStatus(relayUrl(l2.config), l2.config.handle, {
+            org: l2.config.org, handle: l2.config.handle, token: l2.config.token,
+          })).online,
+        );
+      } catch {
+        online.set(l2.config.handle, false);
+      }
+    }
+    const rows = listLinesReport(machine, (cfg: LineConfig) => online.get(cfg.handle) ?? false);
+    if (o.json) {
+      console.log(JSON.stringify(rows));
+      return;
+    }
+    if (rows.length === 0) {
+      console.log("No lines yet. Run `agentcall setup` to create the first one.");
+      return;
+    }
+    for (const r of rows) {
+      console.log(`${r.name.padEnd(10)} ${r.address.padEnd(32)} ${r.state}${r.primary ? "   primary" : ""}`);
+    }
+  });
+
+line
+  .command("remove")
+  .description("remove a line (archives calls.log; the handle can never be reused, see README)")
+  .argument("<name>", "line to remove")
+  .option("--yes", "confirm removal — required, since the handle can never be reclaimed")
+  .option("--purge", "delete outright instead of archiving calls.log")
+  .action((name: string, o: { yes?: boolean; purge?: boolean }) => {
+    try {
+      removeLine(getMachinePaths(), name, { confirm: o.yes, purge: o.purge });
+      console.log(`Removed line "${name}".`);
+    } catch (e) {
+      console.error(String(e instanceof Error ? e.message : e));
+      process.exitCode = 1;
+    }
+  });
+
+line
+  .command("primary")
+  .description("set which line places an outbound call when several could answer it")
+  .argument("<name>", "line to make primary")
+  .action((name: string) => {
+    try {
+      setPrimary(getMachinePaths(), name);
+      console.log(`Primary line is now "${name}".`);
+    } catch (e) {
+      console.error(String(e instanceof Error ? e.message : e));
+      process.exitCode = 1;
+    }
+  });
 
 program
   .command("listen")
   .description("run the foreground listener (launchd runs this in the background after setup)")
-  .action(() => {
-    const paths = getPaths();
-    const cfg = loadConfig(paths);
-    assertCallableConfig(cfg);
-    console.log(`agentcall listener starting for ${cfg.handle} -> ${relayUrl(cfg)}`);
-    const l = startListener({ relay: relayUrl(cfg), config: cfg, paths });
+  .option("--line <name>", "run only this line instead of every callable line")
+  .action((o: { line?: string }) => {
+    const machine = getMachinePaths();
+    let l: { stop(): void };
+    if (o.line) {
+      // Single-line foreground run: mirrors startAllListeners' own per-line
+      // wiring (listenAll.ts) instead of duplicating it — same loadConfig
+      // re-read on every reconnect, so a rotated token or edited workdir
+      // still takes effect without a restart.
+      let ctx: LineContext;
+      try {
+        ctx = resolveLine(machine, { line: o.line });
+        assertCallableLine(ctx.config);
+      } catch (e) {
+        console.error(String(e instanceof Error ? e.message : e));
+        process.exitCode = 1;
+        return;
+      }
+      l = startListener({
+        relay: relayUrl(ctx.config),
+        paths: ctx.paths,
+        loadConfig: () => {
+          const cfg = loadLineConfig(ctx.paths);
+          assertCallableLine(cfg);
+          return cfg;
+        },
+      });
+      console.log(`listening as ${ctx.config.handle} (line ${ctx.name})`);
+    } else {
+      // One process, every callable line: startAllListeners enumerates
+      // ~/.agentcall/lines itself and opens one socket per callable line, so
+      // there's no single config/paths pair to load up front here.
+      l = startAllListeners(machine);
+    }
     process.on("SIGTERM", () => {
       l.stop();
       process.exit(0);
@@ -763,24 +1148,25 @@ program
 
 program
   .command("rotate")
-  .description("replace this install's relay token (use if it may have leaked)")
-  .action(async () => {
-    const paths = getPaths();
-    const cfg = loadConfig(paths);
+  .description("replace a line's relay token (use if it may have leaked)")
+  .option("--line <name>", "line to rotate (defaults to the primary line)")
+  .action(async (o: { line?: string }) => {
+    let ctx: LineContext;
     try {
-      const { token } = await rotateToken(relayUrl(cfg), { org: cfg.org, handle: cfg.handle, token: cfg.token });
-      saveConfig(paths, { ...cfg, token });
-      console.log(`Token rotated for ${cfg.handle}. The old token no longer works.`);
-      // The background listener read the old token at startup and holds it in
-      // memory, so without a restart it reconnects with a dead credential and
-      // 401s forever. Only restart a listener that's actually installed —
-      // installLaunchAgent would otherwise create one the owner opted out of.
-      if (isLaunchAgentInstalled(paths)) {
-        installLaunchAgent(paths);
-        console.log("Background listener restarted with the new token.");
-      } else if (cfg.agent_kind) {
-        console.log("Restart `agentcall listen` so it picks up the new token.");
-      }
+      ctx = resolveLine(getMachinePaths(), { line: o.line });
+    } catch (e) {
+      console.error(String(e instanceof Error ? e.message : e));
+      process.exitCode = 1;
+      return;
+    }
+    try {
+      // The multi-line listener (Task 8) re-reads each line's config.json on
+      // every reconnect, so a running listener — foreground or under launchd —
+      // picks up the new token on its own; no restart needed here. This is
+      // what replaced main's explicit installLaunchAgent() restart: the
+      // restart existed only because the old single listener read its token
+      // once at startup.
+      await rotateLine(ctx);
     } catch (e) {
       console.error(e instanceof ApiError ? e.message : String(e));
       process.exitCode = 1;
@@ -792,9 +1178,9 @@ program
   .description("remove the background listener")
   .option("--purge", "also delete ~/.agentcall (config, token, logs)")
   .action((o: { purge?: boolean }) => {
-    const paths = getPaths();
-    uninstallLaunchAgent(paths);
-    if (o.purge) rmSync(paths.dir, { recursive: true, force: true });
+    const machine = getMachinePaths();
+    uninstallLaunchAgent(machine);
+    if (o.purge) rmSync(machine.dir, { recursive: true, force: true });
     console.log("agentcall listener removed." + (o.purge ? " Config purged." : ""));
   });
 

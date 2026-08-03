@@ -2,7 +2,7 @@ import { readFileSync } from "node:fs";
 import { z } from "zod";
 import { HANDLE_RE, MAX_CARD_BLOCKED_CALLERS, ROSTER_ID_RE, TASK_ID_RE } from "@benree/agentcall-shared";
 import { writeJsonAtomic } from "./json-store.js";
-import type { Paths } from "./paths.js";
+import type { LinePaths } from "./paths.js";
 import type { Task } from "./tasks.js";
 
 const GROUP_NAME_RE = /^[a-z0-9][a-z0-9-]{0,63}$/;
@@ -81,7 +81,7 @@ function readOptionalJson<T>(file: string, label: string, schema: z.ZodType<T>):
   }
 }
 
-export function loadUserPolicy(p: Paths): Policy {
+export function loadUserPolicy(p: LinePaths): Policy {
   return readOptionalJson(p.policyFile, "user policy", PolicySchema) ?? DEFAULT_POLICY;
 }
 
@@ -128,15 +128,20 @@ function validateEffectivePolicy(policy: Policy): Policy {
 // Enforcement and publication use the effective policy. A missing managed
 // file is intentionally silent; any other read or parse failure is fatal so an
 // administrator restriction can never disappear through fallback.
-export function loadPolicy(p: Paths): Policy {
+export function loadPolicy(p: LinePaths): Policy {
   return validatePolicy(p, loadUserPolicy(p));
 }
 
 // Validate a proposed user policy against the installed managed layer before
 // writing it. CLI mutations use this to reject a change that would break an
 // assertion, preserving the last known-good file and listener availability.
-export function validatePolicy(p: Paths, user: Policy): Policy {
-  const managed = readOptionalJson(p.managedPolicyFile, "managed policy", ManagedPolicySchema);
+//
+// The user half is per-LINE (p.policyFile); the managed half is per-MACHINE
+// (p.machine.managedPolicyFile). An administrator ceiling that lived on the
+// line would be escaped by `agentcall line add`, and its path is deliberately
+// independent of AGENTCALL_HOME — see paths.ts.
+export function validatePolicy(p: LinePaths, user: Policy): Policy {
+  const managed = readOptionalJson(p.machine.managedPolicyFile, "managed policy", ManagedPolicySchema);
   const effective = validateEffectivePolicy(managed === undefined ? user : applyManagedPolicy(user, managed));
   validatePolicyAssertions(effective, user.tests ?? [], "user policy");
   if (managed !== undefined) validatePolicyAssertions(effective, managed.tests ?? [], "managed policy");
@@ -145,7 +150,7 @@ export function validatePolicy(p: Paths, user: Policy): Policy {
 
 // Writes the exact shape PolicySchema parses, so hand-edits and the CLI
 // verbs (verbs.ts) interoperate on the same file.
-export function savePolicy(p: Paths, policy: Policy): void {
+export function savePolicy(p: LinePaths, policy: Policy): void {
   writeJsonAtomic(p.policyFile, policy);
 }
 
