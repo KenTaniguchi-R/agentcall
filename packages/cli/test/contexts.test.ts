@@ -1,4 +1,4 @@
-import { mkdirSync, mkdtempSync, readFileSync, writeFileSync, statSync } from "node:fs";
+import { lstatSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, symlinkSync, writeFileSync, statSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
@@ -171,7 +171,35 @@ describe("load/save", () => {
   it("writes owner-only", () => {
     const p = paths();
     saveContexts(p, [binding()]);
-    expect(statSync(p.contextsFile).mode & 0o077).toBe(0);
+    expect(statSync(p.dir).mode & 0o777).toBe(0o700);
+    expect(statSync(p.contextsFile).mode & 0o777).toBe(0o600);
+  });
+
+  it("replaces a planted store symlink without overwriting its target", () => {
+    const p = paths();
+    mkdirSync(p.dir, { recursive: true });
+    const victim = join(p.dir, "victim.json");
+    writeFileSync(victim, "OWNER DATA\n");
+    symlinkSync(victim, p.contextsFile);
+
+    saveContexts(p, []);
+
+    expect(readFileSync(victim, "utf8")).toBe("OWNER DATA\n");
+    expect(lstatSync(p.contextsFile).isSymbolicLink()).toBe(false);
+    expect(loadContexts(p)).toEqual([]);
+  });
+
+  it("preserves the previous store and cleans its temp file when serialization fails", () => {
+    const p = paths();
+    const previous = binding();
+    saveContexts(p, [previous]);
+    const circular: Record<string, unknown> = {};
+    circular.self = circular;
+
+    expect(() => saveContexts(p, [circular] as never)).toThrow(/circular/i);
+    expect(loadContexts(p)).toEqual([previous]);
+    expect(readdirSync(p.dir).filter((name) => name.startsWith(".contexts.json.") && name.endsWith(".tmp")))
+      .toEqual([]);
   });
 
   // mkdirSync's `mode` is silently ignored when the directory already exists
@@ -182,6 +210,6 @@ describe("load/save", () => {
     const p = paths();
     mkdirSync(p.dir, { recursive: true, mode: 0o755 });
     saveContexts(p, [binding()]);
-    expect(statSync(p.dir).mode & 0o077).toBe(0);
+    expect(statSync(p.dir).mode & 0o777).toBe(0o700);
   });
 });

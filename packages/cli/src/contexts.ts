@@ -1,8 +1,9 @@
 import { randomBytes } from "node:crypto";
-import { chmodSync, existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { existsSync, readFileSync } from "node:fs";
 import { z } from "zod";
 import { CONTEXT_ID_RE, CONTEXT_TTL_MS, MAX_CONTEXTS, MAX_CONTEXT_TURNS } from "@benree/agentcall-shared";
 import type { LinePaths } from "./paths.js";
+import { writeJsonAtomic } from "./json-store.js";
 
 // The binding is the whole security design in one shape. `context_id` is the
 // only field that ever travels; `agent_session_id` is the capability it stands
@@ -83,11 +84,5 @@ export function loadContexts(p: LinePaths): ContextBinding[] {
 // 0600, same posture as config.json: this file holds real agent session ids and
 // the handle of everyone who has held a conversation with this agent.
 export function saveContexts(p: LinePaths, list: ContextBinding[]): void {
-  // mkdirSync's mode is silently ignored when the directory already exists
-  // (e.g. savePolicy creates it first, with no mode at all) — the chmodSync
-  // is the actual guard, same as saveLineConfig.
-  mkdirSync(p.dir, { recursive: true, mode: 0o700 });
-  chmodSync(p.dir, 0o700);
-  writeFileSync(p.contextsFile, JSON.stringify(list, null, 2) + "\n", { mode: 0o600 });
-  chmodSync(p.contextsFile, 0o600);
+  writeJsonAtomic(p.contextsFile, list);
 }
