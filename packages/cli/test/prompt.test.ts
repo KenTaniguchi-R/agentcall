@@ -15,6 +15,12 @@ describe("buildPrompt threaded", () => {
     expect(buildPrompt("ken", "sota", "hi", task)).toMatch(/one-shot/);
   });
 
+  it("tells the answering agent not to start an unsupported nested call", () => {
+    expect(buildPrompt("ken", "sota", "delegate this", task)).toMatch(
+      /do not place another AgentCall; nested delegation is not supported/i,
+    );
+  });
+
   // The owner's instructions must be the most recent framing in context, not
   // the caller's last message.
   it("re-emits the task instructions on every threaded turn", () => {

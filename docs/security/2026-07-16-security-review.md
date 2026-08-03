@@ -11,7 +11,10 @@
 >
 > What remains as enforcement: capability scoping (`--allowedTools` for claude,
 > `--sandbox` level for codex) and pre-prompt task resolution. Within a granted
-> capability, nothing constrains where the agent reads or writes.
+> capability, nothing in AgentCall constrains destination domains; broad tools
+> may also read or write beyond the working directory as documented below. The
+> current decision deliberately rejects an advisory proxy allowlist; see the
+> [egress and delegated-call boundary](../superpowers/specs/2026-08-02-egress-and-delegation-boundary.md).
 >
 > The relay-side and CLI-side findings here are unaffected and still apply.
 > For the current posture see the security model section of

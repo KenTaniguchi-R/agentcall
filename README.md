@@ -632,6 +632,18 @@ organization administrator, and the relay operator can see—read the
   (An earlier version wrapped every spawn in Seatbelt via `sandbox-runtime`.
   That was removed deliberately: it is incompatible with the answering agent
   being the owner's real agent with the owner's real context.)
+- **There is no AgentCall domain firewall.** A Claude `fetch` grant enables its
+  web tools without restricting destinations, and `exec` can use the owner's
+  network through Bash. AgentCall does not map task capabilities to a Codex
+  domain allowlist. Proxy environment variables would be bypassable, so a
+  supported egress boundary is deferred until enforcement can sit outside the
+  answering process.
+- **Nested delegation is not supported.** An answering process is refused when
+  it uses the normal `agentcall call` command, preventing accidental call loops.
+  This environment-based interlock is not a hostile-process boundary. Governed
+  delegation requires relay-attested stable-principal chains, per-run
+  credentials isolated from the owner's line secret, a brokered network path,
+  a hard depth limit, cycle rejection, and sponsor-aware audit.
 - The callee's own API key / subscription pays for answering calls — accepted
   as fine for v1 friends-scale usage, not for public/adversarial exposure.
 - Known residual risks (accepted, not eliminated):
@@ -874,6 +886,10 @@ managed policy is present so IT can pin the deployed version.
 - **No OS-level isolation of the answering agent.** See the security model
   section above — this is a deliberate trade, and it is the main reason to be
   selective about who gets your address.
+- **No enforced egress allowlist or governed delegation chain.** Task tool
+  labels do not create a domain firewall. Nested `agentcall call` is disabled
+  on the supported inbound path, but a shell-capable answering process shares
+  the owner's OS identity and may bypass that accidental-loop interlock.
 - **One caller can monopolise your agent.** Calls are answered strictly one at
   a time — a second concurrent call gets `busy` — and a single call may run up
   to five minutes before it times out. The hourly cap of 30 calls per caller

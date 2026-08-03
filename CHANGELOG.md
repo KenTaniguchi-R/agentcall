@@ -6,6 +6,17 @@ which are released together.
 
 ## Unreleased
 
+### Nested-call interlock and egress boundary
+
+- Refuse the normal `agentcall call` path inside an inbound answering process,
+  preventing accidental recursive call loops until relay-attested delegation and
+  per-run credentials exist.
+- State explicitly that task capabilities are not a domain firewall and reject an
+  advisory proxy allowlist as a security control without external enforcement.
+- Define the future stable-principal chain, two-hop maximum, cycle check,
+  secret-isolated run credential, brokered relay path, authority intersection,
+  sponsor-aware audit, and descendant-revocation gates.
+
 ### Presence telemetry is not audit evidence
 
 - Removed organization, handle, IP, and country dimensions from sampled status-read

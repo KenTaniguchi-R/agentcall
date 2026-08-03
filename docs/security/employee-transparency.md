@@ -19,6 +19,12 @@ controls stop.
   can use your user account's filesystem and network access, and a Codex-backed
   answering agent has no enforced read boundary. The full residual-risk detail
   remains in the README security model.
+- AgentCall has no domain allowlist. A Claude `fetch` grant enables web tools
+  without constraining destinations, and AgentCall does not impose a domain
+  policy on Codex network access.
+- Nested calls are unsupported. The normal CLI refuses them inside an inbound
+  answer to stop accidental loops, but that environment check cannot constrain
+  a hostile shell-capable process sharing your account and line credential.
 - Your local logs belong to this installation. They are not automatically an
   employer-visible call-history service. The hosted relay separately keeps
   identity, roster, invite, card, and security-audit data described in the
