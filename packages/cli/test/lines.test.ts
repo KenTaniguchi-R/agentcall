@@ -56,6 +56,26 @@ describe("saveLineConfig / loadLineConfig", () => {
     expect(loadLineConfig(l).agent_kind).toBeUndefined();
   });
 
+  it("does not let the legacy fixed temp path block a credential save", () => {
+    const l = getLinePaths(m, "poisoned-temp");
+    mkdirSync(`${l.configFile}.tmp`, { recursive: true });
+
+    expect(() => saveLineConfig(l, cfg)).not.toThrow();
+    expect(loadLineConfig(l)).toEqual(cfg);
+    expect(statSync(`${l.configFile}.tmp`).isDirectory()).toBe(true);
+  });
+
+  it("preserves the previous credential when serialization fails", () => {
+    const l = getLinePaths(m, "serialization-failure");
+    saveLineConfig(l, cfg);
+    const circular: Record<string, unknown> = {};
+    circular.self = circular;
+
+    expect(() => saveLineConfig(l, { ...cfg, token: "replacement", circular } as never))
+      .toThrow(/circular/i);
+    expect(loadLineConfig(l)).toEqual(cfg);
+  });
+
   // Re-homed from main's config.test.ts, where it covered loadConfig. `org`
   // moved onto the LINE with the rest of the tenant identity, so this is now
   // loadLineConfig's job. The message must stay distinct from the generic

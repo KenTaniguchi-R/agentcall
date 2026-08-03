@@ -6,6 +6,13 @@ which are released together.
 
 ## Unreleased
 
+### Line credential persistence
+
+- Route per-line config and relay-token saves through the shared unique-temp
+  atomic writer. A stale legacy `config.json.tmp` path or concurrent writer no
+  longer shares the staging inode, and a serialization failure preserves the
+  previous credential.
+
 ### Authorization permission vocabulary
 
 - Name existing authorization decisions with stable `resource:action`
