@@ -43,6 +43,7 @@ Commands:
   line                                   manage the addresses (lines) this machine answers on and calls from
   listen [options]                       run the foreground listener (the platform service runs this after setup)
   rotate [options]                       replace a line's relay token (use if it may have leaked)
+  recovery                               manage the out-of-band identity recovery proof
   uninstall [options]                    remove the background listener
   help [command]                         display help for command
 ```
@@ -840,6 +841,53 @@ replace a line's relay token (use if it may have leaked)
 Options:
   --line <name>  line to rotate (defaults to the primary line)
   -h, --help     display help for command
+```
+
+## recovery
+
+```text
+Usage: agentcall recovery [options] [command]
+
+manage the out-of-band identity recovery proof
+
+Options:
+  -h, --help        display help for command
+
+Commands:
+  issue [options]   issue or replace a recovery proof while the line token
+                    still works
+  redeem [options]  recover one line using an out-of-band proof
+  help [command]    display help for command
+```
+
+## recovery issue
+
+```text
+Usage: agentcall recovery issue [options]
+
+issue or replace a recovery proof while the line token still works
+
+Options:
+  --line <name>  line to protect (defaults to the primary line)
+  -h, --help     display help for command
+```
+
+## recovery redeem
+
+```text
+Usage: agentcall recovery redeem [options]
+
+recover one line using an out-of-band proof
+
+Options:
+  --line <name>          local line name to recover
+  --org <org>            organization (required when local config is missing)
+  --handle <handle>      handle (required when local config is missing)
+  --relay <url>          relay URL (required when local config is missing)
+  --generation <number>  generation recorded with the current proof
+  --resume               resume the exact pending recovery after a lost
+                         response
+  -h, --help             display help for command
 ```
 
 ## uninstall
