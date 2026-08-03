@@ -16,7 +16,7 @@ sequenceDiagram
     participant Agent as claude -p / codex exec
 
     A->>CLI: agentcall call ken@acme.agentcall.benree.tech "msg"
-    CLI->>CLI: verify/pin B's keys; HPKE seal request
+    CLI->>CLI: verify/pin B's keys, then HPKE seal request
     CLI->>Relay: WSS call_request {encrypted envelope}
     Relay->>L: incoming_call {call_id, from, encrypted envelope}
     L->>L: decrypt, verify, current-check, reserve replay
