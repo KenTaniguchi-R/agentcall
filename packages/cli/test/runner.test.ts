@@ -7,7 +7,9 @@ import { buildPrompt } from "../src/prompt.js";
 import {
   buildSpawnSpec, claudeAllowedTools, codexHookTrustedHash, guardCodexConfigArg,
   guardCodexTrustArg, guardSettingsJson, GUARD_TIMEOUT_S,
-  codexThreadingEnabled, CODEX_THREADING_VERIFIED_VERSION,
+  toolTelemetryCodexConfigArg,
+  codexThreadingEnabled, codexToolTelemetryEnabled, CODEX_HOOK_TRUST_VERIFIED_VERSION,
+  CODEX_THREADING_VERIFIED_VERSION,
   parseClaudeJson, parseCodexJsonl, runAgent, truncateUtf8, type AgentKind, type SpawnSpec,
 } from "../src/runner.js";
 import { resolveAgentBin } from "../src/bin.js";
@@ -30,8 +32,12 @@ function spawnSpec(
   kind: AgentKind, prompt: string, workdir: string,
   resolveBin: (kind: AgentKind) => string = resolveAgentBin,
   envelope: Envelope = FULL_ACCESS_ENVELOPE, callId: string = "unknown", lineName: string = LINE,
+  toolTelemetryFile?: string,
 ): SpawnSpec {
-  return buildSpawnSpec(kind, prompt, workdir, resolveBin, envelope, callId, lineName);
+  return buildSpawnSpec(
+    kind, prompt, workdir, resolveBin, envelope, callId, lineName,
+    undefined, undefined, toolTelemetryFile,
+  );
 }
 function agentRun(
   kind: AgentKind, prompt: string, workdir: string, timeoutMs: number,
@@ -52,6 +58,18 @@ describe("codex threading evidence", () => {
   it("fails closed when the version cannot be read or parsed", () => {
     expect(codexThreadingEnabled(bin, () => "codex-cli unknown")).toBe(false);
     expect(codexThreadingEnabled(bin, () => { throw new Error("missing"); })).toBe(false);
+  });
+});
+
+describe("codex tool telemetry evidence", () => {
+  const bin = () => "/fake/bin/codex";
+
+  it("keeps PostToolUse telemetry disabled until a default production tool path has paired evidence", () => {
+    expect(codexToolTelemetryEnabled(bin, () => `codex-cli ${CODEX_HOOK_TRUST_VERIFIED_VERSION}`)).toBe(false);
+    expect(codexToolTelemetryEnabled(bin, () => "codex-cli 0.146.0")).toBe(false);
+    expect(codexToolTelemetryEnabled(bin, () => "codex-cli 0.147.0")).toBe(false);
+    expect(codexToolTelemetryEnabled(bin, () => "codex-cli unknown")).toBe(false);
+    expect(codexToolTelemetryEnabled(bin, () => { throw new Error("missing"); })).toBe(false);
   });
 });
 
@@ -167,6 +185,7 @@ describe("telemetry environment isolation", () => {
       PATH: "/bin", OTEL_EXPORTER_OTLP_HEADERS: "authorization=secret",
       OTEL_EXPORTER_OTLP_ENDPOINT: "https://collector.example",
       AGENTCALL_OTEL: "1", AGENTCALL_OTEL_MAX_ROOT_SPANS_PER_MINUTE: "10",
+      AGENTCALL_TOOL_TELEMETRY_FILE: "/stale-or-attacker-controlled",
       otel_exporter_otlp_headers: "authorization=lowercase-secret",
       AgentCall_Otel_Exporter_Headers: "authorization=mixed-secret",
     })).toEqual({ PATH: "/bin" });
@@ -495,6 +514,39 @@ describe("guard hook wiring", () => {
     expect(settings.hooks.PreToolUse[0].hooks).toHaveLength(1);
   });
 
+  it("adds paired post-tool hooks only when a bounded local spool is present", () => {
+    const settings = JSON.parse(guardSettingsJson(true));
+    expect(Object.keys(settings.hooks)).toEqual(["PreToolUse", "PostToolUse", "PostToolUseFailure"]);
+    expect(settings.hooks.PostToolUse[0].hooks[0].command).toContain("tool-telemetry-entry.js");
+    expect(settings.hooks.PostToolUseFailure[0].hooks[0].command).toContain("tool-telemetry-entry.js");
+    expect(settings.hooks.PostToolUse[0].hooks[0].async).toBe(false);
+  });
+
+  it("passes the spool to both runtimes and trusts only Codex's exact post hook", () => {
+    const file = "/private/tmp/agentcall-tool-events-test.jsonl";
+    const claude = spawnSpec(
+      "claude", "hi", WORKDIR, () => "/bin/claude", FULL_ACCESS_ENVELOPE, "call-9", LINE, file,
+    );
+    expect(claude.env?.AGENTCALL_TOOL_TELEMETRY_FILE).toBe(file);
+    const claudeSettings = JSON.parse(claude.args[claude.args.indexOf("--settings") + 1]!);
+    expect(claudeSettings.hooks.PostToolUse).toBeDefined();
+    expect(claudeSettings.hooks.PostToolUseFailure).toBeDefined();
+
+    const codex = spawnSpec(
+      "codex", "hi", WORKDIR, () => "/bin/codex", FULL_ACCESS_ENVELOPE, "call-9", LINE, file,
+    );
+    expect(codex.env?.AGENTCALL_TOOL_TELEMETRY_FILE).toBe(file);
+    const overrides = codex.args.flatMap((arg, i) => arg === "-c" ? [codex.args[i + 1]!] : []);
+    expect(overrides).toContain(toolTelemetryCodexConfigArg());
+    const trust = overrides.find((arg) => arg.startsWith("hooks.state="))!;
+    expect(trust).toContain(":pre_tool_use:0:0");
+    expect(trust).toContain(":post_tool_use:0:0");
+    expect(trust).not.toContain("PostToolUseFailure");
+    const disabled = codex.args.flatMap((arg, index) =>
+      arg === "--disable" ? [codex.args[index + 1]] : []);
+    expect(disabled).not.toContain("code_mode_host");
+  });
+
   it("uses no matcher, so every tool call reaches the guard", () => {
     const entry = JSON.parse(guardSettingsJson()).hooks.PreToolUse[0];
     expect(entry.matcher).toBeUndefined();
@@ -552,6 +604,9 @@ describe("guard hook wiring", () => {
   it("matches codex-cli 0.146.0's normalized hook identity hash", () => {
     expect(codexHookTrustedHash("/usr/bin/touch /private/tmp/agentcall-issue4-own.marker"))
       .toBe("sha256:d2f79e214fce245f65d8f1aa644e557bd09d402da9653ecab48cc5ce6e3f1f01");
+    expect(codexHookTrustedHash(
+      "/usr/bin/touch /private/tmp/agentcall-tool.marker", "post_tool_use", 5,
+    )).toBe("sha256:0fb54d9822c088e6c659ca3c8205c660e861d4b964d3ccc32bfdbe1a54ffbb62");
   });
 
   it("trusts only the exact inline guard hook via a whole state-table override", () => {

@@ -51,4 +51,20 @@ describe("SerialQueue keyed cancellation", () => {
     await q.onIdle();
     expect(order).toEqual(["a", "b", "c"]);
   });
+
+  it("drops pending work, aborts the running job, and waits for it on stop", async () => {
+    const q = new SerialQueue(1);
+    let pendingRan = false;
+    let aborted = false;
+    q.tryEnqueue("active", (signal) => new Promise<void>((resolve) => {
+      signal.addEventListener("abort", () => { aborted = true; resolve(); }, { once: true });
+    }));
+    q.tryEnqueue("pending", async () => { pendingRan = true; });
+
+    await q.stop();
+    expect(aborted).toBe(true);
+    expect(pendingRan).toBe(false);
+    expect(q.running).toBe(false);
+    expect(q.tryEnqueue("late", async () => {})).toBe(false);
+  });
 });

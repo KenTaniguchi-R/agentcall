@@ -13,6 +13,7 @@ import { FAIL_CLOSED_REASON, runGuard } from "./guard.js";
 import { LINE_NAME_RE } from "./lineName.js";
 import { getLinePaths, getMachinePaths } from "./paths.js";
 import { appendPrivateLogLine } from "./audit-log.js";
+import { writeToolHookEvent } from "./tool-telemetry-hook.js";
 
 // Only the exact string opts out of enforcement. Anything else — a typo, a
 // stale value, an empty string — enforces, so a mangled env var cannot
@@ -64,6 +65,12 @@ try {
     appendLine: appendPrivateLogLine,
     allowedRoot: process.env.AGENTCALL_ALLOWED_ROOT,
   }, mode);
+
+  // Best-effort and deliberately after the security decision. The spool
+  // writer cannot change the verdict and exports no arguments, paths, or
+  // rule details. A denied attempt has no post event and therefore never
+  // becomes a fabricated execute_tool span.
+  writeToolHookEvent(raw, "pre");
 
   if (out.stdout) process.stdout.write(out.stdout);
   // Codex reads exit 2 as blocking only when stderr carries a reason, and as

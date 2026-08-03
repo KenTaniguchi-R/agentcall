@@ -148,6 +148,19 @@ documentation does not provide an application-level deletion control for it.
 Endpoint-local files such as `~/.agentcall/config.json`, policies, contacts,
 roster cache, context bindings, `calls.log`, `tools.log`, and task/work directories
 remain on the user's machine. They are outside Cloudflare residency controls and
+include the opt-in tool-lifecycle spool while an invocation is running. That
+mode-0600 spool in AgentCall's private state (outside the configured worktree
+and Codex's writable sandbox) is
+capped at 256 KiB, contains only call/tool-call IDs,
+allowlisted tool name, timestamps, duration, and outcome, and is consumed and deleted
+at invocation end. Complete paired lifecycle metadata may then leave the endpoint
+through the operator-selected OTLP destination; arguments, results, paths, and
+error text do not enter the spool or exported tool spans. Provider tool-call IDs
+are exported only as per-invocation keyed digests. Claude `exec` has no OS-level
+filesystem boundary, so the spool remains an untrusted observation channel;
+regular-file/inode validation, allowlisted names, keyed IDs, and bounded timing
+prevent direct attacker-chosen strings from entering exports but do not make
+the records audit-grade. Other endpoint files
 must be covered separately by endpoint retention, backup, and device-management
 policy. The cloud map does not turn local storage into relay storage.
 

@@ -65,6 +65,7 @@ const baseDeps = {
   // Same reasoning for the direct probe: its default spawns node against the
   // built dist/guard-entry.js, which does not exist when vitest runs from src.
   guardBinaryFn: async () => true,
+  codexTelemetryEnabledFn: () => true,
   keyHealthFn: async () => [],
   pkgFn: () => ({
     name: "@benree/agentcall",
@@ -571,13 +572,21 @@ describe("runDoctor", () => {
       guardFn: async () => {
         throw new Error("checkGuard must not run for a codex install");
       },
+      telemetryOptInFn: () => true,
       codexGuardFn: async () => JSON.stringify({
         id: 2,
-        result: { data: [{ cwd: p.shareDir, hooks: [{
-          key: "/<session-flags>/config.toml:pre_tool_use:0:0",
-          enabled: true,
-          trustStatus: "trusted",
-        }] }] },
+        result: { data: [{ cwd: p.shareDir, hooks: [
+          {
+            key: "/<session-flags>/config.toml:pre_tool_use:0:0",
+            enabled: true,
+            trustStatus: "trusted",
+          },
+          {
+            key: "/<session-flags>/config.toml:post_tool_use:0:0",
+            enabled: true,
+            trustStatus: "trusted",
+          },
+        ] }] },
       }),
       log: (l) => lines.push(l),
     });
@@ -604,8 +613,66 @@ describe("runDoctor", () => {
       log: (line) => lines.push(line),
     });
     expect(code).toBe(1);
-    expect(lines.join("\n")).toContain("✗ codex tool telemetry");
+    expect(lines.join("\n")).toContain("✗ codex session guard");
     expect(lines.join("\n")).toContain("allow_managed_hooks_only");
+  });
+
+  it("does not fail optional Codex telemetry compatibility when OpenTelemetry is disabled", async () => {
+    const m = freshMachine();
+    const p = getLinePaths(m, LINE);
+    saveLineConfig(p, {
+      org: "acme", handle: "ken", token: "t", agent_kind: "codex", relay: "https://relay.example",
+    });
+    const lines: string[] = [];
+    const code = await runDoctor({
+      ...baseDeps,
+      machine: m,
+      codexTelemetryEnabledFn: () => false,
+      telemetryOptInFn: () => false,
+      codexGuardFn: async () => JSON.stringify({
+        id: 2, result: { data: [{ cwd: p.shareDir, hooks: [{
+          key: "/<session-flags>/config.toml:pre_tool_use:0:0",
+          enabled: true,
+          trustStatus: "trusted",
+        }] }] },
+      }),
+      log: (line) => lines.push(line),
+    });
+    expect(code).toBe(0);
+    expect(lines.join("\n")).toContain("✓ codex session guard");
+    expect(lines.join("\n")).not.toContain("default-path lifecycle probe");
+  });
+
+  it("warns about unavailable Codex tool spans while still checking the session guard", async () => {
+    const m = freshMachine();
+    const p = getLinePaths(m, LINE);
+    saveLineConfig(p, {
+      org: "acme", handle: "ken", token: "t", agent_kind: "codex", relay: "https://relay.example",
+    });
+    const lines: string[] = [];
+    let seenArgs: string[] = [];
+    const code = await runDoctor({
+      ...baseDeps,
+      machine: m,
+      codexTelemetryEnabledFn: () => false,
+      telemetryOptInFn: () => true,
+      codexGuardFn: async (args) => {
+        seenArgs = args;
+        return JSON.stringify({
+          id: 2, result: { data: [{ cwd: p.shareDir, hooks: [{
+            key: "/<session-flags>/config.toml:pre_tool_use:0:0",
+            enabled: true,
+            trustStatus: "trusted",
+          }] }] },
+        });
+      },
+      log: (line) => lines.push(line),
+    });
+    expect(code).toBe(0);
+    expect(lines.join("\n")).toContain("✓ codex session guard");
+    expect(lines.join("\n")).toContain("! codex tool telemetry");
+    expect(lines.join("\n")).toContain("no codex-cli release has passed the default-path lifecycle probe");
+    expect(seenArgs.some((arg) => arg.startsWith("hooks.PostToolUse="))).toBe(false);
   });
 
   // A relay string that is syntactically not a URL currently reaches the

@@ -7,7 +7,10 @@ import { fetchKeys } from "./api.js";
 import { relayAddressHost, resolveLineWorkdir, type CallableLineConfig } from "./config.js";
 import type { LinePaths } from "./paths.js";
 import { buildPrompt } from "./prompt.js";
-import { AgentRunError, codexThreadingEnabled, CODEX_THREADING_VERIFIED_VERSION, runAgent } from "./runner.js";
+import {
+  AgentRunError, codexThreadingEnabled, codexToolTelemetryEnabled,
+  CODEX_THREADING_VERIFIED_VERSION, runAgent,
+} from "./runner.js";
 import {
   admitContext, loadContexts, mintContextId, pruneContexts, saveContexts, upsertContext,
   type ContextBinding,
@@ -24,6 +27,7 @@ import { loadKeys } from "./keys.js";
 import { verifyAndPinPeer } from "./known-peers.js";
 import { reserveReplay } from "./replay-store.js";
 import { signalForInboundStatus } from "./abuse-signals.js";
+import { createToolEventSpool, type ToolEventSpool } from "./tool-telemetry-spool.js";
 
 export interface ListenerDeps {
   relay: string;
@@ -43,12 +47,20 @@ export interface ListenerDeps {
     opts: { headers: Record<string, string>; perMessageDeflate: false; maxPayload: number },
   ) => WebSocket;
   codexThreadingEnabled?: () => boolean;
+  codexToolTelemetryEnabled?: () => boolean;
   telemetry?: AgentCallTelemetry;
+  createToolEventSpool?: (
+    callId: string, privateStateDir?: string, now?: () => number,
+  ) => ToolEventSpool | undefined;
   fetchKeys?: typeof fetchKeys;
   verifyAndPinPeer?: typeof verifyAndPinPeer;
   loadKeys?: typeof loadKeys;
   reserveReplay?: typeof reserveReplay;
   sealE2EEResponse?: typeof sealE2EEResponse;
+}
+
+export function runtimeToolTelemetryEnabled(runtime: "claude" | "codex", codexVerified: boolean): boolean {
+  return runtime !== "codex" || codexVerified;
 }
 
 function rawWireBytes(raw: RawData): number {
@@ -93,16 +105,26 @@ export function startListener(deps: ListenerDeps): { stop(): Promise<void> } {
   const codexCanThread = startupKind === "codex"
     ? (deps.codexThreadingEnabled ?? codexThreadingEnabled)()
     : false;
+  const startupCodexCanReportTools = startupKind === "codex"
+    ? (deps.codexToolTelemetryEnabled ?? codexToolTelemetryEnabled)()
+    : false;
   if (startupKind === "codex" && !codexCanThread) {
     console.error(
       `Warning: Codex conversation threading is disabled because this codex-cli release has not passed ` +
         `the resume sandbox probe (last verified: ${CODEX_THREADING_VERIFIED_VERSION}).`,
     );
   }
+  if (startupKind === "codex" && telemetry && !startupCodexCanReportTools) {
+    console.error(
+      `Warning: Codex tool telemetry is disabled because no codex-cli release has passed ` +
+        `the default-path lifecycle probe.`,
+    );
+  }
   let stopped = false;
   let attempt = 0;
   let ws: WebSocket | undefined;
   let pingTimer: ReturnType<typeof setInterval> | undefined;
+  const activeToolSpools = new Set<ToolEventSpool>();
 
   const audit = (entry: Record<string, unknown>) => {
     try {
@@ -138,6 +160,12 @@ export function startListener(deps: ListenerDeps): { stop(): Promise<void> } {
   const connect = () => {
     if (stopped) return;
     const config = deps.loadConfig();
+    const runtimeCanReportTools = runtimeToolTelemetryEnabled(
+      config.agent_kind,
+      startupKind === "codex"
+        ? startupCodexCanReportTools
+        : (deps.codexToolTelemetryEnabled ?? codexToolTelemetryEnabled)(),
+    );
     const workdir = resolveLineWorkdir(config, deps.paths);
     // `deps.relay`, not `config.relay`: the relay host is fixed at
     // `startListener()` entry (set by `startAllListeners` from the config it
@@ -163,6 +191,7 @@ export function startListener(deps: ListenerDeps): { stop(): Promise<void> } {
       pingTimer = setInterval(() => { try { ws?.send("ping"); } catch { /* dead */ } }, 30_000);
     });
     ws.on("message", async (raw) => {
+      if (stopped) return;
       if (rawWireBytes(raw) > MAX_E2EE_WIRE_BYTES) {
         try { ws?.close(1009, "Encrypted relay frame exceeded the wire limit."); } catch { /* dead */ }
         return;
@@ -364,6 +393,27 @@ export function startListener(deps: ListenerDeps): { stop(): Promise<void> } {
           correlationId: correlation_id,
           contextId: binding?.context_id,
         }));
+        const toolSpool = telemetrySafely(() => invocationSpan && runtimeCanReportTools
+          ? (deps.createToolEventSpool ?? createToolEventSpool)(call_id, deps.paths.dir)
+          : undefined);
+        if (toolSpool) activeToolSpools.add(toolSpool);
+        let invocationFinished = false;
+        const finishInvocation = (
+          outcome: "success" | "timeout" | "canceled" | "agent_error",
+          contextId?: string,
+        ) => {
+          if (invocationFinished) return;
+          invocationFinished = true;
+          const resolvedContextId = contextId ?? binding?.context_id;
+          if (toolSpool) activeToolSpools.delete(toolSpool);
+          for (const lifecycle of toolSpool?.collect() ?? []) {
+            telemetrySafely(() => invocationSpan?.recordTool({
+              ...lifecycle,
+              ...(resolvedContextId ? { contextId: resolvedContextId } : {}),
+            }));
+          }
+          telemetrySafely(() => invocationSpan?.end(outcome, contextId));
+        };
         try {
           const out = await run(
             config.agent_kind,
@@ -380,6 +430,7 @@ export function startListener(deps: ListenerDeps): { stop(): Promise<void> } {
             deps.paths.name,
             binding?.agent_session_id,
             correlation_id,
+            toolSpool?.file,
           );
 
           // Mint on a fresh threadable call; roll the existing binding forward
@@ -428,7 +479,7 @@ export function startListener(deps: ListenerDeps): { stop(): Promise<void> } {
             kind: "reply", text: out.text, context_id: contextId, task: task.id,
           });
           if (outcomeDeliveryError) {
-            telemetrySafely(() => invocationSpan?.end("agent_error"));
+            finishInvocation("agent_error", contextId);
             audit({
               call_id, ...correlation, from, message: message.slice(0, 500), task: task.id,
               status: "outcome_delivery_error", duration_ms: Date.now() - started,
@@ -438,7 +489,7 @@ export function startListener(deps: ListenerDeps): { stop(): Promise<void> } {
             });
             return;
           }
-          telemetrySafely(() => invocationSpan?.end("success", contextId));
+          finishInvocation("success", contextId);
           audit({
             call_id, ...correlation, from, message: message.slice(0, 500), reply: out.text.slice(0, 500),
             task: task.id, status: "ok",
@@ -448,7 +499,7 @@ export function startListener(deps: ListenerDeps): { stop(): Promise<void> } {
           });
         } catch (e) {
           const code = e instanceof AgentRunError ? e.code : "agent_error";
-          telemetrySafely(() => invocationSpan?.end(code));
+          finishInvocation(code);
           // runAgent settles from the child's exit handler, so reaching here
           // with "canceled" means the process group is actually gone.
           if (code === "canceled") {
@@ -530,6 +581,9 @@ export function startListener(deps: ListenerDeps): { stop(): Promise<void> } {
       stopped = true;
       if (pingTimer) clearInterval(pingTimer);
       try { ws?.close(); } catch { /* fine */ }
+      for (const spool of activeToolSpools) spool.dispose();
+      activeToolSpools.clear();
+      await queue.stop();
       await shutdownTelemetry();
     },
   };

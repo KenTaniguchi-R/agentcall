@@ -21,6 +21,8 @@ The availability date is when the event contract entered the repository migratio
 | `audit.retention.update` | org | `U` | `handle` | `retention_policy` | synchronous D1 batch | nullable request metadata | 2026-08-03 | `0016_audit_retention_controls.sql` |
 | `audit.hold.create` | org | `C` | `handle` | `legal_hold` | synchronous D1 batch | nullable request metadata | 2026-08-03 | `0016_audit_retention_controls.sql` |
 | `audit.hold.release` | org | `U` | `handle` | `legal_hold` | synchronous D1 batch | nullable request metadata | 2026-08-03 | `0016_audit_retention_controls.sql` |
+| `credential.recovery.issue` | org | `U` | `handle` | `handle` | synchronous D1 batch | nullable request metadata | 2026-08-03 | `0018_recovery_v2.sql` |
+| `credential.recovery.redeem` | org | `U` | `recovery` | `handle` | synchronous D1 batch | nullable request metadata | 2026-08-03 | `0018_recovery_v2.sql` |
 | `roster.create` | roster | `C` | `handle` | `roster` | synchronous D1 batch | nullable request metadata | 2026-08-02 | `0007_roster_audit_events.sql` |
 | `roster.join` | roster | `C` | `handle` | `handle` | synchronous D1 batch | nullable request metadata | 2026-08-02 | `0007_roster_audit_events.sql` |
 | `roster.leave` | roster | `D` | `handle` | `handle` | synchronous D1 batch | nullable request metadata | 2026-08-02 | `0007_roster_audit_events.sql` |

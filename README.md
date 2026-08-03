@@ -280,6 +280,51 @@ Before taking an issue, follow the claim and worktree protocol in
 [CONTRIBUTING.md](./CONTRIBUTING.md). Open work is tracked in
 [GitHub Issues](https://github.com/KenTaniguchi-R/agentcall/issues).
 
+### Local OpenTelemetry (opt-in)
+
+AgentCall initializes no telemetry SDK by default. Set `AGENTCALL_OTEL=1` in
+the caller/listener process to enable its manual OpenTelemetry instrumentation,
+then use the standard `OTEL_SERVICE_NAME`, `OTEL_EXPORTER_OTLP_*`, timeout, and
+sampling environment variables to select an OTLP/HTTP collector. A supervised
+background listener needs these variables in its supervisor environment; a
+shell-only export affects only foreground commands.
+
+The local implementation exports bounded call metadata and span timing. When
+enabled, paired runtime hooks also emit `execute_tool <name>` child spans and
+`gen_ai.execute_tool.duration` only for tool lifecycles with the same stable
+pre/post tool-call ID. Claude supplies explicit success/failure and native
+duration events. Codex tool spans are currently disabled: the 0.146.0 live
+probe showed its default code-mode tool path can complete without emitting
+either lifecycle hook, and telemetry does not change the runtime's tool surface
+to force an observable path. Duplicate, mismatched, oversized, and incomplete
+local observations are discarded.
+Pairs with non-allowlisted tool names or timestamps outside the invocation's
+spool lifetime are omitted as well.
+
+The hook spool is a mode-0600 file in AgentCall's private state, outside the
+configured task worktree and Codex's writable sandbox. It is bounded to 256 KiB and consumed and
+deleted when the invocation ends. It contains only call ID, tool-call ID, bounded
+allowlisted tool name, timestamps, duration, and a low-cardinality outcome—never messages,
+replies, handles, tool arguments/results, paths, policy/error details, or agent
+session IDs. Raw provider tool-call IDs are paired locally and exported only as
+per-invocation keyed digests. Claude `exec` has no OS filesystem boundary, so
+spool observations are treated as untrusted: inode/mode checks, strict tool-name
+allowlisting, keyed IDs, and bounded timing prevent attacker-chosen strings from
+becoming span attributes or metric labels, but do not make tool telemetry an
+audit-grade record. Collector headers and all other `OTEL_*`/`AGENTCALL_OTEL*`
+settings are removed from the Claude/Codex and hook subprocess environments.
+Remote sampling flags cannot override the listener's locally bounded sampler;
+`AGENTCALL_OTEL_MAX_ROOT_SPANS_PER_MINUTE` sets its absolute root-span token
+bucket (default 60). Export or shutdown failure never changes a call result.
+The listener records only aggregate trace-export failures, metric-export
+failures, and span-queue drops in `~/.agentcall/telemetry-health.json`;
+`agentcall doctor` reports a warning from that local file without making
+telemetry health a call-health requirement.
+See the living [data-residency map](./docs/security/data-residency.md) and
+[employee transparency statement](./docs/security/employee-transparency.md)
+for the current privacy, export, and Cloudflare separation contracts. The dated
+observability spec records the rationale that preceded this implementation.
+
 ## Limitations
 
 - The hosted service and customer-owned relay path are pre-production.

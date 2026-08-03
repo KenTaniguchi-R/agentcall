@@ -12,7 +12,9 @@ import { listLines } from "./lines.js";
 import type { LinePaths, MachinePaths } from "./paths.js";
 import { loadKeys } from "./keys.js";
 import { checkKnownPeersStore } from "./known-peers.js";
-import type { AgentKind } from "./runner.js";
+import {
+  codexToolTelemetryEnabled, type AgentKind,
+} from "./runner.js";
 import { readTelemetryHealth } from "./telemetry-health.js";
 import {
   checkCodexGuard, checkGuard, checkRelaySelfCall, formatCheck, short, verifyAgent,
@@ -33,6 +35,8 @@ export interface DoctorDeps {
   guardFn?: GuardProbeFn;
   guardBinaryFn?: GuardBinaryProbeFn;
   codexGuardFn?: CodexGuardProbeFn;
+  codexTelemetryEnabledFn?: () => boolean;
+  telemetryOptInFn?: () => boolean;
   keyHealthFn?: (cfg: LineConfig, paths: LinePaths) => Promise<VerifyCheck[]>;
   pkgFn?: () => CliPackageManifest;
   selfPathFn?: () => string;
@@ -417,7 +421,19 @@ export async function runDoctor(deps: DoctorDeps): Promise<number> {
       }
       report(guardCheck);
     } else if (cfg.agent_kind === "codex" && agentOk) {
-      report(await checkCodexGuard(agentWorkdir, deps.codexGuardFn));
+      const telemetryOptIn = (deps.telemetryOptInFn ?? (() => process.env.AGENTCALL_OTEL === "1"))();
+      if (telemetryOptIn && !(deps.codexTelemetryEnabledFn ?? codexToolTelemetryEnabled)()) {
+        report(await checkCodexGuard(agentWorkdir, deps.codexGuardFn, false));
+        report({
+          name: "codex tool telemetry",
+          ok: true,
+          warn: true,
+          detail: "no codex-cli release has passed the default-path lifecycle probe",
+          hint: "Codex call telemetry remains available, but tool spans stay disabled until the default tool path emits paired hooks",
+        });
+      } else {
+        report(await checkCodexGuard(agentWorkdir, deps.codexGuardFn, telemetryOptIn));
+      }
     }
 
     if (agentOk && online) {

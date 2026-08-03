@@ -6,6 +6,7 @@ export class SerialQueue {
   private idleResolvers: Array<() => void> = [];
   private runningKey: string | undefined;
   private runningAbort: AbortController | undefined;
+  private closed = false;
 
   constructor(private maxPending: number) {}
 
@@ -13,6 +14,7 @@ export class SerialQueue {
   get running(): boolean { return this.active; }
 
   tryEnqueue(key: string, run: (signal: AbortSignal) => Promise<void>): boolean {
+    if (this.closed) return false;
     if (this.active && this.jobs.length >= this.maxPending) return false;
     this.jobs.push({ key, run });
     void this.drain();
@@ -35,6 +37,13 @@ export class SerialQueue {
   onIdle(): Promise<void> {
     if (!this.active && this.jobs.length === 0) return Promise.resolve();
     return new Promise((r) => this.idleResolvers.push(r));
+  }
+
+  async stop(): Promise<void> {
+    this.closed = true;
+    this.jobs = [];
+    this.runningAbort?.abort();
+    await this.onIdle();
   }
 
   private async drain(): Promise<void> {
