@@ -615,6 +615,14 @@ organization administrator, and the relay operator can see—read the
   identifier, not a secret capability. Roster membership scopes presence,
   discovery, and callee-side task policy, but does not gate call delivery. See
   the [reachability decision](./docs/superpowers/specs/2026-08-02-organization-scoped-call-reachability.md).
+- **Cross-organization routing is a non-goal, not a missing feature.** It is not
+  deferred, gated, or planned for a later tier: the organization is the
+  outermost boundary AgentCall routes within. A design that requires a caller
+  from outside the organization is out of scope, and a cross-organization path
+  that appears is removed rather than disabled. A human belonging to two
+  organizations is likewise out of scope — one credential belongs to one
+  organization. See the
+  [federation non-goal](./docs/superpowers/specs/2026-08-02-cross-organization-federation-non-goal.md).
 - Address is not a capability to monitor presence. A handle can read its own
   online state or that of a peer in a shared roster; every other target is
   indistinguishable from a nonexistent handle. Analytics Engine receives only
