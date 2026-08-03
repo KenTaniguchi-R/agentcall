@@ -31,7 +31,7 @@ produced in. Later research revised earlier conclusions, so the production order
 | 7 | [cotal-enterprise-installability](./2026-08-01-cotal-enterprise-installability.md) | Which tool does an enterprise actually install — and what has to be true for it to be ours? |
 | 8 | [mcp-tunnels-ema-positioning](./2026-08-02-mcp-tunnels-ema-positioning.md) | What did MCP tunnels and EMA actually ship, and where should MCP sit beside A2A? |
 
-Five notes on the sequence:
+Six notes on the sequence:
 
 - **#3 predates two decisions made the same day.** `agent-coordination-landscape` was
   written before the sandbox was dropped and before Q&A-first was chosen. Its
@@ -54,6 +54,11 @@ Five notes on the sequence:
   private-network reachability a substitute rather than differentiation. EMA supplies a
   useful enterprise-authorization shape, but no non-MCP compatibility claim. The
   companion decision keeps A2A as the public protocol and defers an MCP facade.
+- **#7's GTM conflict is resolved.** Keep the first beachhead at non-EU,
+  non-unionized 100–500-person engineering organizations, lead with measured
+  senior-time recovery, and preserve the narrower no-retained-call-corpus/no-connected-
+  system-indexing distinction. The absolute “we do not ingest employee data” line is
+  retired. See the [GTM sequencing decision](../superpowers/specs/2026-08-03-gtm-sequencing-design.md).
 
 ## The five findings that matter
 

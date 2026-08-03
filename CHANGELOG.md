@@ -6,6 +6,16 @@ which are released together.
 
 ## Unreleased
 
+### Documentation — GTM sequencing and privacy positioning
+
+- Keep the first design-partner segment focused on non-EU, non-unionized
+  100–500-person engineering organizations and measure senior-time recovery.
+- Preserve the live-routing/no-central-corpus distinction while retiring the
+  ambiguous “we do not ingest employee data” claim; any stronger future claim
+  must separately name content confidentiality and retained metadata.
+- Gate regulated and EU expansion on shipped security, audit, retention,
+  administration, runtime, residency, and worker-governance controls.
+
 ### Opt-in local OpenTelemetry
 
 - Propagate a bounded caller correlation ID across relay, listener, lifecycle
