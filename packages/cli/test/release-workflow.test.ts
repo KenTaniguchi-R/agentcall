@@ -6,7 +6,8 @@ import { parse } from "yaml";
 const root = join(import.meta.dirname, "../../..");
 const workflow = readFileSync(join(root, ".github/workflows/release.yml"), "utf8");
 const ciWorkflow = readFileSync(join(root, ".github/workflows/ci.yml"), "utf8");
-const workflowFiles = ["ci.yml", "invariants.yml", "release.yml", "stale-claims.yml"];
+const pagesWorkflow = readFileSync(join(root, ".github/workflows/pages.yml"), "utf8");
+const workflowFiles = ["ci.yml", "invariants.yml", "pages.yml", "release.yml", "stale-claims.yml"];
 
 type WorkflowStep = { name?: string; env?: Record<string, unknown>; run?: string };
 
@@ -80,6 +81,15 @@ describe("npm release workflow", () => {
     ));
     expect(refs.length).toBeGreaterThan(0);
     expect(refs.every((reference) => /^[^@]+@[0-9a-f]{40}$/.test(reference))).toBe(true);
+  });
+
+  it("uses the Node 24 GitHub Pages action releases", () => {
+    expect(actionReferences(parse(pagesWorkflow))).toEqual([
+      "actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1",
+      "actions/configure-pages@45bfe0192ca1faeb007ade9deae92b16b8254a0d",
+      "actions/upload-pages-artifact@fc324d3547104276b827a68afc52ff2a11cc49c9",
+      "actions/deploy-pages@cd2ce8fcbc39b97be8ca5fce6e763baed58fa128",
+    ]);
   });
 
   it("publishes release tags through OIDC provenance without an npm token", () => {
