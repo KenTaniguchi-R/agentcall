@@ -1,0 +1,49 @@
+{
+  "name": "replace-with-unique-agentcall-relay",
+  "main": "src/index.ts",
+  "compatibility_date": "2026-06-01",
+  "workers_dev": false,
+  "preview_urls": false,
+  "vars": {
+    "DEPLOYMENT_MODE": "self-hosted",
+    "SELF_HOSTED_ORG": "replace-with-org"
+  },
+  "d1_databases": [{
+    "binding": "DB",
+    "database_name": "replace-with-agentcall-db",
+    "database_id": "00000000-0000-0000-0000-000000000000",
+    "migrations_dir": "migrations"
+  }],
+  "analytics_engine_datasets": [{
+    "binding": "STATUS_READS",
+    "dataset": "replace_with_agentcall_status_reads"
+  }],
+  "durable_objects": {
+    "bindings": [
+      { "name": "HANDLE_DO", "class_name": "HandleDO" },
+      { "name": "RATE_LIMITER_DO", "class_name": "RateLimiterDO" }
+    ]
+  },
+  "exports": {
+    "HandleDO": { "type": "durable-object", "storage": "sqlite" },
+    "RateLimiterDO": { "type": "durable-object", "storage": "sqlite" }
+  },
+  "routes": [{ "pattern": "relay.example.com", "custom_domain": true }],
+  "ratelimits": [
+    {
+      "name": "CARD_RL",
+      "namespace_id": "1001",
+      "simple": { "limit": 20, "period": 60 }
+    },
+    {
+      "name": "READ_RL",
+      "namespace_id": "1002",
+      "simple": { "limit": 60, "period": 60 }
+    },
+    {
+      "name": "ROSTER_READ_RL",
+      "namespace_id": "1003",
+      "simple": { "limit": 10, "period": 60 }
+    }
+  ]
+}

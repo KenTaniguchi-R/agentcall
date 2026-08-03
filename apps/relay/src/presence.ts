@@ -53,7 +53,7 @@ export function mountPresence(app: Hono<{ Bindings: Env }>): void {
   // shared-roster check then prevents one freely registered peer from polling
   // every other handle's working pattern.
   app.get("/v1/status/:handle", async (c) => {
-    const identity = await authenticateRequest(c.env.DB, c.req);
+    const identity = await authenticateRequest(c.env, c.req);
     if (!identity) return c.json({ error: "unauthorized" }, 401);
     const { org, handle: viewer } = identity;
     const ip = c.req.header("cf-connecting-ip") ?? "unknown";

@@ -161,7 +161,7 @@ async function readPage(
 
 export function mountAudit(app: Hono<{ Bindings: Env }>): void {
   app.get("/v1/audit/events", async (c) => {
-    const identity = await authenticateRequest(c.env.DB, c.req);
+    const identity = await authenticateRequest(c.env, c.req);
     if (!identity) return c.json({ error: "unauthorized" }, 401);
     if (!requireOrgAdmin(identity)) return c.json({ error: "administrator role required" }, 403);
     const query = parseQuery(new URL(c.req.url));

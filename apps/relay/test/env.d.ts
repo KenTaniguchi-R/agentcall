@@ -8,6 +8,9 @@ declare namespace Cloudflare {
     ROSTER_READ_RL: RateLimit;
     RATE_LIMIT_NOW: number;
     BOOTSTRAP_TOKEN: string;
+    DEPLOYMENT_MODE: "hosted" | "self-hosted";
+    HOSTED_WRANGLER_CONFIG: string;
+    SELF_HOST_WRANGLER_CONFIG: string;
     TEST_MIGRATIONS: import("wrangler").D1Migration[];
   }
 }

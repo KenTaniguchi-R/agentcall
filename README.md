@@ -166,12 +166,19 @@ and restart it. Exported files
 contain handles, relationship metadata, source IP/country evidence, and event
 descriptions; protect them as sensitive security records.
 
-The repository does not yet ship an admin web UI, a supported self-hosted
-distribution, or Cloudflare Access integration. The future human admin surface
-will use a separate Access-protected hostname; customer-owned Access is the
-supported SSO profile planned for self-hosted deployments. Access will not sit
-in front of the current relay API or replace AgentCall authorization; hosted
-multi-tenant SSO remains a separate design. See the
+The repository ships an experimental, pre-production
+[customer-owned Cloudflare relay runbook](docs/self-hosting.md) and a
+binding-complete Wrangler configuration. It is for internal evaluation while
+security issues #1–#8 remain incomplete; public and enterprise production
+deployment is not supported yet. Each deployment is pinned to one organization
+and does not federate with other relays. This BYOC shape is not a generic
+on-premises package and does not itself create a regional data-residency claim.
+
+The repository does not yet ship an admin web UI or Cloudflare Access
+integration. The future human admin surface will use a separate
+Access-protected hostname, and customer-owned Access remains the planned SSO
+profile. Access will not sit in front of the machine relay API or replace
+AgentCall authorization; hosted multi-tenant SSO remains a separate design. See the
 [Cloudflare Access boundary decision](docs/superpowers/specs/2026-08-02-cloudflare-access-boundary.md).
 
 ## Usage
@@ -888,6 +895,12 @@ The hosted relay currently makes no regional residency claim. Read the living
 before changing D1 placement, Durable Object ID derivation, Regional Services,
 logging, or analytics. Adding `.jurisdiction()` changes named DO IDs and is a
 state migration, not a configuration-only deploy.
+
+To evaluate an isolated relay in a customer-owned Cloudflare account, use the
+[self-hosting runbook](./docs/self-hosting.md). This remains internal and
+pre-production until security issues #1–#8 close. Do not edit the hosted
+`wrangler.jsonc`; copy the self-host example so customer resource IDs cannot be
+committed into the upstream deployment configuration.
 
 Monorepo layout:
 

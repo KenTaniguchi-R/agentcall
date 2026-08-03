@@ -4,10 +4,26 @@ import { authenticatedHandleRole } from "./auth.js";
 export const HOSTED_RELAY_HOST = "agentcall.benree.tech";
 
 type RequestLike = { header(name: string): string | undefined; url: string };
+export type DeploymentMode = "hosted" | "self-hosted";
+type TenantAuthEnv = { DB: D1Database; DEPLOYMENT_MODE?: string; SELF_HOSTED_ORG?: string };
 export type Identity = { org: string; handle: string; role: OrgRoleType };
 
-export function requestOrg(req: RequestLike): string {
+export function deploymentOrgAllows(
+  mode: string | undefined, configuredOrg: string | undefined, org: string,
+): boolean {
+  if (mode === "hosted") return configuredOrg === undefined && ORG_RE.test(org);
+  return mode === "self-hosted" && configuredOrg !== undefined &&
+    ORG_RE.test(configuredOrg) && configuredOrg === org;
+}
+
+export function requestOrg(req: RequestLike, mode?: string, configuredOrg?: string): string {
   const header = req.header("X-AgentCall-Org") ?? "";
+  if (mode === "self-hosted") {
+    if (configuredOrg === undefined || !ORG_RE.test(configuredOrg) ||
+      (header !== "" && header !== configuredOrg)) return "";
+    return configuredOrg;
+  }
+  if (mode !== "hosted" || configuredOrg !== undefined) return "";
   if (ORG_RE.test(header)) return header;
 
   const host = new URL(req.url).hostname;
@@ -17,12 +33,14 @@ export function requestOrg(req: RequestLike): string {
   return ORG_RE.test(org) ? org : "";
 }
 
-export async function authenticateRequest(db: D1Database, req: RequestLike): Promise<Identity | null> {
-  const org = requestOrg(req);
+export async function authenticateRequest(
+  env: TenantAuthEnv, req: RequestLike,
+): Promise<Identity | null> {
+  const org = requestOrg(req, env.DEPLOYMENT_MODE, env.SELF_HOSTED_ORG);
   const handle = req.header("X-AgentCall-Handle") ?? "";
   const token = (req.header("Authorization") ?? "").replace(/^Bearer\s+/i, "");
   if (!org) return null;
-  const role = await authenticatedHandleRole(db, org, handle, token);
+  const role = await authenticatedHandleRole(env.DB, org, handle, token);
   return role ? { org, handle, role } : null;
 }
 

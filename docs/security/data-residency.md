@@ -187,3 +187,9 @@ Before any residency claim or jurisdiction code change:
 Until that gate is complete, the truthful statement is: **the hosted relay uses
 Cloudflare's global platform, with production D1 currently running in WNAM and
 no configured storage jurisdiction.**
+
+The supported [customer-owned relay](../self-hosting.md) moves operational
+control and every declared Cloudflare resource into the customer's account. It
+does not move AgentCall off Cloudflare and does not turn account ownership into
+a residency guarantee. The customer must evaluate and configure every surface
+in this document before making a locational claim.
