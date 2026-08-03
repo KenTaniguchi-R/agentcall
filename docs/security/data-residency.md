@@ -31,6 +31,13 @@ request-processing, and logging data outside the claim. A regional offering
 must be a planned new deployment or migration covering every row below and the
 non-database surfaces, not a one-line `.jurisdiction()` change.
 
+Confidential computing is also not a residency substitute or a current relay
+target. A Nitro Enclaves deployment could hide application-layer routing state
+from an EC2 parent while still exposing network and traffic-shape metadata and
+still processing data in AWS. The dated
+[TEE deployment decision](../superpowers/specs/2026-08-03-tee-relay-deployment-decision.md)
+keeps that option trigger-gated rather than presenting it as a roadmap.
+
 ## Accepted lifecycle direction — not implemented
 
 AgentCall has committed to a supported subject-erasure path and bounded retention;

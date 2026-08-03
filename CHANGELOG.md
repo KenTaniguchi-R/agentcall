@@ -6,6 +6,15 @@ which are released together.
 
 ## Unreleased
 
+### Confidential-computing deployment decision
+
+- Keep an AWS Nitro Enclaves relay trigger-gated instead of adding a speculative
+  second deployment target or portability layer.
+- Separate exact-image attestation, source-to-measurement transparency, and
+  signer-authorized upgrade lineage; none is allowed to stand in for the others.
+- Define the customer signals and security, state, upgrade, operations, and
+  claim-review gates required before a future TEE evaluation can begin.
+
 ### Organization administration and audit export
 
 - Make organization authority explicit with `admin` and `member` roles; the
