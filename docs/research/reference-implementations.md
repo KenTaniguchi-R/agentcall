@@ -228,6 +228,8 @@ Applied in AgentCall:
 
 - [Executable policy assertions design](../superpowers/specs/2026-08-02-policy-assertions-design.md),
   adapted from Tailscale policy tests
+- [Capability, resource, and autonomy policy](../superpowers/specs/2026-08-02-capability-authorization-policy.md),
+  which keeps one deterministic authorization kernel behind every enforcement adapter
 - [Egress and delegated-call boundary](../superpowers/specs/2026-08-02-egress-and-delegation-boundary.md),
   which rejects advisory proxy policy and gates chain claims on per-run authority
 - [`apps/relay/src/ratelimit/index.ts`](../../apps/relay/src/ratelimit/index.ts)
