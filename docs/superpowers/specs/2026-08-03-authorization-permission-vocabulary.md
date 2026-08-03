@@ -21,8 +21,7 @@ audit event strings do not define them.
 
 Every authorization decision is described by four values:
 
-1. **principal** — the authenticated stable actor or capability exercising
-   authority;
+1. **principal** — the authenticated stable actor exercising authority;
 2. **permission** — one canonical `resource:action` name;
 3. **resource instance** — the workspace, agent, roster, task, or credential
    being addressed; and
@@ -42,8 +41,6 @@ Use typed principals. Never infer the type from an identifier string.
 |---|---|---|
 | agent | authenticated `(org, handle)` | stable agent ID from #154; handle remains an address |
 | relay operator | configured bootstrap token, audited as `bootstrap` | typed operator/service principal with bounded bootstrap authority |
-| roster administrator capability | authenticated handle plus roster admin secret | typed capability ID plus the stable agent that exercised it |
-| enrollment invite | one-use hashed invite token | typed admission capability, never a post-enrollment identity |
 | local line owner | OS user controlling the per-line configuration | local stable agent/device binding when available |
 | machine administrator | owner of the protected managed-policy location | typed administrative policy source, distinct from Workspace Organizer |
 
@@ -52,6 +49,13 @@ role names are not principal IDs. Workspace roles, roster membership, and IdP
 groups are grant sources; the agent exercising one of their grants is still the
 principal. #154 supplies that durable agent principal, while #205 owns the
 Workspace role and onboarding vocabulary.
+
+Bearer capabilities are grant sources, not principals. This includes workspace
+invites, roster join keys, the roster-admin secret, handle bearer credentials,
+and the relay bootstrap credential. Evidence records the typed capability ID or
+kind alongside the agent/operator principal that exercised it; an enrollment
+invite used before an agent exists is an admission capability actor, never a
+durable post-enrollment principal.
 
 ## Canonical relay permissions
 
@@ -104,7 +108,6 @@ admission:
 | `task:discover` | one advertised task | local owner disclosure policy, caller override, and attested roster grants |
 | `task:invoke` | one callee task | effective local policy for caller plus attested rosters, bounded by machine-admin policy |
 | `call.context:continue` | one saved inbound conversation context | authenticated caller plus matching opaque context capability, caller, task, runtime, workdir, TTL, turn budget, and currently threadable runtime |
-| `tool:execute` | one agent tool invocation | answering-agent runtime plus the fail-closed/observe guard policy |
 | `local.policy:read` | effective per-line policy | local line owner; machine policy is reported but not user-editable |
 | `local.policy:update` | user policy layer | local line owner, subject to machine-admin ceiling and assertions |
 | `local.managed_policy:update` | protected machine policy | machine administrator outside the ordinary AgentCall CLI flow |
@@ -112,6 +115,16 @@ admission:
 Task IDs are resource-instance identifiers, not permission names. Do not mint
 `task:<task-id>` permissions or copy every task into a role. The permission is
 `task:invoke`; policy decides which task instances a caller may invoke.
+
+There is no canonical cross-runtime `tool:execute` permission today. Claude's
+runner can restrict its admitted tool set and its enforce-mode hook can deny
+sensitive operations. Codex retains shell execution even when a task lacks the
+`exec` capability; its sandbox changes filesystem/write authority, while the
+current hook observes rather than grants or denies tool use. Record those exact
+runtime controls and telemetry without claiming a shared permission. Add a tool
+permission only when one reviewed enforcement decision exists across the
+runtime boundary, or name runtime-specific permissions when the product intends
+their semantics to remain different.
 
 ## Permissions are not audit event names
 
