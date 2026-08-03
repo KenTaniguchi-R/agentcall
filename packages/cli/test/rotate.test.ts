@@ -44,6 +44,18 @@ describe("rotateLine", () => {
     expect(out.join(" ")).toMatch(/restart the listener/i);
   });
 
+  it("uses systemd restart guidance on Linux", async () => {
+    saveLineConfig(getLinePaths(m, "claude"), base);
+    const out: string[] = [];
+    await rotateLine(resolveLine(m, { line: "claude" }), {
+      rotate: async () => ({ token: "new" }),
+      log: (s) => out.push(s),
+      platform: "linux",
+    });
+    expect(out.join(" ")).toContain("systemctl --user restart agentcall-listener.service");
+    expect(out.join(" ")).not.toContain("launchctl");
+  });
+
   // A caller-only line (no agent_kind) has no listener socket of its own — the
   // pre-lines code guarded this with `else if (cfg.agent_kind)`; lines dropped
   // it and started printing reconnect/restart guidance unconditionally, which

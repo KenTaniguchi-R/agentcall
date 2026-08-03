@@ -1,8 +1,10 @@
-import { execFileSync } from "node:child_process";
 import { getStatus } from "./api.js";
 import { callAgent } from "./callClient.js";
 import { relayUrl, resolveLineWorkdir, type LineConfig, type Workdir } from "./config.js";
-import { isLaunchAgentInstalled, LAUNCH_LABEL } from "./launchd.js";
+import {
+  inspectListenerService,
+  type ListenerServiceStatus,
+} from "./listener-service.js";
 import { listLines } from "./lines.js";
 import type { MachinePaths } from "./paths.js";
 import type { AgentKind } from "./runner.js";
@@ -19,16 +21,13 @@ export interface DoctorDeps {
   verifyFns?: VerifyFns;
   getStatusFn?: typeof getStatus;
   callFn?: typeof callAgent;
-  launchctlList?: () => string;
-  isDarwin?: boolean;
+  platform?: NodeJS.Platform;
+  inspectListenerServiceFn?: (machine: MachinePaths) => ListenerServiceStatus;
   log?: (line: string) => void;
   guardFn?: GuardProbeFn;
   guardBinaryFn?: GuardBinaryProbeFn;
   codexGuardFn?: CodexGuardProbeFn;
 }
-
-const defaultLaunchctlList = () =>
-  execFileSync("launchctl", ["list"], { encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] });
 
 // Verifies every line on this install can answer calls, printing one line
 // per check under a `line <name>` header for each. Ladder semantics (see the
@@ -47,36 +46,35 @@ export async function runDoctor(deps: DoctorDeps): Promise<number> {
     log(formatCheck(c));
   };
 
-  // Machine-level, once: there is one plist and one supervised process
-  // serving every line, so a per-line launchd check would be meaningless
+  // Machine-level, once: there is one supervisor artifact and one process
+  // serving every line, so a per-line service check would be meaningless
   // (and would misreport N-1 lines as broken whenever the listener is down).
-  if (deps.isDarwin ?? process.platform === "darwin") {
-    let loaded = false;
-    try {
-      loaded = (deps.launchctlList ?? defaultLaunchctlList)().includes(LAUNCH_LABEL);
-    } catch {
-      loaded = false;
-    }
+  const platform = deps.platform ?? process.platform;
+  if (platform === "darwin" || platform === "linux") {
+    const status = (deps.inspectListenerServiceFn ?? ((machine) =>
+      inspectListenerService(machine, { platform })))(deps.machine);
     report({
-      name: "background listener (launchd)",
-      ok: loaded,
-      hint: loaded ? undefined : "re-run `agentcall setup` to install it, or run `agentcall listen` in a terminal",
+      name: `background listener (${status.kind})`,
+      ok: status.running,
+      hint: status.running ? undefined : "re-run `agentcall setup` to install it, or run `agentcall listen` in a terminal",
     });
     // Diagnostic only, never fatal on its own: this distinguishes "setup
     // never installed the plist" from "it's installed but not currently
     // loaded" (e.g. someone ran `launchctl bootout` by hand). Both explain
     // the same failed check above, so this must not double-count it.
-    if (!loaded) {
-      const installed = isLaunchAgentInstalled(deps.machine);
+    if (!status.running) {
+      const artifact = status.kind === "launchd" ? "launch agent plist" : "systemd user unit";
       report({
-        name: "launch agent plist",
+        name: artifact,
         ok: true,
         warn: true,
-        detail: installed
-          ? "plist file exists but is not currently loaded"
-          : "plist file was never installed",
-        hint: installed
-          ? "try `launchctl bootstrap gui/$(id -u) ~/Library/LaunchAgents/tech.benree.agentcall.listener.plist`, or re-run `agentcall setup`"
+        detail: status.installed
+          ? `${status.kind === "launchd" ? "plist" : "unit"} file exists but the listener is not running`
+          : `${status.kind === "launchd" ? "plist" : "unit"} file was never installed`,
+        hint: status.installed
+          ? status.kind === "launchd"
+            ? "run `launchctl kickstart gui/$(id -u)/tech.benree.agentcall.listener`, or re-run `agentcall setup`"
+            : "run `systemctl --user restart agentcall-listener.service`, or re-run `agentcall setup`"
           : "run `agentcall setup`",
       });
     }

@@ -5,7 +5,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { WebSocketServer } from "ws";
-import { runCli } from "../src/index.js";
+import { createProgram, runCli } from "../src/index.js";
 import { getLinePaths, getMachinePaths, type LinePaths } from "../src/paths.js";
 import { saveLineConfig } from "../src/lines.js";
 import { loadMemberships, readCached, saveMembership, writeCached } from "../src/rosters.js";
@@ -76,6 +76,25 @@ async function runCommand(home: string, argv: string[]): Promise<Run> {
 function home(): string {
   return mkdtempSync(join(tmpdir(), "agentcall-cli-"));
 }
+
+describe("cross-platform listener CLI", () => {
+  it("describes the platform-neutral service opt-out during setup", () => {
+    const setup = createProgram().commands.find((command) => command.name() === "setup");
+    const options = setup?.options.map((option) => option.long);
+
+    expect(options).toContain("--skip-service");
+    expect(options).not.toContain("--skip-launchd");
+  });
+
+  it("uses the same service opt-out when adding another line", () => {
+    const line = createProgram().commands.find((command) => command.name() === "line");
+    const add = line?.commands.find((command) => command.name() === "add");
+    const options = add?.options.map((option) => option.long);
+
+    expect(options).toContain("--skip-service");
+    expect(options).not.toContain("--skip-launchd");
+  });
+});
 
 function startRelay(
   handler: (url: string, method: string, body: string) => { status: number; body?: unknown; headers?: Record<string, string> },

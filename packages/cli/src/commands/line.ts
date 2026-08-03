@@ -5,12 +5,12 @@ import { registerHandle } from "../api.js";
 import { publishCard } from "../card.js";
 import { resolveLineWorkdir, type LineConfig } from "../config.js";
 import { assertValidLineName, listLines, readyLines, saveLineConfig } from "../lines.js";
-import { launchPathDirs } from "../launchPath.js";
+import { listenerPathDirs } from "../listenerPath.js";
 import { host } from "../outbound.js";
 import { getLinePaths, type LinePaths, type MachinePaths } from "../paths.js";
 import { loadPerson, resolvePrimary, savePerson } from "../person.js";
 import { DEFAULT_POLICY } from "../policy.js";
-import { uninstallLaunchAgent, installLaunchAgent } from "../launchd.js";
+import { installListenerService, uninstallListenerService } from "../listener-service.js";
 import { formatCheck, verifyAgent, type VerifyFns } from "../verify.js";
 
 export interface AddLineOpts {
@@ -40,16 +40,16 @@ export interface AddLineOpts {
   // undefined without constructing a full card upload.
   register?: typeof registerHandle;
   publishCardFn?: (cfg: LineConfig, p: LinePaths) => Promise<unknown>;
-  installLaunchAgentFn?: typeof installLaunchAgent;
+  installListenerServiceFn?: typeof installListenerService;
   // Dirs (an agent/npx binary resolved outside launchd's fixed base PATH) to
-  // prepend to the LaunchAgent's plist PATH. Defaults to launchPathDirs(m,
+  // prepend to the listener service's PATH. Defaults to listenerPathDirs(m,
   // resolveBin) — derived from every ready line on the machine, including
   // the one this call just wrote to disk — rather than requiring the caller
   // to compute and pass it. Explicit values here are a test seam only; a
   // real caller has no reason to override the derived answer.
   extraPathDirs?: string[];
   // Only consulted when extraPathDirs is absent, and only as an input to
-  // launchPathDirs's own derivation — see there for the default.
+  // listenerPathDirs's own derivation — see there for the default.
   resolveBin?: (name: string) => string | null;
 }
 
@@ -112,9 +112,11 @@ export async function addLine(m: MachinePaths, opts: AddLineOpts): Promise<{ add
       );
     }
     // saveLineConfig above already put this line's config on disk, so
-    // launchPathDirs (which reads readyLines(m)) sees it — the derived PATH
+    // listenerPathDirs (which reads readyLines(m)) sees it — the derived PATH
     // covers this line's agent kind alongside every other ready line's.
-    (opts.installLaunchAgentFn ?? installLaunchAgent)(m, undefined, opts.extraPathDirs ?? launchPathDirs(m, opts.resolveBin));
+    (opts.installListenerServiceFn ?? installListenerService)(m, {
+      extraPathDirs: opts.extraPathDirs ?? listenerPathDirs(m, opts.resolveBin),
+    });
 
     // Verification is best-effort feedback, not a gate: the handle is already
     // spent (see above), so a failed verify warns rather than throwing —
@@ -144,15 +146,15 @@ export async function addLine(m: MachinePaths, opts: AddLineOpts): Promise<{ add
 export interface RemoveLineOpts {
   confirm?: boolean;
   purge?: boolean;
-  uninstallFn?: typeof uninstallLaunchAgent;
+  uninstallFn?: typeof uninstallListenerService;
   // Separate from uninstallFn: the reinstall branch below (readyLines still
   // has a callable line) calls install, not uninstall, and a test that only
-  // stubs uninstallFn must not fall through to the real installLaunchAgent —
+  // stubs uninstallFn must not fall through to the real listener installer —
   // that shells out to the actual `launchctl bootstrap` on the real user's
   // launchd session regardless of how sandboxed MachinePaths.userHome is.
-  installFn?: typeof installLaunchAgent;
+  installFn?: typeof installListenerService;
   // Same seam as AddLineOpts.resolveBin — feeds the reinstall branch's
-  // launchPathDirs derivation.
+  // listenerPathDirs derivation.
   resolveBin?: (name: string) => string | null;
 }
 
@@ -213,13 +215,13 @@ export function removeLine(m: MachinePaths, name: string, opts: RemoveLineOpts =
   // unloading a per-line service. Reinstalling the single agent is how that
   // happens; skip it when nothing callable is left. The target's directory
   // is already gone/archived above, so readyLines(m) here reflects the
-  // surviving lines only — launchPathDirs derives their PATH dirs, not the
+  // surviving lines only — listenerPathDirs derives their PATH dirs, not the
   // removed line's, and not an empty list that would clobber them.
   if (readyLines(m).some((l) => l.config.agent_kind)) {
-    (opts.uninstallFn ?? uninstallLaunchAgent)(m);
-    (opts.installFn ?? installLaunchAgent)(m, undefined, launchPathDirs(m, opts.resolveBin));
+    (opts.uninstallFn ?? uninstallListenerService)(m);
+    (opts.installFn ?? installListenerService)(m, { extraPathDirs: listenerPathDirs(m, opts.resolveBin) });
   } else {
-    (opts.uninstallFn ?? uninstallLaunchAgent)(m);
+    (opts.uninstallFn ?? uninstallListenerService)(m);
   }
 }
 

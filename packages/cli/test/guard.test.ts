@@ -283,6 +283,14 @@ describe("decide — task envelopes and launch config are protected", () => {
     expect(v.allow).toBe(false);
   });
 
+  it("denies writing a systemd user unit, which controls how the Linux listener is launched", () => {
+    expect(decide(
+      call("Write", { file_path: "/home/owner/.config/systemd/user/agentcall-listener.service" }),
+      "/home/owner",
+      id,
+    ).allow).toBe(false);
+  });
+
   it.each([".zshrc", ".zprofile", ".bashrc", ".bash_profile", ".profile"])(
     "denies writing %s, a shell startup file",
     (file) => {

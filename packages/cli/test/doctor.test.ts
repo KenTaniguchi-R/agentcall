@@ -7,7 +7,6 @@ import { runDoctor } from "../src/doctor.js";
 import { saveLineConfig } from "../src/lines.js";
 import { getLinePaths, getMachinePaths, type MachinePaths } from "../src/paths.js";
 import { GUARD_PROBE_LINE } from "../src/verify.js";
-import { LAUNCH_LABEL } from "../src/launchd.js";
 import type { AgentKind } from "../src/runner.js";
 import { TelemetryHealthReporter } from "../src/telemetry-health.js";
 
@@ -45,8 +44,8 @@ const okVerifyFns = {
 const fakeCall = async () => ({ type: "call_reply", call_id: "c1", text: "hi", task: "ask" }) as never;
 
 const baseDeps = {
-  isDarwin: true,
-  launchctlList: () => `12345\t0\t${LAUNCH_LABEL}\n`,
+  platform: "darwin" as const,
+  inspectListenerServiceFn: () => ({ kind: "launchd" as const, installed: true, running: true }),
   getStatusFn: async () => ({ online: true }),
   verifyFns: okVerifyFns,
   callFn: fakeCall,
@@ -74,6 +73,25 @@ function failingVerifyFor(kind: AgentKind) {
 }
 
 describe("runDoctor", () => {
+  it("reports a running systemd user listener on Linux", async () => {
+    const m = freshMachine();
+    saveLineConfig(getLinePaths(m, LINE), {
+      org: "acme", handle: "ken", token: "t", agent_kind: "claude", relay: "https://relay.example",
+    });
+    const lines: string[] = [];
+
+    const code = await runDoctor({
+      ...baseDeps,
+      machine: m,
+      platform: "linux",
+      inspectListenerServiceFn: () => ({ kind: "systemd", installed: true, running: true }),
+      log: (line) => lines.push(line),
+    });
+
+    expect(code).toBe(0);
+    expect(lines.join("\n")).toContain("✓ background listener (systemd)");
+  });
+
   it("surfaces persistent local telemetry degradation without failing doctor", async () => {
     const m = freshMachine();
     saveLineConfig(getLinePaths(m, "caller"), {
@@ -201,7 +219,12 @@ describe("runDoctor", () => {
     const m = freshMachine();
     saveLineConfig(getLinePaths(m, LINE), { org: "acme", handle: "ken", token: "t", agent_kind: "claude", relay: "https://relay.example" });
     const lines: string[] = [];
-    const code = await runDoctor({ ...baseDeps, machine: m, launchctlList: () => "nothing here\n", log: (l) => lines.push(l) });
+    const code = await runDoctor({
+      ...baseDeps,
+      machine: m,
+      inspectListenerServiceFn: () => ({ kind: "launchd", installed: true, running: false }),
+      log: (l) => lines.push(l),
+    });
     expect(code).toBe(1);
     const out = lines.join("\n");
     expect(out).toContain("✗ background listener");
@@ -408,9 +431,9 @@ describe("runDoctor across lines", () => {
       ...baseDeps,
       machine: m,
       log: () => {},
-      launchctlList: () => {
+      inspectListenerServiceFn: () => {
         listed++;
-        return LAUNCH_LABEL;
+        return { kind: "launchd", installed: true, running: true };
       },
     });
     expect(listed).toBe(1);

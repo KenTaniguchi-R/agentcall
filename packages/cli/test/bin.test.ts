@@ -23,8 +23,8 @@ describe("resolveAgentBin", () => {
   // ahead of the real, durable install on PATH. resolveOnPath used to return
   // the FIRST PATH match, so the runner spawned the shim — which fails with
   // exit 127 once the session that created it is gone (confirmed live via
-  // `which -a claude`). See launchPath.ts's resolveExtraPathDirs, which needs
-  // the same durable-vs-ephemeral logic when widening the LaunchAgent's PATH.
+  // `which -a claude`). See listenerPath.ts's resolveExtraPathDirs, which needs
+  // the same durable-vs-ephemeral logic when widening the listener service's PATH.
   describe("prefers durable installs over ephemeral session shims", () => {
     function makeFakeBin(dir: string, name: string): string {
       mkdirSync(dir, { recursive: true });
