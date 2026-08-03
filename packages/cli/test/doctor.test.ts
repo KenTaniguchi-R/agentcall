@@ -1,4 +1,4 @@
-import { chmodSync, mkdirSync, mkdtempSync, writeFileSync } from "node:fs";
+import { chmodSync, mkdirSync, mkdtempSync, symlinkSync, writeFileSync } from "node:fs";
 import { dirname } from "node:path";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -16,6 +16,11 @@ import type { StoredKeys } from "../src/keys.js";
 // A single-line machine, still used by tests that only care about one line's
 // checks. Multi-line behavior gets its own describe block below.
 const LINE = "claude";
+const CLI_INSTALL_ROOT = mkdtempSync(join(tmpdir(), "agentcall-cli-install-"));
+const CLI_ENTRY = join(CLI_INSTALL_ROOT, "agentcall.js");
+const CLI_BIN = join(CLI_INSTALL_ROOT, "agentcall");
+writeFileSync(CLI_ENTRY, "#!/usr/bin/env node\n");
+symlinkSync(CLI_ENTRY, CLI_BIN);
 
 function freshMachine(): MachinePaths {
   const home = mkdtempSync(join(tmpdir(), "agentcall-doctor-"));
@@ -60,7 +65,106 @@ const baseDeps = {
   // built dist/guard-entry.js, which does not exist when vitest runs from src.
   guardBinaryFn: async () => true,
   keyHealthFn: async () => [],
+  pkgFn: () => ({
+    name: "@benree/agentcall",
+    version: "0.4.0",
+    bin: { agentcall: "./bin/agentcall.js" },
+  }),
+  selfPathFn: () => CLI_ENTRY,
+  whichFn: () => [CLI_BIN],
 };
+
+describe("doctor CLI install provenance", () => {
+  it("reports the package identity and running entry for one resolved install", async () => {
+    const m = freshMachine();
+    const lines: string[] = [];
+
+    await runDoctor({ ...baseDeps, machine: m, log: (line) => lines.push(line) });
+
+    expect(lines[0]).toBe(`✓ CLI install — @benree/agentcall@0.4.0; running ${CLI_ENTRY}`);
+  });
+
+  it("warns without changing the exit code when PATH contains two distinct installs", async () => {
+    const m = freshMachine();
+    saveLineConfig(getLinePaths(m, "caller"), {
+      org: "acme", handle: "solo", token: "t", relay: "https://relay.example",
+    });
+    const secondRoot = mkdtempSync(join(tmpdir(), "agentcall-cli-shadow-"));
+    const secondEntry = join(secondRoot, "agentcall.js");
+    const secondBin = join(secondRoot, "agentcall");
+    writeFileSync(secondEntry, "#!/usr/bin/env node\n");
+    symlinkSync(secondEntry, secondBin);
+    const cleanLines: string[] = [];
+    const shadowedLines: string[] = [];
+    const cleanCode = await runDoctor({
+      ...baseDeps,
+      machine: m,
+      log: (line) => cleanLines.push(line),
+    });
+    const shadowedCode = await runDoctor({
+      ...baseDeps,
+      machine: m,
+      whichFn: () => [secondBin, CLI_BIN],
+      log: (line) => shadowedLines.push(line),
+    });
+
+    expect(shadowedCode).toBe(cleanCode);
+    expect(shadowedLines[0]).toContain("! CLI install");
+    expect(shadowedLines[0]).toContain(secondEntry);
+    expect(shadowedLines[0]).toContain(CLI_ENTRY);
+  });
+
+  it("deduplicates PATH entries that symlink to the same real executable", async () => {
+    const root = mkdtempSync(join(tmpdir(), "agentcall-doctor-bin-"));
+    const real = join(root, "agentcall.js");
+    const first = join(root, "first-agentcall");
+    const second = join(root, "second-agentcall");
+    writeFileSync(real, "#!/usr/bin/env node\n");
+    symlinkSync(real, first);
+    symlinkSync(real, second);
+    const lines: string[] = [];
+
+    await runDoctor({
+      ...baseDeps,
+      machine: freshMachine(),
+      selfPathFn: () => real,
+      whichFn: () => [first, second],
+      log: (line) => lines.push(line),
+    });
+
+    expect(lines[0]).toContain("✓ CLI install");
+    expect(lines[0]).not.toContain("multiple installs");
+  });
+
+  it("still reports package and running entry when PATH lookup fails", async () => {
+    const lines: string[] = [];
+
+    await runDoctor({
+      ...baseDeps,
+      machine: freshMachine(),
+      whichFn: () => { throw new Error("which unavailable"); },
+      log: (line) => lines.push(line),
+    });
+
+    expect(lines[0]).toContain("! CLI install");
+    expect(lines[0]).toContain("@benree/agentcall@0.4.0");
+    expect(lines[0]).toContain(CLI_ENTRY);
+  });
+
+  it("prints install provenance before the missing-config failure", async () => {
+    const lines: string[] = [];
+
+    const code = await runDoctor({
+      ...baseDeps,
+      machine: freshMachine(),
+      log: (line) => lines.push(line),
+    });
+
+    expect(code).toBe(1);
+    expect(lines[0]).toContain("CLI install");
+    expect(lines.at(-1)).toContain("No agentcall config found");
+  });
+});
 
 describe("doctor credential storage", () => {
   it("reports the plaintext location and private POSIX permissions without exposing the token", () => {

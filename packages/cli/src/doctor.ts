@@ -1,5 +1,6 @@
 import { fetchKeys, getStatus } from "./api.js";
-import { lstatSync, statSync } from "node:fs";
+import { lstatSync, readFileSync, realpathSync, statSync } from "node:fs";
+import { execFileSync } from "node:child_process";
 import { encryptionKeyTranscript, importIdentityPublicKey, keyIdFor, verifyTranscript } from "@benree/agentcall-shared";
 import { callAgent } from "./callClient.js";
 import { addressHost, relayUrl, resolveLineWorkdir, type LineConfig, type Workdir } from "./config.js";
@@ -32,6 +33,83 @@ export interface DoctorDeps {
   guardBinaryFn?: GuardBinaryProbeFn;
   codexGuardFn?: CodexGuardProbeFn;
   keyHealthFn?: (cfg: LineConfig, paths: LinePaths) => Promise<VerifyCheck[]>;
+  pkgFn?: () => CliPackageManifest;
+  selfPathFn?: () => string;
+  whichFn?: (bin: string) => string[];
+}
+
+interface CliPackageManifest {
+  name: string;
+  version: string;
+  bin: Record<string, string>;
+}
+
+function readCliPackageManifest(): CliPackageManifest {
+  const value: unknown = JSON.parse(readFileSync(new URL("../package.json", import.meta.url), "utf8"));
+  if (!value || typeof value !== "object") throw new Error("CLI package manifest is not an object");
+  const manifest = value as Partial<CliPackageManifest>;
+  if (typeof manifest.name !== "string" || typeof manifest.version !== "string" ||
+      !manifest.bin || typeof manifest.bin !== "object") {
+    throw new Error("CLI package manifest is missing name, version, or bin");
+  }
+  return manifest as CliPackageManifest;
+}
+
+function runningEntryPath(): string {
+  if (!process.argv[1]) throw new Error("Node did not report the running CLI entry path");
+  return realpathSync(process.argv[1]);
+}
+
+function whichAll(bin: string): string[] {
+  return execFileSync("which", ["-a", bin], {
+    encoding: "utf8",
+    stdio: ["ignore", "pipe", "ignore"],
+  }).split(/\r?\n/).filter(Boolean);
+}
+
+export function checkCliInstall(
+  deps: Pick<DoctorDeps, "pkgFn" | "selfPathFn" | "whichFn"> = {},
+): VerifyCheck {
+  let manifest: CliPackageManifest;
+  let selfPath: string;
+  let bin: string;
+  try {
+    manifest = (deps.pkgFn ?? readCliPackageManifest)();
+    selfPath = (deps.selfPathFn ?? runningEntryPath)();
+    const bins = Object.keys(manifest.bin);
+    if (bins.length !== 1) throw new Error(`CLI package manifest must declare exactly one bin; found ${bins.length}`);
+    bin = bins[0]!;
+  } catch (error) {
+    return {
+      name: "CLI install",
+      ok: false,
+      detail: short(error),
+      hint: "reinstall the CLI package, then run its doctor command again",
+    };
+  }
+
+  const identity = `${manifest.name}@${manifest.version}; running ${selfPath}`;
+  try {
+    const resolved = [...new Set((deps.whichFn ?? whichAll)(bin).map((path) => realpathSync(path)))];
+    if (resolved.length < 2) return { name: "CLI install", ok: true, detail: identity };
+
+    const unexpected = resolved.filter((path) => path !== selfPath);
+    return {
+      name: "CLI install",
+      ok: true,
+      warn: true,
+      detail: `${identity}; multiple installs on PATH: ${resolved.join(", ")}`,
+      hint: `the first ${bin} on PATH wins; remove or reorder the unexpected install${unexpected.length === 1 ? "" : "s"}: ${unexpected.join(", ")}`,
+    };
+  } catch (error) {
+    return {
+      name: "CLI install",
+      ok: true,
+      warn: true,
+      detail: `${identity}; PATH inspection unavailable: ${short(error)}`,
+      hint: `check which ${bin} executable appears first on PATH`,
+    };
+  }
 }
 
 // The relay token is still plaintext at rest. Until a signed standalone
@@ -143,6 +221,8 @@ export async function runDoctor(deps: DoctorDeps): Promise<number> {
     checks.push(c);
     log(formatCheck(c));
   };
+
+  report(checkCliInstall(deps));
 
   // Machine-level, once: there is one supervisor artifact and one process
   // serving every line, so a per-line service check would be meaningless
