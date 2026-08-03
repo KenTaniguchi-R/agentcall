@@ -6,6 +6,19 @@ which are released together.
 
 ## Unreleased
 
+### Enterprise capability sequence
+
+- Sequence workspace roles and onboarding before complete audit evidence, then
+  deal-triggered managed SSO, written-request-only SCIM, and evidence-backed SOC
+  2 readiness instead of treating issue numbers as a roadmap.
+- Keep hosted SSO provider-managed and provider-adaptable, with WorkOS as an
+  evaluated candidate rather than a committed dependency or a customer-owned
+  relay requirement.
+- Separate the canonical permission vocabulary for existing gates from the
+  two-role Workspace onboarding model and from any future custom RBAC engine.
+- Preserve stable agent identity as a prerequisite for durable role, IdP,
+  provisioning, and offboarding bindings.
+
 ### Confidential-computing deployment decision
 
 - Keep an AWS Nitro Enclaves relay trigger-gated instead of adding a speculative

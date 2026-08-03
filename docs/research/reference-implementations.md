@@ -197,6 +197,7 @@ Applied in AgentCall:
 
 - [Administrator-managed policy design](../superpowers/specs/2026-08-02-managed-policy-design.md)
 - [Cloudflare Access boundary](../superpowers/specs/2026-08-02-cloudflare-access-boundary.md)
+- [Enterprise capability sequence](../superpowers/specs/2026-08-03-enterprise-capability-sequence.md)
 - [Release workflow](../../.github/workflows/release.yml)
 
 ## Governance, same-stack implementations, and observability
