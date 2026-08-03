@@ -171,6 +171,10 @@ and restart it. Exported files
 contain handles, relationship metadata, source IP/country evidence, and event
 descriptions; protect them as sensitive security records.
 
+The generated [audit event catalog](docs/site/reference/audit-events.mdx) is the
+exhaustive contract for event availability, collection-to-export lag, snapshot
+ordering, and evidence that is not yet centrally retained.
+
 The repository ships an experimental, pre-production
 [customer-owned Cloudflare relay runbook](docs/self-hosting.md) and a
 binding-complete Wrangler configuration. It is for internal evaluation while

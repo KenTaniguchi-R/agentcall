@@ -59,7 +59,9 @@ for (const path of mdxFiles) {
   }
 }
 
-for (const generator of ["generate-docs-site-cli.mjs", "generate-docs-site-protocol.mjs"]) {
+for (const generator of [
+  "generate-docs-site-cli.mjs", "generate-docs-site-protocol.mjs", "generate-docs-site-audit-events.mjs",
+]) {
   try {
     execFileSync(process.execPath, [join(root, "scripts", generator), "--check"], { cwd: root });
   } catch {

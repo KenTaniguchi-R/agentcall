@@ -6,7 +6,7 @@ import { dirname, join, resolve } from "node:path";
 const root = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const cli = join(root, "packages/cli/bin/agentcall.js");
 const output = join(root, "docs/site/reference/cli.mdx");
-const commands = ["setup", "listen", "call", "status", "uninstall"];
+const commands = ["setup", "listen", "call", "status", "audit", "uninstall"];
 
 function help(command) {
   return execFileSync(process.execPath, [cli, ...(command ? [command] : []), "--help"], {
