@@ -1,9 +1,13 @@
 import { DurableObject } from "cloudflare:workers";
 import {
-  CallerFrame, ListenerToRelayFrame, MAX_MESSAGE_BYTES, MAX_REPLY_BYTES,
+  a2aError, CallerFrame, ListenerToRelayFrame, MAX_MESSAGE_BYTES, MAX_REPLY_BYTES,
   RATE_LIMIT_PER_HOUR, RELAY_CALL_TIMEOUT_MS, safeParseFrame, sanitizeDetail,
-  type CallStatusType, type ErrorCodeType,
+  standardError, type CallStatusType, type ErrorCodeType,
 } from "@benree/agentcall-shared";
+import {
+  listCallerTasks, parseTaskListQuery, taskBelongsToCaller, taskIsTerminal,
+  toA2ATask, updateTask, validHistoryLength, type PersistedTask,
+} from "./task-store.js";
 
 type CallerAttachment = {
   kind: "caller";
@@ -14,15 +18,8 @@ type CallerAttachment = {
   timeoutMs?: number;
 };
 type ListenerAttachment = { kind: "listener" };
-type CallRecord = {
-  call_id: string;
-  // Optional for in-flight records written by a pre-correlation deployment.
-  correlation_id?: string;
-  from: string;
-  deadline: number;
-  // Optional only for in-flight records written by a pre-#89 deployment.
-  state?: CallStatusType["state"];
-};
+
+type CancelResolution = { kind: "canceled"; task: PersistedTask } | { kind: "not_cancelable" };
 
 const STATUS_RANK: Record<CallStatusType["state"], number> = {
   ringing: 0,
@@ -38,6 +35,8 @@ const RATE_LIMIT_PREFIX = "rl:";
 const RATE_LIMIT_PRUNED_AT_KEY = "meta:rl-pruned-at";
 const RATE_LIMIT_MAINTENANCE_KEY = "meta:rl-maintenance";
 const RATE_LIMIT_PRUNE_CONTINUE_DELAY_MS = 1_000;
+const CANCEL_CONFIRM_TIMEOUT_MS = 10_000;
+const A2A_HEADERS = { "Content-Type": "application/a2a+json" } as const;
 type RateLimitMaintenance = { cursor: string; due: number };
 
 export interface RateLimitStorage {
@@ -167,6 +166,8 @@ export function truncateUtf8Bytes(text: string, maxBytes: number): string {
 }
 
 export class HandleDO extends DurableObject {
+  private readonly cancelWaiters = new Map<string, Set<(result: CancelResolution) => void>>();
+
   constructor(ctx: DurableObjectState, env: unknown) {
     super(ctx, env as never);
     this.ctx.setWebSocketAutoResponse(new WebSocketRequestResponsePair("ping", "pong"));
@@ -202,7 +203,87 @@ export class HandleDO extends DurableObject {
       }
       return new Response(null, { status: 101, webSocket: client });
     }
+    if (url.pathname === "/tasks" && req.method === "GET") {
+      const caller = req.headers.get("X-Verified-From") ?? "";
+      if (!caller) return this.standardTaskError(401, "unauthorized");
+      const query = parseTaskListQuery(url);
+      if (!query) return this.standardTaskError(400, "invalid task list parameters");
+      const tasks = await this.ctx.storage.list<PersistedTask>({ prefix: "call:" });
+      const cursorKey = req.headers.get("X-Task-Cursor-Key") ?? "";
+      const cursorScope = req.headers.get("X-Task-Cursor-Scope") ?? "";
+      if (!cursorKey || !cursorScope) return this.standardTaskError(401, "unauthorized");
+      const result = await listCallerTasks(tasks.values(), caller, query, cursorKey, cursorScope);
+      if (!result) return this.standardTaskError(400, "invalid page token");
+      return Response.json(result, { headers: A2A_HEADERS });
+    }
+    const cancelMatch = /^\/tasks\/([^/]+):cancel$/.exec(url.pathname);
+    if (cancelMatch && req.method === "POST") {
+      return this.cancelTask(decodeURIComponent(cancelMatch[1]!), req.headers.get("X-Verified-From") ?? "");
+    }
+    const getMatch = /^\/tasks\/([^/]+)$/.exec(url.pathname);
+    if (getMatch && req.method === "GET") {
+      const caller = req.headers.get("X-Verified-From") ?? "";
+      if (!caller) return this.standardTaskError(401, "unauthorized");
+      if (!validHistoryLength(url)) return this.standardTaskError(400, "invalid historyLength");
+      const task = await this.ctx.storage.get<PersistedTask>(`call:${decodeURIComponent(getMatch[1]!)}`);
+      if (!task || !taskBelongsToCaller(task, caller)) return this.taskNotFound();
+      return Response.json(toA2ATask(task), { headers: A2A_HEADERS });
+    }
     return new Response("not found", { status: 404 });
+  }
+
+  private standardTaskError(status: number, message: string): Response {
+    return Response.json(standardError(status, message).body, { status, headers: A2A_HEADERS });
+  }
+
+  private taskNotFound(): Response {
+    const error = a2aError("TaskNotFound", "task does not exist or is not accessible");
+    return Response.json(error.body, { status: error.status, headers: A2A_HEADERS });
+  }
+
+  private taskNotCancelable(): Response {
+    const error = a2aError("TaskNotCancelable", "task cannot be canceled");
+    return Response.json(error.body, { status: error.status, headers: A2A_HEADERS });
+  }
+
+  private settleCancellation(callId: string, result: CancelResolution): void {
+    const waiters = this.cancelWaiters.get(callId);
+    if (!waiters) return;
+    this.cancelWaiters.delete(callId);
+    for (const resolve of waiters) resolve(result);
+  }
+
+  private async cancelTask(callId: string, caller: string): Promise<Response> {
+    if (!caller) return this.standardTaskError(401, "unauthorized");
+    const task = await this.ctx.storage.get<PersistedTask>(`call:${callId}`);
+    if (!task || !taskBelongsToCaller(task, caller)) return this.taskNotFound();
+    if (taskIsTerminal(task)) return this.taskNotCancelable();
+    const listener = this.ctx.getWebSockets("listener")[0];
+    if (!listener) return this.taskNotCancelable();
+
+    const firstRequest = !this.cancelWaiters.has(callId);
+    const resultPromise = new Promise<CancelResolution>((resolve) => {
+      const waiters = this.cancelWaiters.get(callId) ?? new Set();
+      let waiter: (result: CancelResolution) => void;
+      const timeout = setTimeout(() => {
+        const current = this.cancelWaiters.get(callId);
+        current?.delete(waiter);
+        if (current?.size === 0) this.cancelWaiters.delete(callId);
+        resolve({ kind: "not_cancelable" });
+      }, Math.min(CANCEL_CONFIRM_TIMEOUT_MS, Math.max(1, task.deadline - Date.now())));
+      waiter = (settled) => {
+        clearTimeout(timeout);
+        resolve(settled);
+      };
+      waiters.add(waiter);
+      this.cancelWaiters.set(callId, waiters);
+    });
+    if (firstRequest) this.send(listener, { type: "cancel_call", call_id: callId });
+    const result = await resultPromise;
+
+    return result.kind === "canceled"
+      ? Response.json(toA2ATask(result.task), { headers: A2A_HEADERS })
+      : this.taskNotCancelable();
   }
 
   private send(ws: WebSocket, frame: unknown): void {
@@ -228,7 +309,7 @@ export class HandleDO extends DurableObject {
   }
 
   private async advanceCall(
-    record: CallRecord,
+    record: PersistedTask,
     state: CallStatusType["state"],
     caller: WebSocket | undefined,
   ): Promise<void> {
@@ -236,7 +317,12 @@ export class HandleDO extends DurableObject {
     if (STATUS_RANK[state] <= STATUS_RANK[current]) return;
     // Persist before fan-out so a DO restart or duplicate/out-of-order frame
     // cannot move the caller backward after it has observed a later state.
-    await this.ctx.storage.put<CallRecord>(`call:${record.call_id}`, { ...record, state });
+    await this.ctx.storage.put<PersistedTask>(`call:${record.call_id}`, {
+      ...record,
+      state,
+      task_state: state === "working" ? "TASK_STATE_WORKING" : (record.task_state ?? "TASK_STATE_SUBMITTED"),
+      updated_at: Date.now(),
+    });
     if (caller) {
       this.send(caller, {
         type: "call_status", state, call_id: record.call_id,
@@ -287,8 +373,10 @@ export class HandleDO extends DurableObject {
       const call_id = crypto.randomUUID();
       const deadline = now + clampTimeoutMs(att.timeoutMs);
       ws.serializeAttachment({ ...att, call_id, correlation_id });
-      await this.ctx.storage.put<CallRecord>(`call:${call_id}`, {
+      await this.ctx.storage.put<PersistedTask>(`call:${call_id}`, {
         call_id, correlation_id, from: att.from, deadline, state: "ringing",
+        task_state: "TASK_STATE_SUBMITTED", created_at: now, updated_at: now,
+        context_id: frame.context_id,
       });
       await this.scheduleNextAlarm();
       this.send(ws, { type: "call_status", state: "ringing", call_id, correlation_id });
@@ -303,8 +391,9 @@ export class HandleDO extends DurableObject {
     // listener frames
     const frame = safeParseFrame(ListenerToRelayFrame, raw);
     if (!frame) return;
-    const record = await this.ctx.storage.get<CallRecord>(`call:${frame.call_id}`);
+    const record = await this.ctx.storage.get<PersistedTask>(`call:${frame.call_id}`);
     if (!record) return; // stale/unknown call
+    if (taskIsTerminal(record)) return; // duplicate/out-of-order terminal frame
     const caller = this.callerFor(frame.call_id);
 
     if (frame.type === "call_accepted") {
@@ -320,13 +409,17 @@ export class HandleDO extends DurableObject {
     if (frame.type === "call_cancelled") {
       // Confirmation means a pending job was removed or the running process
       // was observed exited. Only now is it honest to publish a terminal
-      // cancellation and release the call record.
+      // cancellation. The task record remains until its original deadline.
+      const canceled = updateTask(record, { task_state: "TASK_STATE_CANCELED" });
+      // Persist terminal truth before fan-out. Once a caller observes a
+      // terminal response, a concurrent GetTask must never move backward.
+      await this.ctx.storage.put<PersistedTask>(`call:${frame.call_id}`, canceled);
       if (caller) {
         this.fail(caller, "canceled", undefined, undefined, true, {
           call_id: frame.call_id, correlation_id: record.correlation_id,
         });
       }
-      await this.ctx.storage.delete(`call:${frame.call_id}`);
+      this.settleCancellation(frame.call_id, { kind: "canceled", task: canceled });
       return;
     }
     if (frame.type === "call_not_cancelled") {
@@ -334,10 +427,17 @@ export class HandleDO extends DurableObject {
       // still win and must be allowed to deliver its result. The producer of
       // cancel_call arrives with the durable A2A task store in #9; handling the
       // acknowledgement here keeps the listener/relay link complete first.
+      this.settleCancellation(frame.call_id, { kind: "not_cancelable" });
       return;
     }
     if (frame.type === "call_result") {
       const text = truncateUtf8Bytes(frame.text, MAX_REPLY_BYTES);
+      const completed = updateTask(record, {
+        task_state: "TASK_STATE_COMPLETED",
+        context_id: frame.context_id ?? record.context_id,
+        result_text: text,
+      });
+      await this.ctx.storage.put<PersistedTask>(`call:${frame.call_id}`, completed);
       if (caller) {
         this.send(caller, {
           type: "call_reply", call_id: frame.call_id, correlation_id: record.correlation_id,
@@ -345,7 +445,7 @@ export class HandleDO extends DurableObject {
         });
         try { caller.close(1000, "done"); } catch { /* closed */ }
       }
-      await this.ctx.storage.delete(`call:${frame.call_id}`);
+      this.settleCancellation(frame.call_id, { kind: "not_cancelable" });
       return;
     }
     if (frame.type === "call_failed") {
@@ -353,25 +453,27 @@ export class HandleDO extends DurableObject {
       // text above. sanitizeDetail bounds the string and strips the control
       // characters that would otherwise reach the caller's terminal verbatim.
       const detail = frame.detail === undefined ? undefined : sanitizeDetail(frame.detail);
+      const failed = updateTask(record, {
+        task_state: "TASK_STATE_FAILED", failure_code: frame.code,
+      });
+      await this.ctx.storage.put<PersistedTask>(`call:${frame.call_id}`, failed);
       if (caller) {
         this.fail(caller, frame.code, detail, frame.offered, true, {
           call_id: frame.call_id, correlation_id: record.correlation_id,
         });
       }
-      await this.ctx.storage.delete(`call:${frame.call_id}`);
+      this.settleCancellation(frame.call_id, { kind: "not_cancelable" });
     }
   }
 
-  override async webSocketClose(ws: WebSocket): Promise<void> {
-    const att = ws.deserializeAttachment() as CallerAttachment | ListenerAttachment | null;
-    if (att?.kind === "caller" && att.call_id) {
-      await this.ctx.storage.delete(`call:${att.call_id}`);
-    }
+  override async webSocketClose(_ws: WebSocket): Promise<void> {
+    // Caller disconnect is not task deletion. A2A GetTask/ListTasks must be
+    // able to recover this record until its original call deadline.
     // listener close: keep in-flight calls; a reconnected listener may still deliver results.
   }
 
   private async scheduleNextAlarm(): Promise<void> {
-    const calls = await this.ctx.storage.list<CallRecord>({ prefix: "call:" });
+    const calls = await this.ctx.storage.list<PersistedTask>({ prefix: "call:" });
     let min = Infinity;
     for (const rec of calls.values()) min = Math.min(min, rec.deadline);
     const maintenance = await readRateLimitMaintenance(this.ctx.storage);
@@ -381,7 +483,7 @@ export class HandleDO extends DurableObject {
 
   override async alarm(): Promise<void> {
     const now = Date.now();
-    const calls = await this.ctx.storage.list<CallRecord>({ prefix: "call:" });
+    const calls = await this.ctx.storage.list<PersistedTask>({ prefix: "call:" });
     for (const rec of calls.values()) {
       if (rec.deadline <= now) {
         const caller = this.callerFor(rec.call_id);
@@ -391,6 +493,7 @@ export class HandleDO extends DurableObject {
           });
         }
         await this.ctx.storage.delete(`call:${rec.call_id}`);
+        this.settleCancellation(rec.call_id, { kind: "not_cancelable" });
       }
     }
     await continueRateLimitMaintenance(this.ctx.storage, now);

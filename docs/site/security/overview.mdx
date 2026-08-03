@@ -24,6 +24,7 @@ description: What AgentCall enforces today, and the risks operators still accept
 - Codex is observed, not guarded, and has no read floor. Some non-shell reads are not recorded.
 - Codex's authenticated Apps, web search, and image generation are removed from fresh and resumed answering sessions with strict, fail-closed configuration. Its shell and remaining local read surfaces still have no read floor.
 - The relay operator can read message and reply plaintext because v1 has no end-to-end encryption.
+- An admitted call's successful reply is retained as a caller-scoped task artifact through the original six-minute deadline. Prompts and conversation history are not stored in that task record.
 - A prompt can consume the callee's tokens and may exfiltrate anything reachable through granted capabilities.
 - Relay tokens do not expire and have no inventory or individual revocation. Rotate a suspected token immediately.
 - Per-handle Agent Cards are not signed; clients trust the relay that serves them.
