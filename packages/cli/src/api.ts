@@ -138,12 +138,23 @@ export async function revokeInvite(
 export async function fetchAuditExportPage(
   relay: string,
   auth: Auth,
-  query: { after?: number; before?: number; page_size?: number; page_token?: string } = {},
+  query: {
+    after?: number;
+    before?: number;
+    actor?: string;
+    event?: string;
+    actor_ip?: string;
+    page_size?: number;
+    page_token?: string;
+  } = {},
   opts: { timeoutMs?: number; retryRateLimit?: boolean; sleep?: (ms: number) => Promise<void> } = {},
 ): Promise<AuditExportPageType> {
   const search = new URLSearchParams();
   if (query.after !== undefined) search.set("after", String(query.after));
   if (query.before !== undefined) search.set("before", String(query.before));
+  if (query.actor !== undefined) search.set("actor", query.actor);
+  if (query.event !== undefined) search.set("event", query.event);
+  if (query.actor_ip !== undefined) search.set("actor_ip", query.actor_ip);
   if (query.page_size !== undefined) search.set("page_size", String(query.page_size));
   if (query.page_token) search.set("page_token", query.page_token);
   let res: Response;
@@ -164,7 +175,7 @@ export async function fetchAuditExportPage(
   }
   if (res.status === 401) throw new ApiError("Your credentials were rejected. Re-run `agentcall setup`.", "invalid");
   if (res.status === 403) throw new ApiError("This line is not an organization administrator.", "invalid");
-  if (res.status === 400) throw new ApiError("The audit export cursor or time range is invalid.", "invalid");
+  if (res.status === 400) throw new ApiError("The audit export cursor, filter, or time range is invalid.", "invalid");
   if (res.status === 409) throw new ApiError("The audit snapshot changed during export. Discard the partial output and retry.", "network");
   if (res.status === 429) throw new ApiError("Too many audit export requests — try again in a minute.", "network");
   if (!res.ok) throw new ApiError(`Audit export failed (${res.status}).`, "network");

@@ -245,15 +245,20 @@ describe("api client", () => {
     });
     expect(await fetchAuditExportPage(
       relay, { org: "acme", handle: "ken", token: "tok" },
-      { after: 10, before: 200, page_size: 50, page_token: "cursor" },
+      {
+        after: 10, before: 200, actor: "ken", event: "org.invite.issue",
+        actor_ip: "203.0.113.10", page_size: 50, page_token: "cursor",
+      },
     )).toEqual(page);
-    expect(seen).toBe("/v1/audit/events?after=10&before=200&page_size=50&page_token=cursor");
+    expect(seen).toBe(
+      "/v1/audit/events?after=10&before=200&actor=ken&event=org.invite.issue&actor_ip=203.0.113.10&page_size=50&page_token=cursor",
+    );
   });
 
   it.each([
     [401, "credentials were rejected"],
     [403, "not an organization administrator"],
-    [400, "cursor or time range is invalid"],
+    [400, "cursor, filter, or time range is invalid"],
     [409, "snapshot changed during export"],
     [429, "Too many audit export requests"],
     [503, "Audit export failed (503)"],

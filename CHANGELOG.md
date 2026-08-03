@@ -20,8 +20,9 @@ which are released together.
 - Make organization authority explicit with `admin` and `member` roles; the
   operator bootstrap invite creates the first admin, and admin-issued invites
   can deliberately delegate either role.
-- Let administrators stream a tenant-scoped, time-filtered NDJSON export that
-  merges organization and roster audit ledgers in deterministic order.
+- Let administrators stream a tenant-scoped NDJSON or CSV export that merges
+  organization and roster audit ledgers in deterministic order, with time-range
+  and exact actor, event-type, and source-IP filters.
 - Sign pagination cursors with a relay-only secret and bind them to the tenant,
   administrator, filters, and captured per-ledger ID/count checkpoint so
   tampering and concurrent appends cannot corrupt export completeness; abort

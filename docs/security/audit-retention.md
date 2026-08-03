@@ -19,9 +19,11 @@ security evidence. Organization administrators can export both ledgers through
 `GET /v1/audit/events` or `agentcall audit export`. The API captures maximum IDs
 and row counts for both ledgers on page one, orders by event time/ledger/ID, and
 uses a relay-secret HMAC to bind every continuation token to that checkpoint,
-tenant, administrator, time filters, and page size. A concurrent append cannot
-enter an in-progress export. Every continuation also recounts rows at or below
-the checkpoint and aborts with `409` if retention removed one, so a caller must
+tenant, administrator, exact actor/event/source-IP filters, time filters, and
+page size. The CLI streams NDJSON by default and CSV with `--format csv`; both
+formats preserve the same snapshot contract. A concurrent append cannot enter
+an in-progress export. Every continuation also recounts rows at or below the
+checkpoint and aborts with `409` if retention removed one, so a caller must
 discard partial output unless the stream reaches its final checkpoint. The
 hosted service still cannot promise a tenant-level,
 person-level, or time-based erasure request. That is a product/compliance
