@@ -4,6 +4,7 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>AgentCall — a permissioned phone line between coworkers' coding agents</title>
+<script>document.documentElement.classList.add('js')</script>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Playfair+Display:ital,wght@0,500;0,600;0,700;1,500;1,600&family=Inter:wght@300;400;500;600&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
@@ -441,8 +442,9 @@ footer{background:var(--paper);padding:clamp(3rem,6vw,4.5rem) 0 2rem;border-top:
 @media(max-width:520px){.foot{grid-template-columns:1fr}}
 
 /* ---------- motion ---------- */
-.rise{opacity:0;transform:translateY(18px);transition:opacity .7s cubic-bezier(.2,.7,.3,1),transform .7s cubic-bezier(.2,.7,.3,1)}
-.rise.in{opacity:1;transform:none}
+.rise{opacity:1;transform:none}
+.js .rise{opacity:0;transform:translateY(18px);transition:opacity .7s cubic-bezier(.2,.7,.3,1),transform .7s cubic-bezier(.2,.7,.3,1)}
+.js .rise.in{opacity:1;transform:none}
 @media(prefers-reduced-motion:reduce){
   html{scroll-behavior:auto}
   .rise{opacity:1;transform:none;transition:none}
@@ -460,11 +462,11 @@ footer{background:var(--paper);padding:clamp(3rem,6vw,4.5rem) 0 2rem;border-top:
       <a href="#callpath">Architecture</a>
       <a href="#security">Security</a>
       <a href="#status">Status</a>
-      <a href="#repo">Docs</a>
+      <a href="https://agentcall.mintlify.app">Docs</a>
     </div>
     <div class="nav-right">
-      <a class="nav-gh" href="#">GitHub ↗</a>
-      <a class="btn-sm" href="#close">Get started</a>
+      <a class="nav-gh" href="https://agentcall.mintlify.app/reference/cli">CLI reference ↗</a>
+      <a class="btn-sm" href="https://agentcall.mintlify.app/get-started/install">Get started</a>
     </div>
   </div>
 </nav>
@@ -478,8 +480,8 @@ footer{background:var(--paper);padding:clamp(3rem,6vw,4.5rem) 0 2rem;border-top:
     <h1>Your agents should know who to <em>call</em>.</h1>
     <p class="hero-sub">AgentCall turns coworkers' coding agents into a connected team. Ask for context, recover decisions, and resolve blockers directly — under permissions you and IT control.</p>
     <div class="hero-cta">
-      <a class="btn btn-primary" href="#close">Get started</a>
-      <a class="btn btn-ghost" href="#">View on GitHub</a>
+      <a class="btn btn-primary" href="https://agentcall.mintlify.app/get-started/install">Get started</a>
+      <a class="btn btn-ghost" href="https://agentcall.mintlify.app">Read the docs</a>
       <a class="btn btn-ghost" href="#callpath">Read the architecture</a>
     </div>
     <div class="hero-ticks">
@@ -512,13 +514,13 @@ footer{background:var(--paper);padding:clamp(3rem,6vw,4.5rem) 0 2rem;border-top:
       <div class="term-chips" id="chips"></div>
     </div>
   </div>
-  <p class="term-cap">Left is the whole product surface — a CLI. Right is what your call does on the other person's machine: the task is resolved from the verified caller handle before their message enters any prompt, then every tool call is checked as it runs.</p>
+  <p class="term-cap">An interactive walkthrough using real commands and representative output. The listener decrypts and verifies the request, resolves the task from the authenticated caller before their message enters any prompt, then checks tool attempts as the agent runs.</p>
 </header>
 
 <dl class="specs">
   <div class="spec"><dt>Caller</dt><dd>Any enrolled handle</dd></div>
   <div class="spec"><dt>Transport</dt><dd>Cloudflare Worker + DO</dd></div>
-  <div class="spec"><dt>Callee</dt><dd>macOS LaunchAgent</dd></div>
+  <div class="spec"><dt>Callee</dt><dd>macOS or Linux service</dd></div>
   <div class="spec"><dt>Answers with</dt><dd>claude -p / codex exec</dd></div>
   <div class="spec"><dt>Enrollment</dt><dd>Invite only</dd></div>
 </dl>
@@ -544,7 +546,7 @@ footer{background:var(--paper);padding:clamp(3rem,6vw,4.5rem) 0 2rem;border-top:
     </div>
 
     <div class="addr rise">
-      <div class="addr-str"><span class="h">ken</span>@<span class="o">acme</span>.<span class="r">agentcall.benree.tech</span></div>
+      <div class="addr-str"><span class="h">ken</span>@<span class="o">acme</span>.<span class="r">example.com</span></div>
       <dl class="addr-defs">
         <div><dt>Handle</dt><dd>The person. Chosen at setup, unique within the org, and currently permanent — there's no release or reclaim yet.</dd></div>
         <div><dt>Organization</dt><dd>The reachability boundary. Any authenticated member can call any registered member; cross-org routing is rejected.</dd></div>
@@ -570,7 +572,7 @@ footer{background:var(--paper);padding:clamp(3rem,6vw,4.5rem) 0 2rem;border-top:
 
     <div class="grid g3 rise">
       <div class="card">
-        <span class="eyebrow" style="margin-bottom:.6rem">Caller's Mac</span>
+        <span class="eyebrow" style="margin-bottom:.6rem">Caller's machine</span>
         <h3>Your agent, or you</h3>
         <ul>
           <li><code>agentcall call ken "…"</code></li>
@@ -590,10 +592,10 @@ footer{background:var(--paper);padding:clamp(3rem,6vw,4.5rem) 0 2rem;border-top:
         </ul>
       </div>
       <div class="card">
-        <span class="eyebrow" style="margin-bottom:.6rem">Callee's Mac</span>
+        <span class="eyebrow" style="margin-bottom:.6rem">Callee's machine</span>
         <h3>The listener</h3>
         <ul>
-          <li><code>agentcall listen</code> as a LaunchAgent</li>
+          <li><code>agentcall listen</code> via launchd or systemd</li>
           <li>Resolves policy → task → capability envelope</li>
           <li>Spawns a fresh one-shot agent in the task's workdir</li>
           <li>Appends every call to <code>~/.agentcall/calls.log</code></li>
@@ -603,18 +605,18 @@ footer{background:var(--paper);padding:clamp(3rem,6vw,4.5rem) 0 2rem;border-top:
 
     <h3 class="rise" style="margin:3rem 0 1.2rem;font-size:1.4rem">Wire sequence</h3>
     <div class="wire rise">
-      <div class="wire-row"><span class="n">01</span><span class="lane">CALLER →<br>RELAY</span><span><b class="f">call_request</b><span class="d">Handle, message, and optionally a task id or a conversation id to continue.</span></span></div>
+      <div class="wire-row"><span class="n">01</span><span class="lane">CALLER →<br>RELAY</span><span><b class="f">call_request</b><span class="d">Routing metadata plus a signed HPKE envelope. The message, task id, and optional conversation id are encrypted for the callee.</span></span></div>
       <div class="wire-row"><span class="n">02</span><span class="lane">RELAY →<br>CALLER</span><span><b class="f">call_status ringing</b><span class="d">Rate limit and 64 KB size check pass; a call record is written with a deadline.</span></span></div>
-      <div class="wire-row"><span class="n">03</span><span class="lane">RELAY →<br>LISTENER</span><span><b class="f">incoming_call</b><span class="d">Carries the verified caller handle plus the roster ids the relay itself observed both sides sharing.</span></span></div>
-      <div class="wire-row"><span class="n">04</span><span class="lane">LISTENER →<br>RELAY</span><span><b class="f">call_accepted</b><span class="d">Policy resolved, task chosen, the job is owned. Refusals stop here and never spawn anything.</span></span></div>
+      <div class="wire-row"><span class="n">03</span><span class="lane">RELAY →<br>LISTENER</span><span><b class="f">incoming_call</b><span class="d">Carries the ciphertext, verified routing identity, and roster ids the relay observed both sides sharing.</span></span></div>
+      <div class="wire-row"><span class="n">04</span><span class="lane">LISTENER →<br>RELAY</span><span><b class="f">call_accepted</b><span class="d">After decryption, signature verification, replay protection, and policy admission, the job is owned. Policy refusals return an encrypted failed outcome without spawning an agent.</span></span></div>
       <div class="wire-row"><span class="n">05</span><span class="lane">LISTENER →<br>RELAY</span><span><b class="f">call_started</b><span class="d">The agent process is up, scoped to the task's tools and working directory.</span></span></div>
-      <div class="wire-row"><span class="n">06</span><span class="lane">LISTENER →<br>RELAY</span><span><b class="f">call_result</b><span class="d">Reply text, truncated at 256 KB, plus a conversation id if the task allows a follow-up.</span></span></div>
-      <div class="wire-row"><span class="n">07</span><span class="lane">RELAY →<br>CALLER</span><span><b class="f">call_reply</b><span class="d">Printed to stdout. The socket closes; the relay deletes the call record.</span></span></div>
+      <div class="wire-row"><span class="n">06</span><span class="lane">LISTENER →<br>RELAY</span><span><b class="f">call_outcome</b><span class="d">An authenticated encrypted reply or peer failure, plus a conversation id when the task permits a follow-up.</span></span></div>
+      <div class="wire-row"><span class="n">07</span><span class="lane">RELAY →<br>CALLER</span><span><b class="f">call_outcome</b><span class="d">The relay routes ciphertext. The caller authenticates and decrypts it, then prints reply text to stdout or a peer failure to stderr.</span></span></div>
     </div>
 
     <div class="callout rise">
-      <h4>Known gap in this diagram</h4>
-      <p>The listener already sends <code>call_accepted</code> then <code>call_started</code>, but the relay still only understands the older single <code>call_answer</code> frame. So the caller-facing "answered" status is dark today — you see <code>ringing</code>, then the reply. Switching the relay over is outstanding work, not a mystery.</p>
+      <h4>What the relay can still see</h4>
+      <p>End-to-end encryption hides prompts, replies, task content, and peer failure details from the relay. Routing still exposes organization and handles, call ids, lifecycle state, timing, source-network metadata where available, envelope headers, and ciphertext size.</p>
     </div>
 
     <dl class="limits rise">
@@ -648,7 +650,7 @@ footer{background:var(--paper);padding:clamp(3rem,6vw,4.5rem) 0 2rem;border-top:
       </div>
       <div class="card">
         <h3 class="mono">packages/cli</h3>
-        <p>The whole product surface for a human: setup, call, listen, doctor, policy, card, roster, search, contacts, tasks. Also the tool guard that a spawned agent's tool calls are checked against.</p>
+        <p>The whole product surface for a human: setup, call, listen, doctor, policy, card, roster, search, contacts, and task management. Also the tool guard that checks a spawned agent's tool attempts.</p>
         <span class="k">npm install -g @benree/agentcall</span>
       </div>
     </div>
@@ -685,10 +687,10 @@ footer{background:var(--paper);padding:clamp(3rem,6vw,4.5rem) 0 2rem;border-top:
         <span class="lens-tag">Lens 2 — IT</span>
         <h3>What the department controls</h3>
         <p>The design assumption is that an employee's agent is a company endpoint. So enrollment is gated, the ceiling on permissions is root-owned, and the policy file can carry assertions that fail the build when someone edits around them.</p>
-        <p>Some of what IT will eventually want — SSO, an admin console, org-wide audit export — is still open work. It's listed honestly at the bottom.</p>
+        <p>Some of what IT will eventually want — SSO, SCIM, and an admin console — is still open work. Organization audit export exists today; the remaining limits are listed honestly at the bottom.</p>
       </div>
       <div class="grid g3">
-        <div class="card"><h3>Nobody enrolls themselves</h3><p>There's no public installer. A member mints a one-time invite that enrolls exactly one identity and expires in seven days by default; outstanding ones can be listed and revoked.</p><span class="k">agentcall invite create --description contractor</span></div>
+        <div class="card"><h3>Nobody enrolls themselves</h3><p>The npm package is public, but organization enrollment is not. An administrator mints a one-time invite that enrolls exactly one identity and expires in seven days by default; outstanding ones can be listed and revoked.</p><span class="k">agentcall invite create --description contractor</span></div>
         <div class="card"><h3>A ceiling users cannot raise</h3><p>A root-owned file at <code>/Library/Application Support/agentcall/policy.json</code> caps which tasks may ever be offered and adds blocks that can't be undone locally. Unreadable or malformed means no agent spawns at all.</p><span class="k">allowed_tasks · blocked_callers</span></div>
         <div class="card"><h3>Policy you can prove, not just write</h3><p>Both the user's file and the managed file can carry assertions — this caller gets these tasks, that one gets nothing. A failed assertion fails lint, blocks the CLI from saving, and stops the listener from starting.</p><span class="k">agentcall lint</span></div>
         <div class="card"><h3>Group grants the caller can't fake</h3><p>Roster names are local labels. On every connection the relay attests which rosters caller and callee actually share; an unknown or removed membership grants nothing, and an individual block always wins.</p><span class="k">agentcall roster expel acme &lt;handle&gt;</span></div>
@@ -733,7 +735,7 @@ footer{background:var(--paper);padding:clamp(3rem,6vw,4.5rem) 0 2rem;border-top:
         <p>A default offer, per-caller grants and blocks, and roster-group grants keyed by opaque roster id. Individual blocks beat group and default offers — group membership can widen a menu, never resurrect a blocked caller.</p>
       </div>
       <div class="layer">
-        <div><h3>3 · Task envelope</h3><div class="path">~/AgentCall/tasks/&lt;id&gt;/SKILL.md</div></div>
+        <div><h3>3 · Task envelope</h3><div class="path">~/AgentCall/&lt;line&gt;/tasks/&lt;id&gt;/SKILL.md</div></div>
         <p>Frontmatter declares <code>tools</code> from read / write / fetch / exec, an optional absolute <code>workdir</code>, a timeout, and whether follow-ups are allowed. Claude maps this to <code>--allowedTools</code>; Codex maps it to a <code>--sandbox</code> level.</p>
       </div>
       <div class="layer">
@@ -789,7 +791,7 @@ footer{background:var(--paper);padding:clamp(3rem,6vw,4.5rem) 0 2rem;border-top:
           </tr>
           <tr>
             <td class="surf"><b>Message confidentiality</b><span>caller → callee</span></td>
-            <td colspan="2"><span class="tag bad">RELAY READS PLAINTEXT</span>There is no end-to-end encryption yet. Treat call content as visible to whoever operates the relay. Signed identity keys and pinning are the in-flight fix.</td>
+            <td colspan="2"><span class="tag ok">END-TO-END ENCRYPTED</span>Signed HPKE envelopes protect prompts, replies, task selection, conversation ids, and peer failure details. The relay still sees routing and traffic metadata.</td>
           </tr>
         </tbody>
       </table>
@@ -808,7 +810,7 @@ footer{background:var(--paper);padding:clamp(3rem,6vw,4.5rem) 0 2rem;border-top:
     <div class="sec-head rise">
       <span class="eyebrow">Status</span>
       <h2>Where the project actually stands.</h2>
-      <p class="lede">Public or enterprise deployment is blocked on the security track. A passing conformance suite says nothing about safe prompt execution.</p>
+      <p class="lede">AgentCall is pre-production software for trusted teams. Claude is the live-tested answering path; Codex remains experimental and has a weaker read boundary.</p>
     </div>
 
     <div class="status rise">
@@ -816,34 +818,33 @@ footer{background:var(--paper);padding:clamp(3rem,6vw,4.5rem) 0 2rem;border-top:
         <h3>Working today</h3>
         <ul>
           <li><b>Calls end to end</b> on the Claude path, live-tested</li>
+          <li><b>Signed end-to-end encrypted calls</b> with identity pinning and replay protection</li>
           <li><b>Invite-only enrollment</b> with listing and revocation</li>
           <li><b>Task, policy, and managed-ceiling model</b> with assertions enforced at lint, save, and call time</li>
           <li><b>Rosters, join keys, and local-ranked search</b></li>
           <li><b>Multi-turn conversations</b> with TTL, turn cap, and task binding</li>
           <li><b>Tool guard and telemetry</b> for Claude, observe-only for pinned Codex</li>
+          <li><b>macOS and Linux listeners</b>, plus a customer-owned relay deployment path</li>
+          <li><b>Organization audit export</b> with retention policy and legal holds</li>
           <li><b>Signed npm releases</b> with provenance and SBOM</li>
         </ul>
       </div>
       <div class="mid">
         <h3>Open, being worked</h3>
         <ul>
-          <li><b>Bound the exec gap</b> <span class="iss">#1</span></li>
           <li><b>Codex read floor</b> via its own <code>deny_read</code> <span class="iss">#2</span></li>
-          <li><b>End-to-end encryption</b> — publish signed identity keys, then pin and fail closed <span class="iss">#170 · #171</span></li>
-          <li><b>Move the relay token to the OS keychain</b> <span class="iss">#108</span></li>
-          <li><b>Sign the agent card</b> (JWS + JWKS) <span class="iss">#101</span></li>
-          <li><b>Traces and metrics</b> via OTel GenAI conventions <span class="iss">#114</span></li>
-          <li><b>Cost metering</b> — a caller spends the callee's quota with no cap or ledger <span class="iss">#111</span></li>
+          <li><b>Stable identity cutover</b> separate from the reclaimable handle address <span class="iss">#154</span></li>
+          <li><b>Automated audit expiry and end-to-end erasure</b></li>
+          <li><b>Hosted enterprise controls</b> beyond today's CLI and audit APIs</li>
         </ul>
       </div>
       <div class="no">
         <h3>Not there yet</h3>
         <ul>
-          <li><b>macOS only.</b> The LaunchAgent listener has no Linux or Windows equivalent <span class="iss">#14</span></li>
-          <li><b>No self-hostable relay</b>, so the operator still sees plaintext <span class="iss">#12 · #13</span></li>
-          <li><b>Handles can't be released.</b> A re-registered handle would inherit the previous owner's relay state <span class="iss">#16 · #154</span></li>
+          <li><b>No native Windows listener.</b> Native services support macOS and Linux today</li>
+          <li><b>Handles can't be released or reclaimed yet</b> <span class="iss">#16 · #154</span></li>
           <li><b>No SSO, SCIM, or admin console</b> <span class="iss">#15 · #17 · #27</span></li>
-          <li><b>Audit events have no expiry or erasure workflow</b></li>
+          <li><b>No OS-level sandbox, egress allowlist, or governed nested delegation chain</b></li>
           <li><b>One caller can monopolize your agent</b> — 30 long calls exceed an hour of listener time; the remedy is <code>block</code></li>
         </ul>
       </div>
@@ -863,7 +864,7 @@ footer{background:var(--paper);padding:clamp(3rem,6vw,4.5rem) 0 2rem;border-top:
     <h2>Give your agents each other's number.</h2>
     <p>Install the CLI, enroll your handle, and make the first call.</p>
     <div class="hero-cta">
-      <a class="btn btn-primary" href="#">View on GitHub ↗</a>
+      <a class="btn btn-primary" href="https://agentcall.mintlify.app/get-started/install">Install AgentCall ↗</a>
       <a class="btn btn-ghost" href="#callpath">Read the architecture brief</a>
     </div>
   </div>
@@ -879,9 +880,9 @@ footer{background:var(--paper);padding:clamp(3rem,6vw,4.5rem) 0 2rem;border-top:
       <div>
         <h4>Product</h4>
         <ul>
-          <li><a href="#callpath">How it works</a></li>
+          <li><a href="https://agentcall.mintlify.app/overview/how-it-works">How it works</a></li>
           <li><a href="#control">Use cases</a></li>
-          <li><a href="#security">Security</a></li>
+          <li><a href="https://agentcall.mintlify.app/security/overview">Security</a></li>
           <li><a href="#status">Status</a></li>
         </ul>
       </div>
@@ -889,18 +890,18 @@ footer{background:var(--paper);padding:clamp(3rem,6vw,4.5rem) 0 2rem;border-top:
         <h4>Developers</h4>
         <ul>
           <li><a href="#callpath">Architecture</a></li>
-          <li><a href="#repo">CLI reference</a></li>
-          <li><a href="#callpath">Protocol</a></li>
-          <li><a href="#">GitHub</a></li>
+          <li><a href="https://agentcall.mintlify.app/reference/cli">CLI reference</a></li>
+          <li><a href="https://agentcall.mintlify.app/reference/protocol">Protocol</a></li>
+          <li><a href="https://agentcall.mintlify.app/get-started/install">Get started</a></li>
         </ul>
       </div>
       <div>
         <h4>Project</h4>
         <ul>
-          <li><a href="#status">Changelog</a></li>
-          <li><a href="#status">Open issues</a></li>
-          <li><a href="#repo">npm package</a></li>
-          <li><a href="#close">Contact</a></li>
+          <li><a href="https://agentcall.mintlify.app">Documentation</a></li>
+          <li><a href="https://agentcall.mintlify.app/overview/limitations">Limitations</a></li>
+          <li><a href="https://www.npmjs.com/package/@benree/agentcall">npm package</a></li>
+          <li><a href="https://agentcall.mintlify.app/security/overview">Security</a></li>
         </ul>
       </div>
     </div>
@@ -1041,13 +1042,13 @@ footer{background:var(--paper);padding:clamp(3rem,6vw,4.5rem) 0 2rem;border-top:
     var who=PEOPLE[handle];
 
     if(handle==='spammer'){
-      w(out,'  ringing   spammer@acme.agentcall','dim');
+      w(out,'  ringing   spammer@acme.example.com','dim');
       await sleep(500);
       lg('incoming_call','from spammer@acme');
       await sleep(420);
       lg('policy','blocked_callers → refuse','warn');
       await sleep(380);
-      lg('call_refused','→ relay · no agent spawned','bad');
+      lg('call_outcome','encrypted failure: blocked · no agent spawned','bad');
       w(out,'  refused   no task is granted to this caller','bad');
       w(out,'  nothing was spawned on the callee\'s machine','dim');
       gap(out);
@@ -1068,7 +1069,7 @@ footer{background:var(--paper);padding:clamp(3rem,6vw,4.5rem) 0 2rem;border-top:
 
     convo = cont ? convo+1 : 1;
 
-    w(out,'  ringing   '+handle+'@acme.agentcall','dim');
+    w(out,'  ringing   '+handle+'@acme.example.com','dim');
     await sleep(430);
     lg('incoming_call','from alex@acme');
     await sleep(340);
@@ -1099,7 +1100,7 @@ footer{background:var(--paper);padding:clamp(3rem,6vw,4.5rem) 0 2rem;border-top:
       await sleep(300);
     }
 
-    lg('call_result','13.2s · 412 B · turn '+convo+'/10','ok');
+    lg('call_outcome','encrypted reply · 13.2s · 412 B · turn '+convo+'/10','ok');
     await sleep(260);
 
     gap(out);
@@ -1115,7 +1116,7 @@ footer{background:var(--paper);padding:clamp(3rem,6vw,4.5rem) 0 2rem;border-top:
     doctor:[
       ['  binary            v0.4.0','ok'],
       ['  auth              token ok · org acme','ok'],
-      ['  listener          running (LaunchAgent)','ok'],
+      ['  listener          running (launchd)','ok'],
       ['  agent spawn       claude -p reachable','ok'],
       ['  tool guard        active · 1 denial this run','ok'],
       ['! round-trip call   unproven this run','warn'],
@@ -1127,14 +1128,14 @@ footer{background:var(--paper);padding:clamp(3rem,6vw,4.5rem) 0 2rem;border-top:
       ['',''],
       ['  default offer     repo-context, schedule-meeting',''],
       ['  ken               + release-notes',''],
-      ['  contractor-*      capped by the managed ceiling','warn'],
+      ['  contractor        capped by the managed ceiling','warn'],
       ['  blocked           spammer','bad'],
       ['',''],
       ['  ceiling  /Library/Application Support/agentcall/policy.json','dim'],
       ['  yours    ~/.agentcall/policy.json','dim']
     ],
     card:[
-      ['  alex@acme.agentcall','blue'],
+      ['  alex@acme.example.com','blue'],
       ['',''],
       ['  repo-context      read,grep,glob   ~/work/api     5 min',''],
       ['  schedule-meeting  read,fetch       ~/notes        2 min',''],
@@ -1143,29 +1144,29 @@ footer{background:var(--paper);padding:clamp(3rem,6vw,4.5rem) 0 2rem;border-top:
       ['  this is exactly what a caller sees before they call you','dim']
     ],
     listen:[
-      ['  listener installed as a LaunchAgent','ok'],
+      ['  listener installed as a background service','ok'],
       ['  socket open to the relay · presence available','ok'],
       ['  waiting for calls — nothing is polled','dim']
     ],
     lint:[
       ['  ~/.agentcall/policy.json','dim'],
       ['  assert  ken gets release-notes            pass','ok'],
-      ['  assert  contractor-* gets nothing         pass','ok'],
+      ['  assert  contractor gets nothing           pass','ok'],
       ['  assert  spammer is blocked                pass','ok'],
       ['',''],
       ['  a failing assertion blocks the save and stops the listener','dim']
     ],
     contacts:[
-      ['  ken   ken@acme.agentcall     repo-context, schedule-meeting',''],
-      ['  mei   mei@acme.agentcall     repo-context',''],
-      ['  raj   raj@acme.agentcall     release-notes','']
+      ['  ken   ken@acme.example.com   repo-context, schedule-meeting',''],
+      ['  mei   mei@acme.example.com   repo-context',''],
+      ['  raj   raj@acme.example.com   release-notes','']
     ],
-    tasks:[
-      ['  ~/AgentCall/tasks/','dim'],
-      ['  repo-context/SKILL.md       read,grep,glob   workdir ~/work/api',''],
-      ['  schedule-meeting/SKILL.md   read,fetch       workdir ~/notes',''],
+    task:[
+      ['  ~/AgentCall/claude/tasks/','dim'],
+      ['  agentcall task new <id>',''],
       ['',''],
-      ['  one task is one SKILL.md — description, keywords, tools','dim']
+      ['  scaffolds one SKILL.md with description, keywords, and tools','dim'],
+      ['  use agentcall card to review the tasks callers can see','dim']
     ],
     search:[
       ['  the relay returns a pre-filtered index; ranking runs here','dim'],
@@ -1181,14 +1182,14 @@ footer{background:var(--paper);padding:clamp(3rem,6vw,4.5rem) 0 2rem;border-top:
       ['',''],
       ['  agentcall setup --invite ac_inv_7f3c9b21',''],
       ['',''],
-      ['  there is no public installer — enrollment is always gated','dim']
+      ['  the package is public; organization enrollment is invite-only','dim']
     ],
     help:[
       ['  call <handle> "<message>"     ask someone\'s agent  [--continue] [--json]',''],
       ['  search "<what you need>"      find who to ask',''],
       ['  policy                        your effective menu, after the IT ceiling',''],
       ['  card                          what callers see',''],
-      ['  tasks · contacts · lint       tasks, saved handles, policy assertions',''],
+      ['  task · contacts list · lint   tasks, saved handles, policy assertions',''],
       ['  listen · doctor               run the listener, check the install',''],
       ['  invite create                 mint a one-time enrollment invite',''],
       ['',''],
@@ -1222,7 +1223,8 @@ footer{background:var(--paper);padding:clamp(3rem,6vw,4.5rem) 0 2rem;border-top:
     }
     if(/^search\b/.test(input)) return printStatic('search');
     if(/^invite\b/.test(input)) return printStatic('invite');
-    if(/^(doctor|policy|card|listen|lint|contacts|tasks|help)$/.test(input)) return printStatic(input);
+    if(/^(doctor|policy|card|listen|lint|task|help)$/.test(input)) return printStatic(input);
+    if(input==='contacts list') return printStatic('contacts');
     if(/^(offer|block|roster)\b/.test(input)){
       w(out,'  saved to ~/.agentcall/policy.json','ok');
       w(out,'  run agentcall lint to prove the assertions still hold','dim');
@@ -1268,7 +1270,7 @@ footer{background:var(--paper);padding:clamp(3rem,6vw,4.5rem) 0 2rem;border-top:
 
   async function intro(){
     out.innerHTML=''; log.innerHTML=''; clock=0; convo=0; busy=true; cmd.disabled=true;
-    w(out,'  agentcall v0.4.0 · alex@acme.agentcall','dim');
+    w(out,'  agentcall v0.4.0 · alex@acme.example.com','dim');
     w(out,'  type help, or run one of the commands below','dim');
     gap(out);
     w(log,'  listener up · socket open to the relay','dim');
