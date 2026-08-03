@@ -128,6 +128,9 @@ which are released together.
 - Generate detailed CLI help recursively for every command and nested subcommand,
   with a contract test that fails when the command tree or required reader
   journeys fall out of the published reference and navigation.
+- Replace the 1,100-line repository README with a concise product overview,
+  quick start, safe-receiving path, security summary, and links into the
+  task-oriented documentation.
 
 ### A2A task retrieval for live calls
 
