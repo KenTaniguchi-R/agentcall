@@ -59,7 +59,7 @@ function publicJoinKey(row: JoinKeyRow) {
 
 export function mountRoster(app: Hono<{ Bindings: Env }>): void {
   app.post("/v1/roster", async (c) => {
-    const identity = await authenticateRequest(c.env.DB, c.req);
+    const identity = await authenticateRequest(c.env, c.req);
     if (!identity) return c.json({ error: "unauthorized" }, 401);
     const { org, handle } = identity;
     // Creating rosters uses the tighter registration policy so it cannot be
@@ -104,7 +104,7 @@ export function mountRoster(app: Hono<{ Bindings: Env }>): void {
   const NOT_FOUND = { error: "not found" } as const;
 
   app.post("/v1/roster/:id/join", async (c) => {
-    const identity = await authenticateRequest(c.env.DB, c.req);
+    const identity = await authenticateRequest(c.env, c.req);
     if (!identity) return c.json({ error: "unauthorized" }, 401);
     const { org, handle } = identity;
 
@@ -210,7 +210,7 @@ export function mountRoster(app: Hono<{ Bindings: Env }>): void {
   }
 
   app.post("/v1/roster/:id/leave", async (c) => {
-    const identity = await authenticateRequest(c.env.DB, c.req);
+    const identity = await authenticateRequest(c.env, c.req);
     if (!identity) return c.json({ error: "unauthorized" }, 401);
     const id = c.req.param("id");
     if (!ROSTER_ID_RE.test(id)) return c.json({ error: "invalid roster id" }, 400);
@@ -235,7 +235,7 @@ export function mountRoster(app: Hono<{ Bindings: Env }>): void {
   });
 
   app.post("/v1/roster/:id/audit-budget/reset", async (c) => {
-    const identity = await authenticateRequest(c.env.DB, c.req);
+    const identity = await authenticateRequest(c.env, c.req);
     if (!identity) return c.json({ error: "unauthorized" }, 401);
     const id = c.req.param("id");
     if (!ROSTER_ID_RE.test(id)) return c.json({ error: "invalid roster id" }, 400);
@@ -268,7 +268,7 @@ export function mountRoster(app: Hono<{ Bindings: Env }>): void {
   });
 
   app.post("/v1/roster/:id/expel", async (c) => {
-    const identity = await authenticateRequest(c.env.DB, c.req);
+    const identity = await authenticateRequest(c.env, c.req);
     if (!identity) return c.json({ error: "unauthorized" }, 401);
     const id = c.req.param("id");
     if (!ROSTER_ID_RE.test(id)) return c.json({ error: "invalid roster id" }, 400);
@@ -296,7 +296,7 @@ export function mountRoster(app: Hono<{ Bindings: Env }>): void {
   });
 
   app.post("/v1/roster/:id/keys", async (c) => {
-    const identity = await authenticateRequest(c.env.DB, c.req);
+    const identity = await authenticateRequest(c.env, c.req);
     if (!identity) return c.json({ error: "unauthorized" }, 401);
     const id = c.req.param("id");
     if (!ROSTER_ID_RE.test(id)) return c.json({ error: "invalid roster id" }, 400);
@@ -340,7 +340,7 @@ export function mountRoster(app: Hono<{ Bindings: Env }>): void {
   });
 
   app.post("/v1/roster/:id/keys/list", async (c) => {
-    const identity = await authenticateRequest(c.env.DB, c.req);
+    const identity = await authenticateRequest(c.env, c.req);
     if (!identity) return c.json({ error: "unauthorized" }, 401);
     const id = c.req.param("id");
     if (!ROSTER_ID_RE.test(id)) return c.json({ error: "invalid roster id" }, 400);
@@ -357,7 +357,7 @@ export function mountRoster(app: Hono<{ Bindings: Env }>): void {
   });
 
   app.post("/v1/roster/:id/keys/:prefix/revoke", async (c) => {
-    const identity = await authenticateRequest(c.env.DB, c.req);
+    const identity = await authenticateRequest(c.env, c.req);
     if (!identity) return c.json({ error: "unauthorized" }, 401);
     const id = c.req.param("id");
     if (!ROSTER_ID_RE.test(id)) return c.json({ error: "invalid roster id" }, 400);
@@ -402,7 +402,7 @@ export function mountRoster(app: Hono<{ Bindings: Env }>): void {
   });
 
   app.post("/v1/roster/:id/delete", async (c) => {
-    const identity = await authenticateRequest(c.env.DB, c.req);
+    const identity = await authenticateRequest(c.env, c.req);
     if (!identity) return c.json({ error: "unauthorized" }, 401);
     const id = c.req.param("id");
     if (!ROSTER_ID_RE.test(id)) return c.json({ error: "invalid roster id" }, 400);
@@ -427,7 +427,7 @@ export function mountRoster(app: Hono<{ Bindings: Env }>): void {
   });
 
   app.get("/v1/roster/:id/bundle", async (c) => {
-    const identity = await authenticateRequest(c.env.DB, c.req);
+    const identity = await authenticateRequest(c.env, c.req);
     if (!identity) return c.json({ error: "unauthorized" }, 401);
     const { org, handle: viewer } = identity;
 

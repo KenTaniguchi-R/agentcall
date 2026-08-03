@@ -55,7 +55,7 @@ export function mountA2A(app: Hono<{ Bindings: Env }>): void {
       return c.json(body, status as 400, A2A_HEADERS);
     }
 
-    const identity = await authenticateRequest(c.env.DB, c.req);
+    const identity = await authenticateRequest(c.env, c.req);
     if (!identity) {
       const { status, body } = standardError(401, "unauthorized");
       return c.json(body, status as 401, A2A_HEADERS);

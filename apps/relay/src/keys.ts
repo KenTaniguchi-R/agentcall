@@ -32,7 +32,7 @@ export function mountKeys(app: Hono<{ Bindings: Env }>): void {
   // Publish once. Replacement is refused rather than versioned: an identity key
   // a relay can swap is not a trust root.
   app.put("/v1/keys/identity", async (c) => {
-    const identity = await authenticateRequest(c.env.DB, c.req);
+    const identity = await authenticateRequest(c.env, c.req);
     if (!identity) return c.json({ error: "unauthorized" }, 401);
     if (!(await checkLimit(c.env, `${identity.org}:${identity.handle}`, NATIVE_CARD))) {
       return c.json({ error: "rate limited" }, 429);
@@ -85,7 +85,7 @@ export function mountKeys(app: Hono<{ Bindings: Env }>): void {
   });
 
   app.put("/v1/keys/encryption", async (c) => {
-    const identity = await authenticateRequest(c.env.DB, c.req);
+    const identity = await authenticateRequest(c.env, c.req);
     if (!identity) return c.json({ error: "unauthorized" }, 401);
     if (!(await checkLimit(c.env, `${identity.org}:${identity.handle}`, NATIVE_CARD))) {
       return c.json({ error: "rate limited" }, 429);
@@ -141,7 +141,7 @@ export function mountKeys(app: Hono<{ Bindings: Env }>): void {
   // Authenticated: key records name who talks to whom, so anonymous reads would
   // hand an unregistered scraper the whole namespace.
   app.get("/v1/keys/:handle", async (c) => {
-    const identity = await authenticateRequest(c.env.DB, c.req);
+    const identity = await authenticateRequest(c.env, c.req);
     if (!identity) return c.json({ error: "unauthorized" }, 401);
     const ip = c.req.header("cf-connecting-ip") ?? "unknown";
     if (!(await checkLimit(c.env, ip, NATIVE_READ))) return c.json({ error: "rate limited" }, 429);

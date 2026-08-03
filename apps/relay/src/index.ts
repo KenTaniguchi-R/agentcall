@@ -8,7 +8,8 @@ import { mountKeys } from "./keys.js";
 import { mountPresence } from "./presence.js";
 import { mountRoster } from "./roster.js";
 import { generateToken, sha256Hex } from "./auth.js";
-import { authenticateRequest, identityKey, registrationAddressHost } from "./tenant.js";
+import { authenticateRequest, deploymentOrgAllows, identityKey, registrationAddressHost,
+  type DeploymentMode } from "./tenant.js";
 import { sharedRosterIds } from "./groups.js";
 import { checkLimit, NATIVE_CARD, NATIVE_READ, REGISTER, type RateLimitEnv } from "./ratelimit/index.js";
 import { parseStoredCard } from "./stored-card.js";
@@ -21,6 +22,10 @@ export type Env = RateLimitEnv & {
   HANDLE_DO: DurableObjectNamespace;
   STATUS_READS: AnalyticsEngineDataset;
   BOOTSTRAP_TOKEN?: string;
+  /** Required: missing or unknown deployment mode fails every tenant boundary closed. */
+  DEPLOYMENT_MODE: DeploymentMode;
+  /** Pins a customer-operated relay to one tenant and makes the tenant hostname-independent. */
+  SELF_HOSTED_ORG?: string;
 };
 const app = new Hono<{ Bindings: Env }>();
 mountA2A(app);
@@ -66,6 +71,9 @@ app.post("/v1/register", async (c) => {
   }
   if (!inviteRow) return c.json({ error: "invalid invite" }, 404);
   const org = inviteRow.org;
+  if (!deploymentOrgAllows(c.env.DEPLOYMENT_MODE, c.env.SELF_HOSTED_ORG, org)) {
+    return c.json({ error: "invalid invite" }, 404);
+  }
   const token = generateToken();
   try {
     const now = Date.now();
@@ -118,7 +126,7 @@ app.post("/v1/register", async (c) => {
 // Token rotation shares the 5/min credential-operation policy. Its distinct
 // key keeps it from sharing a budget with registrations or invite creation.
 app.post("/v1/token/rotate", async (c) => {
-  const identity = await authenticateRequest(c.env.DB, c.req);
+  const identity = await authenticateRequest(c.env, c.req);
   if (!identity) return c.json({ error: "unauthorized" }, 401);
   const { org, handle } = identity;
   if (!(await checkLimit(c.env, `rotate:${org}:${handle}`, REGISTER))) {
@@ -133,7 +141,7 @@ app.post("/v1/token/rotate", async (c) => {
 });
 
 app.put("/v1/card", async (c) => {
-  const identity = await authenticateRequest(c.env.DB, c.req);
+  const identity = await authenticateRequest(c.env, c.req);
   if (!identity) return c.json({ error: "unauthorized" }, 401);
   const { org, handle } = identity;
   if (!(await checkLimit(c.env, `${org}:${handle}`, NATIVE_CARD))) return c.json({ error: "rate limited" }, 429);
@@ -147,7 +155,7 @@ app.put("/v1/card", async (c) => {
 });
 
 app.get("/v1/card/:handle", async (c) => {
-  const identity = await authenticateRequest(c.env.DB, c.req);
+  const identity = await authenticateRequest(c.env, c.req);
   if (!identity) return c.json({ error: "unauthorized" }, 401);
   const { org, handle: viewer } = identity;
   const ip = c.req.header("cf-connecting-ip") ?? "unknown";
@@ -171,7 +179,7 @@ app.get("/v1/card/:handle", async (c) => {
 app.get("/v1/ws", async (c) => {
   if (c.req.header("Upgrade")?.toLowerCase() !== "websocket") return c.json({ error: "expected websocket" }, 426);
   const role = c.req.query("role");
-  const identity = await authenticateRequest(c.env.DB, c.req);
+  const identity = await authenticateRequest(c.env, c.req);
   if (!identity) return c.json({ error: "unauthorized" }, 401);
   const { org, handle } = identity;
 

@@ -7,7 +7,7 @@ import type { Env } from "./index.js";
 import { constantTimeEqual, generateToken, sha256Hex } from "./auth.js";
 import { orgAuditStatement, orgAuditTrimStatement, type OrgAuditActor } from "./events.js";
 import { checkLimit, REGISTER, ROSTER_WRITE } from "./ratelimit/index.js";
-import { authenticateRequest, requireOrgAdmin } from "./tenant.js";
+import { authenticateRequest, deploymentOrgAllows, requireOrgAdmin } from "./tenant.js";
 
 const INVITE_RETENTION_MS = 30 * 86_400_000;
 
@@ -92,6 +92,9 @@ export function mountInvites(app: Hono<{ Bindings: Env }>): void {
     if (!(await checkLimit(c.env, `bootstrap:${ip}`, REGISTER))) return c.json({ error: "rate limited" }, 429);
     const body = BootstrapOrgInviteRequest.safeParse(await c.req.json().catch(() => null));
     if (!body.success) return c.json({ error: "invalid request" }, 400);
+    if (!deploymentOrgAllows(c.env.DEPLOYMENT_MODE, c.env.SELF_HOSTED_ORG, body.data.org)) {
+      return c.json({ error: "organization does not match this relay" }, 400);
+    }
     return createInvite(
       c, body.data.org, null, "relay-operator", "bootstrap",
       body.data.description, body.data.expires_in_days, "admin",
@@ -99,7 +102,7 @@ export function mountInvites(app: Hono<{ Bindings: Env }>): void {
   });
 
   app.post("/v1/invites", async (c) => {
-    const identity = await authenticateRequest(c.env.DB, c.req);
+    const identity = await authenticateRequest(c.env, c.req);
     if (!identity) return c.json({ error: "unauthorized" }, 401);
     if (!requireOrgAdmin(identity)) return c.json({ error: "administrator role required" }, 403);
     if (!(await checkLimit(c.env, `invite:${identity.org}:${identity.handle}`, REGISTER))) {
@@ -114,7 +117,7 @@ export function mountInvites(app: Hono<{ Bindings: Env }>): void {
   });
 
   app.post("/v1/invites/list", async (c) => {
-    const identity = await authenticateRequest(c.env.DB, c.req);
+    const identity = await authenticateRequest(c.env, c.req);
     if (!identity) return c.json({ error: "unauthorized" }, 401);
     if (!requireOrgAdmin(identity)) return c.json({ error: "administrator role required" }, 403);
     if (!(await checkLimit(c.env, `invite-list:${identity.org}:${identity.handle}`, ROSTER_WRITE))) {
@@ -130,7 +133,7 @@ export function mountInvites(app: Hono<{ Bindings: Env }>): void {
   });
 
   app.post("/v1/invites/:id/revoke", async (c) => {
-    const identity = await authenticateRequest(c.env.DB, c.req);
+    const identity = await authenticateRequest(c.env, c.req);
     if (!identity) return c.json({ error: "unauthorized" }, 401);
     if (!requireOrgAdmin(identity)) return c.json({ error: "administrator role required" }, 403);
     const id = c.req.param("id");

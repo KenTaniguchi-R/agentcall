@@ -20,6 +20,20 @@ which are released together.
 - Preserve the granted role as structured audit evidence on invite issue,
   redemption, and revocation events.
 
+### Experimental customer-owned Cloudflare relay
+
+- Add a binding-complete self-host Wrangler configuration and an operator
+  runbook covering D1 provisioning/migrations, secrets, custom-domain-only
+  routing, deployment validation, CI, upgrades, rollback, and ownership.
+- Pin customer-operated relays to one configured organization, rejecting
+  conflicting tenant headers, bootstrap requests, and invite redemption while
+  preserving the hosted multi-tenant routing behavior.
+- Keep the deployment claim precise: this is isolated customer-owned
+  Cloudflare infrastructure, not on-premises packaging, relay federation, or a
+  regional data-residency guarantee.
+- Limit the artifact to internal, pre-production evaluation until security
+  issues #1–#8 close; public and enterprise production remain unsupported.
+
 ### Linux and isolated container listeners
 
 - Publish the CLI for Linux and install one restartable systemd user service

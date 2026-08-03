@@ -39,6 +39,11 @@ jobs:
       - run: pnpm -r typecheck
 
       - run: pnpm -r test
+      - name: Bundle hosted and self-host relay configurations
+        working-directory: apps/relay
+        run: |
+          pnpm exec wrangler deploy --dry-run --config wrangler.jsonc
+          pnpm exec wrangler deploy --dry-run --config wrangler.self-host.example.jsonc
       - name: Pack publishable workspaces
         run: |
           mkdir -p "$RUNNER_TEMP/agentcall-packages"

@@ -6,6 +6,7 @@
   // workers.dev bypass URL, which would let anyone reach the relay directly,
   // skipping the custom-domain route below.
   "workers_dev": false,
+  "vars": { "DEPLOYMENT_MODE": "hosted" },
   "d1_databases": [{
     "binding": "DB",
     "database_name": "agentcall",
