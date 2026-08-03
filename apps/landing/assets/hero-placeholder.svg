@@ -1,0 +1,10 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1600 1000" role="img" aria-labelledby="title description">
+  <title id="title">AgentCall hero artwork placeholder</title>
+  <desc id="description">A neutral frame showing where future landing-page artwork will appear.</desc>
+  <rect width="1600" height="1000" fill="#f1f1ee" />
+  <rect x="32" y="32" width="1536" height="936" rx="24" fill="none" stroke="#b8b8b0" stroke-width="4" stroke-dasharray="16 16" />
+  <path d="M560 500h480M800 260v480" stroke="#b8b8b0" stroke-width="4" />
+  <text x="800" y="850" fill="#686862" font-family="ui-monospace, monospace" font-size="32" text-anchor="middle">
+    Replace assets/hero-placeholder.svg
+  </text>
+</svg>
