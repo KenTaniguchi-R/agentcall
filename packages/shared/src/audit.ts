@@ -3,6 +3,7 @@ import { z } from "zod";
 export const DEFAULT_AUDIT_EVENT_RETENTION_DAYS = 400;
 export const MIN_AUDIT_EVENT_RETENTION_DAYS = 30;
 export const MAX_AUDIT_EVENT_RETENTION_DAYS = 2_555;
+export const AUDIT_RETENTION_DAY_MS = 86_400_000;
 export const AUDIT_CONTROL_REQUEST_ID_RE = /^[A-Za-z0-9_-]{16,64}$/;
 export const AUDIT_HOLD_ID_RE = /^hold_[a-f0-9]{32}$/;
 
@@ -101,9 +102,56 @@ export const AuditLegalHoldReleaseRequest = z.object({
   request_id: z.string().regex(AUDIT_CONTROL_REQUEST_ID_RE),
 }).strict();
 
+const AuditRetentionLedgerReadiness = z.object({
+  acknowledged_through_id: z.number().int().nonnegative().nullable(),
+  eligible_event_count: z.number().int().nonnegative(),
+  unacknowledged_event_count: z.number().int().nonnegative(),
+  export_ready: z.boolean(),
+}).strict().superRefine((ledger, context) => {
+  const expected = ledger.acknowledged_through_id !== null && ledger.unacknowledged_event_count === 0;
+  if (ledger.export_ready !== expected) {
+    context.addIssue({ code: "custom", message: "export readiness does not match acknowledgement coverage" });
+  }
+});
+
+export const AuditRetentionReadiness = z.object({
+  state: z.enum(["ready", "held", "export_required"]),
+  evaluated_at: z.number().int().nonnegative(),
+  cutoff_at: z.number().int().nonnegative(),
+  retention_policy: AuditRetentionPolicy,
+  active_hold: AuditLegalHold.nullable(),
+  ledgers: z.object({
+    org: AuditRetentionLedgerReadiness,
+    roster: AuditRetentionLedgerReadiness,
+  }).strict(),
+}).strict().superRefine((readiness, context) => {
+  const expectedCutoff = Math.max(
+    0,
+    readiness.evaluated_at - readiness.retention_policy.event_retention_days * AUDIT_RETENTION_DAY_MS,
+  );
+  if (readiness.cutoff_at !== expectedCutoff) {
+    context.addIssue({ code: "custom", message: "cutoff does not match evaluation time and retention policy" });
+  }
+  if (
+    readiness.active_hold !== null &&
+    (readiness.ledgers.org.eligible_event_count !== 0 || readiness.ledgers.roster.eligible_event_count !== 0)
+  ) {
+    context.addIssue({ code: "custom", message: "held retention cannot report deletion-eligible events" });
+  }
+  const expected = readiness.active_hold !== null
+    ? "held"
+    : readiness.ledgers.org.export_ready && readiness.ledgers.roster.export_ready
+      ? "ready"
+      : "export_required";
+  if (readiness.state !== expected) {
+    context.addIssue({ code: "custom", message: "retention state does not match its blockers" });
+  }
+});
+
 export type AuditExportEventType = z.infer<typeof AuditExportEvent>;
 export type AuditCheckpointType = z.infer<typeof AuditCheckpoint>;
 export type AuditExportPageType = z.infer<typeof AuditExportPage>;
 export type AuditExportAcknowledgementType = z.infer<typeof AuditExportAcknowledgement>;
 export type AuditRetentionPolicyType = z.infer<typeof AuditRetentionPolicy>;
 export type AuditLegalHoldType = z.infer<typeof AuditLegalHold>;
+export type AuditRetentionReadinessType = z.infer<typeof AuditRetentionReadiness>;

@@ -2,7 +2,7 @@ import { describe, expect, it } from "vitest";
 import {
   AuditLegalHold, AuditLegalHoldCreateRequest, AuditLegalHoldReleaseRequest,
   AuditExportAcknowledgement, AuditExportAcknowledgementRequest, AuditExportPage,
-  AuditRetentionPolicy, AuditRetentionPolicyUpdateRequest,
+  AuditRetentionPolicy, AuditRetentionPolicyUpdateRequest, AuditRetentionReadiness,
 } from "../src/audit.js";
 
 describe("audit export protocol", () => {
@@ -93,6 +93,66 @@ describe("audit export protocol", () => {
       .toEqual({ request_id: "d".repeat(32) });
     expect(AuditLegalHoldCreateRequest.safeParse({
       reason: "", request_id: "c".repeat(32), org: "must-not-be-client-controlled",
+    }).success).toBe(false);
+  });
+
+  it("validates the strict retention readiness contract", () => {
+    const readiness = {
+      state: "export_required",
+      evaluated_at: 40_000_000_000,
+      cutoff_at: 5_440_000_000,
+      retention_policy: {
+        event_retention_days: 400,
+        version: 0,
+        updated_by: null,
+        updated_at: null,
+      },
+      active_hold: null,
+      ledgers: {
+        org: {
+          acknowledged_through_id: 12,
+          eligible_event_count: 3,
+          unacknowledged_event_count: 1,
+          export_ready: false,
+        },
+        roster: {
+          acknowledged_through_id: 8,
+          eligible_event_count: 2,
+          unacknowledged_event_count: 0,
+          export_ready: true,
+        },
+      },
+    } as const;
+    expect(AuditRetentionReadiness.parse(readiness)).toEqual(readiness);
+    expect(AuditRetentionReadiness.safeParse({ ...readiness, org: "must-not-leak" }).success).toBe(false);
+    expect(AuditRetentionReadiness.safeParse({ ...readiness, cutoff_at: readiness.cutoff_at + 1 }).success)
+      .toBe(false);
+    expect(AuditRetentionReadiness.safeParse({
+      ...readiness,
+      ledgers: {
+        ...readiness.ledgers,
+        org: { ...readiness.ledgers.org, export_ready: true },
+      },
+    }).success).toBe(false);
+    expect(AuditRetentionReadiness.safeParse({
+      ...readiness,
+      state: "ready",
+      ledgers: {
+        ...readiness.ledgers,
+        org: { ...readiness.ledgers.org, eligible_event_count: -1 },
+      },
+    }).success).toBe(false);
+    expect(AuditRetentionReadiness.safeParse({
+      ...readiness,
+      state: "held",
+      active_hold: {
+        hold_id: `hold_${"e".repeat(32)}`,
+        reason: "incident",
+        created_by: "admin",
+        created_at: 1,
+        released_by: null,
+        released_at: null,
+      },
     }).success).toBe(false);
   });
 });

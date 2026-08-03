@@ -2,7 +2,7 @@
 
 Production infrastructure metadata and Cloudflare documentation were last
 verified on 2026-08-02. The application-state inventory was updated on
-2026-08-03 through issue #227; deployment verification remains pending.
+2026-08-03 through issue #229; deployment verification remains pending.
 
 This is the living inventory for data persisted or processed by AgentCall's
 hosted relay. Update it whenever a migration, Durable Object storage key,
@@ -89,8 +89,11 @@ there is no time-based cleanup job.
 The current operational and future deletion rules for both event ledgers and
 their retention/hold controls are
 defined in the [audit retention policy](./audit-retention.md). In particular,
-the repository has no automated expiry or supported erasure path today;
-count-bounding `org_events` is a capacity control, not a retention period.
+the administrator-only readiness API computes cutoff and export-coverage counts
+without copying or deleting event rows. It is a transactionally consistent D1
+read, not a new datastore or durable authorization. The repository still has no
+automated expiry or supported erasure path today; count-bounding `org_events` is
+a capacity control, not a retention period.
 
 Cloudflare also maintains `d1_migrations`, which records applied migration
 filenames and is operational metadata rather than end-user data. D1 Time Travel,
