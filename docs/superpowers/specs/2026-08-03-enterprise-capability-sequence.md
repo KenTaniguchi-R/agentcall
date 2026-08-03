@@ -16,17 +16,19 @@ Use this dependency and delivery sequence for the hosted enterprise track:
 
 1. establish the Workspace / Organizer / Member product vocabulary and
    self-service onboarding in #205, without building arbitrary custom roles;
-2. complete tenant-scoped administrative and audit evidence in #17;
-3. integrate hosted SSO through a managed provider only when a real enterprise
+2. define canonical subject-action-object permission names for the gates that
+   already exist in #207, without adding custom-role storage or a policy engine;
+3. complete tenant-scoped administrative and audit evidence in #17;
+4. integrate hosted SSO through a managed provider only when a real enterprise
    deal requires it, tracked in #15;
-4. add SCIM provisioning and IdP group synchronization only for a written
+5. add SCIM provisioning and IdP group synchronization only for a written
    customer requirement, tracked in #27; and
-5. start the SOC 2 readiness program in #18 only after the controls whose
+6. start the SOC 2 readiness program in #18 only after the controls whose
    evidence it consumes are implemented and demonstrable.
 
-Issue numbers are identifiers, not a roadmap. Remove the `B.n` prefixes from the
-enterprise issue titles rather than maintaining a second, misleading ordering
-system.
+Issue numbers are identifiers, not a roadmap. Remove the existing `B.1`–`B.5`
+prefixes from #15–#18 and #47 rather than maintaining a second, misleading
+ordering system.
 
 Stable agent identity remains a cross-cutting prerequisite. #154 must land
 before a role, IdP subject, provisioning record, or offboarding workflow is
@@ -40,6 +42,10 @@ handle address.
 - PR #201 delivered the initial `admin` / `member` authorization foundation and
   admin-only audit export. #205 owns the compatible user-facing Organizer /
   Member vocabulary and first-user flow; it is deliberately not custom RBAC.
+- #207 separately owns canonical permission names for existing workspace,
+  handle, roster, invite, audit, credential, call, and policy gates. It maps the
+  gates to subjects and actions but does not add custom roles or permission
+  storage.
 - Customer-owned Cloudflare Access is the optional self-hosted workforce-access
   profile decided by #109. It does not solve hosted multi-tenant SSO.
 - The current audit export is useful evidence, but #17 remains open for central
@@ -105,8 +111,10 @@ deployed product and reviewed terms rather than guessed future commitments.
   duplicate;
 - mark #18 blocked on #17 and the other implemented-control prerequisites;
 - keep #205 as the next role/onboarding product layer;
+- resolve the broader subject-action-object permission vocabulary in #207
+  without expanding #205 into custom RBAC;
 - keep #17 open until its remaining evidence and administration scope ships; and
-- remove `B.n` title prefixes from #15 through #18.
+- remove `B.n` title prefixes from #15 through #18 and #47.
 
 ## References
 
@@ -116,3 +124,5 @@ deployed product and reviewed terms rather than guessed future commitments.
 - [GTM sequencing and privacy positioning](./2026-08-03-gtm-sequencing-design.md)
 - [EnterpriseReady audit log guide](https://www.enterpriseready.io/features/audit-log/)
 - [WorkOS CLI Auth documentation](https://workos.com/docs/authkit/cli-auth)
+- [WorkOS authorization endpoint and PKCE parameters](https://workos.com/docs/reference/workos-connect/authorize)
+- [WorkOS pricing](https://workos.com/pricing)

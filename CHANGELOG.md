@@ -14,6 +14,8 @@ which are released together.
 - Keep hosted SSO provider-managed and provider-adaptable, with WorkOS as an
   evaluated candidate rather than a committed dependency or a customer-owned
   relay requirement.
+- Separate the canonical permission vocabulary for existing gates from the
+  two-role Workspace onboarding model and from any future custom RBAC engine.
 - Preserve stable agent identity as a prerequisite for durable role, IdP,
   provisioning, and offboarding bindings.
 
