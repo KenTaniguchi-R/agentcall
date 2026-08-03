@@ -75,21 +75,16 @@ async function withStoreLock<T>(machine: MachinePaths, operation: () => Promise<
       writeFileSync(fd, owner);
     } catch (error) {
       if ((error as NodeJS.ErrnoException).code !== "EEXIST") throw error;
-      try {
-        const lockOwner = readFileSync(lockFile, "utf8");
-        const ownerPid = Number(lockOwner.split(":", 1)[0]);
-        if (Number.isSafeInteger(ownerPid) && ownerPid > 0) {
-          try {
-            process.kill(ownerPid, 0);
-          } catch (probeError) {
-            if ((probeError as NodeJS.ErrnoException).code === "ESRCH") rmSync(lockFile, { force: true });
-            else if ((probeError as NodeJS.ErrnoException).code !== "EPERM") throw probeError;
-          }
-        }
-      } catch (statError) {
-        if ((statError as NodeJS.ErrnoException).code !== "ENOENT") throw statError;
+      // A PID probe cannot prove that the lock we inspected is still the lock
+      // at this path when we remove it. Another process may replace an orphaned
+      // lock between those operations, so automatic stale-lock recovery can
+      // break mutual exclusion. Fail closed and require deliberate recovery.
+      if (Date.now() >= deadline) {
+        throw new Error(
+          `Timed out waiting for the known-peer trust-store lock at ${lockFile}. ` +
+          "After confirming no AgentCall process is using the trust store, remove that lock file manually and retry.",
+        );
       }
-      if (Date.now() >= deadline) throw new Error(`Timed out waiting for the known-peer trust-store lock at ${lockFile}.`);
       await new Promise((resolve) => setTimeout(resolve, 10));
     }
   }
