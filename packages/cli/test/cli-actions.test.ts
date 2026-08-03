@@ -330,6 +330,7 @@ describe.sequential("CLI command actions", () => {
     expect(out.code).toBe(0);
     expect(out.stderr).toBe("");
     expect(out.stdout).toContain("Effective capability policy");
+    expect(out.stdout).toContain("does not restrict them to an AgentCall domain allowlist");
     expect(out.stdout).toMatch(new RegExp(`Everyone registered[\\s\\S]*ask — Ask a question[\\s\\S]*Working directory: ${paths.shareDir}`));
     expect(out.stdout).toMatch(/Named caller rule: alice \(before roster grants\)[\s\S]*deploy — Deploy production[\s\S]*exec — run shell commands/);
     expect(out.stdout).toContain("WARNING: exec can read, change, and send data outside this working directory");
@@ -552,6 +553,27 @@ describe.sequential("CLI command actions", () => {
     expect(out.stdout).toBe("");
     expect(out.stderr).toMatch(/No open conversation/);
     expect(callRelay.connections()).toBe(0);
+  });
+
+  it("refuses an accidental nested call from an inbound answering process", async () => {
+    const callRelay = await startCallRelay(() => {});
+    routing.host = new URL(callRelay.relay).host;
+    const testHome = home();
+    seedConfig(testHome, callRelay.relay);
+    const previousCallId = process.env.AGENTCALL_CALL_ID;
+    process.env.AGENTCALL_CALL_ID = "inbound-call";
+    try {
+      const out = await runCommand(testHome, ["call", "local-sota", "delegate this"]);
+
+      expect(out.code).toBe(1);
+      expect(out.stdout).toBe("");
+      expect(out.stderr).toMatch(/nested agentcall calls are disabled/i);
+      expect(out.stderr).toMatch(/per-run credential/i);
+      expect(callRelay.connections()).toBe(0);
+    } finally {
+      if (previousCallId === undefined) delete process.env.AGENTCALL_CALL_ID;
+      else process.env.AGENTCALL_CALL_ID = previousCallId;
+    }
   });
 
   it("rejects --continue with --context before opening a WebSocket", async () => {

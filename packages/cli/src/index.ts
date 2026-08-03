@@ -153,6 +153,20 @@ program
   .option("--continue", "continue the last conversation with this address")
   .option("--context <id>", "continue a specific conversation by id")
   .action(async (address: string, messageParts: string[], o: { json?: boolean; task?: string; as?: string; continue?: boolean; context?: string }) => {
+    // Answering agents do not yet receive a relay-minted run credential or an
+    // attested delegation chain. Letting the ordinary CLI silently reuse the
+    // owner's line token here would erase the original caller and permit
+    // accidental A -> B -> A loops. This environment check prevents the
+    // supported CLI path, not a hostile process: an agent with shell/read
+    // access can remove the variable and reuse config credentials. Structural
+    // enforcement requires the brokered design recorded by issue #112.
+    if (process.env.AGENTCALL_CALL_ID !== undefined) {
+      console.error(
+        "Nested agentcall calls are disabled until relay-attested chains and secret-isolated per-run credentials exist.",
+      );
+      process.exitCode = 1;
+      return;
+    }
     const machine = getMachinePaths();
     // The address is resolved BEFORE line selection now: which line places
     // this call depends on the destination's host (pickOutboundLine matches
