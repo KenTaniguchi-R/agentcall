@@ -2,22 +2,48 @@ import { DurableObject } from "cloudflare:workers";
 import {
   a2aError, CallerFrame, ListenerToRelayFrame, MAX_MESSAGE_BYTES, MAX_REPLY_BYTES,
   RATE_LIMIT_PER_HOUR, RELAY_CALL_TIMEOUT_MS, safeParseFrame, sanitizeDetail,
-  standardError, type CallStatusType, type ErrorCodeType,
+  standardError, type CallStatusType, type ErrorCodeType, type OrgAuditEvent,
 } from "@benree/agentcall-shared";
 import {
   listCallerTasks, parseTaskListQuery, taskBelongsToCaller, taskIsTerminal,
   toA2ATask, updateTask, validHistoryLength, type PersistedTask,
 } from "./task-store.js";
+import { MAX_RETAINED_ORG_AUDIT_EVENTS } from "./events.js";
 
 type CallerAttachment = {
   kind: "caller";
   from: string;
+  org?: string;
+  to?: string;
+  actorIp?: string;
+  actorCountry?: string;
   groups: string[];
   call_id?: string;
   correlation_id?: string;
   timeoutMs?: number;
 };
-type ListenerAttachment = { kind: "listener" };
+type ListenerAttachment = {
+  kind: "listener";
+  org?: string;
+  handle?: string;
+  actorIp?: string;
+  actorCountry?: string;
+};
+
+type CallAuditEvent = Extract<OrgAuditEvent, `call.${string}`>;
+type CallAuditIntent = {
+  eventKey: string;
+  event: CallAuditEvent;
+  action: "C" | "U";
+  org: string;
+  actor: string;
+  actorType: "handle" | "system";
+  targetId: string;
+  actorIp: string | null;
+  actorCountry: string | null;
+  description: string;
+  at: number;
+};
 
 type CancelResolution = { kind: "canceled"; task: PersistedTask } | { kind: "not_cancelable" };
 
@@ -36,6 +62,21 @@ const RATE_LIMIT_PRUNED_AT_KEY = "meta:rl-pruned-at";
 const RATE_LIMIT_MAINTENANCE_KEY = "meta:rl-maintenance";
 const RATE_LIMIT_PRUNE_CONTINUE_DELAY_MS = 1_000;
 const CANCEL_CONFIRM_TIMEOUT_MS = 10_000;
+const CALL_AUDIT_PREFIX = "audit:";
+const CALL_AUDIT_RETRY_MS = 1_000;
+// A D1 batch counts every statement against the per-Worker-invocation query
+// limit (50 on Workers Free). In the worst case each intent belongs to a
+// different org and needs its own retention trim, so 24 intents use at most 48
+// statements and leave two queries of headroom.
+const CALL_AUDIT_DRAIN_LIMIT = 24;
+const CALL_AUDIT_RANK: Record<CallAuditEvent, number> = {
+  "call.submit": 0,
+  "call.accept": 1,
+  "call.complete": 2,
+  "call.fail": 2,
+  "call.cancel": 2,
+  "call.timeout": 2,
+};
 const A2A_HEADERS = { "Content-Type": "application/a2a+json" } as const;
 type RateLimitMaintenance = { cursor: string; due: number };
 
@@ -165,11 +206,48 @@ export function truncateUtf8Bytes(text: string, maxBytes: number): string {
   return new TextDecoder("utf-8", { fatal: false }).decode(sliced).replace(/�+$/, "");
 }
 
+function callAuditIntent(
+  event: CallAuditEvent,
+  task: PersistedTask,
+  actor: string,
+  actorType: "handle" | "system",
+  source: { actorIp?: string; actorCountry?: string },
+  at: number,
+): CallAuditIntent | undefined {
+  if (!task.org || !task.to) return undefined;
+  const description = event === "call.submit"
+    ? `${task.from} submitted call ${task.call_id} to ${task.to}`
+    : event === "call.accept"
+      ? `${task.to} accepted call ${task.call_id} from ${task.from}`
+      : event === "call.complete"
+        ? `${task.to} completed call ${task.call_id} from ${task.from}`
+        : event === "call.fail"
+          ? `${task.to} failed call ${task.call_id} from ${task.from}`
+          : event === "call.cancel"
+            ? `${task.to} confirmed cancellation of call ${task.call_id} from ${task.from}`
+            : `The relay expired call ${task.call_id} from ${task.from} to ${task.to}`;
+  return {
+    eventKey: `${task.org}:${task.call_id}:${event}`,
+    event,
+    action: event === "call.submit" ? "C" : "U",
+    org: task.org,
+    actor,
+    actorType,
+    targetId: task.call_id,
+    actorIp: source.actorIp ?? null,
+    actorCountry: source.actorCountry ?? null,
+    description,
+    at,
+  };
+}
+
 export class HandleDO extends DurableObject {
   private readonly cancelWaiters = new Map<string, Set<(result: CancelResolution) => void>>();
+  private readonly db: D1Database;
 
-  constructor(ctx: DurableObjectState, env: unknown) {
+  constructor(ctx: DurableObjectState, env: { DB: D1Database }) {
     super(ctx, env as never);
+    this.db = env.DB;
     this.ctx.setWebSocketAutoResponse(new WebSocketRequestResponsePair("ping", "pong"));
   }
 
@@ -184,6 +262,10 @@ export class HandleDO extends DurableObject {
         return new Response("bad role", { status: 400 });
       }
       const from = req.headers.get("X-Verified-From") ?? "";
+      const org = req.headers.get("X-Verified-Org") || undefined;
+      const target = req.headers.get("X-Verified-Target") || undefined;
+      const actorIp = req.headers.get("X-Verified-Actor-IP") || undefined;
+      const actorCountry = req.headers.get("X-Verified-Actor-Country") || undefined;
       let groups: string[] = [];
       try {
         const parsed = JSON.parse(req.headers.get("X-Verified-Groups") ?? "[]");
@@ -196,10 +278,15 @@ export class HandleDO extends DurableObject {
       if (role === "listen") {
         for (const old of this.ctx.getWebSockets("listener")) old.close(4000, "replaced");
         this.ctx.acceptWebSocket(server, ["listener"]);
-        server.serializeAttachment({ kind: "listener" } satisfies ListenerAttachment);
+        server.serializeAttachment({
+          kind: "listener", org, handle: target, actorIp, actorCountry,
+        } satisfies ListenerAttachment);
       } else {
         this.ctx.acceptWebSocket(server, ["caller"]);
-        server.serializeAttachment({ kind: "caller", from, groups, timeoutMs: testTimeout } satisfies CallerAttachment);
+        server.serializeAttachment({
+          kind: "caller", from, org, to: target, actorIp, actorCountry,
+          groups, timeoutMs: testTimeout,
+        } satisfies CallerAttachment);
       }
       return new Response(null, { status: 101, webSocket: client });
     }
@@ -308,21 +395,112 @@ export class HandleDO extends DurableObject {
     );
   }
 
+  private async persistTaskWithAudit(task: PersistedTask, intent?: CallAuditIntent): Promise<void> {
+    await this.ctx.storage.transaction(async (txn) => {
+      await txn.put<PersistedTask>(`call:${task.call_id}`, task);
+      if (intent) {
+        await txn.put<CallAuditIntent>(this.auditOutboxKey(intent), intent);
+        await this.armAuditRetry(txn);
+      }
+    });
+    await this.flushAuditOutbox();
+  }
+
+  private async armAuditRetry(txn: DurableObjectTransaction): Promise<void> {
+    const retryAt = Date.now() + CALL_AUDIT_RETRY_MS;
+    const current = await txn.getAlarm();
+    if (current === null || current > retryAt) await txn.setAlarm(retryAt);
+  }
+
+  private auditOutboxKey(intent: CallAuditIntent): string {
+    // Storage.list is lexicographic. Preserve lifecycle order when two
+    // transitions share one millisecond so D1 IDs cannot invert submit/accept
+    // or accepted/terminal evidence with identical event timestamps.
+    return `${CALL_AUDIT_PREFIX}${String(intent.at).padStart(16, "0")}:${CALL_AUDIT_RANK[intent.event]}:${intent.eventKey}`;
+  }
+
+  private async flushAuditOutbox(): Promise<void> {
+    const pending = await this.ctx.storage.list<CallAuditIntent>({
+      prefix: CALL_AUDIT_PREFIX,
+      limit: CALL_AUDIT_DRAIN_LIMIT,
+    });
+    if (pending.size === 0) return;
+    try {
+      const orgs = [...new Set([...pending.values()].map((intent) => intent.org))];
+      await this.db.batch([
+        ...[...pending.values()].map((intent) => this.db.prepare(
+          "INSERT INTO org_events (event_key, event, action_type, org, actor, actor_type, " +
+            "target_type, target_id, target_role, actor_ip, actor_country, description, at) " +
+            "VALUES (?, ?, ?, ?, ?, ?, 'call', ?, NULL, ?, ?, ?, ?) " +
+            "ON CONFLICT(event_key) DO NOTHING",
+        ).bind(
+          intent.eventKey, intent.event, intent.action, intent.org, intent.actor, intent.actorType,
+          intent.targetId, intent.actorIp, intent.actorCountry, intent.description, intent.at,
+        )),
+        ...orgs.map((org) => this.db.prepare(
+          "DELETE FROM org_events WHERE org = ? AND id NOT IN (" +
+            "SELECT id FROM org_events WHERE org = ? ORDER BY id DESC LIMIT ?)",
+        ).bind(org, org, MAX_RETAINED_ORG_AUDIT_EVENTS)),
+      ]);
+      await this.ctx.storage.delete([...pending.keys()]);
+      await this.scheduleNextAlarm();
+    } catch (error) {
+      // Keep the atomic outbox entry for alarm retry. Never log SQL or bound
+      // tenant values because platform wrappers can include both.
+      console.error("call audit delivery failure", {
+        name: error instanceof Error ? error.name : "UnknownError",
+      });
+      await this.ctx.storage.setAlarm(Date.now() + CALL_AUDIT_RETRY_MS);
+    }
+  }
+
+  private async expireTask(
+    callId: string,
+    now: number,
+  ): Promise<{ task: PersistedTask; timedOut: boolean } | undefined> {
+    return this.ctx.storage.transaction(async (txn) => {
+      // Alarm snapshots can go stale while another task's D1 delivery yields.
+      // Re-read and decide inside the same transaction that deletes/enqueues so
+      // a concurrent terminal completion can never be overwritten by timeout.
+      const current = await txn.get<PersistedTask>(`call:${callId}`);
+      if (!current || current.deadline > now) return;
+      await txn.delete(`call:${callId}`);
+      if (taskIsTerminal(current)) {
+        return { task: current, timedOut: false };
+      }
+      const intent = callAuditIntent("call.timeout", current, "relay", "system", {}, now);
+      if (intent) {
+        await txn.put<CallAuditIntent>(this.auditOutboxKey(intent), intent);
+        await this.armAuditRetry(txn);
+      }
+      return { task: current, timedOut: true };
+    });
+  }
+
   private async advanceCall(
     record: PersistedTask,
     state: CallStatusType["state"],
     caller: WebSocket | undefined,
+    listener: ListenerAttachment,
   ): Promise<void> {
     const current = record.state ?? "ringing";
     if (STATUS_RANK[state] <= STATUS_RANK[current]) return;
     // Persist before fan-out so a DO restart or duplicate/out-of-order frame
     // cannot move the caller backward after it has observed a later state.
-    await this.ctx.storage.put<PersistedTask>(`call:${record.call_id}`, {
+    const next = {
       ...record,
       state,
       task_state: state === "working" ? "TASK_STATE_WORKING" : (record.task_state ?? "TASK_STATE_SUBMITTED"),
       updated_at: Date.now(),
-    });
+    } satisfies PersistedTask;
+    // Starting work from ringing is an implicit acceptance (including the
+    // legacy call_answer path), so it must not leave a lifecycle gap. A later
+    // explicit acceptance is rank-rejected and cannot duplicate the event.
+    const accepted = state === "answered" || (state === "working" && current === "ringing")
+      ? callAuditIntent("call.accept", next, record.to ?? listener.handle ?? "", "handle", listener, next.updated_at!)
+      : undefined;
+    if (accepted) await this.persistTaskWithAudit(next, accepted);
+    else await this.ctx.storage.put<PersistedTask>(`call:${record.call_id}`, next);
     if (caller) {
       this.send(caller, {
         type: "call_status", state, call_id: record.call_id,
@@ -373,11 +551,15 @@ export class HandleDO extends DurableObject {
       const call_id = crypto.randomUUID();
       const deadline = now + clampTimeoutMs(att.timeoutMs);
       ws.serializeAttachment({ ...att, call_id, correlation_id });
-      await this.ctx.storage.put<PersistedTask>(`call:${call_id}`, {
-        call_id, correlation_id, from: att.from, deadline, state: "ringing",
+      const task = {
+        call_id, correlation_id, from: att.from, org: att.org, to: att.to, deadline, state: "ringing",
         task_state: "TASK_STATE_SUBMITTED", created_at: now, updated_at: now,
         context_id: frame.context_id,
-      });
+      } satisfies PersistedTask;
+      await this.persistTaskWithAudit(
+        task,
+        callAuditIntent("call.submit", task, att.from, "handle", att, now),
+      );
       await this.scheduleNextAlarm();
       this.send(ws, { type: "call_status", state: "ringing", call_id, correlation_id });
       this.send(listener, {
@@ -397,13 +579,13 @@ export class HandleDO extends DurableObject {
     const caller = this.callerFor(frame.call_id);
 
     if (frame.type === "call_accepted") {
-      await this.advanceCall(record, "answered", caller);
+      await this.advanceCall(record, "answered", caller, att);
       return;
     }
     if (frame.type === "call_answer" || frame.type === "call_started") {
       // Legacy call_answer was emitted only once the job started, so preserve
       // that truth when old listeners overlap a new relay deployment.
-      await this.advanceCall(record, "working", caller);
+      await this.advanceCall(record, "working", caller, att);
       return;
     }
     if (frame.type === "call_cancelled") {
@@ -413,7 +595,10 @@ export class HandleDO extends DurableObject {
       const canceled = updateTask(record, { task_state: "TASK_STATE_CANCELED" });
       // Persist terminal truth before fan-out. Once a caller observes a
       // terminal response, a concurrent GetTask must never move backward.
-      await this.ctx.storage.put<PersistedTask>(`call:${frame.call_id}`, canceled);
+      await this.persistTaskWithAudit(
+        canceled,
+        callAuditIntent("call.cancel", canceled, record.to ?? att.handle ?? "", "handle", att, canceled.updated_at!),
+      );
       if (caller) {
         this.fail(caller, "canceled", undefined, undefined, true, {
           call_id: frame.call_id, correlation_id: record.correlation_id,
@@ -437,7 +622,10 @@ export class HandleDO extends DurableObject {
         context_id: frame.context_id ?? record.context_id,
         result_text: text,
       });
-      await this.ctx.storage.put<PersistedTask>(`call:${frame.call_id}`, completed);
+      await this.persistTaskWithAudit(
+        completed,
+        callAuditIntent("call.complete", completed, record.to ?? att.handle ?? "", "handle", att, completed.updated_at!),
+      );
       if (caller) {
         this.send(caller, {
           type: "call_reply", call_id: frame.call_id, correlation_id: record.correlation_id,
@@ -456,7 +644,10 @@ export class HandleDO extends DurableObject {
       const failed = updateTask(record, {
         task_state: "TASK_STATE_FAILED", failure_code: frame.code,
       });
-      await this.ctx.storage.put<PersistedTask>(`call:${frame.call_id}`, failed);
+      await this.persistTaskWithAudit(
+        failed,
+        callAuditIntent("call.fail", failed, record.to ?? att.handle ?? "", "handle", att, failed.updated_at!),
+      );
       if (caller) {
         this.fail(caller, frame.code, detail, frame.offered, true, {
           call_id: frame.call_id, correlation_id: record.correlation_id,
@@ -476,6 +667,8 @@ export class HandleDO extends DurableObject {
     const calls = await this.ctx.storage.list<PersistedTask>({ prefix: "call:" });
     let min = Infinity;
     for (const rec of calls.values()) min = Math.min(min, rec.deadline);
+    const pendingAudit = await this.ctx.storage.list<CallAuditIntent>({ prefix: CALL_AUDIT_PREFIX, limit: 1 });
+    if (pendingAudit.size > 0) min = Math.min(min, Date.now() + CALL_AUDIT_RETRY_MS);
     const maintenance = await readRateLimitMaintenance(this.ctx.storage);
     if (maintenance) min = Math.min(min, maintenance.due);
     if (min !== Infinity) await this.ctx.storage.setAlarm(min);
@@ -484,17 +677,25 @@ export class HandleDO extends DurableObject {
   override async alarm(): Promise<void> {
     const now = Date.now();
     const calls = await this.ctx.storage.list<PersistedTask>({ prefix: "call:" });
+    const timedOut: PersistedTask[] = [];
     for (const rec of calls.values()) {
       if (rec.deadline <= now) {
-        const caller = this.callerFor(rec.call_id);
-        if (caller) {
-          this.fail(caller, "timeout", undefined, undefined, true, {
-            call_id: rec.call_id, correlation_id: rec.correlation_id,
-          });
-        }
-        await this.ctx.storage.delete(`call:${rec.call_id}`);
-        this.settleCancellation(rec.call_id, { kind: "not_cancelable" });
+        if (timedOut.length >= CALL_AUDIT_DRAIN_LIMIT) break;
+        const expired = await this.expireTask(rec.call_id, now);
+        if (expired?.timedOut) timedOut.push(expired.task);
       }
+    }
+    // One budget-safe D1 drain per alarm invocation. A larger retained backlog
+    // keeps the atomically armed alarm and drains over subsequent invocations.
+    await this.flushAuditOutbox();
+    for (const rec of timedOut) {
+      const caller = this.callerFor(rec.call_id);
+      if (caller) {
+        this.fail(caller, "timeout", undefined, undefined, true, {
+          call_id: rec.call_id, correlation_id: rec.correlation_id,
+        });
+      }
+      this.settleCancellation(rec.call_id, { kind: "not_cancelable" });
     }
     await continueRateLimitMaintenance(this.ctx.storage, now);
     await this.scheduleNextAlarm();

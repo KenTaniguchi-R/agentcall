@@ -202,7 +202,12 @@ app.get("/v1/ws", async (c) => {
   const stub = c.env.HANDLE_DO.get(c.env.HANDLE_DO.idFromName(identityKey(org, target)));
   const fwd = new Request(`https://do/ws?role=${role}&test_timeout_ms=${c.req.query("test_timeout_ms") ?? ""}`, c.req.raw);
   fwd.headers.set("X-Verified-From", handle);
+  fwd.headers.set("X-Verified-Org", org);
+  fwd.headers.set("X-Verified-Target", target);
   fwd.headers.set("X-Verified-Groups", JSON.stringify(groups));
+  fwd.headers.set("X-Verified-Actor-IP", c.req.header("cf-connecting-ip") ?? "");
+  const country = c.req.raw.cf?.country;
+  fwd.headers.set("X-Verified-Actor-Country", typeof country === "string" ? country : "");
   return stub.fetch(fwd);
 });
 

@@ -15,6 +15,10 @@ export type PersistedTask = {
   // Optional for in-flight records written by a pre-correlation deployment.
   correlation_id?: string;
   from: string;
+  // Tenant and callee address are audit-routing metadata. Optional only for
+  // in-flight records created before central call evidence shipped.
+  org?: string;
+  to?: string;
   deadline: number;
   // Optional only for in-flight records written by a pre-#89 deployment.
   state?: CallStatusType["state"];

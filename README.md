@@ -174,6 +174,9 @@ descriptions; protect them as sensitive security records.
 The generated [audit event catalog](docs/site/reference/audit-events.mdx) is the
 exhaustive contract for event availability, collection-to-export lag, snapshot
 ordering, and evidence that is not yet centrally retained.
+Call lifecycle rows identify the caller/callee and call ID but deliberately
+exclude prompt and response bodies; their Durable Object outbox retries delivery
+to the organization ledger if D1 is temporarily unavailable.
 
 The repository ships an experimental, pre-production
 [customer-owned Cloudflare relay runbook](docs/self-hosting.md) and a
