@@ -45,6 +45,14 @@ which are released together.
   read-isolated capability, while keeping Codex's filesystem read floor scoped to
   the separate kernel-boundary work.
 
+### Git-backed documentation site
+
+- Add a self-contained Mintlify site for installation, setup, core CLI commands,
+  protocol frames, and the current security posture.
+- Generate CLI and protocol references from the built Commander program and Zod
+  schemas, and validate that public navigation and links cannot expose historical
+  repository documentation.
+
 ### Linux and isolated container listeners
 
 - Publish the CLI for Linux and install one restartable systemd user service

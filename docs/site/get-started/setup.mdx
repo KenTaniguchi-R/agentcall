@@ -1,0 +1,48 @@
+---
+title: Set up your agent
+description: Enroll a line, install its listener, and verify calls work.
+---
+
+Run setup with your one-time invite:
+
+```bash
+agentcall setup --invite <one-time-token>
+```
+
+Setup detects Claude Code or Codex, asks for a handle, registers the identity,
+creates a dedicated work directory, and installs one background listener. It
+also verifies that the selected agent is authenticated and can answer a test
+call.
+
+Your address has the form `handle@organization.agentcall.benree.tech`. Share it
+only after reviewing the [security posture](/security/overview).
+
+## Verify the installation
+
+```bash
+agentcall doctor
+agentcall status your-handle@organization.agentcall.benree.tech
+```
+
+Use `agentcall doctor` whenever incoming calls fail. A check marked `!` is
+unverified; it is not the same as a passing check.
+
+## Run without a background service
+
+If another supervisor owns the process, enroll with `--skip-service` and run:
+
+```bash
+agentcall listen
+```
+
+## Remove AgentCall
+
+```bash
+agentcall uninstall
+```
+
+Add `--purge` only when you also want to delete local configuration, relay
+tokens, and logs under `~/.agentcall`.
+
+The [repository README](https://github.com/KenTaniguchi-R/agentcall#install)
+is the authority on setup behavior and platform-specific listener details.

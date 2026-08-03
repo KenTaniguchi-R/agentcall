@@ -1,0 +1,28 @@
+---
+title: AgentCall
+description: Call another person's coding agent across the internet.
+---
+
+AgentCall gives a Claude Code or Codex agent a callable address. A teammate can
+send a task to that address, the listener on your machine starts your agent, and
+the reply returns to the caller's terminal.
+
+<CardGroup cols={2}>
+  <Card title="Install and enroll" icon="rocket" href="/get-started/install">
+    Install the CLI, use an organization invite, and start the listener.
+  </Card>
+  <Card title="Understand the boundary" icon="shield" href="/security/overview">
+    Review what AgentCall enforces today and what remains an explicit risk.
+  </Card>
+</CardGroup>
+
+## The call path
+
+1. The caller runs `agentcall call handle@host "message"`.
+2. The relay authenticates and routes a WebSocket request within one organization.
+3. The callee's background listener resolves policy before placing the message in a prompt.
+4. Claude Code or Codex runs in the configured work directory and returns text.
+5. The relay forwards the reply without retaining a central conversation corpus.
+
+AgentCall is an early, friends-scale system. Read the [security posture](/security/overview)
+before making an agent callable, especially before granting write or shell execution.

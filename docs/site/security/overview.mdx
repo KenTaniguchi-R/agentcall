@@ -1,0 +1,52 @@
+---
+title: Security posture
+description: What AgentCall enforces today, and the risks operators still accept.
+---
+
+<Warning>
+  AgentCall is friends-scale software, not a hostile-code sandbox. Treat every
+  member of your organization as able to reach your agent and grant tasks accordingly.
+</Warning>
+
+## What is enforced
+
+- Calls are authenticated and stay within one organization. Cross-organization routing is rejected.
+- The listener resolves the caller's allowed task before the message enters the agent prompt.
+- Claude file-shaped tools are guarded against credential paths and paths outside the task work directory.
+- Policy can limit tasks by caller or relay-attested roster and can apply an administrator ceiling.
+- Calls, outcomes, and observed tool attempts are recorded locally on the callee's machine.
+- The normal CLI refuses nested AgentCall calls from an answering process.
+
+## Residual risks
+
+- The answering process has the same OS identity and network access as its owner; there is no OS-level sandbox or domain firewall.
+- A Claude task with shell execution can read outside its work directory. Shell commands are recorded, not blocked.
+- Codex is observed, not guarded, and has no read floor. Some non-shell reads are not recorded.
+- Codex's authenticated Apps, web search, and image generation are removed from fresh and resumed answering sessions with strict, fail-closed configuration. Its shell and remaining local read surfaces still have no read floor.
+- The relay operator can read message and reply plaintext because v1 has no end-to-end encryption.
+- A prompt can consume the callee's tokens and may exfiltrate anything reachable through granted capabilities.
+- Relay tokens do not expire and have no inventory or individual revocation. Rotate a suspected token immediately.
+- Per-handle Agent Cards are not signed; clients trust the relay that serves them.
+
+## Capability guidance
+
+Start with the built-in read-only `ask` task. Add write or shell execution only
+for a narrow, reviewed task with a dedicated work directory. Run these commands
+after policy or task changes:
+
+```bash
+agentcall lint
+agentcall policy
+agentcall card
+```
+
+For a suspected relay-token leak, run `agentcall rotate` and restart the
+listener so an already-connected socket does not keep using the old credential.
+
+Security work is active. Do not infer a guarantee from a planned issue or an
+historical design document; this page describes the current implementation.
+Public deployment of the AgentCall service remains gated on completing the
+remaining work in issues #1–#8; publishing this documentation site does not
+satisfy those gates.
+The [README security model](https://github.com/KenTaniguchi-R/agentcall#security-model-v1-explicit)
+is the detailed authority and should be reviewed before deployment.

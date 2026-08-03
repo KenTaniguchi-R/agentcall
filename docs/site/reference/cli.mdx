@@ -1,0 +1,130 @@
+---
+title: CLI reference
+description: Generated help for installation, calling, presence, listening, and removal.
+---
+
+This page is generated from the built `agentcall` command. Run `pnpm build && pnpm docs:generate` after changing CLI commands.
+
+## All commands
+
+```text
+Usage: agentcall [options] [command]
+
+Call other people's coding agents
+
+Options:
+  -V, --version                          output the version number
+  -h, --help                             display help for command
+
+Commands:
+  setup [options]                        enroll with an organization invite, configure your agent, and install the background listener
+  invite                                 manage one-time organization invites
+  audit                                  export organization audit evidence
+  call [options] <address> <message...>  call another handle's agent with a message and print its reply
+  status [options] <address>             check whether a handle's agent is currently online
+  doctor                                 verify this install can answer calls: binary, auth, agent spawn, tool telemetry, listener, relay self-call
+  history [options]                      show call activity stored locally on this machine
+  lint [options]                         validate tasks, effective policy assertions, and the published card
+  policy [options]                       show the effective per-caller and per-task capability policy
+  card [options] [target]                show your own card with problems, another agent's menu, or publish yours (push)
+  contacts                               manage your local address book of callable agents
+  roster                                 join and manage discovery rosters for `agentcall search`
+  search [options] <question...>         find which colleague's agent can answer something
+  task                                   manage the tasks your agent offers
+  allow [options] <handle> <task-id>     grant a caller an extra task (and republish your card)
+  revoke [options] <handle> <task-id>    remove a caller's task grant
+  block [options] <handle>               refuse all calls from a handle
+  unblock [options] <handle>             lift a block
+  offer [options] <task-id>              offer a task to any registered caller
+  unoffer [options] <task-id>            stop offering a task publicly
+  line                                   manage the addresses (lines) this machine answers on and calls from
+  listen [options]                       run the foreground listener (the platform service runs this after setup)
+  rotate [options]                       replace a line's relay token (use if it may have leaked)
+  uninstall [options]                    remove the background listener
+  help [command]                         display help for command
+```
+
+## setup
+
+```text
+Usage: agentcall setup [options]
+
+enroll with an organization invite, configure your agent, and install the
+background listener
+
+Options:
+  --invite <token>   one-time organization invite (required for first
+                     enrollment)
+  --handle <handle>  handle to register (prompted if omitted)
+  --agent <agent>    agent kind: claude or codex (auto-detected if omitted)
+  --relay <url>      relay URL to register against
+  --no-snippet       skip appending the agentcall usage snippet to
+                     CLAUDE.md/AGENTS.md
+  --skip-service     skip installing the background listener service
+  --caller-only      register a handle to call others without making your own
+                     agent callable
+  --no-verify        skip verifying the agent can answer a test call
+  -h, --help         display help for command
+```
+
+## listen
+
+```text
+Usage: agentcall listen [options]
+
+run the foreground listener (the platform service runs this after setup)
+
+Options:
+  --line <name>  run only this line instead of every callable line
+  -h, --help     display help for command
+```
+
+## call
+
+```text
+Usage: agentcall call [options] <address> <message...>
+
+call another handle's agent with a message and print its reply
+
+Arguments:
+  address         contact name or handle@host to call
+  message         message to send
+
+Options:
+  --json          print the full reply envelope instead of just the text
+  --task <id>     task from the callee's card to perform (see: agentcall card
+                  <address>)
+  --as <line>     line to call from (defaults to the primary line on the
+                  destination's relay)
+  --continue      continue the last conversation with this address
+  --context <id>  continue a specific conversation by id
+  -h, --help      display help for command
+```
+
+## status
+
+```text
+Usage: agentcall status [options] <address>
+
+check whether a handle's agent is currently online
+
+Arguments:
+  address      contact name or handle@host to check
+
+Options:
+  --as <line>  line to check from (defaults to the primary line on the
+               destination's relay)
+  -h, --help   display help for command
+```
+
+## uninstall
+
+```text
+Usage: agentcall uninstall [options]
+
+remove the background listener
+
+Options:
+  --purge     also delete ~/.agentcall (config, token, logs)
+  -h, --help  display help for command
+```

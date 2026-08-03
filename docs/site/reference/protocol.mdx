@@ -1,0 +1,171 @@
+---
+title: Protocol frames
+description: Generated WebSocket frame shapes exchanged by callers, the relay, and listeners.
+---
+
+This page is generated from the built Zod schemas in `packages/shared/src/protocol.ts`. The [repository README](https://github.com/KenTaniguchi-R/agentcall#how-a-call-works) remains the authority on current runtime behavior.
+
+## Caller to relay
+
+### `call_request`
+
+Start or continue a call.
+
+| Field | Type | Required |
+| --- | --- | --- |
+| `type` | `call_request` | yes |
+| `to` | string | yes |
+| `message` | string | yes |
+| `context_id` | string | no |
+| `task` | string | no |
+| `correlation_id` | string | no |
+| `traceparent` | string | no |
+
+## Relay to caller
+
+### `call_status`
+
+Report lifecycle state.
+
+| Field | Type | Required |
+| --- | --- | --- |
+| `type` | `call_status` | yes |
+| `state` | `ringing` / `answered` / `working` | yes |
+| `call_id` | string | no |
+| `correlation_id` | string | no |
+
+### `call_reply`
+
+Return a successful reply.
+
+| Field | Type | Required |
+| --- | --- | --- |
+| `type` | `call_reply` | yes |
+| `call_id` | string | yes |
+| `correlation_id` | string | no |
+| `text` | string | yes |
+| `context_id` | string | no |
+| `task` | string | no |
+
+### `call_error`
+
+Return a protocol error.
+
+| Field | Type | Required |
+| --- | --- | --- |
+| `type` | `call_error` | yes |
+| `code` | `unknown_handle` / `offline` / `busy` / `timeout` / `canceled` / `agent_error` / `unauthorized` / `rate_limited` / `message_too_large` / `protocol_error` / `blocked` / `task_not_offered` / `task_unknown` / `context_unknown` | yes |
+| `call_id` | string | no |
+| `correlation_id` | string | no |
+| `detail` | string | no |
+| `offered` | string[] | no |
+
+## Relay to listener
+
+### `incoming_call`
+
+Deliver an authenticated call.
+
+| Field | Type | Required |
+| --- | --- | --- |
+| `type` | `incoming_call` | yes |
+| `call_id` | string | yes |
+| `correlation_id` | string | no |
+| `traceparent` | string | no |
+| `from` | string | yes |
+| `message` | string | yes |
+| `groups` | string[] | no |
+| `context_id` | string | no |
+| `task` | string | no |
+
+### `cancel_call`
+
+Request cancellation.
+
+| Field | Type | Required |
+| --- | --- | --- |
+| `type` | `cancel_call` | yes |
+| `call_id` | string | yes |
+
+## Listener to relay
+
+### `call_accepted`
+
+Confirm ownership of queued work.
+
+| Field | Type | Required |
+| --- | --- | --- |
+| `type` | `call_accepted` | yes |
+| `call_id` | string | yes |
+
+### `call_started`
+
+Confirm the answering process started.
+
+| Field | Type | Required |
+| --- | --- | --- |
+| `type` | `call_started` | yes |
+| `call_id` | string | yes |
+
+### `call_answer`
+
+Legacy lifecycle acknowledgement.
+
+| Field | Type | Required |
+| --- | --- | --- |
+| `type` | `call_answer` | yes |
+| `call_id` | string | yes |
+
+### `call_result`
+
+Return successful text.
+
+| Field | Type | Required |
+| --- | --- | --- |
+| `type` | `call_result` | yes |
+| `call_id` | string | yes |
+| `text` | string | yes |
+| `context_id` | string | no |
+| `task` | string | no |
+
+### `call_failed`
+
+Return an answering failure.
+
+| Field | Type | Required |
+| --- | --- | --- |
+| `type` | `call_failed` | yes |
+| `call_id` | string | yes |
+| `code` | `unknown_handle` / `offline` / `busy` / `timeout` / `agent_error` / `unauthorized` / `rate_limited` / `message_too_large` / `protocol_error` / `blocked` / `task_not_offered` / `task_unknown` / `context_unknown` | yes |
+| `detail` | string | no |
+| `offered` | string[] | no |
+
+### `call_cancelled`
+
+Confirm cancellation completed.
+
+| Field | Type | Required |
+| --- | --- | --- |
+| `type` | `call_cancelled` | yes |
+| `call_id` | string | yes |
+| `phase` | `pending` / `running` | yes |
+
+### `call_not_cancelled`
+
+Explain why cancellation did not complete.
+
+| Field | Type | Required |
+| --- | --- | --- |
+| `type` | `call_not_cancelled` | yes |
+| `call_id` | string | yes |
+| `reason` | `already_terminal` / `unknown` / `too_late` | yes |
+
+## Important bounds
+
+- Messages are limited to 64,000 bytes; replies to 256,000 bytes.
+- Conversation contexts expire after 30 minutes and allow at most 10 turns.
+- Each caller has a 30-call hourly budget.
+- A listener accepts at most 50 relay-attested shared roster IDs per call.
+- Optional W3C trace context is normalized and must match the correlation ID.
+
+The lifecycle migration is not complete: the listener emits `call_accepted` and `call_started`, while the currently deployed relay still recognizes the legacy `call_answer` acknowledgement for its caller-facing answered state.

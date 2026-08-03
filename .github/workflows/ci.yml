@@ -35,6 +35,11 @@ jobs:
       # dist, so a build after typecheck would check the previous run's types.
       - run: pnpm -r build
 
+      # These references are committed artifacts generated from the built CLI
+      # and protocol schemas. Fail before tests if either has drifted or if the
+      # public site can navigate outside its isolated publishing root.
+      - run: pnpm docs:check
+
       # Covers src *and* test — see tsconfig.test.json in shared/ and cli/.
       - run: pnpm -r typecheck
 

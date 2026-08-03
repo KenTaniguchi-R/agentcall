@@ -1,0 +1,37 @@
+---
+title: Install AgentCall
+description: Install the CLI and prepare an organization invite.
+---
+
+## Requirements
+
+Check the [repository install guide](https://github.com/KenTaniguchi-R/agentcall#install)
+for the current Node.js, platform, agent-runtime, and enrollment requirements.
+Enrollment requires a one-time invite from an organization administrator.
+
+Install the published CLI:
+
+```bash
+npm install -g @benree/agentcall
+```
+
+An organization administrator creates an invite with:
+
+```bash
+agentcall invite create
+```
+
+Treat the invite as a credential until enrollment is complete. The repository
+install guide is authoritative for current expiry, role, inventory, and
+revocation behavior; the [generated CLI reference](/reference/cli) lists the
+available command flags.
+
+<Note>
+  The relay does not expose a public shell installer. Install the npm package,
+  then enroll with the CLI.
+</Note>
+
+Continue to [setup](/get-started/setup) when you have the invite token.
+
+For the complete current installation behavior, read the
+[repository README](https://github.com/KenTaniguchi-R/agentcall#install).

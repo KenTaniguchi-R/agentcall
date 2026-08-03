@@ -84,3 +84,11 @@ meanings are in [CLAUDE.md](./CLAUDE.md).
 Note that `status:*` and the assignee answer different questions: `status:next`
 means *this issue is ready to be worked*, and an assignee means *someone is
 working it*. An issue keeps `status:next` while claimed.
+
+## Documentation site
+
+Public documentation lives in [`docs/site/`](./docs/site/). Mintlify publishes
+that directory from `main`; files elsewhere in `docs/` are repository records
+and must not be added to the site's navigation. After changing CLI commands or
+protocol schemas, run `pnpm build && pnpm docs:generate`, commit both generated
+references, and run `pnpm docs:check` before opening a pull request.
