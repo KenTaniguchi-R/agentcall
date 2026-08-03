@@ -423,9 +423,11 @@ export async function runDoctor(deps: DoctorDeps): Promise<number> {
     } else if (cfg.agent_kind === "codex" && agentOk) {
       const telemetryOptIn = (deps.telemetryOptInFn ?? (() => process.env.AGENTCALL_OTEL === "1"))();
       if (telemetryOptIn && !(deps.codexTelemetryEnabledFn ?? codexToolTelemetryEnabled)()) {
+        report(await checkCodexGuard(agentWorkdir, deps.codexGuardFn, false));
         report({
           name: "codex tool telemetry",
-          ok: false,
+          ok: true,
+          warn: true,
           detail: "no codex-cli release has passed the default-path lifecycle probe",
           hint: "Codex call telemetry remains available, but tool spans stay disabled until the default tool path emits paired hooks",
         });
