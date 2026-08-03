@@ -6,6 +6,16 @@ which are released together.
 
 ## Unreleased
 
+### Authorization permission vocabulary
+
+- Name existing authorization decisions with stable `resource:action`
+  permissions while keeping principals, resource instances, and grant sources
+  explicit.
+- Keep Workspace roles, roster capability credentials, local owner policy, and
+  machine-administrator ceilings distinct instead of introducing custom RBAC.
+- Separate permission checks from audit event names and reserve stable agent
+  identity for future durable principal bindings.
+
 ### Enterprise capability sequence
 
 - Sequence workspace roles and onboarding before complete audit evidence, then
