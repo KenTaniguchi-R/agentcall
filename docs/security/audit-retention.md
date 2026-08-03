@@ -1,6 +1,6 @@
 # Audit retention policy
 
-Last reviewed: 2026-08-03 against the retention control plane in issue #227.
+Last reviewed: 2026-08-03 against the retention readiness surface in issue #229.
 Deployment verification remains pending.
 
 This document is the current retention contract for the hosted relay's D1
@@ -47,10 +47,23 @@ or incident hold. Hold creation and release preserve immutable creator/reason
 fields, are idempotent, and commit atomically with `audit.hold.create` or
 `audit.hold.release` evidence. Released holds cannot be reactivated by replay.
 
-These controls are prerequisites, not retention execution. No scheduled or
-manual application job reads the configured window, active hold, or export
-watermark to delete an event. A configured value therefore does not shorten or
-extend current storage, and an active hold affects no surface yet.
+An administrator may call `GET /v1/audit/retention-readiness` to evaluate a
+single transactionally consistent snapshot. It reports the effective cutoff,
+active hold, acknowledged-through ID, and counts of cutoff-eligible rows that
+are covered or not covered by the export watermark for each ledger. With no
+acknowledgement, both ledgers fail closed as `export_required`; an active hold
+takes precedence as `held` and forces both deletion-eligible counts to zero
+while preserving their export-coverage status. The exact cutoff excludes events
+at the boundary and includes only events strictly older than it. An optional past
+`evaluated_at` Unix-millisecond value makes a snapshot repeatable while future,
+duplicate, negative, or fractional values are rejected.
+
+These controls and the readiness response are prerequisites, not retention
+execution. The response is observation at one instant and cannot authorize a
+later write because policy, holds, acknowledgements, and events may change.
+No scheduled or manual application job reads them to delete an event. A
+configured value therefore does not shorten or extend current storage, and an
+active hold affects no storage surface yet.
 
 Presence reads are not a third audit ledger. `agentcall_status_reads` contains
 only identity-unlinked outcome points in Analytics Engine and is sampled, retained
@@ -111,8 +124,11 @@ must not ship independently. Expiry is safe only when all of these are true:
 3. **Control plane implemented:** a documented 400-day default and 30–2,555-day
    configurable event window are schema/API bounded, versioned, and audited.
    No expiry worker applies the configured window yet.
-4. Deletion runs in bounded batches, resumes safely after interruption, exposes
-   lag/failure metrics, and cannot block security mutations.
+4. **Read-only readiness implemented:** operators can inspect the effective
+   cutoff, hold blocker, export coverage, and exact per-ledger eligible backlog
+   from one D1 snapshot. Deletion still must run in bounded batches, re-check
+   every blocker atomically, resume safely after interruption, expose
+   lag/failure metrics, and avoid blocking security mutations.
 5. **Control plane implemented:** legal holds and incident-preservation
    overrides are explicit, administrator-authorized, tenant-scoped, idempotent,
    and audited. A future expiry worker must fail closed on the active hold.

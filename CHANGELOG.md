@@ -65,6 +65,9 @@ which are released together.
   versioned 400-day default event window, bounded overrides, and one explicit
   legal/incident hold whose create/release lifecycle is idempotent and audited;
   keep deletion and erasure explicitly unimplemented.
+- Add a read-only retention readiness snapshot that evaluates policy, active
+  hold, export watermarks, and exact per-ledger eligible/unacknowledged counts
+  in one D1 transaction without authorizing or performing deletion.
 
 ### Experimental customer-owned Cloudflare relay
 

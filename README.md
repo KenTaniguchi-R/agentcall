@@ -204,9 +204,16 @@ event window (400-day default, bounded to 30–2,555 days), while
 `GET`/`POST /v1/audit/legal-holds`, `GET /v1/audit/legal-holds/:hold_id`, and
 `POST /v1/audit/legal-holds/:hold_id/release` manage one active tenant legal or
 incident hold. Mutations are idempotent and commit with durable audit evidence.
-There is still no expiry worker: these APIs neither delete rows nor prove
-erasure, and a future worker must require the export watermark and fail closed
-while a hold is active.
+`GET /v1/audit/retention-readiness` evaluates one caller-visible time in a
+single D1 transaction and reports the effective cutoff, active hold, and exact
+covered/unacknowledged eligible counts for both ledgers. An optional
+`evaluated_at` Unix-millisecond query value may select a past evaluation time;
+future or malformed values are rejected. An active hold makes both deletion-
+eligible counts zero while the per-ledger export-coverage fields remain visible.
+This is a read-only snapshot, not a
+deletion authorization. There is still no expiry worker: these APIs neither
+delete rows nor prove erasure, and a future worker must re-evaluate the export
+watermark and hold atomically with each bounded deletion batch.
 
 The repository ships an experimental, pre-production
 [customer-owned Cloudflare relay runbook](docs/self-hosting.md) and a

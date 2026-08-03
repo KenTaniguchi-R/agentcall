@@ -1,11 +1,11 @@
 import type { Hono } from "hono";
 import {
-  AuditLegalHold, AuditLegalHoldCreateRequest, AuditLegalHoldReleaseRequest,
+  AuditLegalHoldCreateRequest, AuditLegalHoldReleaseRequest,
   AuditExportAcknowledgement, AuditExportAcknowledgementRequest, AuditExportPage,
-  AuditRetentionPolicy, AuditRetentionPolicyUpdateRequest, DEFAULT_AUDIT_EVENT_RETENTION_DAYS,
+  AuditRetentionPolicy, AuditRetentionPolicyUpdateRequest,
   AUDIT_HOLD_ID_RE,
   type AuditCheckpointType, type AuditExportAcknowledgementType,
-  type AuditExportEventType, type AuditExportPageType, type AuditLegalHoldType,
+  type AuditExportEventType, type AuditExportPageType,
   type AuditRetentionPolicyType, type OrgAuditEvent,
 } from "@benree/agentcall-shared";
 import type { Env } from "./index.js";
@@ -13,6 +13,14 @@ import { sha256Hex } from "./auth.js";
 import { AUDIT_READ, AUDIT_WRITE, checkLimit } from "./ratelimit/index.js";
 import { authenticateRequest, requireOrgAdmin } from "./tenant.js";
 import { auditLocation, orgAuditTrimStatement } from "./events.js";
+import {
+  AUDIT_HOLD_COLUMNS,
+  evaluateAuditRetentionReadiness,
+  publicAuditHold,
+  retentionPolicyFromRow,
+  type AuditHoldRow,
+  type AuditPolicyRow,
+} from "./audit-retention.js";
 
 const DEFAULT_PAGE_SIZE = 100;
 const MAX_PAGE_SIZE = 500;
@@ -54,12 +62,6 @@ type CursorPayload = {
   position: Position;
 };
 type CompletionReceiptPayload = { version: 1; org: string; checkpoint: Checkpoint };
-type PolicyRow = {
-  event_retention_days: number;
-  version: number;
-  updated_by: string;
-  updated_at: number;
-};
 type PolicyRequestRow = {
   requested_days: number;
   expected_version: number;
@@ -67,12 +69,6 @@ type PolicyRequestRow = {
   actor: string;
   at: number;
 };
-type HoldRow = AuditLegalHoldType & {
-  create_request_id: string;
-  release_request_id: string | null;
-};
-const HOLD_COLUMNS = "hold_id, reason, created_by, created_at, create_request_id, " +
-  "released_by, released_at, release_request_id";
 
 function parseIfNoneMatch(value: string): "*" | string[] | null {
   // HTTP optional whitespace is SP / HTAB only. String.trim() also removes
@@ -316,24 +312,6 @@ function sameCheckpoint(left: AuditCheckpointType, right: Checkpoint): boolean {
     left.roster_event_id === right.rosterEventId && left.roster_event_count === right.rosterEventCount;
 }
 
-function defaultPolicy(): AuditRetentionPolicyType {
-  return {
-    event_retention_days: DEFAULT_AUDIT_EVENT_RETENTION_DAYS,
-    version: 0,
-    updated_by: null,
-    updated_at: null,
-  };
-}
-
-function policyFromRow(row: PolicyRow | null): AuditRetentionPolicyType {
-  return row ? AuditRetentionPolicy.parse({
-    event_retention_days: Number(row.event_retention_days),
-    version: Number(row.version),
-    updated_by: row.updated_by,
-    updated_at: Number(row.updated_at),
-  }) : defaultPolicy();
-}
-
 function policyFromRequest(row: PolicyRequestRow): AuditRetentionPolicyType {
   return AuditRetentionPolicy.parse({
     event_retention_days: Number(row.requested_days),
@@ -349,23 +327,12 @@ function policyRequestMatches(
   return Number(row.requested_days) === requestedDays && Number(row.expected_version) === expectedVersion;
 }
 
-function publicHold(row: HoldRow | null): AuditLegalHoldType | null {
-  return row ? AuditLegalHold.parse({
-    hold_id: row.hold_id,
-    reason: row.reason,
-    created_by: row.created_by,
-    created_at: Number(row.created_at),
-    released_by: row.released_by,
-    released_at: row.released_at === null ? null : Number(row.released_at),
-  }) : null;
-}
-
 async function readPolicy(db: D1Database, org: string): Promise<AuditRetentionPolicyType> {
   const row = await db.prepare(
     "SELECT event_retention_days, version, updated_by, updated_at " +
       "FROM audit_retention_policies WHERE org = ?",
-  ).bind(org).first<PolicyRow>();
-  return policyFromRow(row);
+  ).bind(org).first<AuditPolicyRow>();
+  return retentionPolicyFromRow(row);
 }
 
 async function readPolicyRequest(
@@ -379,36 +346,44 @@ async function readPolicyRequest(
 
 async function readHoldByCreateRequest(
   db: D1Database, org: string, requestId: string,
-): Promise<HoldRow | null> {
+): Promise<AuditHoldRow | null> {
   return db.prepare(
-    `SELECT ${HOLD_COLUMNS} FROM audit_legal_holds WHERE org = ? AND create_request_id = ?`,
-  ).bind(org, requestId).first<HoldRow>();
+    `SELECT ${AUDIT_HOLD_COLUMNS} FROM audit_legal_holds WHERE org = ? AND create_request_id = ?`,
+  ).bind(org, requestId).first<AuditHoldRow>();
 }
 
 async function readHoldByReleaseRequest(
   db: D1Database, org: string, requestId: string,
-): Promise<HoldRow | null> {
+): Promise<AuditHoldRow | null> {
   return db.prepare(
-    `SELECT ${HOLD_COLUMNS} FROM audit_legal_holds WHERE org = ? AND release_request_id = ?`,
-  ).bind(org, requestId).first<HoldRow>();
+    `SELECT ${AUDIT_HOLD_COLUMNS} FROM audit_legal_holds WHERE org = ? AND release_request_id = ?`,
+  ).bind(org, requestId).first<AuditHoldRow>();
 }
 
-async function readHold(db: D1Database, org: string, holdId: string): Promise<HoldRow | null> {
+async function readHold(db: D1Database, org: string, holdId: string): Promise<AuditHoldRow | null> {
   return db.prepare(
-    `SELECT ${HOLD_COLUMNS} FROM audit_legal_holds WHERE org = ? AND hold_id = ?`,
-  ).bind(org, holdId).first<HoldRow>();
+    `SELECT ${AUDIT_HOLD_COLUMNS} FROM audit_legal_holds WHERE org = ? AND hold_id = ?`,
+  ).bind(org, holdId).first<AuditHoldRow>();
 }
 
-async function readActiveHold(db: D1Database, org: string): Promise<HoldRow | null> {
+async function readActiveHold(db: D1Database, org: string): Promise<AuditHoldRow | null> {
   return db.prepare(
-    `SELECT ${HOLD_COLUMNS} FROM audit_legal_holds WHERE org = ? AND released_at IS NULL`,
-  ).bind(org).first<HoldRow>();
+    `SELECT ${AUDIT_HOLD_COLUMNS} FROM audit_legal_holds WHERE org = ? AND released_at IS NULL`,
+  ).bind(org).first<AuditHoldRow>();
 }
 
 function retentionMutationFailed(error: unknown): void {
   console.error("audit retention control mutation failed", {
     name: error instanceof Error ? error.name : "UnknownError",
   });
+}
+
+function parseEvaluationTime(url: URL, now: number): number | null {
+  const values = url.searchParams.getAll("evaluated_at");
+  if (values.length === 0) return now;
+  if (values.length !== 1 || !/^\d+$/.test(values[0])) return null;
+  const evaluatedAt = Number(values[0]);
+  return Number.isSafeInteger(evaluatedAt) && evaluatedAt <= now ? evaluatedAt : null;
 }
 
 async function readPage(
@@ -440,6 +415,29 @@ async function readPage(
 }
 
 export function mountAudit(app: Hono<{ Bindings: Env }>): void {
+  app.get("/v1/audit/retention-readiness", async (c) => {
+    const identity = await authenticateRequest(c.env, c.req);
+    if (!identity) return c.json({ error: "unauthorized" }, 401);
+    if (!requireOrgAdmin(identity)) return c.json({ error: "administrator role required" }, 403);
+    if (!(await checkLimit(c.env, `audit-retention-read:${identity.org}:${identity.handle}`, AUDIT_READ))) {
+      return c.json({ error: "rate limited" }, 429, { "Retry-After": "60" });
+    }
+    const evaluatedAt = parseEvaluationTime(new URL(c.req.url), Date.now());
+    if (evaluatedAt === null) return c.json({ error: "invalid evaluation time" }, 400);
+    try {
+      return c.json(
+        await evaluateAuditRetentionReadiness(c.env.DB, identity.org, evaluatedAt),
+        200,
+        { "Cache-Control": "no-store" },
+      );
+    } catch (error) {
+      console.error("audit retention readiness failed", {
+        name: error instanceof Error ? error.name : "UnknownError",
+      });
+      return c.json({ error: "audit retention readiness unavailable" }, 503);
+    }
+  });
+
   app.get("/v1/audit/retention-policy", async (c) => {
     const identity = await authenticateRequest(c.env, c.req);
     if (!identity) return c.json({ error: "unauthorized" }, 401);
@@ -541,7 +539,7 @@ export function mountAudit(app: Hono<{ Bindings: Env }>): void {
     if (!(await checkLimit(c.env, `audit-hold-read:${identity.org}:${identity.handle}`, AUDIT_READ))) {
       return c.json({ error: "rate limited" }, 429, { "Retry-After": "60" });
     }
-    return c.json({ active_hold: publicHold(await readActiveHold(c.env.DB, identity.org)) }, 200, {
+    return c.json({ active_hold: publicAuditHold(await readActiveHold(c.env.DB, identity.org)) }, 200, {
       "Cache-Control": "no-store",
     });
   });
@@ -557,7 +555,7 @@ export function mountAudit(app: Hono<{ Bindings: Env }>): void {
     if (!AUDIT_HOLD_ID_RE.test(holdId)) return c.json({ error: "audit legal hold not found" }, 404);
     const hold = await readHold(c.env.DB, identity.org, holdId);
     if (!hold) return c.json({ error: "audit legal hold not found" }, 404);
-    return c.json(publicHold(hold), 200, { "Cache-Control": "no-store" });
+    return c.json(publicAuditHold(hold), 200, { "Cache-Control": "no-store" });
   });
 
   app.post("/v1/audit/legal-holds", async (c) => {
@@ -574,7 +572,7 @@ export function mountAudit(app: Hono<{ Bindings: Env }>): void {
       if (existingRequest.reason !== body.data.reason) {
         return c.json({ error: "request id conflicts with an earlier hold" }, 409);
       }
-      return c.json(publicHold(existingRequest), 200, { "Cache-Control": "no-store" });
+      return c.json(publicAuditHold(existingRequest), 200, { "Cache-Control": "no-store" });
     }
     if (await readActiveHold(c.env.DB, identity.org)) {
       return c.json({ error: "an audit legal hold is already active" }, 409);
@@ -606,7 +604,7 @@ export function mountAudit(app: Hono<{ Bindings: Env }>): void {
     } catch (error) {
       const racedRequest = await readHoldByCreateRequest(c.env.DB, identity.org, body.data.request_id);
       if (racedRequest && racedRequest.reason === body.data.reason) {
-        return c.json(publicHold(racedRequest), 200, { "Cache-Control": "no-store" });
+        return c.json(publicAuditHold(racedRequest), 200, { "Cache-Control": "no-store" });
       }
       if (await readActiveHold(c.env.DB, identity.org)) {
         return c.json({ error: "an audit legal hold is already active" }, 409);
@@ -614,7 +612,7 @@ export function mountAudit(app: Hono<{ Bindings: Env }>): void {
       retentionMutationFailed(error);
       return c.json({ error: "audit legal hold unavailable" }, 503);
     }
-    return c.json(publicHold(await readHold(c.env.DB, identity.org, holdId)), 201, {
+    return c.json(publicAuditHold(await readHold(c.env.DB, identity.org, holdId)), 201, {
       "Cache-Control": "no-store",
     });
   });
@@ -635,7 +633,7 @@ export function mountAudit(app: Hono<{ Bindings: Env }>): void {
       if (requestReplay.hold_id !== holdId) {
         return c.json({ error: "request id conflicts with an earlier hold release" }, 409);
       }
-      return c.json(publicHold(requestReplay), 200, { "Cache-Control": "no-store" });
+      return c.json(publicAuditHold(requestReplay), 200, { "Cache-Control": "no-store" });
     }
     const existing = await readHold(c.env.DB, identity.org, holdId);
     if (!existing) return c.json({ error: "audit legal hold not found" }, 404);
@@ -643,7 +641,7 @@ export function mountAudit(app: Hono<{ Bindings: Env }>): void {
       if (existing.release_request_id !== body.data.request_id) {
         return c.json({ error: "audit legal hold was already released" }, 409);
       }
-      return c.json(publicHold(existing), 200, { "Cache-Control": "no-store" });
+      return c.json(publicAuditHold(existing), 200, { "Cache-Control": "no-store" });
     }
     const now = Date.now();
     const [actorIp, actorCountry] = auditLocation(c);
@@ -673,7 +671,7 @@ export function mountAudit(app: Hono<{ Bindings: Env }>): void {
         if (racedRequest.hold_id !== holdId) {
           return c.json({ error: "request id conflicts with an earlier hold release" }, 409);
         }
-        return c.json(publicHold(racedRequest), 200, { "Cache-Control": "no-store" });
+        return c.json(publicAuditHold(racedRequest), 200, { "Cache-Control": "no-store" });
       }
       retentionMutationFailed(error);
       return c.json({ error: "audit legal hold release unavailable" }, 503);
@@ -682,7 +680,7 @@ export function mountAudit(app: Hono<{ Bindings: Env }>): void {
     if (!released || released.release_request_id !== body.data.request_id) {
       return c.json({ error: "audit legal hold was already released" }, 409);
     }
-    return c.json(publicHold(released), 200, { "Cache-Control": "no-store" });
+    return c.json(publicAuditHold(released), 200, { "Cache-Control": "no-store" });
   });
 
   app.get("/v1/audit/events", async (c) => {
