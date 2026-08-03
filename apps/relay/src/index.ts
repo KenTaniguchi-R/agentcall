@@ -204,6 +204,7 @@ app.get("/v1/ws", async (c) => {
   fwd.headers.set("X-Verified-From", handle);
   fwd.headers.set("X-Verified-Org", org);
   fwd.headers.set("X-Verified-Target", target);
+  fwd.headers.set("X-Verified-Relay-Origin", registrationAddressHost(org, c.req.url));
   fwd.headers.set("X-Verified-Groups", JSON.stringify(groups));
   fwd.headers.set("X-Verified-Actor-IP", c.req.header("cf-connecting-ip") ?? "");
   const country = c.req.raw.cf?.country;

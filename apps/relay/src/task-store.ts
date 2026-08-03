@@ -7,7 +7,7 @@ import {
   type A2ATaskStateType,
   type A2ATaskType,
   type CallStatusType,
-  type ErrorCodeType,
+  type HpkeEnvelopeType,
 } from "@benree/agentcall-shared";
 
 export type PersistedTask = {
@@ -27,13 +27,10 @@ export type PersistedTask = {
   task_state?: A2ATaskStateType;
   created_at?: number;
   updated_at?: number;
-  context_id?: string;
-  result_text?: string;
-  failure_code?: ErrorCodeType;
+  outcome_envelope?: HpkeEnvelopeType;
 };
 
 export type TaskListQuery = {
-  contextId?: string;
   status?: A2ATaskStateType;
   pageSize: number;
   pageToken?: string;
@@ -68,28 +65,20 @@ export function taskUpdatedAt(task: PersistedTask): number {
   return task.updated_at ?? taskCreatedAt(task);
 }
 
-export function toA2ATask(task: PersistedTask, includeArtifacts = true): A2ATaskType {
+export function toA2ATask(task: PersistedTask): A2ATaskType {
   const projected: A2ATaskType = {
     id: task.call_id,
-    ...(task.context_id ? { contextId: task.context_id } : {}),
     status: {
       state: taskState(task),
       timestamp: new Date(taskUpdatedAt(task)).toISOString(),
     },
-    ...(includeArtifacts && task.result_text !== undefined ? {
-      artifacts: [{
-        artifactId: `${task.call_id}:result`,
-        name: "reply",
-        parts: [{ text: task.result_text }],
-      }],
-    } : {}),
   };
   return A2ATask.parse(projected);
 }
 
 export function updateTask(
   task: PersistedTask,
-  update: Partial<Pick<PersistedTask, "task_state" | "context_id" | "result_text" | "failure_code">>,
+  update: Partial<Pick<PersistedTask, "task_state" | "outcome_envelope">>,
   now = Date.now(),
 ): PersistedTask {
   return { ...task, ...update, updated_at: now };
@@ -113,7 +102,6 @@ function decodeBase64Url(value: string): Uint8Array | null {
 
 function queryFingerprint(query: TaskListQuery): string {
   return JSON.stringify({
-    contextId: query.contextId ?? null,
     status: query.status ?? null,
     pageSize: query.pageSize,
     historyLength: query.historyLength ?? null,
@@ -189,7 +177,6 @@ export async function listCallerTasks(
   // into different visibility rules.
   const visible = [...allTasks]
     .filter((task) => taskBelongsToCaller(task, caller))
-    .filter((task) => query.contextId === undefined || task.context_id === query.contextId)
     .filter((task) => query.status === undefined || taskState(task) === query.status)
     .filter((task) => query.statusTimestampAfter === undefined || taskUpdatedAt(task) >= query.statusTimestampAfter)
     // Pagination must use immutable fields. Sorting by updated_at can move an
@@ -200,7 +187,7 @@ export async function listCallerTasks(
   const remaining = cursor ? visible.filter((task) => afterCursor(task, cursor)) : visible;
   const selected = remaining.slice(0, query.pageSize);
   const response: A2AListTasksResponseType = {
-    tasks: selected.map((task) => toA2ATask(task, query.includeArtifacts)),
+    tasks: selected.map((task) => toA2ATask(task)),
     nextPageToken: remaining.length > selected.length && selected.length > 0
       ? await encodeCursor(selected[selected.length - 1]!, caller, query, cursorKey, cursorScope)
       : "",
@@ -243,7 +230,9 @@ function parseRfc3339Timestamp(value: string): number | null {
 
 export function parseTaskListQuery(url: URL): TaskListQuery | null {
   const contextId = url.searchParams.get("contextId") ?? undefined;
-  if (contextId !== undefined && (contextId.length < 1 || contextId.length > 256)) return null;
+  // Context identifiers are encrypted call content after the Stage 2C cutover.
+  // The relay cannot filter by a value it must not learn.
+  if (contextId !== undefined) return null;
   const statusValue = url.searchParams.get("status") ?? undefined;
   const status = statusValue === undefined ? undefined : A2ATaskState.safeParse(statusValue);
   if (status && !status.success) return null;
@@ -263,7 +252,6 @@ export function parseTaskListQuery(url: URL): TaskListQuery | null {
   if (includeValue !== null && includeValue !== "true" && includeValue !== "false") return null;
 
   return {
-    contextId,
     status: status?.data,
     pageSize,
     pageToken: url.searchParams.get("pageToken") ?? undefined,

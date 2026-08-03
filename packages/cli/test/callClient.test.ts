@@ -1,11 +1,24 @@
 import { createServer, type Server } from "node:http";
+import { mkdtempSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { WebSocketServer } from "ws";
 import { afterEach, describe, expect, it } from "vitest";
-import { callAgent, callStatusMessage, CallError } from "../src/callClient.js";
-import { CORRELATION_ID_RE } from "@benree/agentcall-shared";
+import {
+  CORRELATION_ID_RE, HPKE_SUITE, MAX_E2EE_WIRE_BYTES, RELAY_CALL_TIMEOUT_MS, encryptionKeyTranscript,
+  keyIdFor, requestTranscript, signTranscript, transcriptHash,
+  type E2EEOutcomeType, type E2EEResponsePayloadType, type EncryptionKeyRecordType,
+} from "@benree/agentcall-shared";
+import { callAgent, callStatusMessage, CallError, type CallOpts } from "../src/callClient.js";
+import { ApiError } from "../src/api.js";
+import { openE2EERequest, sealE2EEResponse } from "../src/e2ee.js";
+import { generateIdentityKeys, type StoredKeys } from "../src/keys.js";
+import { getLinePaths, getMachinePaths } from "../src/paths.js";
 
 let httpServer: Server | undefined;
+const roots: string[] = [];
 afterEach(() => new Promise<void>((resolve) => {
+  for (const root of roots.splice(0)) rmSync(root, { recursive: true, force: true });
   const server = httpServer;
   httpServer = undefined;
   if (!server) return resolve();
@@ -27,20 +40,102 @@ function fakeRelay(script: Script): Promise<string> {
   });
 }
 
-// Thin wrapper over fakeRelay: captures each non-ping frame the client sends
-// and hands it to `handler` alongside the socket, so tests can assert on the
-// outbound frame and script a reply in one place.
-function fakeRelayCapture(handler: (ws: import("ws").WebSocket, frame: any) => void): Promise<string> {
-  return fakeRelay((ws) => {
-    ws.on("message", (raw) => {
-      const s = String(raw);
-      if (s === "ping") return;
-      handler(ws, JSON.parse(s));
+function rejectingRelay(status: number): Promise<string> {
+  return new Promise((resolve) => {
+    const server = createServer();
+    httpServer = server;
+    server.on("upgrade", (_request, socket) => {
+      socket.end(`HTTP/1.1 ${status} Rejected\r\nConnection: close\r\nContent-Length: 0\r\n\r\n`);
+    });
+    server.listen(0, "127.0.0.1", () => {
+      const { port } = server.address() as { port: number };
+      resolve(`http://127.0.0.1:${port}`);
     });
   });
 }
 
-const base = { org: "acme", from: "me", token: "tok", to: "ken", message: "hi" };
+function malformedKeyRelay(): Promise<string> {
+  return new Promise((resolve) => {
+    const server = createServer((_request, response) => {
+      response.writeHead(200, { "content-type": "application/json" });
+      response.end("{");
+    });
+    httpServer = server;
+    server.listen(0, "127.0.0.1", () => {
+      const { port } = server.address() as { port: number };
+      resolve(`http://127.0.0.1:${port}`);
+    });
+  });
+}
+
+async function identity(name: string): Promise<{ keys: StoredKeys; paths: ReturnType<typeof getLinePaths> }> {
+  const root = mkdtempSync(join(tmpdir(), `agentcall-call-client-${name}-`));
+  roots.push(root);
+  const paths = getLinePaths(getMachinePaths(root, root), name);
+  return { keys: await generateIdentityKeys(paths), paths };
+}
+
+async function encryptionRecord(address: string, keys: StoredKeys): Promise<EncryptionKeyRecordType> {
+  return {
+    v: 1, address, key_id: await keyIdFor(keys.encryption_pub), suite: HPKE_SUITE,
+    pub: keys.encryption_pub, epoch: keys.epoch, not_before: 1, not_after: Date.now() + 1_000_000,
+    prev: null,
+  };
+}
+
+async function fixture(relay: string, overrides: Partial<CallOpts> = {}) {
+  const sender = await identity("sender");
+  const recipient = await identity("recipient");
+  const origin = new URL(relay).hostname;
+  const from = overrides.from ?? "me";
+  const to = overrides.to ?? "ken";
+  const fromAddress = `${from}@${origin}`;
+  const toAddress = `${to}@${origin}`;
+  const recipientRecord = await encryptionRecord(toAddress, recipient.keys);
+  const opts: CallOpts = {
+    relay, org: "acme", from, token: "tok", to, message: "hi", paths: sender.paths,
+    ...overrides,
+    keyDeps: {
+      fetchKeys: async () => ({
+        identity: { v: 1, address: toAddress, identity_pub: recipient.keys.identity_pub },
+        encryption: { record: recipientRecord, signature: "unused" },
+      }),
+      verifyAndPinPeer: async () => ({
+        address: toAddress, identity_pub: recipient.keys.identity_pub,
+        fingerprint: `SHA256:${"a".repeat(32)}`, first_seen_at: 1,
+        highest_encryption_epoch: recipient.keys.epoch, call_count: 1,
+      }),
+      loadKeys: () => sender.keys,
+    },
+  };
+
+  const outcomeFrame = async (outer: any, outcome: E2EEOutcomeType) => {
+    const request = await openE2EERequest(
+      outer.envelope, recipient.keys.encryption_pkcs8, sender.keys.identity_pub,
+      {
+        relay_origin: origin, from: fromAddress, to: toAddress,
+        key_id: recipientRecord.key_id, epoch: recipient.keys.epoch,
+      },
+    );
+    const issuedAt = Date.now();
+    const payload: E2EEResponsePayloadType = {
+      v: 1, direction: "response", relay_origin: origin, from: toAddress, to: fromAddress,
+      request_id: request.request_id,
+      sender_identity_key_id: await keyIdFor(recipient.keys.identity_pub),
+      recipient_encryption_key_id: await keyIdFor(sender.keys.encryption_pub),
+      recipient_epoch: sender.keys.epoch, issued_at: issuedAt,
+      expires_at: Math.min(request.expires_at, issuedAt + RELAY_CALL_TIMEOUT_MS),
+      request_transcript_hash: await transcriptHash(requestTranscript(request)), outcome,
+    };
+    const envelope = await sealE2EEResponse(payload, recipient.keys, {
+      pub: sender.keys.encryption_pub,
+      key_id: payload.recipient_encryption_key_id,
+      epoch: sender.keys.epoch,
+    });
+    return { type: "call_outcome", call_id: "c1", terminal: outcome.kind === "reply" ? "completed" : "failed", envelope };
+  };
+  return { opts, outcomeFrame };
+}
 
 describe("callAgent", () => {
   it("gives each relay status a distinct progress message", () => {
@@ -49,128 +144,197 @@ describe("callAgent", () => {
     expect(callStatusMessage("working")).toBe("agent working...");
   });
 
-  it("resolves with the reply and reports statuses", async () => {
+  it("sends no plaintext content and decrypts an authenticated reply", async () => {
+    let fx!: Awaited<ReturnType<typeof fixture>>;
+    const states: string[] = [];
+    const privateMessage = "request-content-must-not-appear-on-wire";
+    const privateReply = "response-content-must-not-appear-on-wire";
     const relay = await fakeRelay((ws, req) => {
       expect(req.headers.authorization).toBe("Bearer tok");
-      expect(req.headers["x-agentcall-handle"]).toBe("me");
-      expect(req.headers["x-agentcall-org"]).toBe("acme");
-      ws.on("message", (raw) => {
-        const f = JSON.parse(String(raw));
-        expect(f).toMatchObject({ type: "call_request", to: "ken", message: "hi" });
-        expect(f.correlation_id).toMatch(CORRELATION_ID_RE);
-        expect(f).not.toHaveProperty("traceparent");
-        ws.send(JSON.stringify({ type: "call_status", state: "ringing", call_id: "c1", correlation_id: f.correlation_id }));
-        ws.send(JSON.stringify({ type: "call_status", state: "answered", call_id: "c1", correlation_id: f.correlation_id }));
-        ws.send(JSON.stringify({ type: "call_status", state: "working", call_id: "c1", correlation_id: f.correlation_id }));
-        ws.send(JSON.stringify({ type: "call_reply", call_id: "c1", correlation_id: f.correlation_id, text: "yo", context_id: "ctx_AAAAAAAAAAAAAAAAAAAAAA" }));
-        ws.close(1000);
+      expect(req.headers["sec-websocket-extensions"]).toBeUndefined();
+      ws.on("message", async (raw) => {
+        if (String(raw) === "ping") return;
+        const wire = String(raw);
+        expect(wire).not.toContain(privateMessage);
+        const frame = JSON.parse(wire);
+        expect(frame).toMatchObject({ type: "call_request" });
+        expect(frame).not.toHaveProperty("message");
+        expect(frame.correlation_id).toMatch(CORRELATION_ID_RE);
+        for (const state of ["ringing", "answered", "working"]) {
+          ws.send(JSON.stringify({ type: "call_status", state, call_id: "c1", correlation_id: frame.correlation_id }));
+        }
+        const outcome = await fx.outcomeFrame(frame, {
+          kind: "reply", text: privateReply, context_id: "ctx_AAAAAAAAAAAAAAAAAAAAAA",
+        });
+        expect(JSON.stringify(outcome)).not.toContain(privateReply);
+        ws.send(JSON.stringify(outcome));
       });
     });
-    const states: string[] = [];
-    const reply = await callAgent({ relay, ...base, onStatus: (s) => states.push(s) });
-    expect(reply.text).toBe("yo");
-    expect(reply.context_id).toBe("ctx_AAAAAAAAAAAAAAAAAAAAAA");
+    fx = await fixture(relay, { message: privateMessage, onStatus: (state) => states.push(state) });
+    const reply = await callAgent(fx.opts);
+    expect(reply).toMatchObject({ text: privateReply, context_id: "ctx_AAAAAAAAAAAAAAAAAAAAAA" });
     expect(states).toEqual(["ringing", "answered", "working"]);
   });
 
-  it("sends an enabled SDK traceparent only with its matching correlation id", async () => {
+  it("carries task and trace context only in their intended visibility zones", async () => {
     const correlationId = "a".repeat(32);
     const traceparent = `00-${correlationId}-${"b".repeat(16)}-01`;
+    let fx!: Awaited<ReturnType<typeof fixture>>;
     let captured: any;
-    const relay = await fakeRelayCapture((ws, frame) => {
-      captured = frame;
-      ws.send(JSON.stringify({
-        type: "call_reply", call_id: "c1", correlation_id: correlationId, text: "ok",
-      }));
-    });
-
-    await callAgent({ relay, ...base, correlationId, traceparent });
+    const relay = await fakeRelay((ws) => ws.on("message", async (raw) => {
+      if (String(raw) === "ping") return;
+      captured = JSON.parse(String(raw));
+      expect(JSON.stringify(captured)).not.toContain("schedule-meeting");
+      ws.send(JSON.stringify(await fx.outcomeFrame(captured, {
+        kind: "reply", text: "ok", task: "schedule-meeting",
+      })));
+    }));
+    fx = await fixture(relay, { correlationId, traceparent, task: "schedule-meeting" });
+    const reply = await callAgent(fx.opts);
     expect(captured).toMatchObject({ correlation_id: correlationId, traceparent });
+    expect(reply.task).toBe("schedule-meeting");
   });
 
-  it("rejects with the relay's error code", async () => {
-    const relay = await fakeRelay((ws) => {
-      ws.on("message", () => ws.send(JSON.stringify({ type: "call_error", code: "offline" })));
-    });
-    await expect(callAgent({ relay, ...base })).rejects.toMatchObject({ code: "offline" });
-  });
-
-  it("reports a confirmed remote cancellation without treating it as a connection failure", async () => {
-    const relay = await fakeRelay((ws) => {
-      ws.on("message", () => ws.send(JSON.stringify({ type: "call_error", code: "canceled" })));
-    });
-    await expect(callAgent({ relay, ...base })).rejects.toMatchObject({
-      code: "canceled",
-      message: "The call was canceled.",
+  it("labels relay errors as unauthenticated operational claims", async () => {
+    const relay = await fakeRelay((ws) => ws.on("message", () => ws.send(JSON.stringify({
+      type: "call_error", origin: "relay", code: "offline",
+    }))));
+    const fx = await fixture(relay);
+    await expect(callAgent(fx.opts)).rejects.toMatchObject({
+      code: "offline", origin: "relay", message: expect.stringMatching(/Unauthenticated relay status/),
     });
   });
 
-  it("rejects when the socket closes before a reply", async () => {
+  it("labels preflight key API failures as unauthenticated relay claims", async () => {
+    const fx = await fixture("https://relay.example");
+    fx.opts.keyDeps!.fetchKeys = async () => {
+      throw new ApiError("The relay returned a malformed key record.", "invalid");
+    };
+    await expect(callAgent(fx.opts)).rejects.toMatchObject({
+      code: "protocol_error",
+      origin: "relay",
+      message: expect.stringMatching(/^Unauthenticated relay status:/),
+    });
+  });
+
+  it("keeps preflight reachability failures in the transport trust domain", async () => {
+    const fx = await fixture("https://relay.example");
+    fx.opts.keyDeps!.fetchKeys = async () => {
+      throw new ApiError("Cannot reach relay: TLS handshake failed.", "network");
+    };
+    await expect(callAgent(fx.opts)).rejects.toMatchObject({
+      code: "connection_failed",
+      origin: "transport",
+      message: expect.stringMatching(/^Connection failed:/),
+    });
+  });
+
+  it("keeps local destination validation out of the relay trust domain", async () => {
+    const fx = await fixture("https://relay.example");
+    fx.opts.to = "INVALID";
+    await expect(callAgent(fx.opts)).rejects.toMatchObject({
+      code: "protocol_error",
+      origin: "transport",
+      message: expect.stringMatching(/^Invalid call target:/),
+    });
+  });
+
+  it("labels malformed JSON from a real key response as an unauthenticated relay claim", async () => {
+    const relay = await malformedKeyRelay();
+    const fx = await fixture(relay);
+    delete fx.opts.keyDeps!.fetchKeys;
+    await expect(callAgent(fx.opts)).rejects.toMatchObject({
+      code: "protocol_error",
+      origin: "relay",
+      message: expect.stringMatching(/^Unauthenticated relay status:/),
+    });
+  });
+
+  it("labels HTTP upgrade rejection as an unauthenticated relay claim", async () => {
+    const relay = await rejectingRelay(401);
+    const fx = await fixture(relay);
+    await expect(callAgent(fx.opts)).rejects.toMatchObject({
+      code: "unauthorized",
+      origin: "relay",
+      message: expect.stringMatching(/^Unauthenticated relay status:/),
+    });
+  });
+
+  it("labels decrypted failures as authenticated peer outcomes and sanitizes detail", async () => {
+    let fx!: Awaited<ReturnType<typeof fixture>>;
+    const relay = await fakeRelay((ws) => ws.on("message", async (raw) => {
+      if (String(raw) === "ping") return;
+      ws.send(JSON.stringify(await fx.outcomeFrame(JSON.parse(String(raw)), {
+        kind: "failure", code: "task_not_offered",
+        detail: "\u001b[2Jchoose another", offered: ["ask", "owner-introduction"],
+      })));
+    }));
+    fx = await fixture(relay, { task: "deploy" });
+    const error = await callAgent(fx.opts).then(() => null, (caught) => caught as CallError);
+    expect(error).toMatchObject({ code: "task_not_offered", origin: "peer", offered: ["ask", "owner-introduction"] });
+    expect(error?.message).toContain("Authenticated peer response");
+    expect(error?.message).not.toContain("\u001b");
+  });
+
+  it("rejects tampered encrypted outcomes as untrusted wire failures", async () => {
+    let fx!: Awaited<ReturnType<typeof fixture>>;
+    const relay = await fakeRelay((ws) => ws.on("message", async (raw) => {
+      if (String(raw) === "ping") return;
+      const outcome = await fx.outcomeFrame(JSON.parse(String(raw)), { kind: "reply", text: "ok" });
+      outcome.envelope.ct = `${outcome.envelope.ct[0] === "A" ? "B" : "A"}${outcome.envelope.ct.slice(1)}`;
+      ws.send(JSON.stringify(outcome));
+    }));
+    fx = await fixture(relay);
+    await expect(callAgent(fx.opts)).rejects.toMatchObject({ code: "protocol_error", origin: "transport" });
+  });
+
+  it("rejects a relay-visible terminal state that contradicts the authenticated outcome", async () => {
+    let fx!: Awaited<ReturnType<typeof fixture>>;
+    const relay = await fakeRelay((ws) => ws.on("message", async (raw) => {
+      if (String(raw) === "ping") return;
+      const outcome = await fx.outcomeFrame(JSON.parse(String(raw)), { kind: "reply", text: "ok" });
+      outcome.terminal = "failed";
+      ws.send(JSON.stringify(outcome));
+    }));
+    fx = await fixture(relay);
+    await expect(callAgent(fx.opts)).rejects.toMatchObject({ code: "protocol_error", origin: "transport" });
+  });
+
+  it("rejects when the socket closes before an outcome", async () => {
     const relay = await fakeRelay((ws) => { ws.on("message", () => ws.close(1011)); });
-    await expect(callAgent({ relay, ...base })).rejects.toBeInstanceOf(CallError);
+    const fx = await fixture(relay);
+    await expect(callAgent(fx.opts)).rejects.toBeInstanceOf(CallError);
+  });
+
+  it("rejects an oversized relay frame at the WebSocket boundary", async () => {
+    const relay = await fakeRelay((ws) => ws.on("message", () => {
+      ws.send(Buffer.alloc(MAX_E2EE_WIRE_BYTES + 1));
+    }));
+    const fx = await fixture(relay, { timeoutMs: 2_000 });
+    await expect(callAgent(fx.opts)).rejects.toMatchObject({
+      code: "connection_failed", origin: "transport",
+    });
   });
 
   it("times out client-side", async () => {
     const relay = await fakeRelay(() => { /* say nothing */ });
-    await expect(callAgent({ relay, ...base, timeoutMs: 200 })).rejects.toMatchObject({ code: "timeout" });
+    const fx = await fixture(relay, { timeoutMs: 200 });
+    await expect(callAgent(fx.opts)).rejects.toMatchObject({ code: "timeout" });
   });
 
-  it("sends a keepalive ping on an interval and ignores pong replies", async () => {
+  it("sends keepalive pings and ignores pong replies", async () => {
+    let fx!: Awaited<ReturnType<typeof fixture>>;
     const pings: string[] = [];
-    const relay = await fakeRelay((ws) => {
-      ws.on("message", (raw) => {
-        const s = String(raw);
-        if (s === "ping") { pings.push(s); return; }
-        const f = JSON.parse(s);
-        if (f.type === "call_request") {
-          ws.send("pong");
-          setTimeout(() => ws.send(JSON.stringify({ type: "call_reply", call_id: "c1", text: "yo" })), 60);
-        }
-      });
-    });
-    const reply = await callAgent({ relay, ...base, pingIntervalMs: 20 });
-    expect(reply.text).toBe("yo");
+    const relay = await fakeRelay((ws) => ws.on("message", async (raw) => {
+      const value = String(raw);
+      if (value === "ping") { pings.push(value); return; }
+      ws.send("pong");
+      setTimeout(async () => ws.send(JSON.stringify(
+        await fx.outcomeFrame(JSON.parse(value), { kind: "reply", text: "yo" }),
+      )), 60);
+    }));
+    fx = await fixture(relay, { pingIntervalMs: 20 });
+    expect((await callAgent(fx.opts)).text).toBe("yo");
     expect(pings.length).toBeGreaterThan(0);
-  });
-
-  it("sends the task field in call_request when opts.task is set", async () => {
-    // Arrange a fake relay that captures the first frame, then replies.
-    let captured: any;
-    const url = await fakeRelayCapture((ws, frame) => {
-      captured = frame;
-      ws.send(JSON.stringify({ type: "call_reply", call_id: "c1", text: "ok", task: frame.task }));
-    });
-    const reply = await callAgent({ relay: url, org: "acme", from: "bob", token: "t", to: "ken", message: "tue?", task: "schedule-meeting" });
-    expect(captured).toMatchObject({ type: "call_request", task: "schedule-meeting" });
-    expect(reply.task).toBe("schedule-meeting");
-  });
-
-  // The CLI must not trust the relay to have sanitized `detail`: the relay and
-  // the CLI deploy independently, so an older or rogue relay can still hand us
-  // raw control bytes that would otherwise land in the user's terminal.
-  it("strips terminal escapes from call_error detail before it reaches the message", async () => {
-    const url = await fakeRelayCapture((ws) => {
-      ws.send(JSON.stringify({
-        type: "call_error", code: "agent_error",
-        detail: "\u001b[2Jcleared your screen\u001b]0;retitled\u0007",
-      }));
-    });
-    const err = await callAgent({ relay: url, org: "acme", from: "bob", token: "t", to: "ken", message: "x" })
-      .then(() => null, (e) => e);
-    expect(err.code).toBe("agent_error");
-    expect(err.message).not.toContain("\u001b");
-    expect(/[\u0000-\u001f\u007f-\u009f]/.test(err.message)).toBe(false);
-    expect(err.message).toContain("cleared your screen");
-  });
-
-  it("surfaces offered[] from call_error on the thrown CallError", async () => {
-    const url = await fakeRelayCapture((ws) => {
-      ws.send(JSON.stringify({ type: "call_error", code: "task_not_offered", offered: ["ask", "owner-introduction"] }));
-    });
-    const err = await callAgent({ relay: url, org: "acme", from: "bob", token: "t", to: "ken", message: "x", task: "deploy" })
-      .then(() => null, (e) => e);
-    expect(err.code).toBe("task_not_offered");
-    expect(err.offered).toEqual(["ask", "owner-introduction"]);
-    expect(err.message).toContain("ask");
   });
 });

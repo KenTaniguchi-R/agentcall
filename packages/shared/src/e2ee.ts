@@ -2,8 +2,10 @@ import { z } from "zod";
 import { canonicalEncode } from "./canonical.js";
 import { ADDRESS_RE } from "./keys.js";
 import {
-  CallFailureCode, CONTEXT_ID_RE, MAX_DETAIL_LENGTH, MAX_MESSAGE_BYTES,
-  MAX_OFFERED_TASKS, MAX_REPLY_BYTES, RELAY_CALL_TIMEOUT_MS, TASK_ID_RE,
+  CallAccepted, CallCancelled, CallNotCancelled, CallRejected, CallStarted, CallStatus,
+  CancelCall, CorrelationId, CONTEXT_ID_RE, MAX_DETAIL_LENGTH, MAX_MESSAGE_BYTES,
+  HANDLE_RE, MAX_CALLER_GROUPS, MAX_OFFERED_TASKS, MAX_REPLY_BYTES,
+  normalizeTraceContext, PeerFailureCode, RELAY_CALL_TIMEOUT_MS, RelayCallError, TASK_ID_RE,
 } from "./protocol.js";
 
 const BASE64URL_RE = /^[A-Za-z0-9_-]+$/;
@@ -39,6 +41,7 @@ export const E2EE_RESPONSE_INFO = new TextEncoder().encode("agentcall/v1/respons
 // NUL becomes `\u0000`). Keep room for that worst case plus fixed metadata,
 // signatures, failure details, offered tasks, and the AEAD tag.
 export const MAX_E2EE_CIPHERTEXT_BYTES = MAX_REPLY_BYTES * 6 + 8_192;
+export const MAX_E2EE_WIRE_BYTES = Math.ceil(MAX_E2EE_CIPHERTEXT_BYTES * 4 / 3) + 4_096;
 
 export const HpkeEnvelopeHeader = z.object({
   v: z.literal(1),
@@ -92,7 +95,7 @@ const ReplyOutcome = z.object({
 }).strict();
 const FailureOutcome = z.object({
   kind: z.literal("failure"),
-  code: CallFailureCode,
+  code: PeerFailureCode,
   detail: utf8(MAX_DETAIL_LENGTH).optional(),
   offered: z.array(z.string().regex(TASK_ID_RE)).max(MAX_OFFERED_TASKS).optional(),
 }).strict();
@@ -107,6 +110,50 @@ export const E2EEResponsePayload = InnerBase.extend({
   message: `response validity must be positive and at most ${RELAY_CALL_TIMEOUT_MS}ms`,
 });
 export type E2EEResponsePayloadType = z.infer<typeof E2EEResponsePayload>;
+
+const RequestEnvelope = HpkeEnvelope.refine((value) => value.direction === "request", {
+  message: "call request must contain a request envelope",
+});
+const ResponseEnvelope = HpkeEnvelope.refine((value) => value.direction === "response", {
+  message: "call outcome must contain a response envelope",
+});
+
+export const EncryptedCallRequest = z.preprocess(normalizeTraceContext, z.object({
+  type: z.literal("call_request"),
+  envelope: RequestEnvelope,
+  correlation_id: CorrelationId.optional(),
+  traceparent: z.string().optional(),
+}).strict());
+
+export const EncryptedIncomingCall = z.preprocess(normalizeTraceContext, z.object({
+  type: z.literal("incoming_call"),
+  call_id: z.string(),
+  from: z.string().regex(HANDLE_RE),
+  envelope: RequestEnvelope,
+  correlation_id: CorrelationId.optional(),
+  traceparent: z.string().optional(),
+  groups: z.array(z.string().regex(/^[A-Za-z0-9_-]{16,64}$/)).max(MAX_CALLER_GROUPS).default([]),
+}).strict());
+
+export const EncryptedCallOutcome = z.object({
+  type: z.literal("call_outcome"),
+  call_id: z.string(),
+  terminal: z.enum(["completed", "failed"]),
+  envelope: ResponseEnvelope,
+}).strict();
+
+export const E2EECallerFrame = EncryptedCallRequest;
+export const E2EEListenerToRelayFrame = z.discriminatedUnion("type", [
+  EncryptedCallOutcome, CallAccepted, CallStarted, CallCancelled, CallNotCancelled, CallRejected,
+]);
+export const E2EERelayToCallerFrame = z.discriminatedUnion("type", [
+  CallStatus, RelayCallError, EncryptedCallOutcome,
+]);
+export const E2EERelayToListenerFrame = z.union([EncryptedIncomingCall, CancelCall]);
+
+export type EncryptedCallRequestType = z.infer<typeof EncryptedCallRequest>;
+export type EncryptedIncomingCallType = z.infer<typeof EncryptedIncomingCall>;
+export type EncryptedCallOutcomeType = z.infer<typeof EncryptedCallOutcome>;
 
 export const SignedE2EERequest = z.object({ payload: E2EERequestPayload, signature: z.string().regex(BASE64URL_RE).max(256) }).strict();
 export const SignedE2EEResponse = z.object({ payload: E2EEResponsePayload, signature: z.string().regex(BASE64URL_RE).max(256) }).strict();

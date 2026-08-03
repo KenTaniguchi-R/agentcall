@@ -1,7 +1,8 @@
 import { describe, expect, it } from "vitest";
 import {
-  E2EERequestPayload, E2EEResponsePayload, HpkeEnvelope, MAX_E2EE_CIPHERTEXT_BYTES, hpkeEnvelopeAad, requestTranscript,
-  responseTranscript, transcriptHash, type E2EERequestPayloadType,
+  E2EECallerFrame, E2EEListenerToRelayFrame, E2EERelayToCallerFrame,
+  E2EERequestPayload, E2EEResponsePayload, HpkeEnvelope, MAX_E2EE_CIPHERTEXT_BYTES,
+  hpkeEnvelopeAad, requestTranscript, responseTranscript, transcriptHash, type E2EERequestPayloadType,
   type E2EEResponsePayloadType,
 } from "../src/e2ee.js";
 
@@ -16,6 +17,42 @@ const request: E2EERequestPayloadType = {
 };
 
 describe("E2EE envelope schemas and transcripts", () => {
+  it("makes plaintext request and outcome fields impossible on the live wire", () => {
+    const requestEnvelope = {
+      v: 1 as const, direction: "request" as const, relay_origin: request.relay_origin,
+      from: request.from, to: request.to, key_id: request.recipient_encryption_key_id,
+      epoch: request.recipient_epoch, enc: "A", ct: "B",
+    };
+    expect(E2EECallerFrame.safeParse({ type: "call_request", envelope: requestEnvelope }).success).toBe(true);
+    for (const field of ["message", "task", "context_id"] as const) {
+      expect(E2EECallerFrame.safeParse({
+        type: "call_request", envelope: requestEnvelope, [field]: "plaintext",
+      }).success).toBe(false);
+    }
+    const responseEnvelope = { ...requestEnvelope, direction: "response" as const };
+    expect(E2EEListenerToRelayFrame.safeParse({
+      type: "call_outcome", call_id: "c1", terminal: "completed", envelope: responseEnvelope,
+    }).success).toBe(true);
+    for (const field of ["text", "detail", "offered"] as const) {
+      expect(E2EEListenerToRelayFrame.safeParse({
+        type: "call_outcome", call_id: "c1", terminal: "failed", envelope: responseEnvelope,
+        [field]: field === "offered" ? ["ask"] : "plaintext",
+      }).success).toBe(false);
+    }
+  });
+
+  it("separates unauthenticated relay errors from encrypted peer outcomes", () => {
+    expect(E2EERelayToCallerFrame.safeParse({
+      type: "call_error", origin: "relay", code: "offline",
+    }).success).toBe(true);
+    expect(E2EERelayToCallerFrame.safeParse({
+      type: "call_error", origin: "relay", code: "blocked",
+    }).success).toBe(false);
+    expect(E2EERelayToCallerFrame.safeParse({
+      type: "call_error", origin: "relay", code: "offline", detail: "peer said no",
+    }).success).toBe(false);
+  });
+
   it("binds every relay-visible routing field into AAD", () => {
     const base = {
       v: 1 as const, direction: "request" as const, relay_origin: request.relay_origin,

@@ -3,21 +3,18 @@ title: Protocol frames
 description: Generated WebSocket frame shapes exchanged by callers, the relay, and listeners.
 ---
 
-This page is generated from the built Zod schemas in `packages/shared/src/protocol.ts`. The [repository README](https://github.com/KenTaniguchi-R/agentcall#how-a-call-works) remains the authority on current runtime behavior.
+This page is generated from the built Zod schemas in `packages/shared/src/protocol.ts` and `packages/shared/src/e2ee.ts`. The [repository README](https://github.com/KenTaniguchi-R/agentcall#how-a-call-works) remains the authority on current runtime behavior.
 
 ## Caller to relay
 
 ### `call_request`
 
-Start or continue a call.
+Send an encrypted call payload.
 
 | Field | Type | Required |
 | --- | --- | --- |
 | `type` | `call_request` | yes |
-| `to` | string | yes |
-| `message` | string | yes |
-| `context_id` | string | no |
-| `task` | string | no |
+| `envelope` | object | yes |
 | `correlation_id` | string | no |
 | `traceparent` | string | no |
 
@@ -25,7 +22,7 @@ Start or continue a call.
 
 ### `call_status`
 
-Report lifecycle state.
+Report unauthenticated lifecycle metadata.
 
 | Field | Type | Required |
 | --- | --- | --- |
@@ -34,49 +31,44 @@ Report lifecycle state.
 | `call_id` | string | no |
 | `correlation_id` | string | no |
 
-### `call_reply`
-
-Return a successful reply.
-
-| Field | Type | Required |
-| --- | --- | --- |
-| `type` | `call_reply` | yes |
-| `call_id` | string | yes |
-| `correlation_id` | string | no |
-| `text` | string | yes |
-| `context_id` | string | no |
-| `task` | string | no |
-
 ### `call_error`
 
-Return a protocol error.
+Return an unauthenticated relay-operational error.
 
 | Field | Type | Required |
 | --- | --- | --- |
 | `type` | `call_error` | yes |
-| `code` | `unknown_handle` / `offline` / `busy` / `timeout` / `canceled` / `agent_error` / `unauthorized` / `rate_limited` / `message_too_large` / `protocol_error` / `blocked` / `task_not_offered` / `task_unknown` / `context_unknown` | yes |
+| `origin` | `relay` | yes |
+| `code` | `unknown_handle` / `offline` / `timeout` / `canceled` / `unauthorized` / `rate_limited` / `message_too_large` / `protocol_error` | yes |
 | `call_id` | string | no |
 | `correlation_id` | string | no |
-| `detail` | string | no |
-| `offered` | string[] | no |
+
+### `call_outcome`
+
+Return an encrypted, authenticated peer outcome.
+
+| Field | Type | Required |
+| --- | --- | --- |
+| `type` | `call_outcome` | yes |
+| `call_id` | string | yes |
+| `terminal` | `completed` / `failed` | yes |
+| `envelope` | object | yes |
 
 ## Relay to listener
 
 ### `incoming_call`
 
-Deliver an authenticated call.
+Deliver an encrypted call with relay-attested routing metadata.
 
 | Field | Type | Required |
 | --- | --- | --- |
 | `type` | `incoming_call` | yes |
 | `call_id` | string | yes |
+| `from` | string | yes |
+| `envelope` | object | yes |
 | `correlation_id` | string | no |
 | `traceparent` | string | no |
-| `from` | string | yes |
-| `message` | string | yes |
 | `groups` | string[] | no |
-| `context_id` | string | no |
-| `task` | string | no |
 
 ### `cancel_call`
 
@@ -107,38 +99,26 @@ Confirm the answering process started.
 | `type` | `call_started` | yes |
 | `call_id` | string | yes |
 
-### `call_answer`
+### `call_outcome`
 
-Legacy lifecycle acknowledgement.
-
-| Field | Type | Required |
-| --- | --- | --- |
-| `type` | `call_answer` | yes |
-| `call_id` | string | yes |
-
-### `call_result`
-
-Return successful text.
+Return an encrypted, authenticated peer outcome.
 
 | Field | Type | Required |
 | --- | --- | --- |
-| `type` | `call_result` | yes |
+| `type` | `call_outcome` | yes |
 | `call_id` | string | yes |
-| `text` | string | yes |
-| `context_id` | string | no |
-| `task` | string | no |
+| `terminal` | `completed` / `failed` | yes |
+| `envelope` | object | yes |
 
-### `call_failed`
+### `call_rejected`
 
-Return an answering failure.
+Reject an invalid encrypted request.
 
 | Field | Type | Required |
 | --- | --- | --- |
-| `type` | `call_failed` | yes |
+| `type` | `call_rejected` | yes |
 | `call_id` | string | yes |
-| `code` | `unknown_handle` / `offline` / `busy` / `timeout` / `agent_error` / `unauthorized` / `rate_limited` / `message_too_large` / `protocol_error` / `blocked` / `task_not_offered` / `task_unknown` / `context_unknown` | yes |
-| `detail` | string | no |
-| `offered` | string[] | no |
+| `code` | `protocol_error` | yes |
 
 ### `call_cancelled`
 
@@ -166,6 +146,7 @@ Explain why cancellation did not complete.
 - Conversation contexts expire after 30 minutes and allow at most 10 turns.
 - Each caller has a 30-call hourly budget.
 - A listener accepts at most 50 relay-attested shared roster IDs per call.
+- An encrypted WebSocket frame is limited to 2,063,019 bytes.
 - Optional W3C trace context is normalized and must match the correlation ID.
 
-The lifecycle migration is not complete: the listener emits `call_accepted` and `call_started`, while the currently deployed relay still recognizes the legacy `call_answer` acknowledgement for its caller-facing answered state.
+Call messages, task and context identifiers, successful replies, peer failure details, and offered-task lists exist only inside signed HPKE envelopes. Routing and lifecycle metadata remain visible to the relay.

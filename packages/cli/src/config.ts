@@ -78,6 +78,10 @@ export function relayUrl(cfg?: LineConfig): string {
 }
 
 export function addressHost(cfg: LineConfig): string {
-  const host = new URL(relayUrl(cfg)).hostname;
-  return host === "agentcall.benree.tech" ? `${cfg.org}.${host}` : host;
+  return relayAddressHost(relayUrl(cfg), cfg.org);
+}
+
+export function relayAddressHost(relay: string, org: string): string {
+  const host = new URL(relay).hostname;
+  return host === "agentcall.benree.tech" ? `${org}.${host}` : host;
 }

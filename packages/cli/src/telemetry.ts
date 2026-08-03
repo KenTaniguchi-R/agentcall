@@ -19,7 +19,7 @@ import {
   type Span, type SpanExporter, type SpanProcessor,
 } from "@opentelemetry/sdk-trace-base";
 import { defaultResource, resourceFromAttributes } from "@opentelemetry/resources";
-import { normalizeTraceparent, type AgentKind, type IncomingCallType } from "@benree/agentcall-shared";
+import { normalizeTraceparent, type AgentKind, type EncryptedIncomingCallType } from "@benree/agentcall-shared";
 import { TelemetryHealthReporter } from "./telemetry-health.js";
 
 const INSTRUMENTATION = "@benree/agentcall";
@@ -332,7 +332,7 @@ export class AgentCallTelemetry {
     };
   }
 
-  startInbound(frame: IncomingCallType): InboundSpanHandle {
+  startInbound(frame: EncryptedIncomingCallType): InboundSpanHandle {
     const traceparent = normalizeTraceparent(frame.correlation_id, frame.traceparent);
     const parent = traceparent
       ? this.propagator.extract(ROOT_CONTEXT, { traceparent }, {

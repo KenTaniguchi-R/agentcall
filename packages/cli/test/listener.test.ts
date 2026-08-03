@@ -1,18 +1,36 @@
 import { createServer, type Server } from "node:http";
-import { mkdirSync, mkdtempSync, readFileSync, statSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { WebSocketServer, type WebSocket as WsSocket } from "ws";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { CONTEXT_TTL_MS, MAX_CONTEXT_TURNS } from "@benree/agentcall-shared";
+import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import {
+  CONTEXT_TTL_MS, HPKE_SUITE, MAX_CONTEXT_TURNS, MAX_E2EE_WIRE_BYTES, RELAY_CALL_TIMEOUT_MS,
+  keyIdFor, requestTranscript, transcriptHash, type E2EERequestPayloadType,
+  type EncryptionKeyRecordType,
+} from "@benree/agentcall-shared";
 import { startListener } from "../src/listener.js";
 import { getLinePaths, getMachinePaths, type LinePaths, type MachinePaths } from "../src/paths.js";
 import { AgentRunError, buildSpawnSpec } from "../src/runner.js";
 import { loadContexts, mintContextId, saveContexts, type ContextBinding } from "../src/contexts.js";
 import type { CallableLineConfig } from "../src/config.js";
+import { openE2EEResponse, sealE2EERequest } from "../src/e2ee.js";
+import { generateIdentityKeys, type StoredKeys } from "../src/keys.js";
 
 let httpServer: Server;
 let stopper: { stop(): Promise<void> } | undefined;
+let cryptoRoot: string;
+let callerKeys: StoredKeys;
+let listenerKeys: StoredKeys;
+const requestByCall = new Map<string, E2EERequestPayloadType>();
+
+beforeAll(async () => {
+  cryptoRoot = mkdtempSync(join(tmpdir(), "agentcall-listener-crypto-"));
+  const machine = getMachinePaths(cryptoRoot, cryptoRoot);
+  callerKeys = await generateIdentityKeys(getLinePaths(machine, "caller"));
+  listenerKeys = await generateIdentityKeys(getLinePaths(machine, "listener"));
+});
+afterAll(() => rmSync(cryptoRoot, { recursive: true, force: true }));
 // Resolves immediately when a test never started a relay — `httpServer?.close()`
 // on an undefined server is a silent no-op whose callback never fires, which
 // would hang teardown until vitest's timeout.
@@ -41,13 +59,70 @@ const cfg: CallableLineConfig = { org: "acme", handle: "ken", token: "tok", agen
 function frames(ws: WsSocket, n: number): Promise<any[]> {
   return new Promise((resolve) => {
     const got: any[] = [];
+    let chain = Promise.resolve();
     ws.on("message", (raw) => {
       const s = String(raw);
       if (s === "ping") return;
-      got.push(JSON.parse(s));
-      if (got.length === n) resolve(got);
+      chain = chain.then(async () => {
+        const wire = JSON.parse(s);
+        if (wire.type !== "call_outcome") {
+          got.push(wire);
+        } else {
+          const request = requestByCall.get(wire.call_id)!;
+          const response = await openE2EEResponse(
+            wire.envelope, callerKeys.encryption_pkcs8, listenerKeys.identity_pub,
+            {
+              relay_origin: "127.0.0.1", from: request.to, to: request.from,
+              key_id: await keyIdFor(callerKeys.encryption_pub), epoch: callerKeys.epoch,
+            },
+            {
+              request_id: request.request_id,
+              request_transcript_hash: await transcriptHash(requestTranscript(request)),
+            },
+          );
+          got.push(response.outcome.kind === "reply"
+            ? { type: "call_result", call_id: wire.call_id, ...response.outcome, _wire: wire }
+            : { type: "call_failed", call_id: wire.call_id, ...response.outcome, _wire: wire });
+        }
+        if (got.length === n) resolve(got);
+      });
     });
   });
+}
+
+async function sendIncoming(
+  ws: WsSocket,
+  frame: {
+    call_id: string; from: string; message: string; task?: string; context_id?: string;
+    groups?: string[]; correlation_id?: string; traceparent?: string;
+  },
+): Promise<{ request: E2EERequestPayloadType; wire: Record<string, unknown> }> {
+  const issuedAt = Date.now();
+  const request: E2EERequestPayloadType = {
+    v: 1, direction: "request", relay_origin: "127.0.0.1",
+    from: `${frame.from}@127.0.0.1`, to: "ken@127.0.0.1",
+    request_id: crypto.randomUUID().replaceAll("-", ""),
+    sender_identity_key_id: await keyIdFor(callerKeys.identity_pub),
+    recipient_encryption_key_id: await keyIdFor(listenerKeys.encryption_pub),
+    recipient_epoch: listenerKeys.epoch, issued_at: issuedAt,
+    expires_at: issuedAt + RELAY_CALL_TIMEOUT_MS, message: frame.message,
+    ...(frame.task ? { task: frame.task } : {}),
+    ...(frame.context_id ? { context_id: frame.context_id } : {}),
+  };
+  requestByCall.set(frame.call_id, request);
+  const envelope = await sealE2EERequest(request, callerKeys, {
+    pub: listenerKeys.encryption_pub,
+    key_id: request.recipient_encryption_key_id,
+    epoch: listenerKeys.epoch,
+  });
+  const wire = {
+    type: "incoming_call", call_id: frame.call_id, from: frame.from,
+    groups: frame.groups ?? [], envelope,
+    ...(frame.correlation_id ? { correlation_id: frame.correlation_id } : {}),
+    ...(frame.traceparent ? { traceparent: frame.traceparent } : {}),
+  };
+  ws.send(JSON.stringify(wire));
+  return { request, wire };
 }
 
 // Fresh ~/.agentcall-shaped tmp root, isolated as both stateRoot and userHome
@@ -70,7 +145,25 @@ function seededPaths(): LinePaths {
 // override, or seed onto `.paths` before calling startListener.
 function baseDeps(relay: string) {
   const paths = seededPaths();
-  return { paths, relay, loadConfig: () => ({ ...cfg, relay }), codexThreadingEnabled: () => true };
+  return {
+    paths, relay, loadConfig: () => ({ ...cfg, relay }), codexThreadingEnabled: () => true,
+    fetchKeys: async (_relay: string, _auth: unknown, handle: string) => {
+      const record: EncryptionKeyRecordType = {
+        v: 1, address: `${handle}@127.0.0.1`, key_id: await keyIdFor(callerKeys.encryption_pub),
+        suite: HPKE_SUITE, pub: callerKeys.encryption_pub, epoch: callerKeys.epoch,
+        not_before: 1, not_after: Date.now() + RELAY_CALL_TIMEOUT_MS, prev: null,
+      };
+      return {
+        identity: { v: 1 as const, address: `${handle}@127.0.0.1`, identity_pub: callerKeys.identity_pub },
+        encryption: { record, signature: "unused" },
+      };
+    },
+    verifyAndPinPeer: async (_machine: MachinePaths, address: string) => ({
+      address, identity_pub: callerKeys.identity_pub, fingerprint: `SHA256:${"a".repeat(32)}`,
+      first_seen_at: 1, highest_encryption_epoch: callerKeys.epoch, call_count: 1,
+    }),
+    loadKeys: () => listenerKeys,
+  };
 }
 
 describe("startListener workdir", () => {
@@ -95,7 +188,7 @@ describe("startListener workdir", () => {
     const relayReady = new Promise<WsSocket>((resolveWs) => {
       void fakeRelay((ws) => resolveWs(ws)).then((url) => {
         stopper = startListener({
-          relay: url, paths,
+          ...baseDeps(url), paths,
           loadConfig: () => ({ ...cfg, workdir: project }),
           run: async (_k, prompt, workdir) => {
             seen.prompt = prompt; seen.workdir = workdir;
@@ -106,7 +199,7 @@ describe("startListener workdir", () => {
     });
     const ws = await relayReady;
     const done = frames(ws, 3); // accepted, started, result
-    ws.send(JSON.stringify({ type: "incoming_call", call_id: "c1", from: "shusaku", message: "hi" }));
+    await sendIncoming(ws, { call_id: "c1", from: "shusaku", message: "hi" });
     await done;
     expect(seen.workdir).toBe(project);
     expect(seen.prompt).toContain(project);
@@ -126,6 +219,50 @@ describe("startListener policy assertions", () => {
 });
 
 describe("startListener", () => {
+  it("drops an oversized relay frame before parsing or spawning", async () => {
+    let runs = 0;
+    let closeFromListener!: () => void;
+    const closed = new Promise<void>((resolve) => { closeFromListener = resolve; });
+    const relay = await fakeRelay((ws) => {
+      ws.on("close", closeFromListener);
+      ws.send(Buffer.alloc(MAX_E2EE_WIRE_BYTES + 1));
+    });
+    stopper = startListener({
+      ...baseDeps(relay),
+      run: async () => { runs += 1; return { text: "must not run" }; },
+      backoffMs: () => 60_000,
+    });
+    await Promise.race([
+      closed,
+      new Promise<never>((_, reject) => setTimeout(() => reject(new Error("listener did not close oversized frame")), 2_000)),
+    ]);
+    expect(runs).toBe(0);
+  });
+
+  it("reserves an authenticated request before spawn and rejects a replay", async () => {
+    let runs = 0;
+    const relayReady = new Promise<WsSocket>((resolveWs) => {
+      void fakeRelay((ws) => resolveWs(ws)).then((url) => {
+        stopper = startListener({
+          ...baseDeps(url),
+          run: async () => { runs += 1; return { text: "once" }; },
+        });
+      });
+    });
+    const ws = await relayReady;
+    const firstFrames = frames(ws, 3);
+    const first = await sendIncoming(ws, { call_id: "replay-1", from: "shusaku", message: "once" });
+    await firstFrames;
+
+    requestByCall.set("replay-2", first.request);
+    const replayFrame = frames(ws, 1);
+    ws.send(JSON.stringify({ ...first.wire, call_id: "replay-2" }));
+    expect(await replayFrame).toEqual([{
+      type: "call_rejected", call_id: "replay-2", code: "protocol_error",
+    }]);
+    expect(runs).toBe(1);
+  });
+
   it("answers an incoming call: accepted -> started -> result, and audits", async () => {
     let paths!: LinePaths;
     const relayReady = new Promise<WsSocket>((resolveWs) => {
@@ -140,10 +277,9 @@ describe("startListener", () => {
     });
     const ws = await relayReady;
     const expectFrames = frames(ws, 3);
-    ws.send(JSON.stringify({
-      type: "incoming_call", call_id: "c1", correlation_id: "b".repeat(32),
-      from: "shusaku", message: "q?",
-    }));
+    await sendIncoming(ws, {
+      call_id: "c1", correlation_id: "b".repeat(32), from: "shusaku", message: "q?",
+    });
     const [accepted, started, result] = await expectFrames;
     expect(accepted).toMatchObject({ type: "call_accepted", call_id: "c1" });
     expect(started).toMatchObject({ type: "call_started", call_id: "c1" });
@@ -162,6 +298,44 @@ describe("startListener", () => {
     expect(statSync(paths.callsLog).mode & 0o777).toBe(0o600);
   });
 
+  it("audits a reply sealing failure once without retrying it as an agent failure", async () => {
+    let paths!: LinePaths;
+    let sealAttempts = 0;
+    const errorSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+    try {
+      const relayReady = new Promise<WsSocket>((resolveWs) => {
+        void fakeRelay((ws) => resolveWs(ws)).then((url) => {
+          const deps = baseDeps(url);
+          paths = deps.paths;
+          stopper = startListener({
+            ...deps,
+            run: async () => ({ text: "completed locally" }),
+            sealE2EEResponse: async () => {
+              sealAttempts += 1;
+              throw new Error("response key expired before sealing");
+            },
+          });
+        });
+      });
+      const ws = await relayReady;
+      const acceptedAndStarted = frames(ws, 2);
+      await sendIncoming(ws, { call_id: "seal-failure", from: "shusaku", message: "q?" });
+      await acceptedAndStarted;
+      for (let attempt = 0; attempt < 20 && sealAttempts === 0; attempt++) {
+        await new Promise((resolve) => setTimeout(resolve, 5));
+      }
+      expect(sealAttempts).toBe(1);
+      const audit = readFileSync(paths.callsLog, "utf8").trim().split("\n").map((line) => JSON.parse(line));
+      expect(audit.at(-1)).toMatchObject({
+        call_id: "seal-failure",
+        status: "outcome_delivery_error",
+        outcome_delivery_error: expect.stringContaining("response key expired before sealing"),
+      });
+    } finally {
+      errorSpy.mockRestore();
+    }
+  });
+
   it("reports busy when the queue is full", async () => {
     let resolveRun!: () => void;
     const running = new Promise<void>((r) => (resolveRun = r));
@@ -175,9 +349,9 @@ describe("startListener", () => {
     });
     const ws = await relayReady;
     const expectFrames = frames(ws, 4); // accepted(c1), started(c1), failed(c2,busy), result(c1)
-    ws.send(JSON.stringify({ type: "incoming_call", call_id: "c1", from: "a", message: "long job" }));
+    await sendIncoming(ws, { call_id: "c1", from: "aa", message: "long job" });
     await new Promise((r) => setTimeout(r, 50));
-    ws.send(JSON.stringify({ type: "incoming_call", call_id: "c2", from: "b", message: "hi" }));
+    await sendIncoming(ws, { call_id: "c2", from: "bb", message: "hi" });
     await new Promise((r) => setTimeout(r, 50));
     resolveRun();
     const got = await expectFrames;
@@ -198,7 +372,7 @@ describe("startListener", () => {
     });
     const ws = await relayReady;
     const expectFrames = frames(ws, 3); // accepted, started, failed
-    ws.send(JSON.stringify({ type: "incoming_call", call_id: "c9", from: "x", message: "y" }));
+    await sendIncoming(ws, { call_id: "c9", from: "xx", message: "y" });
     const got = await expectFrames;
     expect(got[2]).toMatchObject({ type: "call_failed", call_id: "c9", code: "timeout" });
     expect(got[2].detail).not.toContain("boom");
@@ -220,7 +394,7 @@ describe("startListener acceptance and cancellation", () => {
     });
     const ws = await relayReady;
     const got = frames(ws, 3);
-    ws.send(JSON.stringify({ type: "incoming_call", call_id: "c1", from: "amy", message: "hi" }));
+    await sendIncoming(ws, { call_id: "c1", from: "amy", message: "hi" });
     const types = (await got).map((f) => f.type);
     expect(types).toEqual(["call_accepted", "call_started", "call_result"]);
   });
@@ -236,8 +410,8 @@ describe("startListener acceptance and cancellation", () => {
     });
     const ws = await relayReady;
     const got = frames(ws, 3); // accepted(c1), started(c1), failed(c2,busy)
-    ws.send(JSON.stringify({ type: "incoming_call", call_id: "c1", from: "amy", message: "hi" }));
-    ws.send(JSON.stringify({ type: "incoming_call", call_id: "c2", from: "amy", message: "hi" }));
+    await sendIncoming(ws, { call_id: "c1", from: "amy", message: "hi" });
+    await sendIncoming(ws, { call_id: "c2", from: "amy", message: "hi" });
     const all = await got;
     expect(all.filter((f) => f.type === "call_failed" && f.code === "busy")).toHaveLength(1);
   });
@@ -263,7 +437,7 @@ describe("startListener acceptance and cancellation", () => {
     });
     const ws = await relayReady;
     const got = frames(ws, 3); // accepted, started, cancelled
-    ws.send(JSON.stringify({ type: "incoming_call", call_id: "c1", from: "amy", message: "hi" }));
+    await sendIncoming(ws, { call_id: "c1", from: "amy", message: "hi" });
     await new Promise((r) => setTimeout(r, 20));
     ws.send(JSON.stringify({ type: "cancel_call", call_id: "c1" }));
     const all = await got;
@@ -311,7 +485,7 @@ describe("startListener task resolution", () => {
     });
     const ws = await relayReady;
     const expectFrames = frames(ws, 1);
-    ws.send(JSON.stringify({ type: "incoming_call", call_id: "c1", from: "spammer", message: "hi" }));
+    await sendIncoming(ws, { call_id: "c1", from: "spammer", message: "hi" });
     const [failed] = await expectFrames;
     expect(failed).toMatchObject({ type: "call_failed", call_id: "c1", code: "blocked" });
     expect(spawned).toBe(false);
@@ -340,7 +514,7 @@ describe("startListener task resolution", () => {
     });
     const ws = await relayReady;
     const expectFrames = frames(ws, 1);
-    ws.send(JSON.stringify({ type: "incoming_call", call_id: "managed-block", from: "spammer", message: "hi" }));
+    await sendIncoming(ws, { call_id: "managed-block", from: "spammer", message: "hi" });
     const [failed] = await expectFrames;
     expect(failed).toMatchObject({ type: "call_failed", call_id: "managed-block", code: "blocked" });
     expect(spawned).toBe(false);
@@ -358,7 +532,7 @@ describe("startListener task resolution", () => {
     });
     const ws = await relayReady;
     const expectFrames = frames(ws, 1);
-    ws.send(JSON.stringify({ type: "incoming_call", call_id: "c2", from: "stranger", message: "book", task: "schedule-meeting" }));
+    await sendIncoming(ws, { call_id: "c2", from: "stranger", message: "book", task: "schedule-meeting" });
     const [failed] = await expectFrames;
     expect(failed).toMatchObject({ type: "call_failed", call_id: "c2", code: "task_not_offered", offered: ["ask"] });
     expect(spawned).toBe(false);
@@ -380,10 +554,9 @@ describe("startListener task resolution", () => {
     });
     const ws = await relayReady;
     const expectFrames = frames(ws, 3);
-    ws.send(JSON.stringify({
-      type: "incoming_call", call_id: "cg1", from: "stranger", groups: [rosterId],
-      message: "book", task: "schedule-meeting",
-    }));
+    await sendIncoming(ws, {
+      call_id: "cg1", from: "stranger", groups: [rosterId], message: "book", task: "schedule-meeting",
+    });
     const [, , result] = await expectFrames;
     expect(spawned).toBe(true);
     expect(result).toMatchObject({ type: "call_result", call_id: "cg1", task: "schedule-meeting" });
@@ -417,7 +590,7 @@ describe("startListener task resolution", () => {
     });
     const ws = await relayReady;
     const expectFrames = frames(ws, 3); // accepted, started, result
-    ws.send(JSON.stringify({ type: "incoming_call", call_id: "c3", from: "shusaku", message: "tue?", task: "schedule-meeting" }));
+    await sendIncoming(ws, { call_id: "c3", from: "shusaku", message: "tue?", task: "schedule-meeting" });
     const [, , result] = await expectFrames;
     expect(result).toMatchObject({ type: "call_result", call_id: "c3", text: "booked", task: "schedule-meeting" });
     expect(seen.prompt).toContain("check the calendar");
@@ -441,7 +614,7 @@ describe("startListener task resolution", () => {
     });
     const ws = await relayReady;
     const expectFrames = frames(ws, 3); // accepted, started, result
-    ws.send(JSON.stringify({ type: "incoming_call", call_id: "c4", from: "anyone", message: "q?" }));
+    await sendIncoming(ws, { call_id: "c4", from: "anyone", message: "q?" });
     const [, , result] = await expectFrames;
     expect(result).toMatchObject({ type: "call_result", task: "ask" });
     expect(seen.envelope).toEqual({ caps: ["read"] });
@@ -463,7 +636,7 @@ describe("startListener task resolution", () => {
     mkdirSync(paths.dir, { recursive: true });
     writeFileSync(paths.policyFile, "{corrupt");
     const expectFrames = frames(ws, 1);
-    ws.send(JSON.stringify({ type: "incoming_call", call_id: "c5", from: "a", message: "hi" }));
+    await sendIncoming(ws, { call_id: "c5", from: "aa", message: "hi" });
     const [failed] = await expectFrames;
     expect(failed).toMatchObject({ type: "call_failed", call_id: "c5", code: "agent_error" });
     expect(failed.detail).not.toMatch(/JSON|SyntaxError|corrupt/i);
@@ -498,7 +671,7 @@ describe("startListener line name propagation", () => {
     const relayReady = new Promise<WsSocket>((resolveWs) => {
       void fakeRelay((ws) => resolveWs(ws)).then((url) => {
         stopper = startListener({
-          relay: url, paths,
+          ...baseDeps(url), paths,
           loadConfig: () => ({ ...cfg, relay: url }),
           run: async (kind, prompt, workdir, _timeoutMs, _specOverride, envelope, callId, _signal, lineName, _resume, correlationId) => {
             captured.kind = kind; captured.prompt = prompt; captured.workdir = workdir;
@@ -516,10 +689,9 @@ describe("startListener line name propagation", () => {
     // that's what makes the assertion below able to catch a positional-
     // argument swap, not just an empty string. See the "would this catch an
     // argument-order shift" check below the assertions.
-    ws.send(JSON.stringify({
-      type: "incoming_call", call_id: "c1", correlation_id: "a".repeat(32),
-      from: "shusaku", message: "hi",
-    }));
+    await sendIncoming(ws, {
+      call_id: "c1", correlation_id: "a".repeat(32), from: "shusaku", message: "hi",
+    });
     await done;
 
     // Compared against `paths.name`, the actual source of truth this test is
@@ -709,7 +881,7 @@ describe("startListener reconnect isolation", () => {
 // `seed` runs against the deps before the listener starts, so a test can plant
 // a binding, a policy, or a task.
 async function oneCall(
-  incoming: Record<string, unknown>,
+  incoming: { message: string; task?: string; context_id?: string; groups?: string[] },
   opts: {
     seed?: (paths: LinePaths) => void;
     run?: (...a: any[]) => Promise<{ text: string; session_id?: string }>;
@@ -723,8 +895,9 @@ async function oneCall(
   const got = await new Promise<any[]>((resolve) => {
     void fakeRelay((ws) => {
       const collected = frames(ws, opts.frameCount ?? 3);
-      ws.send(JSON.stringify({ type: "incoming_call", call_id: "c1", from: "sota", ...incoming }));
-      void collected.then(resolve);
+      void sendIncoming(ws, { call_id: "c1", from: "sota", ...incoming })
+        .then(() => collected)
+        .then(resolve);
     }).then((url) => {
       deps = baseDeps(url);
       // loadConfig is called fresh on every (re)connect (see listener.ts), so
@@ -1025,7 +1198,9 @@ describe("listener contexts", () => {
       { message: "x", context_id: SEEDED_CTX },
       { seed: seedBinding({ caller: "mallory" }), frameCount: 1 },
     );
-    expect(Object.keys(f[0]).sort()).toEqual(["call_id", "code", "type"]);
+    expect(f[0]).not.toHaveProperty("detail");
+    expect(f[0]).not.toHaveProperty("offered");
+    expect(Object.keys(f[0]._wire).sort()).toEqual(["call_id", "envelope", "terminal", "type"]);
   });
 
   it("does not mint a context for a non-threadable task", async () => {
