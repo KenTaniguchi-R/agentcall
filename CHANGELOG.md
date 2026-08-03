@@ -122,6 +122,12 @@ which are released together.
 - Generate CLI and protocol references from the built Commander program and Zod
   schemas, and validate that public navigation and links cannot expose historical
   repository documentation.
+- Expand the site into 25 task-oriented pages covering evaluation, first call,
+  safe answering, tasks and policy, discovery, identity, multiple lines,
+  administration, configuration, A2A retrieval, troubleshooting, and privacy.
+- Generate detailed CLI help recursively for every command and nested subcommand,
+  with a contract test that fails when the command tree or required reader
+  journeys fall out of the published reference and navigation.
 
 ### A2A task retrieval for live calls
 

@@ -1,9 +1,9 @@
 ---
 title: CLI reference
-description: Generated help for installation, calling, presence, listening, and removal.
+description: Complete generated help for every AgentCall command and nested subcommand.
 ---
 
-This page is generated from the built `agentcall` command. Run `pnpm build && pnpm docs:generate` after changing CLI commands.
+This page is generated recursively from the built `agentcall` command tree. Run `pnpm build && pnpm docs:generate` after changing any command, option, argument, or description.
 
 ## All commands
 
@@ -70,16 +70,104 @@ Options:
   -h, --help         display help for command
 ```
 
-## listen
+## invite
 
 ```text
-Usage: agentcall listen [options]
+Usage: agentcall invite [options] [command]
 
-run the foreground listener (the platform service runs this after setup)
+manage one-time organization invites
 
 Options:
-  --line <name>  run only this line instead of every callable line
+  -h, --help             display help for command
+
+Commands:
+  create [options]       create a one-time invite
+  list [options]         list organization invite lifecycle metadata
+  revoke [options] <id>  revoke an unused organization invite
+  help [command]         display help for command
+```
+
+## invite create
+
+```text
+Usage: agentcall invite create [options]
+
+create a one-time invite
+
+Options:
+  --description <text>      purpose shown in the organization invite inventory
+                            (default: "")
+  --expires-in-days <days>  expiry from 1 to 90 days (default: "7")
+  --role <role>             enrolled organization role: member or admin
+  --line <name>             line whose organization to invite into (defaults to
+                            the primary line)
+  -h, --help                display help for command
+```
+
+## invite list
+
+```text
+Usage: agentcall invite list [options]
+
+list organization invite lifecycle metadata
+
+Options:
+  --line <name>  line whose organization to list (defaults to the primary line)
   -h, --help     display help for command
+```
+
+## invite revoke
+
+```text
+Usage: agentcall invite revoke [options] <id>
+
+revoke an unused organization invite
+
+Arguments:
+  id             64-character invite ID from `agentcall invite list`
+
+Options:
+  --line <name>  line whose organization the invite belongs to (defaults to the
+                 primary line)
+  -h, --help     display help for command
+```
+
+## audit
+
+```text
+Usage: agentcall audit [options] [command]
+
+export organization audit evidence
+
+Options:
+  -h, --help        display help for command
+
+Commands:
+  export [options]  stream an administrator-only snapshot as NDJSON or CSV
+  help [command]    display help for command
+```
+
+## audit export
+
+```text
+Usage: agentcall audit export [options]
+
+stream an administrator-only snapshot as NDJSON or CSV
+
+Options:
+  --after <time>       include events at or after this epoch-millisecond or ISO
+                       timestamp
+  --before <time>      include events before this epoch-millisecond or ISO
+                       timestamp
+  --actor <actor>      include events whose actor field exactly matches
+  --event <event>      include events whose event type exactly matches
+  --ip <address>       include events whose source IP exactly matches
+  --format <format>    output format: ndjson or csv (default: "ndjson")
+  --page-size <count>  events fetched per relay page, from 1 to 500 (default:
+                       "100")
+  --line <name>        line whose organization to export (defaults to the
+                       primary line)
+  -h, --help           display help for command
 ```
 
 ## call
@@ -120,19 +208,638 @@ Options:
   -h, --help   display help for command
 ```
 
-## audit
+## verify
 
 ```text
-Usage: agentcall audit [options] [command]
+Usage: agentcall verify [options] <address>
 
-export organization audit evidence
+fetch and verify a peer's pinned identity fingerprint
+
+Arguments:
+  address      contact name or handle@host to verify
 
 Options:
-  -h, --help        display help for command
+  --as <line>  line whose relay credentials to use
+  -h, --help   display help for command
+```
+
+## trust
+
+```text
+Usage: agentcall trust [options]
+
+manage explicitly pinned peer identities
+
+Options:
+  --reset <address>  remove one pin after verifying a key change out of band
+  -h, --help         display help for command
+```
+
+## keys
+
+```text
+Usage: agentcall keys [options] [command]
+
+manage this line's end-to-end encryption keys
+
+Options:
+  -h, --help         display help for command
 
 Commands:
-  export [options]  stream an administrator-only snapshot as NDJSON or CSV
-  help [command]    display help for command
+  publish [options]  publish the identity and current encryption key already
+                     stored on disk
+  help [command]     display help for command
+```
+
+## keys publish
+
+```text
+Usage: agentcall keys publish [options]
+
+publish the identity and current encryption key already stored on disk
+
+Options:
+  --line <name>  line whose persisted keys to publish
+  -h, --help     display help for command
+```
+
+## doctor
+
+```text
+Usage: agentcall doctor [options]
+
+verify this install can answer calls: binary, auth, agent spawn, tool
+telemetry, listener, relay self-call
+
+Options:
+  -h, --help  display help for command
+```
+
+## history
+
+```text
+Usage: agentcall history [options]
+
+show call activity stored locally on this machine
+
+Options:
+  --limit <count>  maximum newest calls to show (1-100) (default: "20")
+  --flagged        show only calls with objective local abuse signals
+  --json           print machine-readable local history
+  --line <name>    line whose history to show (defaults to the primary line)
+  -h, --help       display help for command
+```
+
+## lint
+
+```text
+Usage: agentcall lint [options]
+
+validate tasks, effective policy assertions, and the published card
+
+Options:
+  --line <name>  line to lint (defaults to the primary line)
+  -h, --help     display help for command
+```
+
+## policy
+
+```text
+Usage: agentcall policy [options]
+
+show the effective per-caller and per-task capability policy
+
+Options:
+  --line <name>  line to report on (defaults to the primary line)
+  -h, --help     display help for command
+```
+
+## card
+
+```text
+Usage: agentcall card [options] [target]
+
+show your own card with problems, another agent's menu, or publish yours (push)
+
+Arguments:
+  target         contact name or handle@host to fetch, 'push' to publish, or
+                 omit to review your own card
+
+Options:
+  --line <name>  line to use (defaults to the primary line)
+  -h, --help     display help for command
+```
+
+## contacts
+
+```text
+Usage: agentcall contacts [options] [command]
+
+manage your local address book of callable agents
+
+Options:
+  -h, --help                      display help for command
+
+Commands:
+  add [options] <name> <address>  save (or update) a contact so you can call
+                                  them by name
+  list [options]                  list saved contacts (name, address, who they
+                                  are)
+  remove <name>                   delete a contact
+  help [command]                  display help for command
+```
+
+## contacts add
+
+```text
+Usage: agentcall contacts add [options] <name> <address>
+
+save (or update) a contact so you can call them by name
+
+Arguments:
+  name           short name to call them by (no @)
+  address        their handle@host
+
+Options:
+  --note <note>  who they are and what to ask them about
+  -h, --help     display help for command
+```
+
+## contacts list
+
+```text
+Usage: agentcall contacts list [options]
+
+list saved contacts (name, address, who they are)
+
+Options:
+  --json      print the raw contacts array
+  -h, --help  display help for command
+```
+
+## contacts remove
+
+```text
+Usage: agentcall contacts remove [options] <name>
+
+delete a contact
+
+Arguments:
+  name        contact name to delete
+
+Options:
+  -h, --help  display help for command
+```
+
+## roster
+
+```text
+Usage: agentcall roster [options] [command]
+
+join and manage discovery rosters for `agentcall search`
+
+Options:
+  -h, --help                       display help for command
+
+Commands:
+  create [options]                 create a roster and print its initial
+                                   reusable join key
+  join [options] <roster-id>       join a roster so `agentcall search` can see
+                                   its members
+  list [options]                   list rosters this line has joined
+  leave [options] <name>           leave a roster on the relay and remove its
+                                   local record
+  expel [options] <name> <handle>  remove a member using the roster admin
+                                   secret
+  key                              issue, list, and revoke scoped roster join
+                                   keys
+  delete [options] <name>          permanently delete a roster while retaining
+                                   its relay audit events
+  forget [options] <name>          drop only the local roster record; use
+                                   `roster leave` to remove relay membership
+  help [command]                   display help for command
+```
+
+## roster create
+
+```text
+Usage: agentcall roster create [options]
+
+create a roster and print its initial reusable join key
+
+Options:
+  --as <name>    local name to record it under (default: "roster")
+  --line <name>  line to create it as (defaults to the primary line)
+  -h, --help     display help for command
+```
+
+## roster join
+
+```text
+Usage: agentcall roster join [options] <roster-id>
+
+join a roster so `agentcall search` can see its members
+
+Arguments:
+  roster-id      roster id shared by whoever created it
+
+Options:
+  --key <key>    a roster join key
+  --as <name>    local name for this roster (default: "roster")
+  --line <name>  line to join as (defaults to the primary line)
+  -h, --help     display help for command
+```
+
+## roster list
+
+```text
+Usage: agentcall roster list [options]
+
+list rosters this line has joined
+
+Options:
+  --line <name>  line to list for (defaults to the primary line)
+  -h, --help     display help for command
+```
+
+## roster leave
+
+```text
+Usage: agentcall roster leave [options] <name>
+
+leave a roster on the relay and remove its local record
+
+Arguments:
+  name           local roster name
+
+Options:
+  --line <name>  line to leave it for (defaults to the primary line)
+  -h, --help     display help for command
+```
+
+## roster expel
+
+```text
+Usage: agentcall roster expel [options] <name> <handle>
+
+remove a member using the roster admin secret
+
+Arguments:
+  name                     local roster name
+  handle                   member handle to remove
+
+Options:
+  --admin-secret <secret>  admin secret (prefer AGENTCALL_ADMIN_SECRET to avoid
+                           shell history)
+  --line <name>            line to act as (defaults to the primary line)
+  -h, --help               display help for command
+```
+
+## roster key
+
+```text
+Usage: agentcall roster key [options] [command]
+
+issue, list, and revoke scoped roster join keys
+
+Options:
+  -h, --help                        display help for command
+
+Commands:
+  issue [options] <name>            issue a one-off join key (use --reusable
+                                    for a shared key)
+  list [options] <name>             list join-key metadata without revealing
+                                    secrets
+  revoke [options] <name> <prefix>  revoke one join key; --evict removes only
+                                    members admitted by it
+  help [command]                    display help for command
+```
+
+## roster key issue
+
+```text
+Usage: agentcall roster key issue [options] <name>
+
+issue a one-off join key (use --reusable for a shared key)
+
+Arguments:
+  name                     local roster name
+
+Options:
+  --admin-secret <secret>  admin secret (prefer AGENTCALL_ADMIN_SECRET to avoid
+                           shell history)
+  --description <text>     short label shown by `roster key list` (default: "")
+  --expires-in <days>      expiry in days (1-90) (default: 30)
+  --reusable               allow more than one member to use this key
+  --line <name>            line to act as (defaults to the primary line)
+  -h, --help               display help for command
+```
+
+## roster key list
+
+```text
+Usage: agentcall roster key list [options] <name>
+
+list join-key metadata without revealing secrets
+
+Arguments:
+  name                     local roster name
+
+Options:
+  --admin-secret <secret>  admin secret (prefer AGENTCALL_ADMIN_SECRET to avoid
+                           shell history)
+  --line <name>            line to act as (defaults to the primary line)
+  -h, --help               display help for command
+```
+
+## roster key revoke
+
+```text
+Usage: agentcall roster key revoke [options] <name> <prefix>
+
+revoke one join key; --evict removes only members admitted by it
+
+Arguments:
+  name                     local roster name
+  prefix                   12-character public key prefix from `roster key
+                           list`
+
+Options:
+  --admin-secret <secret>  admin secret (prefer AGENTCALL_ADMIN_SECRET to avoid
+                           shell history)
+  --evict                  remove members admitted by this key
+  --yes                    confirm targeted eviction
+  --line <name>            line to act as (defaults to the primary line)
+  -h, --help               display help for command
+```
+
+## roster delete
+
+```text
+Usage: agentcall roster delete [options] <name>
+
+permanently delete a roster while retaining its relay audit events
+
+Arguments:
+  name                     local roster name
+
+Options:
+  --admin-secret <secret>  admin secret (prefer AGENTCALL_ADMIN_SECRET to avoid
+                           shell history)
+  --yes                    confirm deletion
+  --line <name>            line to act as (defaults to the primary line)
+  -h, --help               display help for command
+```
+
+## roster forget
+
+```text
+Usage: agentcall roster forget [options] <name>
+
+drop only the local roster record; use `roster leave` to remove relay
+membership
+
+Arguments:
+  name           local roster name
+
+Options:
+  --line <name>  line to forget it for (defaults to the primary line)
+  -h, --help     display help for command
+```
+
+## search
+
+```text
+Usage: agentcall search [options] <question...>
+
+find which colleague's agent can answer something
+
+Arguments:
+  question         what you need to know
+
+Options:
+  --roster <name>  search only this roster (default: all joined rosters)
+  --limit <n>      maximum results (default: 5)
+  --json           machine-readable output for your own agent
+  --offline        never refresh; use whatever is cached
+  --line <name>    line to search as (defaults to the primary line)
+  -h, --help       display help for command
+```
+
+## task
+
+```text
+Usage: agentcall task [options] [command]
+
+manage the tasks your agent offers
+
+Options:
+  -h, --help          display help for command
+
+Commands:
+  new [options] <id>  scaffold a new task (does not publish it)
+  help [command]      display help for command
+```
+
+## task new
+
+```text
+Usage: agentcall task new [options] <id>
+
+scaffold a new task (does not publish it)
+
+Arguments:
+  id             task id: lowercase kebab-case, becomes the directory name
+
+Options:
+  --line <name>  line to use (defaults to the primary line)
+  -h, --help     display help for command
+```
+
+## allow
+
+```text
+Usage: agentcall allow [options] <handle> <task-id>
+
+grant a caller an extra task (and republish your card)
+
+Options:
+  --line <name>  line to use (defaults to the primary line)
+  -h, --help     display help for command
+```
+
+## revoke
+
+```text
+Usage: agentcall revoke [options] <handle> <task-id>
+
+remove a caller's task grant
+
+Options:
+  --line <name>  line to use (defaults to the primary line)
+  -h, --help     display help for command
+```
+
+## block
+
+```text
+Usage: agentcall block [options] <handle>
+
+refuse all calls from a handle
+
+Options:
+  --line <name>  line to use (defaults to the primary line)
+  -h, --help     display help for command
+```
+
+## unblock
+
+```text
+Usage: agentcall unblock [options] <handle>
+
+lift a block
+
+Options:
+  --line <name>  line to use (defaults to the primary line)
+  -h, --help     display help for command
+```
+
+## offer
+
+```text
+Usage: agentcall offer [options] <task-id>
+
+offer a task to any registered caller
+
+Options:
+  --line <name>  line to use (defaults to the primary line)
+  -h, --help     display help for command
+```
+
+## unoffer
+
+```text
+Usage: agentcall unoffer [options] <task-id>
+
+stop offering a task publicly
+
+Options:
+  --line <name>  line to use (defaults to the primary line)
+  -h, --help     display help for command
+```
+
+## line
+
+```text
+Usage: agentcall line [options] [command]
+
+manage the addresses (lines) this machine answers on and calls from
+
+Options:
+  -h, --help               display help for command
+
+Commands:
+  add [options] <name>     register another address on this machine
+  list [options]           list the addresses this machine holds, which is
+                           primary, and whether each is online
+  remove [options] <name>  remove a line (archives calls.log; the handle can
+                           never be reused, see README)
+  primary <name>           set which line places an outbound call when several
+                           could answer it
+  help [command]           display help for command
+```
+
+## line add
+
+```text
+Usage: agentcall line add [options] <name>
+
+register another address on this machine
+
+Arguments:
+  name               local name for this line, e.g. codex (never shared — the
+                     handle is)
+
+Options:
+  --handle <handle>  handle to register (prompted if omitted)
+  --invite <token>   one-time organization invite (required — each line enrolls
+                     in its own tenant)
+  --agent <agent>    agent kind: claude or codex (omit with --caller-only)
+  --relay <url>      relay URL to register against
+  --caller-only      register a handle to call others without making this
+                     line's agent callable
+  --skip-service     skip reinstalling the background listener service
+  --no-verify        skip verifying the agent can answer a test call
+  -h, --help         display help for command
+```
+
+## line list
+
+```text
+Usage: agentcall line list [options]
+
+list the addresses this machine holds, which is primary, and whether each is
+online
+
+Options:
+  --json      print the full row data (name, address, relay, state, primary) as
+              JSON
+  -h, --help  display help for command
+```
+
+## line remove
+
+```text
+Usage: agentcall line remove [options] <name>
+
+remove a line (archives calls.log; the handle can never be reused, see README)
+
+Arguments:
+  name        line to remove
+
+Options:
+  --yes       confirm removal — required, since the handle can never be
+              reclaimed
+  --purge     delete outright instead of archiving calls.log
+  -h, --help  display help for command
+```
+
+## line primary
+
+```text
+Usage: agentcall line primary [options] <name>
+
+set which line places an outbound call when several could answer it
+
+Arguments:
+  name        line to make primary
+
+Options:
+  -h, --help  display help for command
+```
+
+## listen
+
+```text
+Usage: agentcall listen [options]
+
+run the foreground listener (the platform service runs this after setup)
+
+Options:
+  --line <name>  run only this line instead of every callable line
+  -h, --help     display help for command
+```
+
+## rotate
+
+```text
+Usage: agentcall rotate [options]
+
+replace a line's relay token (use if it may have leaked)
+
+Options:
+  --line <name>  line to rotate (defaults to the primary line)
+  -h, --help     display help for command
 ```
 
 ## uninstall

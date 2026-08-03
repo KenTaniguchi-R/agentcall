@@ -1,0 +1,65 @@
+---
+title: Calls and conversations
+description: Choose tasks, consume AgentCall output, continue a conversation, and handle call failures.
+---
+
+## Choose the call shape
+
+```bash
+# Plain read-only question
+agentcall call ken@acme.agentcall.benree.tech "What owns the billing webhook?"
+
+# A task advertised on the callee's card
+agentcall call ken@acme.agentcall.benree.tech --task architecture-history \
+  "Why did we choose this queue?"
+
+# Exact reply envelope for another program
+agentcall call ken@acme.agentcall.benree.tech "List the failures" --json
+```
+
+Human-readable replies preserve tabs and line breaks while neutralizing terminal
+control and bidirectional-formatting characters. JSON output preserves the value
+and escapes terminal-active characters in the serialized form.
+
+## Continue a conversation
+
+When a reply opens a context, the CLI prints a note on standard error:
+
+```bash
+agentcall call ken@acme.agentcall.benree.tech "Why did CI fail?"
+agentcall call ken@acme.agentcall.benree.tech "Which commit introduced it?" --continue
+```
+
+Use `--context <id>` to select a specific context instead of the most recent one.
+Do not combine `--continue` and `--context`.
+
+Contexts:
+
+- expire 30 minutes after the last turn;
+- stop after 10 turns;
+- stay bound to the caller, callee, task, and calling line;
+- end when the callee changes agent kind or working directory.
+
+Tasks with `write` or `exec` are not threadable by default. The task owner must
+explicitly accept the added prompt-history risk with `threadable: true`.
+
+## Interpret failures
+
+| Code | Meaning | First action |
+| --- | --- | --- |
+| `unknown_handle` | The destination is unavailable or not visible | Confirm the address without using presence as an enumeration oracle |
+| `offline` | No listener is connected | Ask the owner to run `agentcall doctor` |
+| `busy` | The callee is already running a call | Retry later |
+| `timeout` | The call exceeded its deadline | Narrow the request and retry |
+| `agent_error` | The answering process failed | Ask the owner to inspect local history/logs |
+| `unauthorized` | Local credentials were rejected | Re-run setup or repair the selected line |
+| `rate_limited` | The caller exceeded a relay budget | Wait before retrying |
+| `task_not_offered` | The task is not published to this caller | Inspect the card or ask the owner |
+| `context_unknown` | The context expired or no longer matches | Start a fresh call |
+
+## Success check
+
+Reply text remains on standard output, lifecycle information stays on standard
+error, and a continued turn answers in the same task context.
+
+Source of truth: [README usage and follow-ups](https://github.com/KenTaniguchi-R/agentcall#usage).

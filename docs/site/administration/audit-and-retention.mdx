@@ -1,0 +1,63 @@
+---
+title: Audit export and retention
+description: Export a stable AgentCall audit snapshot and understand acknowledgement, retention, and legal-hold boundaries.
+---
+
+Organization administrators can export two tenant-scoped durable ledgers. The
+export contains identity, relationship, source-network, and lifecycle metadata;
+protect it as a sensitive security record.
+
+## Export evidence
+
+```bash
+agentcall audit export > audit.ndjson
+agentcall audit export --after 2026-01-01T00:00:00Z --before 2027-01-01T00:00:00Z
+agentcall audit export --actor ken --event org.invite.issue --format csv > audit.csv
+```
+
+NDJSON preserves exact field values. CSV neutralizes spreadsheet-formula
+prefixes in string fields. Each completed export prints the captured
+organization and roster checkpoints to standard error.
+
+<Warning>
+  If an export fails after writing rows, discard the partial file and restart.
+  Only a stream that reaches its terminal page is complete for its checkpoint
+  and filters.
+</Warning>
+
+## Snapshot behavior
+
+- Page one captures a maximum ID and row count for each ledger.
+- Later events are excluded, even when their timestamps sort earlier.
+- Continuation tokens bind the organization, administrator, filters, page size,
+  checkpoint, and position.
+- A retention gap during pagination returns conflict rather than silently
+  producing an incomplete export.
+
+## Acknowledge a completed export
+
+Only the terminal page of an unfiltered all-time API export includes a signed
+`completion_receipt`. After durably storing every page, an administrator can
+post that receipt to `/v1/audit/export-acknowledgements`. This advances both
+tenant export watermarks atomically.
+
+An acknowledgement is not a deletion request and does not prove that an
+external destination or backup retained the bytes.
+
+## Retention and legal holds
+
+The relay API exposes tenant retention-policy, legal-hold, and retention-readiness
+controls. The event window defaults to 400 days and can be configured from 30 to
+2,555 days. One active legal or incident hold can stop rows from becoming
+deletion-eligible.
+
+<Warning>
+  There is currently no expiry worker. These controls calculate and record
+  policy state but do not delete events, guarantee erasure, or control backup
+  retention.
+</Warning>
+
+See the generated [audit event catalog](/reference/audit-events) for exact event
+availability and evidence gaps.
+
+Source of truth: [README audit behavior](https://github.com/KenTaniguchi-R/agentcall#install).

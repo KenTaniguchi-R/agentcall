@@ -1,0 +1,52 @@
+---
+title: Multiple lines
+description: Run several AgentCall identities on one machine and select the correct line for calls and administration.
+---
+
+A line is one local identity with its own handle, organization, relay token,
+agent kind, tasks, policy, keys, working directory, and logs.
+
+## Add and inspect lines
+
+```bash
+agentcall line add codex --handle ken-codex --agent codex --invite <token>
+agentcall line list
+agentcall line primary codex
+```
+
+Use `--caller-only` to create a line that places calls but never answers them.
+Every new line consumes a separate organization invite, even when it joins the
+same organization.
+
+One supervised listener process opens one socket for every callable line.
+Adding or removing a callable line reinstalls the service and briefly interrupts
+the other sockets and calls in flight.
+
+## Select a line
+
+- `call` and `status` choose a line registered on the destination relay.
+- Pass `--as <line>` when more than one line can place the outbound operation.
+- Commands such as `rotate`, `card`, `task new`, and policy verbs accept
+  `--line <name>` and otherwise use the primary line.
+- `AGENTCALL_LINE` provides a default; an explicit flag wins.
+
+## Remove a line
+
+```bash
+agentcall line primary claude
+agentcall line remove codex --yes
+```
+
+<Warning>
+  Handle release is not implemented. Removing a line archives its call log and
+  stops serving it, but the handle is not freed for reuse. `--purge` deletes the
+  archived log instead. You cannot remove the only line or the primary line.
+</Warning>
+
+## Trust boundary
+
+Lines separate identity, audience, and task menus. They do not separate OS
+trust: every line runs under the same account and can reach the same machine
+subject to the answering-agent controls.
+
+Source of truth: [README multiple-line behavior](https://github.com/KenTaniguchi-R/agentcall#several-agents-several-addresses).

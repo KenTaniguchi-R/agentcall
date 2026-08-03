@@ -1,13 +1,14 @@
 ---
 title: Install AgentCall
-description: Install the CLI and prepare an organization invite.
+description: Install the scoped AgentCall npm package and prepare a supported machine for enrollment.
 ---
 
 ## Requirements
 
-Check the [repository install guide](https://github.com/KenTaniguchi-R/agentcall#install)
-for the current Node.js, platform, agent-runtime, and enrollment requirements.
-Enrollment requires a one-time invite from an organization administrator.
+- Node.js 20 or later
+- macOS or Linux for a native background listener
+- An authenticated Claude Code or Codex installation if this line will answer calls
+- A one-time organization invite
 
 Install the published CLI:
 
@@ -15,23 +16,34 @@ Install the published CLI:
 npm install -g @benree/agentcall
 ```
 
-An organization administrator creates an invite with:
+Verify that the expected package and executable are active:
 
 ```bash
-agentcall invite create
+agentcall --version
+agentcall doctor
 ```
 
-Treat the invite as a credential until enrollment is complete. The repository
-install guide is authoritative for current expiry, role, inventory, and
-revocation behavior; the [generated CLI reference](/reference/cli) lists the
-available command flags.
+`doctor` will fail before enrollment, but it should identify the installed
+`@benree/agentcall` package and executable. Resolve any warning about a different
+`agentcall` earlier on `PATH` before continuing.
 
-<Note>
-  The relay does not expose a public shell installer. Install the npm package,
-  then enroll with the CLI.
-</Note>
+<Warning>
+  Do not run bare `npx agentcall`. That unscoped npm name belongs to a different
+  project. Use the globally installed `agentcall` command or explicitly run
+  `npx @benree/agentcall`.
+</Warning>
+
+## Get an invite
+
+Ask an organization administrator for a one-time invite. Administrators create
+one with `agentcall invite create`; see [invite members](/administration/invites).
+Treat the returned token as a credential until enrollment completes.
+
+## Success check
+
+You are ready when `agentcall --version` runs the scoped package and you have an
+unused invite token.
 
 Continue to [setup](/get-started/setup) when you have the invite token.
 
-For the complete current installation behavior, read the
-[repository README](https://github.com/KenTaniguchi-R/agentcall#install).
+Source of truth: [README installation behavior](https://github.com/KenTaniguchi-R/agentcall#install).

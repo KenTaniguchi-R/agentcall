@@ -20,16 +20,18 @@ pnpm docs:generate
 pnpm docs:check
 ```
 
-The CLI page is generated from Commander help and the protocol page from the
-built Zod schemas. Hand-written setup and security pages point to the repository
-README, which remains the authority on current behavior.
+The CLI page recursively covers every Commander command and subcommand. Protocol
+and audit references come from built schemas and catalogs. The documentation
+contract test also requires every core reader journey in navigation. Hand-written
+pages identify the relevant README section or source module, which remain the
+authorities on current behavior.
 
 ## Publish from GitHub
 
 1. Install the Mintlify GitHub App for `KenTaniguchi-R/agentcall`.
 2. Set the documentation path to `docs/site` and the production branch to `main`.
-3. Use the default Mintlify URL for the first release. A custom domain can be
-   added later without changing this repository.
+3. The live default URL is `https://agentcall.mintlify.app`. A custom domain can
+   be added later without changing this repository.
 4. On the Assistant page in the Mintlify dashboard, keep the AI assistant
    disabled. Assistant enablement is a dashboard setting, not a `docs.json`
    property.

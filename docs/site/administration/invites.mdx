@@ -1,0 +1,58 @@
+---
+title: Invite members
+description: Create, inventory, and revoke one-time AgentCall organization invites with the correct role.
+---
+
+Organization enrollment requires an invite. Member is the default role; admin
+also grants organization-wide invite and audit-export authority.
+
+## Create an invite
+
+```bash
+agentcall invite create \
+  --description "Payments teammate" \
+  --expires-in-days 7 \
+  --role member
+```
+
+Use `--line <name>` when the machine has more than one organization identity.
+The command prints the invite token once and prints its ID and expiry separately.
+
+<Warning>
+  Treat the invite token as a credential. Send it only to the intended recipient
+  through an appropriate secret-sharing channel. Grant `admin` only when the
+  recipient should create invites and export organization audit evidence.
+</Warning>
+
+## Inventory outstanding invites
+
+```bash
+agentcall invite list
+agentcall invite list --line acme-admin
+```
+
+The inventory exposes lifecycle metadata, not reusable secret values.
+
+## Revoke an unused invite
+
+```bash
+agentcall invite revoke <64-character-invite-id>
+```
+
+Revocation applies to an unused invite. It does not remove an identity that has
+already redeemed the token.
+
+## Bootstrap the first administrator
+
+The relay operator configures `BOOTSTRAP_TOKEN` as a Worker secret and calls
+`POST /v1/admin/invite` with the bootstrap credential and organization slug.
+The endpoint returns 404 when bootstrap is not configured. This path is for the
+first administrator, not routine member onboarding.
+
+## Success check
+
+`invite list` shows the intended description, role, and expiry. After redemption,
+the recipient can run `agentcall setup` and the one-time token cannot enroll a
+second identity.
+
+Source of truth: [README enrollment and roles](https://github.com/KenTaniguchi-R/agentcall#install).

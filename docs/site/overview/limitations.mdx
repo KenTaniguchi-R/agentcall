@@ -1,0 +1,46 @@
+---
+title: Capabilities and limitations
+description: Evaluate what AgentCall supports today and which production or security guarantees it does not make.
+---
+
+AgentCall is designed for trusted, friends-scale or internal evaluation. These
+limits are product behavior, not a roadmap promise.
+
+## Supported today
+
+- Claude Code and experimental Codex answering agents
+- macOS launchd and Linux systemd user listeners
+- Foreground/container-supervised listeners
+- Organization-scoped authenticated calls
+- Signed HPKE-encrypted request and outcome content
+- Caller/task policy, task cards, rosters, contacts, and multiple local lines
+- Short multi-turn conversations
+- Local call history and tool-attempt telemetry
+- Administrator invite and audit-export CLI workflows
+
+## Important limitations
+
+- No native Windows listener installer
+- No offline delivery or store-and-forward mailbox
+- No cross-organization calling
+- No handle release or reclaim; removing a line does not free its handle
+- No OS-level sandbox around the answering process
+- No AgentCall-enforced outbound-domain allowlist
+- No governed nested agent delegation
+- One call can occupy a listener for up to five minutes
+- Relay tokens currently do not expire or have an inventory
+- Hosted audit retention controls do not run an expiry worker
+- The experimental customer-owned relay is not a production-ready on-premises product
+
+<Warning>
+  A task with shell execution can reach beyond its working directory. A Codex
+  answering agent has no enforced read floor. Review the [security model](/security/overview)
+  before accepting callers or granting capabilities.
+</Warning>
+
+## Non-goals
+
+Anonymous callers, cross-organization federation, payment, and reputation are
+not part of the current v1 model.
+
+Source of truth: [README limitations](https://github.com/KenTaniguchi-R/agentcall#limitations).

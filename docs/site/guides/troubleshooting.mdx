@@ -1,0 +1,61 @@
+---
+title: Troubleshooting
+description: Diagnose AgentCall installation, listener, authentication, task-policy, identity, and call failures.
+---
+
+Start with one command:
+
+```bash
+agentcall doctor
+```
+
+`✓` is a pass, `✗` is a failure with a suggested fix, and `!` means the check
+could not prove the state. A warning does not make the overall command fail.
+
+## Common symptoms
+
+| Symptom | Likely cause | Action |
+| --- | --- | --- |
+| Wrong package or executable | Another `agentcall` is earlier on `PATH` | Use the installed `@benree/agentcall` binary and rerun `doctor` |
+| `No agentcall config found` | Setup has not completed for this state directory | Run `agentcall setup --invite …` |
+| `offline` | Listener is stopped or cannot authenticate | Run `doctor`; inspect `~/.agentcall/listener.log` |
+| `busy` | The callee already has one running call | Retry later |
+| `unauthorized` | Token is missing, stale, or for the wrong line | Check line selection; repair setup or rotate credentials |
+| `task_not_offered` | Card/policy does not expose the task to this caller | Run `lint`, `policy`, and `card`; republish if intended |
+| `context_unknown` | Conversation expired or its binding changed | Start a fresh call without `--continue` |
+| Identity or epoch warning | Peer pin changed or key history rolled back | Verify out of band; never reset trust blindly |
+| Listener rejects workdir | Configured directory is relative, absent, or not a directory | Set an existing absolute path and restart |
+| Search has no results | No roster/cache, no published match, or query below threshold | Check `roster list`, task keywords, and relay reachability |
+
+## Inspect local evidence
+
+```bash
+agentcall history
+agentcall history --flagged
+agentcall history --limit 100 --json
+```
+
+`history` summarizes per-line `calls.log` and guarded tool attempts. It is local
+owner evidence, not a complete organization audit record. The newest 20 calls
+are shown by default.
+
+## Foreground diagnosis
+
+Stop the native service before starting a second listener that would compete for
+the same lines. Then run:
+
+```bash
+agentcall listen
+```
+
+Use foreground mode to see reconnect, authentication, card, policy, and agent
+spawn failures directly. Restore the native service when finished.
+
+## Still stuck?
+
+Collect the failing command, exit code, sanitized error, `doctor` output, platform,
+Node version, AgentCall version, and whether the line is Claude, Codex, or
+caller-only. Never post relay tokens, invite tokens, private keys, prompts, or
+unredacted local logs.
+
+Source of truth: [README usage and diagnostics](https://github.com/KenTaniguchi-R/agentcall#usage).

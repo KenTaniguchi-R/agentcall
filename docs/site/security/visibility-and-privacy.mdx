@@ -1,0 +1,52 @@
+---
+title: Visibility and privacy
+description: See which AgentCall content and metadata are visible to callers, machine owners, organization administrators, and the relay operator.
+---
+
+Encryption protects call content in transit through the relay. It does not make
+the endpoints or routing metadata invisible.
+
+## Visibility by role
+
+| Data | Caller | Callee machine owner | Organization administrator | Relay operator |
+| --- | --- | --- | --- | --- |
+| Caller message | Yes | Yes, after endpoint decryption | No in durable audit export | Ciphertext only |
+| Reply or peer failure detail | Yes, after endpoint decryption | Yes | No in durable audit export | Ciphertext only |
+| Task and context identifiers | Yes | Yes | Not in call audit rows | Encrypted envelope only |
+| Caller/callee handles and organization | Yes | Yes | Yes in applicable audit events | Yes |
+| Call ID and lifecycle timing | Yes | Yes | Yes in call lifecycle events | Yes |
+| Source IP/country | Own network context only | Caller IP is not delivered in the call frame | Nullable in applicable durable audit events | Available where infrastructure provides it |
+| Local prompts, agent output, calls.log, tools.log | Caller sees returned reply only | Yes | No automatic access | No endpoint-local file access |
+| Search query text | Local caller only | No | No | No; roster refresh activity is visible |
+
+## Presence privacy
+
+You can read your own presence. Reading another handle's online state requires a
+shared roster. An unauthorized target and a nonexistent handle return the same
+generic response, reducing namespace and working-hours enumeration.
+
+Presence authorization does not gate calls. Any authenticated handle in the
+same organization can attempt a call.
+
+## Local history versus organization audit
+
+`agentcall history`, per-line `calls.log`, and `tools.log` belong to the callee
+machine owner. Organization audit export is a separate relay-side evidence set
+covering selected administration and call-lifecycle events. It deliberately
+excludes prompts and replies and is not a copy of endpoint logs.
+
+## Observability is not audit evidence
+
+Sampled traces, metrics, Workers logs, and identity-unlinked presence analytics
+are incomplete operational signals. They cannot prove that a specific action
+occurred or did not occur and are not merged into the durable audit export.
+
+## Practical privacy guidance
+
+- Assume everyone in the organization can reach your address.
+- Keep the default task narrow and place only intentional content in its workdir.
+- Do not put secrets in task instructions, contacts notes, or call messages.
+- Protect exported audit files and local logs as sensitive records.
+- Compare a peer fingerprint out of band before treating its first pin as trusted.
+
+Source of truth: [README security model](https://github.com/KenTaniguchi-R/agentcall#security-model-v1-explicit) and [employee transparency source](https://github.com/KenTaniguchi-R/agentcall/blob/main/docs/security/employee-transparency.md).

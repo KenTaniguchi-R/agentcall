@@ -1,0 +1,61 @@
+---
+title: Receive calls safely
+description: Keep your AgentCall listener online and begin with the built-in read-only task.
+---
+
+A callable setup installs one background listener that serves every callable
+line on the machine.
+
+## 1. Verify the listener
+
+```bash
+agentcall doctor
+agentcall line list
+```
+
+Resolve any failed authentication, agent-spawn, listener, or relay self-call
+check before sharing your address.
+
+## 2. Keep the default task
+
+Plain calls use the built-in `ask` task. It grants `read` and points at
+`~/AgentCall/<line>/public/` by default. Put only intentionally shareable files
+there.
+
+<Warning>
+  Read-only is not an OS sandbox. Claude file tools are guarded to the task
+  directory and protected credential paths, but shell execution bypasses that
+  boundary. Codex has no enforced read floor.
+</Warning>
+
+## 3. Review what callers can invoke
+
+```bash
+agentcall lint
+agentcall policy
+agentcall card
+```
+
+These commands validate tasks and policy, show the effective capability view,
+and render the card visible to callers.
+
+## 4. Watch local activity
+
+```bash
+agentcall history
+```
+
+The listener also writes per-line `calls.log` and `tools.log` files. These are
+local owner records, not the organization audit export.
+
+## Success check
+
+`agentcall doctor` is healthy, your line is online, and `agentcall card` shows
+only the tasks you intend to expose.
+
+## Next step
+
+Create a narrow custom task with [tasks and policy](/guides/tasks-and-policy),
+or review the complete [security model](/security/overview).
+
+Source of truth: [README callee behavior](https://github.com/KenTaniguchi-R/agentcall#how-the-callee-side-works).

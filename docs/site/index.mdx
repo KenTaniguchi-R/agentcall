@@ -1,31 +1,52 @@
 ---
 title: AgentCall
-description: Call another person's coding agent across the internet.
+description: Give Claude Code or Codex a callable address and ask another person's agent for help from your terminal.
 ---
 
-AgentCall gives a Claude Code or Codex agent a callable address. A teammate can
-send a task to that address, the listener on your machine starts your agent, and
-the reply returns to the caller's terminal.
+AgentCall lets one person call another person's Claude Code or Codex agent from
+the terminal. The owner chooses what their agent can do; the caller sends a
+message to an address such as `ken@acme.agentcall.benree.tech` and receives the
+answer on standard output.
 
-<CardGroup cols={2}>
-  <Card title="Install and enroll" icon="rocket" href="/get-started/install">
-    Install the CLI, use an organization invite, and start the listener.
+<Warning>
+  AgentCall is friends-scale software, not a hostile-code sandbox. Start with
+  the built-in read-only task and review the security boundary before making an
+  agent callable.
+</Warning>
+
+<CardGroup cols={3}>
+  <Card title="Call an agent" icon="phone" href="/get-started/first-call">
+    Install AgentCall, enroll, and make a first authenticated call.
+  </Card>
+  <Card title="Answer calls" icon="headset" href="/get-started/receive-calls">
+    Keep a listener online and begin with a narrow, read-only task.
   </Card>
   <Card title="Understand the boundary" icon="shield" href="/security/overview">
-    Review what AgentCall enforces today and what remains an explicit risk.
+    See what is encrypted, what the relay observes, and what remains risky.
   </Card>
 </CardGroup>
 
-## The call path
+## What happens during a call
 
-1. The caller runs `agentcall call handle@host "message"`.
-2. The caller verifies the callee's signed key record and encrypts the request before opening the WebSocket.
-3. The relay authenticates and routes only the encrypted envelope and lifecycle metadata within one organization.
-4. The callee verifies, decrypts, and replay-reserves the request before resolving policy and placing the message in a prompt.
-5. Claude Code or Codex runs in the configured work directory and returns text.
-6. The listener encrypts the outcome for the caller. The relay forwards ciphertext
-   and retains bounded lifecycle status plus the opaque outcome envelope through
-   the original six-minute deadline.
+1. The caller selects an address, optional task, and message.
+2. AgentCall verifies the callee's signed key record and encrypts the request.
+3. The relay authenticates both sides and routes ciphertext inside one organization.
+4. The callee resolves task policy before the caller's message enters the prompt.
+5. A fresh Claude Code or Codex process answers in the configured working directory.
+6. The listener encrypts the outcome and the caller prints the authenticated reply.
 
-AgentCall is an early, friends-scale system. Read the [security posture](/security/overview)
-before making an agent callable, especially before granting write or shell execution.
+Read [how AgentCall works](/overview/how-it-works) for the lifecycle and
+[core concepts](/overview/concepts) for the vocabulary.
+
+## Choose your path
+
+| I want to… | Start here |
+| --- | --- |
+| Evaluate AgentCall | [Current capabilities and limitations](/overview/limitations) |
+| Call a colleague's agent | [Install AgentCall](/get-started/install) |
+| Make my own agent callable | [Receive calls safely](/get-started/receive-calls) |
+| Publish a task | [Tasks and policy](/guides/tasks-and-policy) |
+| Find the right colleague | [Discovery and contacts](/guides/discovery-and-contacts) |
+| Operate an organization | [Invite members](/administration/invites) |
+
+Source of truth: [repository overview](https://github.com/KenTaniguchi-R/agentcall#agentcall).

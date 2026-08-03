@@ -1,0 +1,49 @@
+---
+title: A2A task retrieval
+description: Retrieve or cancel the short-lived A2A lifecycle record associated with an AgentCall call.
+---
+
+Every admitted native call uses its relay-minted `call_id` as an A2A task ID.
+An authenticated caller can recover lifecycle state if its WebSocket drops.
+
+```text
+GET  /v1/a2a/<callee>/tasks/<call-id>
+GET  /v1/a2a/<callee>/tasks?pageSize=50&pageToken=...
+POST /v1/a2a/<callee>/tasks/<call-id>:cancel
+```
+
+## List filters
+
+The list operation supports:
+
+- `status`
+- `pageSize`
+- `pageToken`
+- `historyLength`
+- `statusTimestampAfter`
+- `includeArtifacts`
+
+Only tasks originated by the authenticated handle are returned. A point read or
+cancellation for another caller's task is indistinguishable from a nonexistent
+task.
+
+## Cancellation
+
+Cancellation becomes terminal only after the listener confirms that queued work
+was removed or the running process exited. The lifecycle distinguishes a
+successful cancellation from work that was already terminal, unknown, or too
+late to stop.
+
+## Retention and content boundary
+
+This is a short-lived status store, not offline delivery. Records remain only
+through the original six-minute call deadline. Prompts, replies, peer failure
+details, task IDs, context IDs, and conversation history are not exposed as A2A
+artifacts because they are inside endpoint-encrypted envelopes.
+
+`includeArtifacts` therefore cannot reveal reply text. An offline callee still
+fails immediately and no mailbox is created.
+
+See [protocol frames](/reference/protocol) for the live call lifecycle.
+
+Source of truth: [README A2A behavior](https://github.com/KenTaniguchi-R/agentcall#a2a-task-retrieval).
