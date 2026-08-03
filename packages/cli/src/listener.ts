@@ -23,6 +23,7 @@ import { openE2EERequest, sealE2EEResponse } from "./e2ee.js";
 import { loadKeys } from "./keys.js";
 import { verifyAndPinPeer } from "./known-peers.js";
 import { reserveReplay } from "./replay-store.js";
+import { signalForInboundStatus } from "./abuse-signals.js";
 
 export interface ListenerDeps {
   relay: string;
@@ -105,9 +106,14 @@ export function startListener(deps: ListenerDeps): { stop(): Promise<void> } {
 
   const audit = (entry: Record<string, unknown>) => {
     try {
+      const signal = signalForInboundStatus(entry.status);
       appendPrivateLogLine(
         deps.paths.callsLog,
-        JSON.stringify({ ts: new Date().toISOString(), ...entry }),
+        JSON.stringify({
+          ts: new Date().toISOString(),
+          ...entry,
+          ...(signal.flags.length > 0 ? signal : {}),
+        }),
       );
     } catch (e) {
       // Audit persistence is observability, not call delivery. A full or

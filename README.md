@@ -398,13 +398,17 @@ either way this run, which is not a failure and does not change doctor's exit co
 ```bash
 # Review the newest activity recorded on this machine
 agentcall history
+agentcall history --flagged
 agentcall history --limit 100 --json
 ```
 
 History is local to the callee's machine. It shows the newest 20 calls by
 default, including caller, task, outcome, the first 500 characters of the
 question and successful reply, and counts from guarded tool attempts. It does
-not fetch an employer or relay audit trail. Read the
+not fetch an employer or relay audit trail. `--flagged` filters objective
+local signals: blocked-caller attempts, requests for unknown/unoffered tasks,
+and tool-policy denials. It does not classify harassment or prompt injection,
+and detection is not prevention. Read the
 [employee transparency statement](./docs/security/employee-transparency.md)
 for what is and is not visible through these logs.
 

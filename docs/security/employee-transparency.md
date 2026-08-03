@@ -1,7 +1,8 @@
 # Employee transparency statement
 
 Last reviewed: 2026-08-03 against the E2EE cutover implementation in issue
-#216. Release verification remains pending.
+#216 and local abuse-signal filtering in issue #47. Release verification
+remains pending.
 
 AgentCall lets another person ask a coding agent to run on your machine. This
 page is for the person whose machine and agent account do that work. It states
@@ -58,8 +59,10 @@ task.
   the tool name and—when the guard is enforcing—its allow/deny result.
   `agentcall history` reports counts, not tool arguments or guard details.
 
-The command shows the newest 20 calls by default; `--limit` accepts 1–100 and
-`--json` emits the same local entries for scripts. It warns when malformed JSON
+The command shows the newest 20 calls by default; `--limit` accepts 1–100,
+`--flagged` filters objective local policy-refusal and tool-denial signals,
+and `--json` emits the same local entries for scripts. These flags do not
+classify message intent and are detection, not prevention. It warns when malformed JSON
 records were skipped. To keep the command bounded, each log scan reads at most
 the newest 4 MiB and warns when older bytes were not inspected; tool counts may
 then be partial. It does not prove that every action was observed: shell command

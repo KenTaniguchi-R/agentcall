@@ -281,6 +281,11 @@ open conversations.
   malformed log records and bounded-scan gaps are disclosed instead of
   silently hidden, and audit directories/files are repaired to 0700/0600 on
   write.
+- Added `agentcall history --flagged` for objective local signals only:
+  blocked-caller attempts, unknown or unoffered task requests, and enforcing
+  tool-policy denials. Persisted signal fields are cross-checked against their
+  source status, contradictory log rows are rejected, and no prompt classifier
+  or central data flow is introduced.
 - Callable setup now states that offered tasks run automatically without
   per-call approval, and the employee transparency page documents what the
   caller, machine owner, organization, and relay operator can actually see.

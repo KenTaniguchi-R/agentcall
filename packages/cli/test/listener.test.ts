@@ -490,7 +490,10 @@ describe("startListener task resolution", () => {
     expect(failed).toMatchObject({ type: "call_failed", call_id: "c1", code: "blocked" });
     expect(spawned).toBe(false);
     const audit = readFileSync(paths.callsLog, "utf8").trim().split("\n").map((l) => JSON.parse(l));
-    expect(audit[0]).toMatchObject({ call_id: "c1", from: "spammer", status: "blocked" });
+    expect(audit[0]).toMatchObject({
+      call_id: "c1", from: "spammer", status: "blocked",
+      flags: ["blocked_caller_attempt"], severity: "high",
+    });
   });
 
   it("enforces an administrator block even when user policy allows the caller", async () => {
