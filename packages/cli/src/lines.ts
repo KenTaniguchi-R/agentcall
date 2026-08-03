@@ -1,8 +1,9 @@
-import { chmodSync, existsSync, lstatSync, mkdirSync, readdirSync, readFileSync, renameSync, writeFileSync } from "node:fs";
+import { existsSync, lstatSync, readdirSync, readFileSync } from "node:fs";
 import { z } from "zod";
 import { AgentKindSchema, ORG_RE } from "@benree/agentcall-shared";
 import { getLinePaths, type LinePaths, type MachinePaths } from "./paths.js";
 import type { LineConfig } from "./config.js";
+import { writeJsonAtomic } from "./json-store.js";
 // A line name becomes a directory component and part of an authored-content
 // path, so this regex is the traversal defence and runs before anything
 // touches disk. Deliberately narrower than HANDLE_RE: the handle is global
@@ -85,12 +86,7 @@ export function loadLineConfig(l: LinePaths): LineConfig {
 // the relay token, and a torn write is unrecoverable (the relay authenticates
 // rotation with the OLD token, and handle release is not implemented — #16).
 export function saveLineConfig(l: LinePaths, cfg: LineConfig): void {
-  mkdirSync(l.dir, { recursive: true, mode: 0o700 });
-  chmodSync(l.dir, 0o700);
-  const tmp = `${l.configFile}.tmp`;
-  writeFileSync(tmp, JSON.stringify(cfg, null, 2) + "\n", { mode: 0o600 });
-  chmodSync(tmp, 0o600);
-  renameSync(tmp, l.configFile);
+  writeJsonAtomic(l.configFile, cfg);
 }
 
 export interface LineSummary {
