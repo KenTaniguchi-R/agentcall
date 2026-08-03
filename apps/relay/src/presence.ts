@@ -7,36 +7,42 @@ import { authenticateRequest, identityKey } from "./tenant.js";
 
 type PresenceOutcome = "allowed" | "denied";
 
-// Analytics Engine fields are positional and must remain stable:
-//   index[0]  org (sampling/query boundary; ORG_RE caps it below 96 bytes)
-//   blob[0]   viewer handle
-//   blob[1]   target handle
-//   blob[2]   allowed | denied
-//   blob[3]   source IP, when Cloudflare supplies one
-//   blob[4]   source country, when Cloudflare supplies one
+// Analytics Engine is statistical product telemetry, never an access ledger.
+// Keep direct identity and network dimensions out so its sampled, non-deletable
+// three-month window cannot strand a stable subject or network identifier:
+//   index[0]  allowed | denied (sampling and grouping boundary)
 //   double[0] event timestamp in epoch milliseconds
-function recordStatusRead(
-  c: Context<{ Bindings: Env }>, org: string, viewer: string, target: string, outcome: PresenceOutcome,
-): void {
+async function recordStatusRead(c: Context<{ Bindings: Env }>, outcome: PresenceOutcome): Promise<void> {
   try {
     c.env.STATUS_READS.writeDataPoint({
-      indexes: [org],
-      blobs: [
-        viewer,
-        target,
-        outcome,
-        c.req.header("cf-connecting-ip") ?? "",
-        typeof c.req.raw.cf?.country === "string" ? c.req.raw.cf.country : "",
-      ],
+      indexes: [outcome],
       doubles: [Date.now()],
     });
   } catch (error) {
-    // Read telemetry must not become an availability dependency. Do not log
-    // viewer, target, or the raw error: bindings can expose request metadata.
+    // This catches only a locally observable binding-call failure. Analytics
+    // Engine writes are otherwise asynchronous and sampled, so neither this
+    // counter nor a successful call proves ingestion or per-event completeness.
+    let counterRecorded = false;
+    try {
+      const now = Date.now();
+      await c.env.DB.prepare(
+        "INSERT INTO telemetry_health (sink, failure_count, first_failure_at, last_failure_at) " +
+          "VALUES ('agentcall_status_reads', 1, ?, ?) " +
+          "ON CONFLICT(sink) DO UPDATE SET " +
+          "failure_count = CASE WHEN telemetry_health.failure_count < 9223372036854775807 " +
+          "THEN telemetry_health.failure_count + 1 ELSE telemetry_health.failure_count END, " +
+          "last_failure_at = MAX(telemetry_health.last_failure_at, excluded.last_failure_at)",
+      ).bind(now, now).run();
+      counterRecorded = true;
+    } catch {
+      // Telemetry and its health signal must not become a presence dependency.
+      // The short-lived generic log remains the last-resort operator signal.
+    }
+    // Do not log tenant, subject, outcome, or raw errors: logs are a separate
+    // retention surface and binding wrappers may expose request metadata.
     console.error("status read analytics failure", {
-      org,
-      outcome,
       name: error instanceof Error ? error.name : "UnknownError",
+      counter_recorded: counterRecorded,
     });
   }
 }
@@ -62,11 +68,7 @@ export function mountPresence(app: Hono<{ Bindings: Env }>): void {
     const allowed = validTarget && (
       viewer === target || (await sharedRosterIds(c.env.DB, org, viewer, target)).length > 0
     );
-    // A route parameter is not schema-bounded. Cap malformed probe text before
-    // sending it to Analytics Engine's 16 KiB blob budget; valid handles are
-    // already much shorter and are recorded exactly.
-    const auditTarget = validTarget ? target : target.slice(0, 256);
-    recordStatusRead(c, org, viewer, auditTarget, allowed ? "allowed" : "denied");
+    await recordStatusRead(c, allowed ? "allowed" : "denied");
     if (!allowed) return c.json({ error: "not found" }, 404);
 
     const stub = c.env.HANDLE_DO.get(c.env.HANDLE_DO.idFromName(identityKey(org, target)));

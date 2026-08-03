@@ -94,6 +94,13 @@ rosters, membership, and security-audit evidence. The exact fields, logical
 retention, Cloudflare surfaces, and residency limitations are listed in the
 [cloud data map](./data-residency.md).
 
+Status-read analytics contains only identity-unlinked allowed/denied points and
+timestamps. It does not contain the organization, viewer, target, source IP,
+country, or online/offline result. Exact timestamps can still be correlated with
+information held elsewhere, while sampling prevents this dataset from reliably
+or completely reconstructing a person's presence access history. A non-personal
+D1 health row counts only binding-call failures the Worker observed locally.
+
 ## What AgentCall does not automatically collect
 
 AgentCall does not implement keystroke capture, screenshots, webcam/microphone

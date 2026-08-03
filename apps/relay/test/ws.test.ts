@@ -210,7 +210,7 @@ describe("listener attach + status", () => {
     expect((await res.json<{ online: boolean }>()).online).toBe(false);
   });
 
-  it("records allowed and denied authenticated status reads without distinguishing missing targets", async () => {
+  it("records only identity-unlinked allowed and denied status-read points", async () => {
     await registerHandle("s-log-target");
     const viewer = await registerHandle("s-log-viewer");
     const points: { indexes?: string[]; blobs?: string[]; doubles?: number[] }[] = [];
@@ -232,29 +232,25 @@ describe("listener attach + status", () => {
 
     expect(points).toEqual([
       {
-        indexes: ["acme"],
-        blobs: ["s-log-viewer", "s-log-target", "denied", "203.0.113.116", ""],
+        indexes: ["denied"],
         doubles: [expect.any(Number)],
       },
       {
-        indexes: ["acme"],
-        blobs: ["s-log-viewer", "s-log-missing", "denied", "203.0.113.116", ""],
+        indexes: ["denied"],
         doubles: [expect.any(Number)],
       },
       {
-        indexes: ["acme"],
-        blobs: ["s-log-viewer", "s-log-viewer", "allowed", "203.0.113.116", ""],
+        indexes: ["allowed"],
         doubles: [expect.any(Number)],
       },
       {
-        indexes: ["acme"],
-        blobs: ["s-log-viewer", "x".repeat(256), "denied", "203.0.113.116", ""],
+        indexes: ["denied"],
         doubles: [expect.any(Number)],
       },
     ]);
   });
 
-  it("keeps allowed and denied status responses available when analytics writing throws", async () => {
+  it("durably counts locally observable analytics failures without blocking status reads", async () => {
     const viewer = await registerHandle("s-log-failure");
     const STATUS_READS = {
       writeDataPoint() {
@@ -269,12 +265,49 @@ describe("listener attach + status", () => {
       const denied = await app.request("https://relay.test/v1/status/s-log-failure-other", { headers }, bindings);
       expect(allowed.status).toBe(200);
       expect(denied.status).toBe(404);
+      expect(await env.DB.prepare(
+        "SELECT failure_count, first_failure_at, last_failure_at FROM telemetry_health WHERE sink = ?",
+      ).bind("agentcall_status_reads").first()).toMatchObject({
+        failure_count: 2,
+        first_failure_at: expect.any(Number),
+        last_failure_at: expect.any(Number),
+      });
       expect(log).toHaveBeenCalledTimes(2);
       expect(log).toHaveBeenNthCalledWith(1, "status read analytics failure", {
-        org: "acme", outcome: "allowed", name: "Error",
+        name: "Error", counter_recorded: true,
       });
       expect(log).toHaveBeenNthCalledWith(2, "status read analytics failure", {
-        org: "acme", outcome: "denied", name: "Error",
+        name: "Error", counter_recorded: true,
+      });
+    } finally {
+      log.mockRestore();
+    }
+  });
+
+  it("keeps status available when both analytics and its durable health counter fail", async () => {
+    const viewer = await registerHandle("s-log-double-failure");
+    const STATUS_READS = {
+      writeDataPoint() {
+        throw new Error("analytics unavailable");
+      },
+    } as AnalyticsEngineDataset;
+    const DB = new Proxy(env.DB, {
+      get(target, property) {
+        if (property !== "prepare") return Reflect.get(target, property, target);
+        return (query: string) => {
+          if (query.startsWith("INSERT INTO telemetry_health")) throw new Error("health store unavailable");
+          return target.prepare(query);
+        };
+      },
+    }) as D1Database;
+    const log = vi.spyOn(console, "error").mockImplementation(() => {});
+    try {
+      const res = await app.request("https://relay.test/v1/status/s-log-double-failure", {
+        headers: wsAuth("s-log-double-failure", viewer),
+      }, { ...env, DB, STATUS_READS });
+      expect(res.status).toBe(200);
+      expect(log).toHaveBeenCalledWith("status read analytics failure", {
+        name: "Error", counter_recorded: false,
       });
     } finally {
       log.mockRestore();

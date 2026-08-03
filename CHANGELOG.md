@@ -6,6 +6,15 @@ which are released together.
 
 ## Unreleased
 
+### Presence telemetry is not audit evidence
+
+- Removed organization, handle, IP, and country dimensions from sampled status-read
+  analytics; the dataset now contains only identity-unlinked allowed/denied points.
+- Added a non-personal D1 health counter for locally observable Analytics Engine
+  binding failures without making presence depend on telemetry availability.
+- Recorded the three-month retention, sampling, US-only CMB, and asynchronous-loss
+  constraints so audit export and abuse monitoring use purpose-built durable stores.
+
 ### Documentation — subject erasure and bounded retention decision
 
 - Committed AgentCall to a supported subject-erasure workflow rather than treating

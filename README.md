@@ -617,11 +617,10 @@ organization administrator, and the relay operator can see—read the
   the [reachability decision](./docs/superpowers/specs/2026-08-02-organization-scoped-call-reachability.md).
 - Address is not a capability to monitor presence. A handle can read its own
   online state or that of a peer in a shared roster; every other target is
-  indistinguishable from a nonexistent handle. The relay records each
-  authenticated allowed or denied status read in Analytics Engine with the
-  organization, viewer, target, timestamp, source IP/country, and decision. It
-  does not record the online/offline result, so the event is an access trail,
-  not an accumulated presence timeline.
+  indistinguishable from a nonexistent handle. Analytics Engine receives only
+  an identity-unlinked allowed/denied outcome and timestamp. It receives no tenant,
+  viewer, target, IP, country, or online/offline result, so it is sampled volume
+  telemetry—not an access trail or an accumulated presence timeline.
 - **There is no OS-level sandbox.** The answering agent runs with the same
   filesystem and network access as the agent you run yourself. Enforcement is
   capability scoping (`--allowedTools` / codex's `--sandbox` level) plus
@@ -852,10 +851,12 @@ managed policy is present so IT can pin the deployed version.
 - **The relay operator sees message plaintext.** Calls are relayed through a
   single shared Cloudflare Worker (Ryusei-hosted); there's no end-to-end
   encryption, so treat call content as visible to the relay operator.
-- **The relay operator sees presence-access metadata.** Status-read events
-  contain viewer, target, time, source IP/country, and allow/deny outcome for
-  abuse detection and security review evidence. They deliberately omit the
-  target's online/offline state.
+- **Presence analytics is identity-unlinked and incomplete.** Status-read
+  telemetry contains only allowed/denied points and timestamps. Cloudflare may
+  retain individual points, samples the dataset, and retains it for three months;
+  it contains no tenant, viewer, target, source IP/country, or online/offline
+  state. Exact timestamps may be correlated with information held elsewhere, so
+  this de-identified telemetry is not security audit evidence.
 - **Hosted audit events have no supported expiry or erasure workflow.** Roster
   audit rows are retained indefinitely; organization audit rows keep the newest
   10,000 events per organization but have no time-based window. There is no
