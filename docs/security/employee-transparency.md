@@ -1,8 +1,8 @@
 # Employee transparency statement
 
-Last reviewed: 2026-08-03 against the E2EE cutover implementation in issue
-#216 and local abuse-signal filtering in issue #47. Release verification
-remains pending.
+Last reviewed: 2026-08-03 against the E2EE cutover, local abuse-signal
+filtering, and opt-in local telemetry implemented in issues #216, #47, and
+#187. Release verification remains pending.
 
 AgentCall lets another person ask a coding agent to run on your machine. This
 page is for the person whose machine and agent account do that work. It states
@@ -31,6 +31,11 @@ controls stop.
   employer-visible call-history service. The hosted relay separately keeps
   identity, roster, invite, card, and security-audit data described in the
   cloud data map.
+- AgentCall exports no local telemetry by default. An operator can opt the
+  listener into OTLP export; when enabled, bounded call metadata, timing, and
+  paired tool lifecycle identity/outcome may leave the endpoint for the
+  operator-selected collector. Tool arguments, results, paths, prompts,
+  replies, and error text are excluded from tool lifecycle spans.
 
 ## What the caller can see
 
@@ -90,6 +95,22 @@ An administrator-managed policy can place a ceiling on offered tasks and block
 callers. The machine owner's user policy cannot widen that ceiling. Managed
 policy is not a remote screen-sharing or local-log collection mechanism.
 
+Separately, an operator who sets `AGENTCALL_OTEL=1` on the listener can export
+local OpenTelemetry spans and metrics to an OTLP destination they configure.
+Those records contain bounded call/correlation/context identifiers, runtime,
+task, lifecycle timing/outcome, and—for exactly paired hook observations—a
+bounded tool name and stable tool-call ID. They exclude caller messages,
+replies, handles, tool arguments/results, paths, policy details, error text,
+and agent session IDs. Codex failures without a post hook are omitted rather
+than inferred. Raw tool-call IDs are exported only as per-invocation keyed
+digests and tool names come from a fixed allowlist. The transient mode-0600 hook
+spool stays in AgentCall's private state outside the configured worktree and
+Codex writable sandbox, is capped at 256 KiB/512 events, and is
+consumed and deleted at invocation end. Destination access, retention,
+residency, and employee notice are the operator's responsibility. Claude
+`exec` has no OS filesystem boundary, so these hook observations are not an
+audit-grade source even with the channel's validation and export constraints.
+
 ## What the relay operator can see
 
 Call messages, task and context identifiers, replies, and peer-authored failure
@@ -118,7 +139,8 @@ D1 health row counts only binding-call failures the Worker observed locally.
 AgentCall does not implement keystroke capture, screenshots, webcam/microphone
 capture, email collection, browser-history collection, or an inventory of your
 unrelated agent sessions. It does not upload your local call/tool logs to the
-hosted relay.
+hosted relay. Opt-in OTLP exports are separate metadata records, not uploads of
+those log files.
 
 This is not a claim that the answering agent cannot reach those data. It runs
 as your user, and a sufficiently broad task may read local files, call network

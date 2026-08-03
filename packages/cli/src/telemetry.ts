@@ -21,12 +21,17 @@ import {
 import { defaultResource, resourceFromAttributes } from "@opentelemetry/resources";
 import { normalizeTraceparent, type AgentKind, type EncryptedIncomingCallType } from "@benree/agentcall-shared";
 import { TelemetryHealthReporter } from "./telemetry-health.js";
+import type { ToolLifecycle } from "./tool-telemetry-spool.js";
 
 const INSTRUMENTATION = "@benree/agentcall";
 export const INVOCATION_DURATION_BUCKETS = [
   0.01, 0.02, 0.05, 0.1, 0.2, 0.5, 1, 2, 5, 10, 30, 60, 120, 300, 600,
 ] as const;
+export const TOOL_DURATION_BUCKETS = [
+  0.001, 0.005, 0.01, 0.02, 0.05, 0.1, 0.2, 0.5, 1, 2, 5, 10, 30, 60, 120, 300,
+] as const;
 const METRIC_ATTRIBUTES = ["agentcall.runtime.name", "agentcall.call.outcome", "error.type"];
+const TOOL_METRIC_ATTRIBUTES = ["gen_ai.operation.name", "gen_ai.tool.name", "error.type"];
 const TOKEN_REFILL_MS = 60_000;
 const DEFAULT_MAX_ROOT_SPANS_PER_MINUTE = 60;
 const MAX_EXPORT_TIMEOUT_MS = 2_000;
@@ -261,6 +266,7 @@ export interface CallerSpanHandle {
 }
 
 export interface InvocationSpanHandle {
+  recordTool(input: ToolLifecycle & { contextId?: string }): void;
   end(outcome: InvocationOutcome, contextId?: string): void;
 }
 
@@ -279,6 +285,7 @@ export interface InboundSpanHandle {
 export class AgentCallTelemetry {
   private readonly duration;
   private readonly calls;
+  private readonly toolDuration;
 
   constructor(
     private readonly tracer: Tracer,
@@ -287,6 +294,7 @@ export class AgentCallTelemetry {
   ) {
     this.duration = meter.createHistogram("agentcall.invoke_agent.duration", { unit: "s" });
     this.calls = meter.createCounter("agentcall.invoke_agent.calls", { unit: "{call}" });
+    this.toolDuration = meter.createHistogram("gen_ai.execute_tool.duration", { unit: "s" });
   }
 
   startCaller(input: { task?: string; relay: string }): CallerSpanHandle {
@@ -381,9 +389,44 @@ export class AgentCallTelemetry {
     const span = this.tracer.startSpan(
       `invoke_agent ${input.task}`, { kind: SpanKind.INTERNAL, attributes }, parent,
     );
+    const invocationContext = trace.setSpan(parent, span);
     const started = performance.now();
     let ended = false;
     return {
+      recordTool: (tool) => {
+        if (ended || tool.callId !== input.callId) return;
+        const toolAttributes: Attributes = {
+          "gen_ai.operation.name": "execute_tool",
+          "gen_ai.tool.name": tool.toolName,
+          "gen_ai.tool.call.id": tool.toolCallId,
+          "agentcall.runtime.name": input.runtime,
+          "agentcall.call.id": input.callId,
+        };
+        if (input.correlationId) toolAttributes["agentcall.correlation.id"] = input.correlationId;
+        const conversationId = tool.contextId ?? input.contextId;
+        if (conversationId) toolAttributes["gen_ai.conversation.id"] = conversationId;
+        const metricAttributes: Attributes = {
+          "gen_ai.operation.name": "execute_tool",
+          "gen_ai.tool.name": tool.toolName,
+        };
+        if (tool.outcome !== "success") {
+          const errorType = tool.outcome === "interrupted" ? "interrupted" : "tool_error";
+          toolAttributes["error.type"] = errorType;
+          metricAttributes["error.type"] = errorType;
+        }
+        const toolSpan = this.tracer.startSpan(
+          `execute_tool ${tool.toolName}`,
+          {
+            kind: SpanKind.INTERNAL,
+            attributes: toolAttributes,
+            startTime: new Date(tool.startedAtMs),
+          },
+          invocationContext,
+        );
+        if (tool.outcome !== "success") toolSpan.setStatus({ code: SpanStatusCode.ERROR });
+        this.toolDuration.record(tool.durationMs / 1_000, metricAttributes);
+        toolSpan.end(new Date(tool.endedAtMs));
+      },
       end: (outcome, contextId) => {
         if (ended) return;
         ended = true;
@@ -512,6 +555,14 @@ export function getTelemetry(
         instrumentName: "agentcall.invoke_agent.calls",
         attributesProcessors: [createAllowListAttributesProcessor(METRIC_ATTRIBUTES)],
         aggregationCardinalityLimit: 16,
+      }, {
+        instrumentName: "gen_ai.execute_tool.duration",
+        aggregation: {
+          type: AggregationType.EXPLICIT_BUCKET_HISTOGRAM,
+          options: { boundaries: [...TOOL_DURATION_BUCKETS], recordMinMax: true },
+        },
+        attributesProcessors: [createAllowListAttributesProcessor(TOOL_METRIC_ATTRIBUTES)],
+        aggregationCardinalityLimit: 64,
       }],
     });
     singleton = {

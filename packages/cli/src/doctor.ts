@@ -12,7 +12,9 @@ import { listLines } from "./lines.js";
 import type { LinePaths, MachinePaths } from "./paths.js";
 import { loadKeys } from "./keys.js";
 import { checkKnownPeersStore } from "./known-peers.js";
-import type { AgentKind } from "./runner.js";
+import {
+  codexToolTelemetryEnabled, CODEX_HOOK_TRUST_VERIFIED_VERSION, type AgentKind,
+} from "./runner.js";
 import { readTelemetryHealth } from "./telemetry-health.js";
 import {
   checkCodexGuard, checkGuard, checkRelaySelfCall, formatCheck, short, verifyAgent,
@@ -33,6 +35,7 @@ export interface DoctorDeps {
   guardFn?: GuardProbeFn;
   guardBinaryFn?: GuardBinaryProbeFn;
   codexGuardFn?: CodexGuardProbeFn;
+  codexTelemetryEnabledFn?: () => boolean;
   keyHealthFn?: (cfg: LineConfig, paths: LinePaths) => Promise<VerifyCheck[]>;
   pkgFn?: () => CliPackageManifest;
   selfPathFn?: () => string;
@@ -417,7 +420,16 @@ export async function runDoctor(deps: DoctorDeps): Promise<number> {
       }
       report(guardCheck);
     } else if (cfg.agent_kind === "codex" && agentOk) {
-      report(await checkCodexGuard(agentWorkdir, deps.codexGuardFn));
+      if (!(deps.codexTelemetryEnabledFn ?? codexToolTelemetryEnabled)()) {
+        report({
+          name: "codex tool telemetry",
+          ok: false,
+          detail: `codex-cli release has not passed the PostToolUse probe (last verified: ${CODEX_HOOK_TRUST_VERIFIED_VERSION})`,
+          hint: "install the verified codex-cli release or disable local OpenTelemetry until this release is re-probed",
+        });
+      } else {
+        report(await checkCodexGuard(agentWorkdir, deps.codexGuardFn));
+      }
     }
 
     if (agentOk && online) {

@@ -6,8 +6,9 @@ import { callAgent } from "./callClient.js";
 import { relayUrl, type LineConfig } from "./config.js";
 import { getLinePaths, getMachinePaths, type LinePaths } from "./paths.js";
 import {
-  AgentRunError, buildSpawnSpec, CODEX_SESSION_GUARD_KEY, guardCodexConfigArg, guardCodexTrustArg,
-  guardEntryPath, guardSettingsJson, runAgent, type AgentKind,
+  AgentRunError, buildSpawnSpec, CODEX_SESSION_GUARD_KEY, CODEX_SESSION_TOOL_TELEMETRY_KEY,
+  guardCodexConfigArg, guardCodexTrustArg, guardEntryPath, guardSettingsJson, runAgent,
+  toolTelemetryCodexConfigArg, type AgentKind,
 } from "./runner.js";
 import { resolveAgentBin } from "./bin.js";
 import { ASK_TASK } from "./tasks.js";
@@ -231,7 +232,10 @@ export async function checkCodexGuard(
 
   try {
     const output = await probe(
-      ["app-server", "-c", guardCodexConfigArg(), "-c", guardCodexTrustArg()],
+      [
+        "app-server", "-c", guardCodexConfigArg(), "-c", toolTelemetryCodexConfigArg(),
+        "-c", guardCodexTrustArg(true),
+      ],
       input,
       workdir,
     );
@@ -266,7 +270,30 @@ export async function checkCodexGuard(
         hint: CODEX_GUARD_HINT,
       };
     }
-    return { name: "codex tool telemetry", ok: true, detail: "trusted session hook" };
+    const postEntry = hooks.find((hook: any) => hook?.key === CODEX_SESSION_TOOL_TELEMETRY_KEY);
+    if (!postEntry) {
+      return {
+        name: "codex tool telemetry", ok: false,
+        detail: "AgentCall's tool lifecycle hook is absent",
+        hint: CODEX_GUARD_HINT,
+      };
+    }
+    if (postEntry.enabled !== true) {
+      return {
+        name: "codex tool telemetry", ok: false,
+        detail: "AgentCall's tool lifecycle hook is disabled",
+        hint: CODEX_GUARD_HINT,
+      };
+    }
+    if (postEntry.trustStatus !== "trusted") {
+      const status = typeof postEntry.trustStatus === "string" ? postEntry.trustStatus : "unknown";
+      return {
+        name: "codex tool telemetry", ok: false,
+        detail: `AgentCall's tool lifecycle hook trust is ${status}`,
+        hint: CODEX_GUARD_HINT,
+      };
+    }
+    return { name: "codex tool telemetry", ok: true, detail: "trusted session lifecycle hooks" };
   } catch (error) {
     return {
       name: "codex tool telemetry", ok: false, detail: short(error),

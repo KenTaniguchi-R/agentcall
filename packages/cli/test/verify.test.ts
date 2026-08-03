@@ -33,6 +33,10 @@ const trustedCodexHookList = JSON.stringify({
         key: "/<session-flags>/config.toml:pre_tool_use:0:0",
         enabled: true,
         trustStatus: "trusted",
+      }, {
+        key: "/<session-flags>/config.toml:post_tool_use:0:0",
+        enabled: true,
+        trustStatus: "trusted",
       }],
       warnings: [],
       errors: [],
@@ -261,6 +265,7 @@ describe("checkCodexGuard", () => {
     expect(calls).toHaveLength(1);
     expect(calls[0]!.args[0]).toBe("app-server");
     expect(calls[0]!.args.some((arg) => arg.startsWith("hooks.PreToolUse="))).toBe(true);
+    expect(calls[0]!.args.some((arg) => arg.startsWith("hooks.PostToolUse="))).toBe(true);
     expect(calls[0]!.args.some((arg) => arg.startsWith("hooks.state="))).toBe(true);
     expect(calls[0]!.input).toContain('"method":"hooks/list"');
     expect(calls[0]!.input).toContain('"cwds":["/work"]');
@@ -273,6 +278,20 @@ describe("checkCodexGuard", () => {
     expect(check).toMatchObject({ name: "codex tool telemetry", ok: false });
     expect(check.detail).toContain("session hook is absent");
     expect(check.hint).toContain("allow_managed_hooks_only");
+  });
+
+  it("fails when the trusted pre hook exists but paired post lifecycle discovery does not", async () => {
+    const output = JSON.stringify({
+      id: 2,
+      result: { data: [{ cwd: "/work", hooks: [{
+        key: "/<session-flags>/config.toml:pre_tool_use:0:0",
+        enabled: true,
+        trustStatus: "trusted",
+      }] }] },
+    });
+    const check = await checkCodexGuard("/work", async () => output);
+    expect(check).toMatchObject({ ok: false });
+    expect(check.detail).toContain("tool lifecycle hook is absent");
   });
 
   it("does not accept a trusted hook result for a different working directory", async () => {

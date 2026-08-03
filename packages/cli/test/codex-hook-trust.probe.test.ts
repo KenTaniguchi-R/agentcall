@@ -1,5 +1,5 @@
 import { execFileSync, spawnSync } from "node:child_process";
-import { existsSync, mkdtempSync, rmSync, symlinkSync, unlinkSync, writeFileSync } from "node:fs";
+import { existsSync, mkdtempSync, readFileSync, rmSync, symlinkSync, unlinkSync, writeFileSync } from "node:fs";
 import { homedir, tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
@@ -8,6 +8,7 @@ import {
   buildSpawnSpec, GUARD_TIMEOUT_S,
 } from "../src/runner.js";
 import { checkCodexGuard } from "../src/verify.js";
+import { createToolEventSpool } from "../src/tool-telemetry-spool.js";
 
 // Env-gated OFF by default. This launches a real authenticated Codex and is
 // deliberately excluded from CI:
@@ -22,7 +23,7 @@ const enabled = process.env.AGENTCALL_PROBE_CODEX_HOOKS === "1";
 describe.skipIf(!enabled)("codex exact-hook trust", () => {
   it("doctor discovers the production session hook as enabled and trusted", async () => {
     expect(await checkCodexGuard(process.cwd())).toMatchObject({
-      name: "codex tool telemetry", ok: true, detail: "trusted session hook",
+      name: "codex tool telemetry", ok: true, detail: "trusted session lifecycle hooks",
     });
   }, 20_000);
 
@@ -101,6 +102,45 @@ describe.skipIf(!enabled)("codex exact-hook trust", () => {
       ).toBe(CODEX_HOOK_TRUST_VERIFIED_VERSION);
     } finally {
       rmSync(codexHome, { recursive: true, force: true });
+      rmSync(workdir, { recursive: true, force: true });
+    }
+  }, 200_000);
+
+  it("pairs the production pre/post hooks around a real successful tool call", () => {
+    const workdir = mkdtempSync(join(tmpdir(), "agentcall-codex-tool-work-"));
+    const state = mkdtempSync(join(tmpdir(), "agentcall-codex-tool-state-"));
+    const spool = createToolEventSpool("probe-tool-lifecycle", state)!;
+    try {
+      const spec = buildSpawnSpec(
+        "codex",
+        "Use the shell tool exactly once to run pwd, then reply with the single word done.",
+        workdir,
+        () => "codex",
+        { caps: ["read"] },
+        "probe-tool-lifecycle",
+        "probe-line",
+        undefined,
+        undefined,
+        spool.file,
+      );
+      spec.env = { ...spec.env, AGENTCALL_HOME: state };
+      const result = spawnSync(spec.cmd, spec.args, {
+        cwd: spec.cwd, env: spec.env, encoding: "utf8", timeout: 180_000,
+      });
+      expect(result.error).toBeUndefined();
+      expect(result.status, result.stderr).toBe(0);
+      const raw = readFileSync(spool.file, "utf8");
+      expect(spool.collect(), `production hook payloads did not pair: ${raw}`).toEqual([
+        expect.objectContaining({
+          callId: "probe-tool-lifecycle",
+          toolCallId: expect.stringMatching(/^hmac-sha256:[a-f0-9]{64}$/),
+          toolName: "functions.exec",
+          outcome: "success",
+        }),
+      ]);
+    } finally {
+      spool.dispose();
+      rmSync(state, { recursive: true, force: true });
       rmSync(workdir, { recursive: true, force: true });
     }
   }, 200_000);

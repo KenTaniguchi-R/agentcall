@@ -216,6 +216,10 @@ describe("AgentCallTelemetry", () => {
     const invocation = inbound.startInvocation({
       task: "ask", runtime: "claude", callId: "call-1", correlationId: caller.correlationId,
     });
+    invocation.recordTool({
+      callId: "call-1", toolCallId: "tool-1", toolName: "Bash", outcome: "success",
+      startedAtMs: 1_000, endedAtMs: 1_025, durationMs: 25,
+    });
     invocation.end("success", "ctx_AAAAAAAAAAAAAAAAAAAAAA");
     caller.endSuccess("call-1");
 
@@ -234,13 +238,20 @@ describe("AgentCallTelemetry", () => {
       "gen_ai.conversation.id": "ctx_AAAAAAAAAAAAAAAAAAAAAA",
       "agentcall.runtime.name": "claude",
     });
+    const tool = spans.find((span) => span.name === "execute_tool Bash")!;
+    expect(tool.parentSpanContext?.spanId).toBe(internal.spanContext().spanId);
+    expect(tool.attributes).toMatchObject({
+      "gen_ai.operation.name": "execute_tool", "gen_ai.tool.name": "Bash",
+      "gen_ai.tool.call.id": "tool-1", "agentcall.runtime.name": "claude",
+      "agentcall.call.id": "call-1",
+    });
     const serialized = JSON.stringify(spans.map((span) => span.attributes));
     for (const secret of ["private-handle", "private prompt", "authorization", "session_id"]) {
       expect(serialized).not.toContain(secret);
     }
   });
 
-  it("exports only the exact custom metric shapes and bounded attributes", async () => {
+  it("exports the exact invocation and tool metric shapes with bounded attributes", async () => {
     const exporter = new InMemoryMetricExporter(AggregationTemporality.CUMULATIVE);
     const reader = new PeriodicExportingMetricReader({ exporter, exportIntervalMillis: 60_000 });
     const meterProvider = new MeterProvider({
@@ -267,6 +278,10 @@ describe("AgentCallTelemetry", () => {
       task: "owner-task-with-unbounded-name", runtime: "codex", callId: "call-1",
       correlationId: caller.correlationId,
     });
+    invocation.recordTool({
+      callId: "call-1", toolCallId: "unbounded-tool-call-id", toolName: "Bash", outcome: "error",
+      startedAtMs: 1_000, endedAtMs: 1_100, durationMs: 100,
+    });
     invocation.end("timeout");
     await meterProvider.forceFlush();
 
@@ -275,13 +290,17 @@ describe("AgentCallTelemetry", () => {
     expect(metrics.map((metric) => [metric.descriptor.name, metric.descriptor.unit])).toEqual([
       ["agentcall.invoke_agent.duration", "s"],
       ["agentcall.invoke_agent.calls", "{call}"],
+      ["gen_ai.execute_tool.duration", "s"],
     ]);
     const serialized = JSON.stringify(metrics);
     expect(serialized).toContain("agentcall.runtime.name");
     expect(serialized).toContain("timeout");
+    expect(serialized).toContain("gen_ai.tool.name");
+    expect(serialized).toContain("tool_error");
     expect(serialized).not.toContain("owner-task-with-unbounded-name");
     expect(serialized).not.toContain("call-1");
     expect(serialized).not.toContain(caller.correlationId);
+    expect(serialized).not.toContain("unbounded-tool-call-id");
     await meterProvider.shutdown();
   });
 });

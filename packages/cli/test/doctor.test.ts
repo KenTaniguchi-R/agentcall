@@ -65,6 +65,7 @@ const baseDeps = {
   // Same reasoning for the direct probe: its default spawns node against the
   // built dist/guard-entry.js, which does not exist when vitest runs from src.
   guardBinaryFn: async () => true,
+  codexTelemetryEnabledFn: () => true,
   keyHealthFn: async () => [],
   pkgFn: () => ({
     name: "@benree/agentcall",
@@ -573,11 +574,18 @@ describe("runDoctor", () => {
       },
       codexGuardFn: async () => JSON.stringify({
         id: 2,
-        result: { data: [{ cwd: p.shareDir, hooks: [{
-          key: "/<session-flags>/config.toml:pre_tool_use:0:0",
-          enabled: true,
-          trustStatus: "trusted",
-        }] }] },
+        result: { data: [{ cwd: p.shareDir, hooks: [
+          {
+            key: "/<session-flags>/config.toml:pre_tool_use:0:0",
+            enabled: true,
+            trustStatus: "trusted",
+          },
+          {
+            key: "/<session-flags>/config.toml:post_tool_use:0:0",
+            enabled: true,
+            trustStatus: "trusted",
+          },
+        ] }] },
       }),
       log: (l) => lines.push(l),
     });
@@ -606,6 +614,25 @@ describe("runDoctor", () => {
     expect(code).toBe(1);
     expect(lines.join("\n")).toContain("✗ codex tool telemetry");
     expect(lines.join("\n")).toContain("allow_managed_hooks_only");
+  });
+
+  it("matches runtime by failing Codex telemetry on an unverified CLI release", async () => {
+    const m = freshMachine();
+    const p = getLinePaths(m, LINE);
+    saveLineConfig(p, {
+      org: "acme", handle: "ken", token: "t", agent_kind: "codex", relay: "https://relay.example",
+    });
+    const lines: string[] = [];
+    const code = await runDoctor({
+      ...baseDeps,
+      machine: m,
+      codexTelemetryEnabledFn: () => false,
+      codexGuardFn: async () => { throw new Error("hooks/list must not run for an unverified version"); },
+      log: (line) => lines.push(line),
+    });
+    expect(code).toBe(1);
+    expect(lines.join("\n")).toContain("✗ codex tool telemetry");
+    expect(lines.join("\n")).toContain("last verified: 0.146.0");
   });
 
   // A relay string that is syntactically not a URL currently reaches the

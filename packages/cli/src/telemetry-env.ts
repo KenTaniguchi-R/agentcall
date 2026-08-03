@@ -7,7 +7,9 @@ export function agentChildEnv(env: NodeJS.ProcessEnv): NodeJS.ProcessEnv {
   return Object.fromEntries(
     Object.entries(env).filter(([key]) => {
       const normalized = key.toUpperCase();
-      return !normalized.startsWith("OTEL_") && !normalized.startsWith("AGENTCALL_OTEL");
+      return !normalized.startsWith("OTEL_")
+        && !normalized.startsWith("AGENTCALL_OTEL")
+        && normalized !== "AGENTCALL_TOOL_TELEMETRY_FILE";
     }),
   );
 }

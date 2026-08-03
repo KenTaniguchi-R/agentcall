@@ -221,6 +221,13 @@ which are released together.
   invocation metrics. Invalid optional trace context is ignored without
   affecting delivery, and untrusted remote sampling cannot exceed local ratio
   and token-bucket ceilings.
+- Pair stable pre/post tool hook IDs through a bounded private local spool and
+  emit `execute_tool` child spans plus `gen_ai.execute_tool.duration` only for
+  complete observed lifecycles. Missing, duplicate, mismatched, or oversized
+  events are omitted; hook arguments, results, paths, and error text never enter
+  the spool or exporter.
+- Extend model-free Codex hook discovery so `agentcall doctor` requires both the
+  exact trusted PreToolUse guard and PostToolUse lifecycle hook.
 - Keep prompts, replies, handles, paths, policy details, sessions, and exporter
   credentials out of telemetry; answering agent and hook subprocesses inherit
   correlation but no `OTEL_*` or AgentCall exporter configuration.

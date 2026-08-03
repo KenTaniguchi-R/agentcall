@@ -9,7 +9,7 @@ import {
   keyIdFor, requestTranscript, transcriptHash, type E2EERequestPayloadType,
   type EncryptionKeyRecordType,
 } from "@benree/agentcall-shared";
-import { startListener } from "../src/listener.js";
+import { runtimeToolTelemetryEnabled, startListener } from "../src/listener.js";
 import { getLinePaths, getMachinePaths, type LinePaths, type MachinePaths } from "../src/paths.js";
 import { AgentRunError, buildSpawnSpec } from "../src/runner.js";
 import { loadContexts, mintContextId, saveContexts, type ContextBinding } from "../src/contexts.js";
@@ -23,6 +23,14 @@ let cryptoRoot: string;
 let callerKeys: StoredKeys;
 let listenerKeys: StoredKeys;
 const requestByCall = new Map<string, E2EERequestPayloadType>();
+
+describe("runtime tool telemetry gate", () => {
+  it("follows a hot-edited runtime instead of the startup runtime", () => {
+    expect(runtimeToolTelemetryEnabled("codex", false)).toBe(false);
+    expect(runtimeToolTelemetryEnabled("codex", true)).toBe(true);
+    expect(runtimeToolTelemetryEnabled("claude", false)).toBe(true);
+  });
+});
 
 beforeAll(async () => {
   cryptoRoot = mkdtempSync(join(tmpdir(), "agentcall-listener-crypto-"));
@@ -147,6 +155,7 @@ function baseDeps(relay: string) {
   const paths = seededPaths();
   return {
     paths, relay, loadConfig: () => ({ ...cfg, relay }), codexThreadingEnabled: () => true,
+    codexToolTelemetryEnabled: () => true,
     fetchKeys: async (_relay: string, _auth: unknown, handle: string) => {
       const record: EncryptionKeyRecordType = {
         v: 1, address: `${handle}@127.0.0.1`, key_id: await keyIdFor(callerKeys.encryption_pub),
@@ -404,7 +413,15 @@ describe("startListener acceptance and cancellation", () => {
       void fakeRelay((ws) => resolveWs(ws)).then((url) => {
         stopper = startListener({
           ...baseDeps(url),
-          run: () => new Promise(() => {}), // first call never finishes
+          // Production runAgent settles when its AbortSignal fires. Keep the
+          // first call active for the busy assertion while preserving that
+          // shutdown contract so afterEach can stop the listener cleanly.
+          run: (_kind, _prompt, _workdir, _timeout, _spec, _envelope, _callId, signal) =>
+            new Promise((_resolve, reject) => signal?.addEventListener(
+              "abort",
+              () => reject(new AgentRunError("canceled", "canceled")),
+              { once: true },
+            )),
         });
       });
     });
@@ -670,16 +687,35 @@ describe("startListener line name propagation", () => {
     const captured: {
       kind?: "claude" | "codex"; prompt?: string; workdir?: string;
       envelope?: unknown; callId?: string; lineName?: string; correlationId?: string;
+      toolTelemetryFile?: string;
     } = {};
+    const recordTool = vi.fn();
+    const endInvocation = vi.fn();
     const relayReady = new Promise<WsSocket>((resolveWs) => {
       void fakeRelay((ws) => resolveWs(ws)).then((url) => {
         stopper = startListener({
           ...baseDeps(url), paths,
           loadConfig: () => ({ ...cfg, relay: url }),
-          run: async (kind, prompt, workdir, _timeoutMs, _specOverride, envelope, callId, _signal, lineName, _resume, correlationId) => {
+          telemetry: {
+            startInbound: () => ({
+              context: {} as never,
+              endAdmission: () => {},
+              startInvocation: () => ({ recordTool, end: endInvocation }),
+            }),
+          } as never,
+          createToolEventSpool: () => ({
+            file: "/private/tmp/agentcall-tool-events-test.jsonl",
+            dispose: () => {},
+            collect: () => [{
+              callId: "c1", toolCallId: "tool-1", toolName: "Read", outcome: "success" as const,
+              startedAtMs: 1_000, endedAtMs: 1_010, durationMs: 10,
+            }],
+          }),
+          run: async (kind, prompt, workdir, _timeoutMs, _specOverride, envelope, callId, _signal, lineName, _resume, correlationId, toolTelemetryFile) => {
             captured.kind = kind; captured.prompt = prompt; captured.workdir = workdir;
             captured.envelope = envelope; captured.callId = callId; captured.lineName = lineName;
             captured.correlationId = correlationId;
+            captured.toolTelemetryFile = toolTelemetryFile;
             return { text: "ok" };
           },
         });
@@ -728,6 +764,49 @@ describe("startListener line name propagation", () => {
     // runtime assertion here the way callId/workdir/lineName do.
     expect(spec.env?.AGENTCALL_CALL_ID).toBe("c1");
     expect(captured.correlationId).toBe("a".repeat(32));
+    expect(captured.toolTelemetryFile).toBe("/private/tmp/agentcall-tool-events-test.jsonl");
+    expect(recordTool).toHaveBeenCalledWith(expect.objectContaining({
+      callId: "c1", toolCallId: "tool-1", toolName: "Read",
+    }));
+    expect(endInvocation).toHaveBeenCalledWith("success", undefined);
+  });
+
+  it("disposes an active tool spool and aborts the answering run before graceful stop returns", async () => {
+    const paths = getLinePaths(freshMachine(), "shutdown");
+    const dispose = vi.fn();
+    let runAborted = false;
+    const relayReady = new Promise<WsSocket>((resolveWs) => {
+      void fakeRelay((ws) => resolveWs(ws)).then((url) => {
+        stopper = startListener({
+          ...baseDeps(url), paths,
+          loadConfig: () => ({ ...cfg, relay: url }),
+          telemetry: {
+            startInbound: () => ({
+              context: {} as never,
+              endAdmission: () => {},
+              startInvocation: () => ({ recordTool: () => {}, end: () => {} }),
+            }),
+          } as never,
+          createToolEventSpool: () => ({
+            file: "/private/state/active-tool-events.jsonl", dispose, collect: () => [],
+          }),
+          run: async (_kind, _prompt, _workdir, _timeout, _spec, _envelope, _callId, signal) =>
+            new Promise((resolve) => signal?.addEventListener("abort", () => {
+              runAborted = true;
+              resolve({ text: "canceled" });
+            }, { once: true })),
+        });
+      });
+    });
+    const ws = await relayReady;
+    const started = frames(ws, 2);
+    await sendIncoming(ws, { call_id: "stop-call", from: "shusaku", message: "hi" });
+    await started;
+
+    await stopper!.stop();
+    stopper = undefined;
+    expect(dispose).toHaveBeenCalledOnce();
+    expect(runAborted).toBe(true);
   });
 });
 

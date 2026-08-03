@@ -31,6 +31,19 @@ export function codexThreadingEnabled(
   }
 }
 
+export function codexToolTelemetryEnabled(
+  resolveBin: (kind: AgentKind) => string = resolveAgentBin,
+  readVersion: (bin: string) => string = (bin) =>
+    execFileSync(bin, ["--version"], { encoding: "utf8", stdio: ["ignore", "pipe", "ignore"] }),
+): boolean {
+  try {
+    const match = readVersion(resolveBin("codex")).match(/\b(\d+\.\d+\.\d+)\b/);
+    return match?.[1] === CODEX_HOOK_TRUST_VERIFIED_VERSION;
+  } catch {
+    return false;
+  }
+}
+
 export interface SpawnSpec { cmd: string; args: string[]; cwd: string; env?: NodeJS.ProcessEnv }
 export interface AgentOutput { text: string; session_id?: string }
 
@@ -55,6 +68,7 @@ const KILL_GRACE_MS = 10_000;
 // stalls one call (safe and visible); an abandoned one is neither. Measured cost
 // is ~33ms.
 export const GUARD_TIMEOUT_S = 30;
+export const TOOL_TELEMETRY_TIMEOUT_S = 5;
 
 // Inline settings, not a plugin and not a file: scoped to this spawn, gone when
 // the process exits, and the owner's own ~/.claude is untouched.
@@ -71,18 +85,27 @@ const shellQuote = (s: string) => `'${s.replaceAll("'", `'\\''`)}'`;
 // Exported so doctor's direct probe invokes the exact file the spawn wires up,
 // rather than a second path expression that could drift from this one.
 export const guardEntryPath = () => fileURLToPath(new URL("./guard-entry.js", import.meta.url));
+export const toolTelemetryEntryPath = () => fileURLToPath(new URL("./tool-telemetry-entry.js", import.meta.url));
 
 const guardCommand = () =>
   `${shellQuote(process.execPath)} ${shellQuote(guardEntryPath())}`;
+const toolTelemetryCommand = () =>
+  `${shellQuote(process.execPath)} ${shellQuote(toolTelemetryEntryPath())}`;
 
-export function guardSettingsJson(): string {
-  return JSON.stringify({
-    hooks: {
-      PreToolUse: [{
-        hooks: [{ type: "command", command: guardCommand(), timeout: GUARD_TIMEOUT_S }],
-      }],
-    },
-  });
+export function guardSettingsJson(includeToolTelemetry = false): string {
+  const hooks: Record<string, unknown> = {
+    PreToolUse: [{
+      hooks: [{ type: "command", command: guardCommand(), timeout: GUARD_TIMEOUT_S }],
+    }],
+  };
+  if (includeToolTelemetry) {
+    const post = [{ hooks: [{
+      type: "command", command: toolTelemetryCommand(), timeout: TOOL_TELEMETRY_TIMEOUT_S, async: false,
+    }] }];
+    hooks.PostToolUse = post;
+    hooks.PostToolUseFailure = post;
+  }
+  return JSON.stringify({ hooks });
 }
 
 // TOML basic string. Only `"` and `\` need escaping for a path; the control
@@ -96,12 +119,20 @@ const tomlQuote = (s: string) => `"${s.replaceAll("\\", "\\\\").replaceAll(`"`, 
 //
 // This registers the SAME entry point as claude, but Codex runs it in observe
 // mode. Its command-shaped filesystem surface cannot be safely bounded here.
-export function codexHookConfigArg(command: string): string {
-  return `hooks.PreToolUse=[{hooks=[{type="command",command=${tomlQuote(command)},timeout=${GUARD_TIMEOUT_S}}]}]`;
+export function codexHookConfigArg(
+  command: string,
+  event: "PreToolUse" | "PostToolUse" = "PreToolUse",
+  timeout = GUARD_TIMEOUT_S,
+): string {
+  return `hooks.${event}=[{hooks=[{type="command",command=${tomlQuote(command)},timeout=${timeout}}]}]`;
 }
 
 export function guardCodexConfigArg(): string {
   return codexHookConfigArg(guardCommand());
+}
+
+export function toolTelemetryCodexConfigArg(): string {
+  return codexHookConfigArg(toolTelemetryCommand(), "PostToolUse", TOOL_TELEMETRY_TIMEOUT_S);
 }
 
 // Codex executes a hook only when its normalized identity matches a trusted
@@ -111,6 +142,7 @@ export function guardCodexConfigArg(): string {
 // and supply trust for its exact synthetic key. A CLI-side normalization
 // change makes the hash mismatch and fails closed (the hook is skipped).
 export const CODEX_SESSION_GUARD_KEY = "/<session-flags>/config.toml:pre_tool_use:0:0";
+export const CODEX_SESSION_TOOL_TELEMETRY_KEY = "/<session-flags>/config.toml:post_tool_use:0:0";
 
 function canonicalize(value: unknown): unknown {
   if (Array.isArray(value)) return value.map(canonicalize);
@@ -124,10 +156,10 @@ function canonicalize(value: unknown): unknown {
   return value;
 }
 
-export function codexHookTrustedHash(command: string): string {
+export function codexHookTrustedHash(command: string, eventName = "pre_tool_use", timeout = GUARD_TIMEOUT_S): string {
   const identity = canonicalize({
-    event_name: "pre_tool_use",
-    hooks: [{ type: "command", command, timeout: GUARD_TIMEOUT_S, async: false }],
+    event_name: eventName,
+    hooks: [{ type: "command", command, timeout, async: false }],
   });
   return `sha256:${createHash("sha256").update(JSON.stringify(identity)).digest("hex")}`;
 }
@@ -140,8 +172,16 @@ export function codexHookTrustArg(command: string): string {
   return `hooks.state={${tomlQuote(CODEX_SESSION_GUARD_KEY)}={trusted_hash=${tomlQuote(hash)}}}`;
 }
 
-export function guardCodexTrustArg(): string {
-  return codexHookTrustArg(guardCommand());
+export function guardCodexTrustArg(includeToolTelemetry = false): string {
+  if (!includeToolTelemetry) return codexHookTrustArg(guardCommand());
+  const guardHash = codexHookTrustedHash(guardCommand());
+  const toolHash = codexHookTrustedHash(
+    toolTelemetryCommand(), "post_tool_use", TOOL_TELEMETRY_TIMEOUT_S,
+  );
+  return `hooks.state={` +
+    `${tomlQuote(CODEX_SESSION_GUARD_KEY)}={trusted_hash=${tomlQuote(guardHash)}},` +
+    `${tomlQuote(CODEX_SESSION_TOOL_TELEMETRY_KEY)}={trusted_hash=${tomlQuote(toolHash)}}` +
+    `}`;
 }
 
 // Cap -> Claude Code tool names, used with --allowedTools + --permission-mode
@@ -182,6 +222,7 @@ export function buildSpawnSpec(
   // lineName so lineName stays the last required parameter — see runAgent.
   resume?: string,
   correlationId?: string,
+  toolTelemetryFile?: string,
 ): SpawnSpec {
   const childEnv = agentChildEnv(process.env);
   const correlationEnv = correlationId ? { AGENTCALL_CORRELATION_ID: correlationId } : {};
@@ -192,12 +233,13 @@ export function buildSpawnSpec(
         ...(resume ? ["--resume", resume] : []),
         "-p", prompt, "--output-format", "json",
         "--permission-mode", "dontAsk", "--allowedTools", claudeAllowedTools(envelope),
-        "--settings", guardSettingsJson(),
+        "--settings", guardSettingsJson(toolTelemetryFile !== undefined),
       ],
       cwd: workdir,
       env: {
         ...childEnv, ...correlationEnv, AGENTCALL_CALL_ID: callId, AGENTCALL_LINE: lineName,
         AGENTCALL_ALLOWED_ROOT: workdir,
+        ...(toolTelemetryFile ? { AGENTCALL_TOOL_TELEMETRY_FILE: toolTelemetryFile } : {}),
       },
     };
   }
@@ -228,13 +270,19 @@ export function buildSpawnSpec(
     return {
       cmd: resolveBin(kind),
       args: ["exec", "resume", resume, "--ignore-user-config", "--skip-git-repo-check",
-        "--json", ...codexRemoteBoundary, "-c", guardCodexConfigArg(), "-c", guardCodexTrustArg(),
+        "--json", ...codexRemoteBoundary, "-c", guardCodexConfigArg(),
+        ...(toolTelemetryFile ? ["-c", toolTelemetryCodexConfigArg()] : []),
+        "-c", guardCodexTrustArg(toolTelemetryFile !== undefined),
         "-c", `sandbox_mode="${sandbox}"`, prompt],
       cwd: workdir,
       // AGENTCALL_LINE is as required here as on the non-resume branch: the
       // guard resolves the line's tasksDir from it and fails closed without
       // it, so omitting it would deny every tool call on a resumed session.
-      env: { ...childEnv, ...correlationEnv, AGENTCALL_CALL_ID: callId, AGENTCALL_GUARD_MODE: "observe", AGENTCALL_LINE: lineName },
+      env: {
+        ...childEnv, ...correlationEnv, AGENTCALL_CALL_ID: callId,
+        AGENTCALL_GUARD_MODE: "observe", AGENTCALL_LINE: lineName,
+        ...(toolTelemetryFile ? { AGENTCALL_TOOL_TELEMETRY_FILE: toolTelemetryFile } : {}),
+      },
     };
   }
   return {
@@ -250,9 +298,14 @@ export function buildSpawnSpec(
     // The prompt stays last: codex takes the final positional as the prompt.
     args: ["exec", "--ignore-user-config", "--sandbox", sandbox, "--cd", workdir,
       "--skip-git-repo-check", "--json", "-c", guardCodexConfigArg(),
-      "-c", guardCodexTrustArg(), ...codexRemoteBoundary, prompt],
+      ...(toolTelemetryFile ? ["-c", toolTelemetryCodexConfigArg()] : []),
+      "-c", guardCodexTrustArg(toolTelemetryFile !== undefined), ...codexRemoteBoundary, prompt],
     cwd: workdir,
-    env: { ...childEnv, ...correlationEnv, AGENTCALL_CALL_ID: callId, AGENTCALL_GUARD_MODE: "observe", AGENTCALL_LINE: lineName },
+    env: {
+      ...childEnv, ...correlationEnv, AGENTCALL_CALL_ID: callId,
+      AGENTCALL_GUARD_MODE: "observe", AGENTCALL_LINE: lineName,
+      ...(toolTelemetryFile ? { AGENTCALL_TOOL_TELEMETRY_FILE: toolTelemetryFile } : {}),
+    },
   };
 }
 
@@ -313,14 +366,18 @@ export function runAgent(
   // listener. A caller-supplied context id must never reach this parameter.
   // Optional, so it goes after the required lineName.
   //
-  // Note for a later cleanup (not done here): runAgent now takes ten
+  // Note for a later cleanup (not done here): runAgent now takes twelve
   // positional parameters and should become an options object. That belongs
   // with the #49 work in #48 Phase 1, not in this change.
   resume?: string,
   correlationId?: string,
+  toolTelemetryFile?: string,
 ): Promise<AgentOutput> {
   const spec = specOverride
-    ?? buildSpawnSpec(kind, prompt, workdir, resolveAgentBin, envelope, callId, lineName, resume, correlationId);
+    ?? buildSpawnSpec(
+      kind, prompt, workdir, resolveAgentBin, envelope, callId, lineName, resume, correlationId,
+      toolTelemetryFile,
+    );
   return new Promise<AgentOutput>((resolve, reject) => {
     // detached: true makes the child its own process group leader, so any
     // grandchildren it forks share its process group unless they detach
