@@ -16,6 +16,7 @@ const auditEvents = readFileSync(join(migrationsDir, "0007_roster_audit_events.s
 const joinKeys = readFileSync(join(migrationsDir, "0008_roster_join_keys.sql"), "utf8");
 const orgInvites = readFileSync(join(migrationsDir, "0009_org_invite_lifecycle.sql"), "utf8");
 const orgRoles = readFileSync(join(migrationsDir, "0013_org_roles.sql"), "utf8");
+const recoveryV2 = readFileSync(join(migrationsDir, "0018_recovery_v2.sql"), "utf8");
 
 function legacyDatabase(): DatabaseSync {
   const db = new DatabaseSync(":memory:");
@@ -34,6 +35,41 @@ function tenantDatabase(): DatabaseSync {
 }
 
 describe("D1 migration reconciliation", () => {
+  it("upgrades a populated 0017 database without losing handles or audit evidence", () => {
+    const db = legacyDatabase();
+    for (const file of [
+      "0006_tenancy_and_roster_lifecycle.sql", "0007_roster_audit_events.sql",
+      "0008_roster_join_keys.sql", "0009_org_invite_lifecycle.sql",
+      "0010_roster_audit_budget_recovery.sql", "0011_telemetry_health.sql",
+      "0012_key_publication.sql", "0013_org_roles.sql", "0014_call_audit_events.sql",
+      "0015_audit_export_acknowledgements.sql", "0016_audit_retention_controls.sql",
+      "0017_audit_retention_readiness.sql",
+    ]) db.exec(readFileSync(join(migrationsDir, file), "utf8"));
+    db.exec(
+      "INSERT INTO handles (org, handle, token_hash, agent_kind, created_at, org_role) " +
+        "VALUES ('acme', 'existing', 'token', NULL, 1, 'member');" +
+      "INSERT INTO org_events (event, action_type, org, actor, actor_type, target_type, target_id, description, at) " +
+        "VALUES ('org.invite.redeem', 'C', 'acme', 'invite-id', 'invite', 'handle', 'existing', 'kept', 2);",
+    );
+
+    db.exec(recoveryV2);
+
+    expect(db.prepare("SELECT org, handle, token_hash, recovery_generation FROM handles").get())
+      .toEqual({ org: "acme", handle: "existing", token_hash: "token", recovery_generation: 0 });
+    expect(db.prepare("SELECT event, description FROM org_events").get())
+      .toEqual({ event: "org.invite.redeem", description: "kept" });
+    expect(columns(db, "handles")).toEqual([
+      "org", "handle", "token_hash", "agent_kind", "created_at", "org_role",
+      "recovery_hash", "recovery_redeemed_at", "recovery_generation",
+    ]);
+    expect(columns(db, "recovery_receipts")).toContain("consumed_recovery_hash");
+    expect(columns(db, "recovery_evictions")).toContain("next_attempt");
+    expect(() => db.exec(
+      "INSERT INTO org_events (event, action_type, org, actor, actor_type, target_type, target_id, description, at) " +
+        "VALUES ('credential.recovery.redeem', 'U', 'acme', 'agr_public', 'recovery', 'handle', 'existing', 'reset', 3)",
+    )).not.toThrow();
+  });
+
   it("keeps existing handles least-privileged and makes bootstrap enrollment administrative", () => {
     const db = tenantDatabase();
     for (const file of [

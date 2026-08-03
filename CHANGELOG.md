@@ -6,6 +6,22 @@ which are released together.
 
 ## Unreleased
 
+### Generation-bound handle recovery
+
+- Add an org-scoped, generation-versioned recovery proof that is issued only
+  after an out-of-band backup acknowledgement and is never stored in AgentCall
+  config, pending state, stdout/stderr, or logs.
+- Make recovery a client-led, crash-safe operation: the CLI durably saves its
+  candidate online token before commit, the relay atomically consumes the
+  predecessor and records an exact seven-day replay receipt, and `--resume`
+  recovers a lost response without creating different credential material.
+- Advance to an acknowledged successor proof, reject changed and cross-identity
+  replays, evict sockets in the recovered identity's current Durable Object
+  after commit, and make normal token rotation compare-and-swap against
+  concurrent credential changes. Until #154 moves outbound sockets to their
+  authenticated identity, already-open outbound calls remain outside that DO.
+- Report recovery generation and missing-backup risk in `agentcall doctor`.
+
 ### Line credential persistence
 
 - Route per-line config and relay-token saves through the shared unique-temp

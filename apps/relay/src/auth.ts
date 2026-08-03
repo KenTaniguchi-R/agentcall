@@ -19,13 +19,13 @@ export function constantTimeEqual(a: string, b: string): boolean {
   return diff === 0;
 }
 
-export async function authenticatedHandleRole(
+export async function authenticatedHandle(
   db: D1Database, org: string, handle: string, token: string,
-): Promise<OrgRoleType | null> {
+): Promise<{ role: OrgRoleType; recoveryGeneration: number } | null> {
   const row = await db.prepare(
-    "SELECT token_hash, org_role FROM handles WHERE org = ? AND handle = ?",
-  ).bind(org, handle).first<{ token_hash: string; org_role: OrgRoleType }>();
+    "SELECT token_hash, org_role, recovery_generation FROM handles WHERE org = ? AND handle = ?",
+  ).bind(org, handle).first<{ token_hash: string; org_role: OrgRoleType; recovery_generation: number }>();
   if (!row || !constantTimeEqual(row.token_hash, await sha256Hex(token))) return null;
-  return row.org_role;
+  return { role: row.org_role, recoveryGeneration: row.recovery_generation };
 }
 import type { OrgRoleType } from "@benree/agentcall-shared";

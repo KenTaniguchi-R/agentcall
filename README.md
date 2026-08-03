@@ -124,6 +124,58 @@ The [receive-a-call guide](https://agentcall.mintlify.app/get-started/receive-ca
 and [tasks and policy guide](https://agentcall.mintlify.app/guides/tasks-and-policy)
 cover task design, caller rules, policy tests, cards, and safe defaults.
 
+## Recovering a lost line token
+
+While a line still works, create its out-of-band recovery root:
+
+```bash
+agentcall recovery issue --line <name>
+```
+
+AgentCall shows the proof only on the controlling terminal and requires you to
+acknowledge that it is saved somewhere separate, such as a password manager.
+It is never written to line config, pending state, stdout/stderr, or logs. Record
+the returned generation and public proof ID with it. Issuing again increments
+the generation and immediately invalidates the predecessor.
+
+If the line token is lost, retain both the current proof and the newly displayed
+successor proof until recovery confirms its public receipt:
+
+```bash
+agentcall recovery redeem --line <name> --org <org> --handle <handle> \
+  --relay <url> --generation <number>
+```
+
+Before contacting the relay, the CLI atomically saves a locally generated
+candidate token and operation ID in that line's private pending file. Neither
+recovery proof is saved there. Recovery atomically consumes the current proof,
+replaces the online token, advances to the successor proof, and evicts sockets
+owned by the recovered identity's current Durable Object. Persistent token
+replacement blocks every reconnect. Before the stable-identity cutover in #154,
+an already-open outbound caller socket lives in the remote target's Durable
+Object and is not globally evicted by this receipt; the cutover removes that
+topology limitation. If the response is lost, run
+`agentcall recovery redeem --line <name> --resume` and provide both retained
+proofs. The consumed predecessor can then retrieve only the exact seven-day
+receipt already bound to that operation; changed or cross-identity payloads are
+rejected. Remove the predecessor backup only after the CLI confirms the receipt.
+
+`--line <name>` (or the `AGENTCALL_LINE` environment variable, same precedence
+order — an explicit `--line` wins) selects which line a command acts on wherever
+a machine has more than one: `rotate`, `card`, `task new`, and the six policy
+verbs (`allow`/`revoke`/`block`/`unblock`/`offer`/`unoffer`) all accept it. Omit
+it and these default to the primary line.
+
+Current relay tokens do not expire, cannot be listed or individually revoked,
+and have no last-used timestamp; rotation is the immediate hard swap described
+above. The recovery proof is also intentionally long-lived because it must work
+after an offline backup has been untouched for a long time; `agentcall doctor`
+reports this sole long-lived full-authority exception and warns when a line has
+no proof. The decided zero-user credential cutover will replace online tokens with
+90-day client credentials, one-hour access tokens, bounded overlap, revocation,
+and coarse liveness tracking. See the
+[credential lifecycle decision](docs/superpowers/specs/2026-08-02-credential-lifecycle.md).
+
 ## How a call works
 
 ```mermaid
@@ -147,6 +199,14 @@ still sees routing and traffic metadata: organization and handles, call IDs,
 lifecycle state, timing, source-network metadata where available, envelope
 headers, and ciphertext size. Prompts, replies, task content, and peer failure
 details remain encrypted in transit through the relay.
+
+`agentcall doctor` reports the installed package and real CLI entry that answered,
+warns when a different install also appears on `PATH`, reports each line's recovery
+generation (or missing backup), and verifies your install can answer calls (auth,
+agent spawn, listener, relay self-call). Run it whenever setup or
+calls to you start failing. `✓` is a pass and `✗` is a failure with a fix; a `!` is a
+check that could not be proven either way this run, which is not a failure and does
+not change doctor's exit code.
 
 Read [How AgentCall works](https://agentcall.mintlify.app/overview/how-it-works)
 for the full lifecycle and [Protocol reference](https://agentcall.mintlify.app/reference/protocol)

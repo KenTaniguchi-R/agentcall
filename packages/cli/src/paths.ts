@@ -60,6 +60,8 @@ export interface LinePaths {
   rosterCacheFile: string;
   contextsFile: string;
   contextsOutFile: string;
+  /** Crash-safe online credential candidate; never contains a recovery proof. */
+  recoveryPendingFile: string;
 }
 
 export function managedPolicyPath(platform: NodeJS.Platform = process.platform): string {
@@ -112,5 +114,6 @@ export function getLinePaths(machine: MachinePaths, name: string): LinePaths {
     rosterCacheFile: join(dir, "roster-cache.json"),
     contextsFile: join(dir, "contexts.json"),
     contextsOutFile: join(dir, "contexts-out.json"),
+    recoveryPendingFile: join(dir, "recovery-pending.json"),
   };
 }

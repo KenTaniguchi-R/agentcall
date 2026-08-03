@@ -18,6 +18,7 @@ const orgInvites = "0009_org_invite_lifecycle.sql";
 const rosterBudget = "0010_roster_audit_budget_recovery.sql";
 const callEvents = "0014_call_audit_events.sql";
 const retentionControls = "0016_audit_retention_controls.sql";
+const recoveryV2 = "0018_recovery_v2.sql";
 
 /** Durable, tenant-exportable event types implemented by the relay. */
 export const AUDIT_EVENT_CATALOG = [
@@ -33,6 +34,8 @@ export const AUDIT_EVENT_CATALOG = [
   { event: "audit.retention.update", ledger: "org", action: "U", actors: ["handle"], target: "retention_policy", source_ip: "nullable_request_metadata", source_country: "nullable_request_metadata", collection: "synchronous_d1_batch", available_since: "2026-08-03", migration: retentionControls, description: "An organization administrator changed the audit event retention window." },
   { event: "audit.hold.create", ledger: "org", action: "C", actors: ["handle"], target: "legal_hold", source_ip: "nullable_request_metadata", source_country: "nullable_request_metadata", collection: "synchronous_d1_batch", available_since: "2026-08-03", migration: retentionControls, description: "An organization administrator created an audit legal or incident hold." },
   { event: "audit.hold.release", ledger: "org", action: "U", actors: ["handle"], target: "legal_hold", source_ip: "nullable_request_metadata", source_country: "nullable_request_metadata", collection: "synchronous_d1_batch", available_since: "2026-08-03", migration: retentionControls, description: "An organization administrator released an audit legal or incident hold." },
+  { event: "credential.recovery.issue", ledger: "org", action: "U", actors: ["handle"], target: "handle", source_ip: "nullable_request_metadata", source_country: "nullable_request_metadata", collection: "synchronous_d1_batch", available_since: "2026-08-03", migration: recoveryV2, description: "A handle issued or replaced its out-of-band recovery proof." },
+  { event: "credential.recovery.redeem", ledger: "org", action: "U", actors: ["recovery"], target: "handle", source_ip: "nullable_request_metadata", source_country: "nullable_request_metadata", collection: "synchronous_d1_batch", available_since: "2026-08-03", migration: recoveryV2, description: "A recovery proof reset the handle's online credential and advanced its recovery generation." },
   { event: "roster.create", ledger: "roster", action: "C", actors: ["handle"], target: "roster", source_ip: "nullable_request_metadata", source_country: "nullable_request_metadata", collection: "synchronous_d1_batch", available_since: "2026-08-02", migration: rosterBase, description: "A roster was created." },
   { event: "roster.join", ledger: "roster", action: "C", actors: ["handle"], target: "handle", source_ip: "nullable_request_metadata", source_country: "nullable_request_metadata", collection: "synchronous_d1_batch", available_since: "2026-08-02", migration: rosterBase, description: "A handle joined a roster." },
   { event: "roster.leave", ledger: "roster", action: "D", actors: ["handle"], target: "handle", source_ip: "nullable_request_metadata", source_country: "nullable_request_metadata", collection: "synchronous_d1_batch", available_since: "2026-08-02", migration: rosterBase, description: "A handle left a roster." },

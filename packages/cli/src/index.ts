@@ -1,7 +1,7 @@
 import { existsSync, rmSync } from "node:fs";
 import { Command, CommanderError } from "commander";
 import type { AgentKind, AuditCheckpointType, AuditExportEventType } from "@benree/agentcall-shared";
-import { getMachinePaths, type LinePaths } from "./paths.js";
+import { getLinePaths, getMachinePaths, type LinePaths } from "./paths.js";
 import { addressHost, assertCallableLine, relayUrl, resolveLineWorkdir, type LineConfig } from "./config.js";
 import { callAgent, callStatusMessage, CallError } from "./callClient.js";
 // No rotateToken here: `rotate` goes through commands/rotate.ts's rotateLine,
@@ -25,6 +25,7 @@ import { resolveLine } from "./lineContext.js";
 import type { LineContext } from "./lineContext.js";
 import { pickOutboundLine } from "./outbound.js";
 import { rotateLine } from "./commands/rotate.js";
+import { runRecoveryIssue, runRecoveryRedeem } from "./commands/recovery.js";
 import { addLine, listLinesReport, removeLine, setPrimary } from "./commands/line.js";
 import { ask as ttyAsk } from "./tty.js";
 import { findOutbound, loadOutbound, rememberOutbound } from "./contextsOut.js";
@@ -1356,6 +1357,53 @@ program
       await rotateLine(ctx);
     } catch (e) {
       console.error(e instanceof ApiError ? e.message : String(e));
+      process.exitCode = 1;
+    }
+  });
+
+const recovery = program.command("recovery").description("manage the out-of-band identity recovery proof");
+
+recovery
+  .command("issue")
+  .description("issue or replace a recovery proof while the line token still works")
+  .option("--line <name>", "line to protect (defaults to the primary line)")
+  .action(async (o: { line?: string }) => {
+    try {
+      const ctx = resolveLine(getMachinePaths(), { line: o.line });
+      await runRecoveryIssue(ctx);
+    } catch (e) {
+      console.error(e instanceof ApiError ? e.message : String(e instanceof Error ? e.message : e));
+      process.exitCode = 1;
+    }
+  });
+
+recovery
+  .command("redeem")
+  .description("recover one line using an out-of-band proof")
+  .requiredOption("--line <name>", "local line name to recover")
+  .option("--org <org>", "organization (required when local config is missing)")
+  .option("--handle <handle>", "handle (required when local config is missing)")
+  .option("--relay <url>", "relay URL (required when local config is missing)")
+  .option("--generation <number>", "generation recorded with the current proof")
+  .option("--resume", "resume the exact pending recovery after a lost response")
+  .action(async (o: {
+    line: string; org?: string; handle?: string; relay?: string; generation?: string; resume?: boolean;
+  }) => {
+    try {
+      assertValidLineName(o.line);
+      const paths = getLinePaths(getMachinePaths(), o.line);
+      const config = existsSync(paths.configFile) ? loadLineConfig(paths) : undefined;
+      let generation: number | undefined;
+      if (o.generation !== undefined) {
+        generation = Number(o.generation);
+        if (!Number.isSafeInteger(generation) || generation < 1) throw new Error("--generation must be a positive integer.");
+      }
+      await runRecoveryRedeem({
+        name: o.line, paths, config, org: o.org, handle: o.handle, relay: o.relay,
+        generation, resume: o.resume,
+      });
+    } catch (e) {
+      console.error(e instanceof ApiError ? e.message : String(e instanceof Error ? e.message : e));
       process.exitCode = 1;
     }
   });

@@ -267,4 +267,13 @@ describe("POST /v1/token/rotate", () => {
       .bind("acme", "ghost-handle").first();
     expect(row).toBeNull();
   });
+
+  it("elects only one token when two rotations race", async () => {
+    const old = await registerHandle("rot-race");
+    const results = await Promise.all([rotate("rot-race", old), rotate("rot-race", old)]);
+    expect(results.map((res) => res.status).sort()).toEqual([200, 409]);
+    const winner = results.find((res) => res.status === 200)!;
+    const { token } = await winner.json<{ token: string }>();
+    expect((await rotate("rot-race", token)).status).toBe(200);
+  });
 });

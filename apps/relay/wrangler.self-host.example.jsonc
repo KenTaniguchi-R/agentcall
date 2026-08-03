@@ -29,6 +29,7 @@
     "RateLimiterDO": { "type": "durable-object", "storage": "sqlite" }
   },
   "routes": [{ "pattern": "relay.example.com", "custom_domain": true }],
+  "triggers": { "crons": ["*/5 * * * *"] },
   "ratelimits": [
     {
       "name": "CARD_RL",

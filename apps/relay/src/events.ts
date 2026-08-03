@@ -5,7 +5,7 @@ import type { Env } from "./index.js";
 export type AuditAction = "C" | "R" | "U" | "D";
 export type AuditActor = "handle" | "admin_secret" | "system";
 export type AuditTarget = "handle" | "roster" | "join_key";
-export type OrgAuditActor = "handle" | "bootstrap" | "invite";
+export type OrgAuditActor = "handle" | "bootstrap" | "invite" | "recovery";
 export type OrgAuditTarget = "invite" | "handle" | "call" | "retention_policy" | "legal_hold";
 
 type RosterAudit = {
