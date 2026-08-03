@@ -83,6 +83,7 @@ describe("renderPolicyReport", () => {
     expect(report).toContain("read-only or workspace-write sandbox");
     expect(report).toContain("fetch and exec are not separate Codex controls");
     expect(report).toContain("Codex can execute shell commands whether or not a task declares exec");
+    expect(report).toContain("Bundled authenticated Codex apps, web search, and image generation are disabled with strict configuration");
     expect(report).toContain("On verified codex-cli 0.146.0");
     expect(report).toContain("shell tool attempts are recorded by an observe-only hook");
     expect(report).toContain("unless managed-only hooks are required");

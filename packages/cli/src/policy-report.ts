@@ -108,6 +108,7 @@ export function renderPolicyReport(
       "  Codex only enforces the write boundary with a read-only or workspace-write sandbox;",
       "  fetch and exec are not separate Codex controls, and read access is not confined to the working directory.",
       "  Codex can execute shell commands whether or not a task declares exec.",
+      "  Bundled authenticated Codex apps, web search, and image generation are disabled with strict configuration on every spawn.",
       "  AgentCall does not impose or audit a domain allowlist on Codex network access.",
       "  On verified codex-cli 0.146.0, shell tool attempts are recorded by an observe-only hook unless managed-only hooks are required.",
       "  Other Codex releases or allow_managed_hooks_only=true may silently skip that hook; non-hooked read routes remain unrecorded.",

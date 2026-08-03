@@ -809,13 +809,15 @@ queries `hooks/list` with AgentCall's exact production overrides, per line (hook
 trust is per-directory, and each line has its own workdir), and fails unless the
 session hook is present, enabled, and trusted.
 
-Two limits, stated plainly:
+Limits and trust boundaries, stated plainly:
 
-- **A task that grants `exec` has no read floor.** On Claude — and on the
-  verified Codex release when session hooks are enabled — shell commands are
-  recorded, not blocked. Pattern-matching a command string is too weak to be a
-  boundary and too eager to be harmless. The control on `exec` is which tasks
-  you choose to write.
+- **A Claude task that grants `exec` deliberately grants broad local authority.**
+  The task envelope is the control: without `exec`, Claude is not offered Bash;
+  with it, shell commands can practically read, change, and send data beyond the
+  other declared caps and the task workdir. Bash is recorded, not blocked.
+  Pattern-matching a command string is too weak to be a security boundary and
+  too eager to be harmless, so only offer an `exec` task to callers you trust
+  with that authority. This is a trust decision, not process isolation.
 - **A Codex answering agent is observed, not guarded.** AgentCall trusts only its exact
   inline session hook by supplying Codex's normalized hook-identity hash; it does not
   use the blanket `--dangerously-bypass-hook-trust` flag, so user, project,
@@ -841,22 +843,20 @@ Two limits, stated plainly:
   parses, so a read through them appears in **no** log: not `tools.log`, not
   `calls.log`. Verified against codex-cli 0.146.0; see
   [issue #29](https://github.com/KenTaniguchi-R/agentcall/issues/29).
-- **The Codex spawn does not load your `~/.codex` — but that does not disarm Codex's
-  own bundled tools.** It runs with `--ignore-user-config`, so a caller cannot reach
-  *your* MCP servers, plugins, or apps. Those run as separate processes outside Codex's
+- **The Codex spawn removes bundled remote and account-backed publishing tools.** It runs with
+  `--ignore-user-config`, so a caller cannot reach your configured MCP servers,
+  plugins, or apps. Those run as separate processes outside Codex's
   sandbox, and a filesystem MCP server — or `claude mcp serve`, which re-exposes `Read`
-  and `Bash` — would otherwise route around every control here. What that flag does not
-  drop is Codex's own bundled `codex_apps` connector, 28 tools on codex-cli 0.146.0.
-  **These are not merely reachable — they work.** In the exact spawn shape above,
-  `sites_list_sites` returns a normal `isError:false` result and
-  `hotline_get_local_hotline` returns real content fetched from the ChatGPT backend;
-  nothing returns the connector's documented auth-failure envelope. The same authenticated
-  surface carries `sites_deploy_site_version`, `sites_update_environment_variables`,
-  `sites_update_site_access` and `sites_generate_siwc_bypass_token`. **So a remote caller
-  can read something in your workspace and publish it to the internet without crossing a
-  single denied path.** No read floor touches that, because those tools do not read: they
-  send. `--sandbox` does not touch it either — it confines the *shell*, and this traffic
-  is not the shell's. Verified against codex-cli 0.146.0 by
+  and `Bash` — would otherwise route around every control here. Because
+  `--ignore-user-config` alone does not remove Codex's bundled authenticated
+  `codex_apps` connector, top-level web search, or image generation, every fresh
+  and resumed AgentCall spawn additionally disables `apps` and
+  `image_generation`, sets `web_search="disabled"`, and uses strict config.
+  Strict config makes a renamed or removed setting stop the spawn instead of
+  silently restoring account reads, deploys, environment mutation,
+  access-control changes, or undeclared outbound tools. Verified against
+  codex-cli 0.146.0 with an authenticated production-spawn registry probe; the
+  original exposed-surface evidence remains in
   [`scripts/verify-codex-apps-surface.sh`](./scripts/verify-codex-apps-surface.sh); see
   [issue #30](https://github.com/KenTaniguchi-R/agentcall/issues/30).
 

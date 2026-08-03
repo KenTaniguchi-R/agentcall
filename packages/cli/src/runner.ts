@@ -94,8 +94,8 @@ const tomlQuote = (s: string) => `"${s.replaceAll("\\", "\\\\").replaceAll(`"`, 
 // ($CODEX_HOME/hooks.json, the project .codex/) would edit configuration the
 // owner keeps, which claude's inline --settings deliberately avoids.
 //
-// This registers the SAME entry point as claude, but the spawn runs it in
-// observe mode: it records attempts, it does not block. See GuardMode.
+// This registers the SAME entry point as claude, but Codex runs it in observe
+// mode. Its command-shaped filesystem surface cannot be safely bounded here.
 export function codexHookConfigArg(command: string): string {
   return `hooks.PreToolUse=[{hooks=[{type="command",command=${tomlQuote(command)},timeout=${GUARD_TIMEOUT_S}}]}]`;
 }
@@ -206,6 +206,17 @@ export function buildSpawnSpec(
   // --allowedTools, and now the only thing confining its writes. Note it does
   // NOT confine reads: `codex exec --sandbox read-only` still reads ~/.ssh.
   const sandbox = envelope.caps.includes("write") ? "workspace-write" : "read-only";
+  // --ignore-user-config does not remove Codex's bundled authenticated apps,
+  // web search, or image generation. Disable every bundled remote surface on
+  // fresh and resumed spawns: no AgentCall task cap grants account mutation or
+  // undeclared egress. --strict-config turns a renamed/removed setting into a
+  // startup failure instead of silently restoring a surface.
+  const codexRemoteBoundary = [
+    "--disable", "apps",
+    "--disable", "image_generation",
+    "-c", `web_search="disabled"`,
+    "--strict-config",
+  ];
   if (resume) {
     // `codex exec resume` accepts neither --sandbox nor --cd (verified against
     // the installed CLI, 2026-08-01). --sandbox is the ONLY thing confining
@@ -217,7 +228,7 @@ export function buildSpawnSpec(
     return {
       cmd: resolveBin(kind),
       args: ["exec", "resume", resume, "--ignore-user-config", "--skip-git-repo-check",
-        "--json", "-c", guardCodexConfigArg(), "-c", guardCodexTrustArg(),
+        "--json", ...codexRemoteBoundary, "-c", guardCodexConfigArg(), "-c", guardCodexTrustArg(),
         "-c", `sandbox_mode="${sandbox}"`, prompt],
       cwd: workdir,
       // AGENTCALL_LINE is as required here as on the non-resume branch: the
@@ -228,18 +239,18 @@ export function buildSpawnSpec(
   }
   return {
     cmd: resolveBin(kind),
-    // --ignore-user-config drops the owner's ~/.codex: their MCP servers,
-    // plugins and apps. Those are separate processes that reach the
+    // --ignore-user-config drops the owner's ~/.codex: their configured MCP
+    // servers and plugins. Those are separate processes that reach the
     // filesystem outside codex's sandbox entirely, so a remote caller could
     // otherwise route around every control here — on a typical dev machine
     // that means a filesystem MCP server, and often `claude mcp serve`, which
     // re-exposes Read and Bash. Claude fences these off with --allowedTools,
-    // an allowlist that `mcp__*` names never match; codex has no equivalent,
-    // so not loading them is the only lever. The prompt stays last: codex
-    // takes the final positional as the prompt.
+    // an allowlist that `mcp__*` names never match. Codex's bundled apps remain
+    // loaded even with this flag, so codexRemoteBoundary removes them explicitly.
+    // The prompt stays last: codex takes the final positional as the prompt.
     args: ["exec", "--ignore-user-config", "--sandbox", sandbox, "--cd", workdir,
       "--skip-git-repo-check", "--json", "-c", guardCodexConfigArg(),
-      "-c", guardCodexTrustArg(), prompt],
+      "-c", guardCodexTrustArg(), ...codexRemoteBoundary, prompt],
     cwd: workdir,
     env: { ...childEnv, ...correlationEnv, AGENTCALL_CALL_ID: callId, AGENTCALL_GUARD_MODE: "observe", AGENTCALL_LINE: lineName },
   };

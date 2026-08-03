@@ -101,23 +101,30 @@ review; **D** is competitive parity; **E** is positioning.
 
 ### C. Endpoint security review — the argument to win
 
-- [ ] **Close or bound the `exec` gap.** A task granting `exec` has no read floor today;
-      shell commands are recorded, not blocked. This is the single line a security
-      architect will stop on. Either bound it or have a written answer for why the task
-      envelope is the control.
+- [x] **Close or bound the `exec` gap.** The endpoint model now states the exact
+      boundary: for Claude, omitting `exec` withholds Bash, while granting it is an
+      explicit decision to trust that caller with broad local authority rather than
+      a promise of read isolation. Codex still has no per-tool shell switch, so its
+      filesystem read floor remains C.2. The disjoint Codex publish gap is bounded:
+      fresh and resumed spawns disable bundled authenticated apps, web search,
+      and image generation with strict config, making an unsupported or renamed
+      control fail startup instead of restoring the owner's account-backed or
+      undeclared outbound tools.
 - [~] **Codex read-guard parity.** A Codex answering agent has no read guard at all.
       "Depends which agent the employee happens to use" does not survive review.
       **Partly done, and renamed in the doing** — see
       [codex-read-floor-design](../superpowers/specs/2026-08-01-codex-read-floor-design.md).
       Shipped: the guard is registered on the Codex spawn in *observe* mode, the
       spawn no longer loads the owner's `~/.codex` (its MCP servers were a
-      complete bypass of every control here), `~/.codex` joined the denied paths,
+      complete bypass of every control here), bundled authenticated apps, web
+      search, and image generation are disabled with strict config, `~/.codex`
+      joined the denied paths,
       and the guard's fail-closed exits were fixed — under Codex they had been
       failing *open*. Still open: the read floor itself. It cannot come from this
       hook, because Codex reaches the filesystem only through `Bash`; the design
       delegates it to Codex's own kernel-enforced `deny_read`, gated on five
-      unproven preconditions. **This item cannot close before C.1** — for Codex,
-      the whole tool surface is the `exec` gap.
+      unproven preconditions. C.1 now leaves this item as the explicit owner of
+      Codex's remaining filesystem read gap.
 - [ ] **Make the policy envelope legible to a non-engineer.** `policy.json` +
       `resolveTask()` is the right foundation, but the security team needs to read the
       granted surface as policy, not infer it from frontmatter. A rendered

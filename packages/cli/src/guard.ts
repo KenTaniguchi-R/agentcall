@@ -29,14 +29,8 @@ export const DENY_REASON =
 export const FAIL_CLOSED_REASON =
   "The answering agent's policy guard could not evaluate this action.";
 
-// `enforce` blocks; `observe` records and always allows.
-//
-// The codex spawn runs in `observe`. The guard is not codex's read boundary —
-// codex reaches the filesystem through `Bash` (`sed -n '1,200p' file`), which
-// this module deliberately records rather than blocks, so enforcing here would
-// buy no protection. It would, however, deny every codex tool `decide()` cannot
-// classify (`apply_patch` and friends) and break the runtime. Codex's own
-// kernel-enforced `deny_read` is the boundary there.
+// `enforce` blocks; `observe` records and always allows. Codex uses observe
+// because command-string inspection cannot provide its filesystem read floor.
 export type GuardMode = "enforce" | "observe";
 
 // Home-relative directories. Everything beneath them is denied.
