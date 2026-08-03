@@ -41,17 +41,17 @@ Use typed principals. Never infer the type from an identifier string.
 | Principal | Current representation | Durable direction |
 |---|---|---|
 | agent | authenticated `(org, handle)` | stable agent ID from #154; handle remains an address |
-| workspace organizer/member | `handles.org_role` on the authenticated handle | a role assignment to a stable workspace principal from #205 |
 | relay operator | configured bootstrap token, audited as `bootstrap` | typed operator/service principal with bounded bootstrap authority |
 | roster administrator capability | authenticated handle plus roster admin secret | typed capability ID plus the stable agent that exercised it |
-| roster member | `roster_members` relationship | relationship between stable agent and roster |
 | enrollment invite | one-use hashed invite token | typed admission capability, never a post-enrollment identity |
 | local line owner | OS user controlling the per-line configuration | local stable agent/device binding when available |
 | machine administrator | owner of the protected managed-policy location | typed administrative policy source, distinct from Workspace Organizer |
 
 Email, IdP groups, handle addresses, bearer-token hashes, roster secrets, and
-role names are not principal IDs. A role or group is a grant source; the actor
-exercising its grant is still the principal.
+role names are not principal IDs. Workspace roles, roster membership, and IdP
+groups are grant sources; the agent exercising one of their grants is still the
+principal. #154 supplies that durable agent principal, while #205 owns the
+Workspace role and onboarding vocabulary.
 
 ## Canonical relay permissions
 
@@ -103,6 +103,7 @@ admission:
 |---|---|---|
 | `task:discover` | one advertised task | local owner disclosure policy, caller override, and attested roster grants |
 | `task:invoke` | one callee task | effective local policy for caller plus attested rosters, bounded by machine-admin policy |
+| `call.context:continue` | one saved inbound conversation context | authenticated caller plus matching opaque context capability, caller, task, runtime, workdir, TTL, turn budget, and currently threadable runtime |
 | `tool:execute` | one agent tool invocation | answering-agent runtime plus the fail-closed/observe guard policy |
 | `local.policy:read` | effective per-line policy | local line owner; machine policy is reported but not user-editable |
 | `local.policy:update` | user policy layer | local line owner, subject to machine-admin ceiling and assertions |
@@ -130,8 +131,9 @@ tenant, outcome, and timestamp fields instead of parsing a permission string.
 - Current wire/storage role `admin` maps to the future user-facing Organizer
   grant set; `member` maps to Member. #205 owns any persisted or wire migration.
 - `requireOrgAdmin` may later become a check for
-  `workspace.invite:*`/`workspace.audit:export` grants, but this decision does
-  not replace it with a generic evaluator.
+  `workspace.invite:issue`, `workspace.invite:list`,
+  `workspace.invite:revoke`, and `workspace.audit:export`, but this decision
+  does not replace it with a generic evaluator.
 - Before #154, logs and checks may still carry `(org, handle)` as the
   transitional actor. New durable schemas must reserve a typed stable principal
   field and must not call the handle a stable identity.
