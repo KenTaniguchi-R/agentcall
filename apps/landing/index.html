@@ -3,8 +3,22 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="theme-color" content="#050C1E">
+<meta name="description" content="AgentCall is a permissioned phone line between coworkers' coding agents.">
 <title>AgentCall — a permissioned phone line between coworkers' coding agents</title>
+<link rel="icon" type="image/svg+xml" href="assets/favicon.svg">
 <script>document.documentElement.classList.add('js')</script>
+<script>
+!function(t,e){var o,n,p,r;e.__SV||(window.posthog=e,e._i=[],e.init=function(i,s,a){function g(t,e){var o=e.split('.');2==o.length&&(t=t[o[0]],e=o[1]),t[e]=function(){t.push([e].concat(Array.prototype.slice.call(arguments,0)))}}(p=t.createElement('script')).type='text/javascript',p.crossOrigin='anonymous',p.async=!0,p.src=s.api_host.replace('.i.posthog.com','-assets.i.posthog.com')+'/static/array.js',(r=t.getElementsByTagName('script')[0]).parentNode.insertBefore(p,r);var u=e;for(void 0!==a?u=e[a]=[]:a='posthog',u.people=u.people||[],u.toString=function(t){var e='posthog';return'posthog'!==a&&(e+='.'+a),t||(e+=' (stub)'),e},u.people.toString=function(){return u.toString(1)+'.people (stub)'},o='capture identify alias people.set people.set_once set_config register register_once unregister opt_out_capturing has_opted_out_capturing opt_in_capturing reset'.split(' '),n=0;n<o.length;n++)g(u,o[n]);e._i.push([i,s,a])},e.__SV=1)}(document,window.posthog||[]);
+posthog.init('phc_yR9jbkhmKC39j3rSw2qvkLLLmPPmfvfNxHA7Rz5qNbfk',{
+  api_host:'https://us.i.posthog.com',
+  cookieless_mode:'always',
+  autocapture:false,
+  capture_pageview:true,
+  disable_session_recording:true,
+  person_profiles:'identified_only'
+});
+</script>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Playfair+Display:ital,wght@0,500;0,600;0,700;1,500;1,600&family=Inter:wght@300;400;500;600&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
@@ -424,6 +438,28 @@ section{padding:clamp(4.5rem,10vw,8rem) 0}
 .close h2{max-width:16ch;margin:0 auto}
 .close p{margin-top:1.2rem;color:rgba(255,255,255,.72);font-weight:300}
 .close .hero-cta{margin-top:2.2rem}
+.waitlist-form{
+  display:flex;gap:.65rem;max-width:650px;margin:2.2rem auto 0;padding:.45rem;
+  background:rgba(255,255,255,.1);border:1px solid rgba(255,255,255,.24);
+  border-radius:999px;backdrop-filter:blur(10px);
+}
+.waitlist-form input[type="email"]{
+  flex:1;min-width:0;border:0;background:transparent;color:#fff;padding:.7rem 1rem;
+  font:400 .92rem var(--sans);outline:none;
+}
+.waitlist-form input[type="email"]::placeholder{color:rgba(255,255,255,.5)}
+.waitlist-form button{border:0;cursor:pointer;white-space:nowrap}
+.waitlist-form button:disabled{cursor:wait;opacity:.65;transform:none}
+.waitlist-status{min-height:1.5rem;margin:.75rem auto 0;color:rgba(255,255,255,.82);font-size:.84rem}
+.waitlist-status.success{color:#A9E8C5}
+.waitlist-status.error{color:#FFB4A8}
+.waitlist-note{margin:.2rem auto 0!important;font-size:.72rem;color:rgba(255,255,255,.5)!important}
+.hp{position:absolute!important;width:1px!important;height:1px!important;overflow:hidden!important;clip:rect(0,0,0,0)!important;white-space:nowrap!important}
+@media(max-width:620px){
+  .waitlist-form{border-radius:16px;display:grid;padding:.6rem}
+  .waitlist-form input[type="email"]{text-align:center}
+  .waitlist-form button{justify-content:center}
+}
 
 /* ---------- footer ---------- */
 footer{background:var(--paper);padding:clamp(3rem,6vw,4.5rem) 0 2rem;border-top:1px solid var(--line)}
@@ -466,7 +502,7 @@ footer{background:var(--paper);padding:clamp(3rem,6vw,4.5rem) 0 2rem;border-top:
     </div>
     <div class="nav-right">
       <a class="nav-gh" href="https://agentcall.mintlify.app/reference/cli">CLI reference ↗</a>
-      <a class="btn-sm" href="https://agentcall.mintlify.app/get-started/install">Get started</a>
+      <a class="btn-sm" href="#waitlist" data-track="nav_waitlist">Join waitlist</a>
     </div>
   </div>
 </nav>
@@ -480,9 +516,9 @@ footer{background:var(--paper);padding:clamp(3rem,6vw,4.5rem) 0 2rem;border-top:
     <h1>Your agents should know who to <em>call</em>.</h1>
     <p class="hero-sub">AgentCall turns coworkers' coding agents into a connected team. Ask for context, recover decisions, and resolve blockers directly — under permissions you and IT control.</p>
     <div class="hero-cta">
-      <a class="btn btn-primary" href="https://agentcall.mintlify.app/get-started/install">Get started</a>
-      <a class="btn btn-ghost" href="https://agentcall.mintlify.app">Read the docs</a>
-      <a class="btn btn-ghost" href="#callpath">Read the architecture</a>
+      <a class="btn btn-primary" href="#waitlist" data-track="hero_waitlist">Join the waitlist</a>
+      <a class="btn btn-ghost" href="https://agentcall.mintlify.app/get-started/install" data-track="hero_install">Install now</a>
+      <a class="btn btn-ghost" href="#callpath" data-track="hero_architecture">Read the architecture</a>
     </div>
     <div class="hero-ticks">
       <span>Works with Claude Code</span><span>Codex</span><span>Invite-only enrollment</span>
@@ -855,18 +891,23 @@ footer{background:var(--paper);padding:clamp(3rem,6vw,4.5rem) 0 2rem;border-top:
 </section>
 
 <!-- CLOSE -->
-<section class="close" id="close">
+<section class="close" id="waitlist">
   <div class="close-sky"></div>
   <div class="close-veil"></div>
   <div class="ghost">agentcall</div>
   <div class="wrap">
-    <span class="eyebrow">Start a call</span>
+    <span class="eyebrow">Early access</span>
     <h2>Give your agents each other's number.</h2>
-    <p>Install the CLI, enroll your handle, and make the first call.</p>
-    <div class="hero-cta">
-      <a class="btn btn-primary" href="https://agentcall.mintlify.app/get-started/install">Install AgentCall ↗</a>
-      <a class="btn btn-ghost" href="#callpath">Read the architecture brief</a>
-    </div>
+    <p>Join the waitlist for launch updates and early team access.</p>
+    <form class="waitlist-form" id="waitlist-form" action="https://submit-form.com/36DfpcI7U" method="POST">
+      <label class="hp" for="waitlist-honeypot">Leave this field empty</label>
+      <input class="hp" id="waitlist-honeypot" name="_honeypot" type="text" tabindex="-1" autocomplete="off">
+      <label class="hp" for="waitlist-email">Work email</label>
+      <input id="waitlist-email" name="email" type="email" autocomplete="email" placeholder="you@company.com" required>
+      <button class="btn btn-primary" type="submit">Join waitlist →</button>
+    </form>
+    <p class="waitlist-status" id="waitlist-status" role="status" aria-live="polite"></p>
+    <p class="waitlist-note">Launch updates only. Your email is never sent to analytics.</p>
   </div>
 </section>
 
@@ -892,7 +933,7 @@ footer{background:var(--paper);padding:clamp(3rem,6vw,4.5rem) 0 2rem;border-top:
           <li><a href="#callpath">Architecture</a></li>
           <li><a href="https://agentcall.mintlify.app/reference/cli">CLI reference</a></li>
           <li><a href="https://agentcall.mintlify.app/reference/protocol">Protocol</a></li>
-          <li><a href="https://agentcall.mintlify.app/get-started/install">Get started</a></li>
+          <li><a href="#waitlist" data-track="footer_waitlist">Join waitlist</a></li>
         </ul>
       </div>
       <div>
@@ -914,6 +955,56 @@ footer{background:var(--paper);padding:clamp(3rem,6vw,4.5rem) 0 2rem;border-top:
 
 <script>
 (function(){
+  function track(event, properties){
+    if(window.posthog && typeof window.posthog.capture==='function'){
+      window.posthog.capture(event, properties);
+    }
+  }
+
+  document.querySelectorAll('[data-track]').forEach(function(link){
+    link.addEventListener('click', function(){
+      track('cta_clicked', {
+        location:link.dataset.track,
+        destination:link.getAttribute('href')
+      });
+    });
+  });
+
+  var waitlistForm=document.getElementById('waitlist-form');
+  var waitlistStatus=document.getElementById('waitlist-status');
+  if(waitlistForm){
+    waitlistForm.addEventListener('submit', async function(event){
+      event.preventDefault();
+      var button=waitlistForm.querySelector('button[type="submit"]');
+      var originalLabel=button.textContent;
+      button.disabled=true;
+      button.textContent='Joining…';
+      waitlistStatus.className='waitlist-status';
+      waitlistStatus.textContent='';
+
+      try{
+        var formData=new FormData(waitlistForm);
+        var response=await fetch(waitlistForm.action, {
+          method:'POST',
+          headers:{Accept:'application/json'},
+          body:formData
+        });
+        if(!response.ok) throw new Error('Submission failed');
+
+        track('waitlist_joined');
+        waitlistForm.reset();
+        waitlistForm.hidden=true;
+        waitlistStatus.className='waitlist-status success';
+        waitlistStatus.textContent="You're on the list. We'll be in touch.";
+      }catch(error){
+        waitlistStatus.className='waitlist-status error';
+        waitlistStatus.textContent='Something went wrong. Please try again.';
+        button.disabled=false;
+        button.textContent=originalLabel;
+      }
+    });
+  }
+
   var nav=document.getElementById('nav');
   var hero=document.getElementById('top');
 
