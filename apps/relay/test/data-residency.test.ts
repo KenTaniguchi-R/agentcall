@@ -13,8 +13,8 @@ describe("cloud data map", () => {
     const tables = (results ?? []).map((row) => row.name);
 
     expect(tables).toEqual([
-      "cards", "handles", "invites", "org_events", "roster_events", "roster_join_keys",
-      "roster_members", "rosters", "telemetry_health",
+      "cards", "encryption_keys", "handles", "identity_keys", "invites", "org_events",
+      "roster_events", "roster_join_keys", "roster_members", "rosters", "telemetry_health",
     ]);
     for (const table of tables) expect(dataMap).toContain(`| \`${table}\` |`);
   });

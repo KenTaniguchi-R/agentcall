@@ -30,6 +30,16 @@ export interface LinePaths {
   name: string;
   dir: string;
   configFile: string;
+  // Line-scoped for the same reason as the group below, and the sharpest case
+  // of it: the identity key is the trust root FOR AN ADDRESS, and a line is
+  // exactly one handle on one relay. Machine-scoping it would hand two lines a
+  // single identity key, which would let line A sign key records for line B's
+  // address — the relay could then serve B's contacts a key A controls.
+  //
+  // One file holds BOTH key pairs on purpose, so a partial write cannot leave
+  // an identity without its encryption key. There is deliberately no separate
+  // encryption-key path.
+  identityKeyFile: string;
   policyFile: string;
   cardSnapshotFile: string;
   callsLog: string;
@@ -85,6 +95,7 @@ export function getLinePaths(machine: MachinePaths, name: string): LinePaths {
     name,
     dir,
     configFile: join(dir, "config.json"),
+    identityKeyFile: join(dir, "identity.key.json"),
     policyFile: join(dir, "policy.json"),
     cardSnapshotFile: join(dir, "card.pushed.json"),
     callsLog: join(dir, "calls.log"),

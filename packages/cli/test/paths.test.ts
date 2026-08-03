@@ -63,6 +63,18 @@ describe("getLinePaths", () => {
     expect(l.shareDir).toBe("/state/AgentCall/codex/public");
   });
 
+  // The identity key is the trust root for an ADDRESS, and a line is exactly
+  // one handle on one relay. If two lines shared an identity key file, line A
+  // could sign key records for line B's address.
+  it("gives each line its own identity key file", () => {
+    const m = getMachinePaths("/state", "/state");
+    const a = getLinePaths(m, "claude");
+    const b = getLinePaths(m, "codex");
+    expect(a.identityKeyFile).toBe("/state/.agentcall/lines/claude/identity.key.json");
+    expect(b.identityKeyFile).toBe("/state/.agentcall/lines/codex/identity.key.json");
+    expect(a.identityKeyFile).not.toBe(b.identityKeyFile);
+  });
+
   it("carries the machine paths so a line can reach person-scoped state", () => {
     const m = getMachinePaths("/state", "/real");
     expect(getLinePaths(m, "claude").machine.userHome).toBe("/real");
