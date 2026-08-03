@@ -10,6 +10,12 @@ import { getLinePaths, getMachinePaths, type LinePaths } from "../src/paths.js";
 import { saveLineConfig } from "../src/lines.js";
 import { loadMemberships, readCached, saveMembership, writeCached } from "../src/rosters.js";
 import { loadOutbound, rememberOutbound } from "../src/contextsOut.js";
+import { loadKnownPeers } from "../src/known-peers.js";
+import { writeJsonAtomic } from "../src/json-store.js";
+import {
+  encryptionKeyTranscript, exportPublicKey, fingerprint, generateEncryptionKeyPair, identityTranscript,
+  generateIdentityKeyPair, HPKE_SUITE, keyIdFor, signTranscript,
+} from "@benree/agentcall-shared";
 
 // The "local-sota" contact stands in for an address on whichever relay the
 // current test spun up. pickOutboundLine (src/outbound.ts) now matches the
@@ -47,6 +53,7 @@ afterEach(() => {
     server.closeAllConnections?.();
     server.close();
   }
+  vi.unstubAllGlobals();
   vi.restoreAllMocks();
 });
 
@@ -93,6 +100,65 @@ describe("cross-platform listener CLI", () => {
 
     expect(options).toContain("--skip-service");
     expect(options).not.toContain("--skip-launchd");
+  });
+});
+
+describe("trust CLI", () => {
+  it("removes exactly one full-address pin only through --reset", async () => {
+    const testHome = home();
+    const machine = getMachinePaths(testHome, testHome);
+    writeJsonAtomic(machine.knownPeersFile, { peers: [{
+      address: "peer@relay.example", identity_pub: "abc",
+      fingerprint: "SHA256:0123456789abcdef0123456789abcdef",
+      first_seen_at: 1, highest_encryption_epoch: 1, call_count: 1,
+    }] });
+    const result = await runCommand(testHome, ["trust", "--reset", "peer@relay.example"]);
+    expect(result.code, result.stderr).toBe(0);
+    expect(result.stdout).toContain("Removed the identity pin for peer@relay.example");
+    expect(loadKnownPeers(machine)).toEqual([]);
+  });
+
+  it("prints a peer-verifiable fingerprint and exits nonzero on a later pin change", async () => {
+    const identityBundle = async (address: string) => {
+      const identity = await generateIdentityKeyPair();
+      const identityPub = await exportPublicKey(identity.publicKey);
+      const encryption = await generateEncryptionKeyPair();
+      const pub = await exportPublicKey(encryption.publicKey);
+      const record = {
+        v: 1 as const, address, key_id: await keyIdFor(pub), suite: HPKE_SUITE, pub,
+        epoch: 1, not_before: Date.now() - 1_000, not_after: Date.now() + 60_000, prev: null,
+      };
+      const identityRecord = { v: 1 as const, address, identity_pub: identityPub };
+      return {
+        expected: await fingerprint(identityTranscript(identityRecord)),
+        response: {
+          identity: identityRecord,
+          encryption: { record, signature: await signTranscript(identity.privateKey, encryptionKeyTranscript(record)) },
+        },
+      };
+    };
+    let response: unknown;
+    const relay = "https://local.test";
+    routing.host = "local.test";
+    vi.stubGlobal("fetch", vi.fn(async () => new Response(JSON.stringify(response), { status: 200 })));
+    const address = "sota@local.test";
+    const firstIdentity = await identityBundle(address);
+    response = firstIdentity.response;
+    const testHome = home();
+    seedConfig(testHome, relay);
+
+    const first = await runCommand(testHome, ["verify", "local-sota"]);
+    expect(first.code, first.stderr).toBe(0);
+    expect(first.stdout).toContain(`Pinned fingerprint: ${firstIdentity.expected}`);
+    expect(first.stdout).toContain(`Served fingerprint: ${firstIdentity.expected}`);
+
+    const replacement = await identityBundle(address);
+    response = replacement.response;
+    const changed = await runCommand(testHome, ["verify", "local-sota"]);
+    expect(changed.code).toBe(1);
+    expect(changed.stderr).toContain(firstIdentity.expected);
+    expect(changed.stderr).toContain(replacement.expected);
+    expect(loadKnownPeers(getMachinePaths(testHome))[0]?.fingerprint).toBe(firstIdentity.expected);
   });
 });
 

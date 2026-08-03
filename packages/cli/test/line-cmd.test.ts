@@ -4,9 +4,10 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { getLinePaths, getMachinePaths, type MachinePaths } from "../src/paths.js";
 import { saveLineConfig } from "../src/lines.js";
+import { generateIdentityKeys } from "../src/keys.js";
 import { loadPerson, savePerson } from "../src/person.js";
 import {
-  addLine as addLineImpl, listLinesReport,
+  addLine as addLineImpl, listLinesReport, publishStoredKeys,
   removeLine as removeLineImpl, setPrimary,
   type AddLineOpts, type RemoveLineOpts,
 } from "../src/commands/line.js";
@@ -56,18 +57,60 @@ const noNetworkResolveBin = () => null;
 // The tests that care about the invite itself pass their own, or call
 // addLineImpl directly.
 function addLine(m: MachinePaths, opts: AddLineOpts): ReturnType<typeof addLineImpl> {
-  return addLineImpl(m, { resolveBin: noNetworkResolveBin, invite: "test-invite", ...opts });
+  return addLineImpl(m, { resolveBin: noNetworkResolveBin, invite: "test-invite", publishKeysFn: async () => {}, ...opts });
 }
 function removeLine(m: MachinePaths, name: string, opts: RemoveLineOpts = {}): void {
   removeLineImpl(m, name, { resolveBin: noNetworkResolveBin, ...opts });
 }
 
 describe("addLine", () => {
-  it("registers, then writes config.json as the first thing on disk", async () => {
+  it("publishes through the canonical organization-qualified public address", async () => {
+    const paths = getLinePaths(m, "caller");
+    const keys = await generateIdentityKeys(paths);
+    const hosts: string[] = [];
+    await publishStoredKeys(
+      { org: "acme", handle: "ken", token: "t", relay: "https://agentcall.benree.tech" },
+      keys,
+      {
+        identity: async (_relay, _auth, _keys, relayHost) => { hosts.push(relayHost); },
+        encryption: async (_relay, _auth, _keys, relayHost) => { hosts.push(relayHost); },
+      },
+    );
+    expect(hosts).toEqual(["acme.agentcall.benree.tech", "acme.agentcall.benree.tech"]);
+  });
+  it("persists identity keys before registration and config immediately after", async () => {
+    let keysExistedAtRegistration = false;
     await addLine(m, { name: "codex", handle: "ken-cdx", agent: "codex", relay: "https://r.example",
-      register: ok, installListenerServiceFn: () => {}, publishCardFn: async () => undefined, verify: false });
+      register: async () => { keysExistedAtRegistration = existsSync(getLinePaths(m, "codex").identityKeyFile); return ok(); },
+      installListenerServiceFn: () => {}, publishCardFn: async () => undefined, verify: false });
     const l = getLinePaths(m, "codex");
+    expect(keysExistedAtRegistration).toBe(true);
     expect(JSON.parse(readFileSync(l.configFile, "utf8")).token).toBe("tok");
+  });
+
+  it("publishes exactly the key material committed before registration", async () => {
+    let persistedAtRegister = "";
+    let published = "";
+    await addLine(m, {
+      name: "caller", handle: "ken-c", relay: "https://r.example", callerOnly: true,
+      register: async () => {
+        persistedAtRegister = JSON.parse(readFileSync(getLinePaths(m, "caller").identityKeyFile, "utf8")).identity_pub;
+        return ok();
+      },
+      publishKeysFn: async (_cfg, keys) => { published = keys.identity_pub; }, verify: false,
+    });
+    expect(published).toBe(persistedAtRegister);
+  });
+
+  it("keeps persisted credentials and gives a recovery command when key publication fails", async () => {
+    const warnings: string[] = [];
+    await addLine(m, {
+      name: "caller", handle: "ken-c", relay: "https://r.example", callerOnly: true,
+      register: ok, publishKeysFn: async () => { throw new Error("offline"); },
+      warn: (line) => warnings.push(line), verify: false,
+    });
+    expect(existsSync(getLinePaths(m, "caller").configFile)).toBe(true);
+    expect(warnings.join("\n")).toContain("agentcall keys publish --line caller");
   });
 
   it("leaves the disk untouched when the handle is taken", async () => {
@@ -76,6 +119,23 @@ describe("addLine", () => {
       register: taken, installListenerServiceFn: () => {}, publishCardFn: async () => undefined, verify: false }))
       .rejects.toThrow(/already taken/);
     expect(readdirSync(m.linesDir)).toEqual([]);
+  });
+
+  it("gives one concurrent setup exclusive ownership of a line directory", async () => {
+    let registrations = 0;
+    const register = async () => { registrations += 1; return ok(); };
+    const options = {
+      name: "caller", handle: "ken-c", relay: "https://r.example", callerOnly: true,
+      register, publishKeysFn: async () => {}, verify: false,
+    };
+    const first = addLine(m, options);
+    const second = addLine(m, options);
+    const settled = await Promise.allSettled([first, second]);
+    expect(settled.filter((result) => result.status === "fulfilled")).toHaveLength(1);
+    expect(settled.filter((result) => result.status === "rejected")).toHaveLength(1);
+    expect(registrations).toBe(1);
+    expect(existsSync(getLinePaths(m, "caller").identityKeyFile)).toBe(true);
+    expect(existsSync(getLinePaths(m, "caller").configFile)).toBe(true);
   });
 
   it("rejects an invalid line name before registering", async () => {

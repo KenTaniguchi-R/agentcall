@@ -1,14 +1,17 @@
-import { mkdirSync, mkdtempSync, writeFileSync } from "node:fs";
+import { chmodSync, mkdirSync, mkdtempSync, writeFileSync } from "node:fs";
 import { dirname } from "node:path";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
-import { runDoctor } from "../src/doctor.js";
+import { checkLineKeyHealth, runDoctor } from "../src/doctor.js";
 import { saveLineConfig } from "../src/lines.js";
 import { getLinePaths, getMachinePaths, type MachinePaths } from "../src/paths.js";
 import { GUARD_PROBE_LINE } from "../src/verify.js";
 import type { AgentKind } from "../src/runner.js";
 import { TelemetryHealthReporter } from "../src/telemetry-health.js";
+import { generateIdentityKeys } from "../src/keys.js";
+import { encryptionKeyTranscript, fromBase64Url, HPKE_SUITE, keyIdFor, signTranscript, type EncryptionKeyRecordType } from "@benree/agentcall-shared";
+import type { StoredKeys } from "../src/keys.js";
 
 // A single-line machine, still used by tests that only care about one line's
 // checks. Multi-line behavior gets its own describe block below.
@@ -56,7 +59,115 @@ const baseDeps = {
   // Same reasoning for the direct probe: its default spawns node against the
   // built dist/guard-entry.js, which does not exist when vitest runs from src.
   guardBinaryFn: async () => true,
+  keyHealthFn: async () => [],
 };
+
+describe("doctor key health", () => {
+  const signed = async (local: StoredKeys, record: EncryptionKeyRecordType) => {
+    const privateKey = await crypto.subtle.importKey(
+      "pkcs8", fromBase64Url(local.identity_pkcs8) as BufferSource,
+      { name: "ECDSA", namedCurve: "P-256" }, false, ["sign"],
+    );
+    return signTranscript(privateKey, encryptionKeyTranscript(record));
+  };
+
+  it("proves persisted keys and the relay record are identical", async () => {
+    const m = freshMachine();
+    const paths = getLinePaths(m, LINE);
+    const cfg = { org: "acme", handle: "ken", token: "t", relay: "https://relay.example" };
+    const local = await generateIdentityKeys(paths);
+    const now = Date.now();
+    const record: EncryptionKeyRecordType = {
+      v: 1, address: "ken@relay.example", key_id: await keyIdFor(local.encryption_pub), suite: HPKE_SUITE,
+      pub: local.encryption_pub, epoch: local.epoch, not_before: now - 1_000, not_after: now + 60_000, prev: null,
+    };
+    const checks = await checkLineKeyHealth(cfg, paths, async () => ({
+      identity: { v: 1, address: "ken@relay.example", identity_pub: local.identity_pub },
+      encryption: { record, signature: await signed(local, record) },
+    }));
+    expect(checks).toEqual([
+      expect.objectContaining({ name: "local identity keys", ok: true }),
+      expect.objectContaining({ name: "published identity keys", ok: true }),
+    ]);
+  });
+
+  it("fails when the relay's published record differs from disk", async () => {
+    const m = freshMachine();
+    const paths = getLinePaths(m, LINE);
+    const cfg = { org: "acme", handle: "ken", token: "t", relay: "https://relay.example" };
+    const local = await generateIdentityKeys(paths);
+    const now = Date.now();
+    const record: EncryptionKeyRecordType = {
+      v: 1, address: "ken@relay.example", key_id: await keyIdFor(local.encryption_pub), suite: HPKE_SUITE,
+      pub: local.encryption_pub, epoch: local.epoch + 1, not_before: now - 1_000, not_after: now + 60_000, prev: null,
+    };
+    const checks = await checkLineKeyHealth(cfg, paths, async () => ({
+      identity: { v: 1, address: "ken@relay.example", identity_pub: local.identity_pub },
+      encryption: { record, signature: await signed(local, record) },
+    }));
+    expect(checks.at(-1)).toMatchObject({ name: "published identity keys", ok: false });
+  });
+
+  it("fails before relay access when the line key directory is not 0700", async () => {
+    const m = freshMachine();
+    const paths = getLinePaths(m, LINE);
+    await generateIdentityKeys(paths);
+    chmodSync(paths.dir, 0o755);
+    let fetched = false;
+    const checks = await checkLineKeyHealth(
+      { org: "acme", handle: "ken", token: "t", relay: "https://relay.example" }, paths,
+      async () => { fetched = true; throw new Error("must not fetch"); },
+    );
+    expect(checks[0]).toMatchObject({ name: "local identity keys", ok: false });
+    expect(checks[0]?.detail).toContain("expected 700");
+    expect(fetched).toBe(false);
+  });
+
+  it("fails when relay records match but their signature is invalid", async () => {
+    const m = freshMachine();
+    const paths = getLinePaths(m, LINE);
+    const local = await generateIdentityKeys(paths);
+    const now = Date.now();
+    const record: EncryptionKeyRecordType = {
+      v: 1, address: "ken@relay.example", key_id: await keyIdFor(local.encryption_pub), suite: HPKE_SUITE,
+      pub: local.encryption_pub, epoch: local.epoch, not_before: now - 1_000, not_after: now + 60_000, prev: null,
+    };
+    const checks = await checkLineKeyHealth(
+      { org: "acme", handle: "ken", token: "t", relay: "https://relay.example" }, paths,
+      async () => ({
+        identity: { v: 1, address: "ken@relay.example", identity_pub: local.identity_pub },
+        encryption: { record, signature: "invalid" },
+      }),
+    );
+    expect(checks.at(-1)).toMatchObject({ name: "published identity keys", ok: false });
+  });
+
+  it.each([
+    { name: "expired", record: async (local: StoredKeys) => ({
+      key_id: await keyIdFor(local.encryption_pub), not_before: 1, not_after: 2,
+    }) },
+    { name: "wrong key id", record: async () => ({
+      key_id: "a".repeat(32), not_before: Date.now() - 1_000, not_after: Date.now() + 60_000,
+    }) },
+  ])("fails when matching relay records are $name", async ({ record: fields }) => {
+    const m = freshMachine();
+    const paths = getLinePaths(m, LINE);
+    const local = await generateIdentityKeys(paths);
+    const values = await fields(local);
+    const record: EncryptionKeyRecordType = {
+      v: 1, address: "ken@relay.example", suite: HPKE_SUITE, pub: local.encryption_pub,
+      epoch: local.epoch, prev: null, ...values,
+    };
+    const checks = await checkLineKeyHealth(
+      { org: "acme", handle: "ken", token: "t", relay: "https://relay.example" }, paths,
+      async () => ({
+        identity: { v: 1, address: "ken@relay.example", identity_pub: local.identity_pub },
+        encryption: { record, signature: await signed(local, record) },
+      }),
+    );
+    expect(checks.at(-1)).toMatchObject({ name: "published identity keys", ok: false });
+  });
+});
 
 // A VerifyFns whose agent-binary resolution fails for exactly one kind, so a
 // multi-line test can make one line's ladder fail without touching the

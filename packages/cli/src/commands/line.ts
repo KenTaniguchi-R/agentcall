@@ -1,13 +1,14 @@
 import { existsSync, mkdirSync, renameSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import type { AgentKind } from "@benree/agentcall-shared";
-import { registerHandle } from "../api.js";
+import { publishEncryptionKey, publishIdentityKey, registerHandle } from "../api.js";
 import { publishCard } from "../card.js";
-import { resolveLineWorkdir, type LineConfig } from "../config.js";
+import { addressHost, resolveLineWorkdir, type LineConfig } from "../config.js";
 import { assertValidLineName, listLines, readyLines, saveLineConfig } from "../lines.js";
 import { listenerPathDirs } from "../listenerPath.js";
 import { host } from "../outbound.js";
 import { getLinePaths, type LinePaths, type MachinePaths } from "../paths.js";
+import { generateIdentityKeys, type StoredKeys } from "../keys.js";
 import { loadPerson, resolvePrimary, savePerson } from "../person.js";
 import { DEFAULT_POLICY } from "../policy.js";
 import { installListenerService, uninstallListenerService } from "../listener-service.js";
@@ -40,6 +41,7 @@ export interface AddLineOpts {
   // undefined without constructing a full card upload.
   register?: typeof registerHandle;
   publishCardFn?: (cfg: LineConfig, p: LinePaths) => Promise<unknown>;
+  publishKeysFn?: (cfg: LineConfig, keys: StoredKeys) => Promise<void>;
   installListenerServiceFn?: typeof installListenerService;
   // Dirs (an agent/npx binary resolved outside launchd's fixed base PATH) to
   // prepend to the listener service's PATH. Defaults to listenerPathDirs(m,
@@ -51,6 +53,17 @@ export interface AddLineOpts {
   // Only consulted when extraPathDirs is absent, and only as an input to
   // listenerPathDirs's own derivation — see there for the default.
   resolveBin?: (name: string) => string | null;
+}
+
+export async function publishStoredKeys(
+  line: LineConfig,
+  stored: StoredKeys,
+  fns: { identity?: typeof publishIdentityKey; encryption?: typeof publishEncryptionKey } = {},
+): Promise<void> {
+  const auth = { org: line.org, handle: line.handle, token: line.token };
+  const canonicalHost = addressHost(line);
+  await (fns.identity ?? publishIdentityKey)(line.relay, auth, stored, canonicalHost);
+  await (fns.encryption ?? publishEncryptionKey)(line.relay, auth, stored, canonicalHost);
 }
 
 // A handle that is `<existing>-<something>` is guessable from an address the
@@ -87,16 +100,54 @@ export async function addLine(m: MachinePaths, opts: AddLineOpts): Promise<{ add
   if (!invite) {
     throw new Error(`An organization invite is required. Run \`agentcall line add ${opts.name} --invite <token>\`.`);
   }
-  const { org, token, address } = await (opts.register ?? registerHandle)(opts.relay, invite, opts.handle, agentKind);
+  // Persist the private halves before either registration or publication. A
+  // relay must never advertise a public key whose private half was not safely
+  // committed on this machine.
+  const paths = getLinePaths(m, opts.name);
+  mkdirSync(m.linesDir, { recursive: true, mode: 0o700 });
+  try {
+    // This directory is also the cross-process reservation for the line name.
+    // Unlike the later atomic file replacement, mkdir without `recursive`
+    // has exactly one winner, so two setups cannot publish one key while a
+    // competing setup leaves a different key on disk.
+    mkdirSync(paths.dir, { mode: 0o700 });
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === "EEXIST") {
+      throw new Error(`A line named "${opts.name}" is already being created or has incomplete state at ${paths.dir}.`);
+    }
+    throw error;
+  }
+  let keys: StoredKeys;
+  let registration: Awaited<ReturnType<typeof registerHandle>>;
+  try {
+    keys = await generateIdentityKeys(paths);
+    registration = await (opts.register ?? registerHandle)(opts.relay, invite, opts.handle, agentKind);
+  } catch (error) {
+    // This invocation owns the exclusive directory reservation, and the handle
+    // was not spent. Removing it cannot delete a competing setup's state.
+    rmSync(paths.dir, { recursive: true, force: true });
+    throw error;
+  }
+  const { org, token, address } = registration;
 
   // Registration succeeded, so the handle is spent and unreclaimable (#16).
-  // config.json is therefore the very first thing written — everything below
-  // is recoverable by re-running, losing the token is not.
-  const paths = getLinePaths(m, opts.name);
+  // config.json is therefore the first post-registration write — the key file
+  // above is deliberately pre-registration and contains no relay credential.
+  // Everything below is recoverable by re-running; losing the token is not.
   const cfg: LineConfig = agentKind
     ? { org, handle: opts.handle, token, relay: opts.relay, agent_kind: agentKind }
     : { org, handle: opts.handle, token, relay: opts.relay };
   saveLineConfig(paths, cfg);
+
+  const publishKeys = opts.publishKeysFn ?? publishStoredKeys;
+  try {
+    await publishKeys(cfg, keys);
+  } catch (error) {
+    (opts.warn ?? console.error)(
+      `Warning: keys are safely stored but could not be published (${String(error)}). ` +
+      `Run \`agentcall keys publish --line ${opts.name}\` after checking the relay.`,
+    );
+  }
 
   if (agentKind) {
     mkdirSync(paths.shareDir, { recursive: true });

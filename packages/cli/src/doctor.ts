@@ -1,12 +1,16 @@
-import { getStatus } from "./api.js";
+import { fetchKeys, getStatus } from "./api.js";
+import { statSync } from "node:fs";
+import { encryptionKeyTranscript, importIdentityPublicKey, keyIdFor, verifyTranscript } from "@benree/agentcall-shared";
 import { callAgent } from "./callClient.js";
-import { relayUrl, resolveLineWorkdir, type LineConfig, type Workdir } from "./config.js";
+import { addressHost, relayUrl, resolveLineWorkdir, type LineConfig, type Workdir } from "./config.js";
 import {
   inspectListenerService,
   type ListenerServiceStatus,
 } from "./listener-service.js";
 import { listLines } from "./lines.js";
-import type { MachinePaths } from "./paths.js";
+import type { LinePaths, MachinePaths } from "./paths.js";
+import { loadKeys } from "./keys.js";
+import { checkKnownPeersStore } from "./known-peers.js";
 import type { AgentKind } from "./runner.js";
 import { readTelemetryHealth } from "./telemetry-health.js";
 import {
@@ -27,6 +31,49 @@ export interface DoctorDeps {
   guardFn?: GuardProbeFn;
   guardBinaryFn?: GuardBinaryProbeFn;
   codexGuardFn?: CodexGuardProbeFn;
+  keyHealthFn?: (cfg: LineConfig, paths: LinePaths) => Promise<VerifyCheck[]>;
+}
+
+export async function checkLineKeyHealth(
+  cfg: LineConfig, paths: LinePaths, fetchFn: typeof fetchKeys = fetchKeys,
+): Promise<VerifyCheck[]> {
+  let local;
+  try {
+    const dirMode = statSync(paths.dir).mode & 0o777;
+    if (dirMode !== 0o700) {
+      throw new Error(`${paths.dir} has permission ${dirMode.toString(8)}; expected 700. Run: chmod 700 ${paths.dir}`);
+    }
+    local = loadKeys(paths);
+  } catch (error) {
+    return [{ name: "local identity keys", ok: false, detail: short(error), hint: "run `agentcall setup` to create persisted keys" }];
+  }
+  const checks: VerifyCheck[] = [{ name: "local identity keys", ok: true, detail: `epoch ${local.epoch}, permissions 600` }];
+  try {
+    const remote = await fetchFn(
+      relayUrl(cfg), { org: cfg.org, handle: cfg.handle, token: cfg.token }, cfg.handle,
+    );
+    const expectedAddress = `${cfg.handle}@${addressHost(cfg)}`;
+    const signatureValid = await verifyTranscript(
+      await importIdentityPublicKey(remote.identity.identity_pub),
+      encryptionKeyTranscript(remote.encryption.record),
+      remote.encryption.signature,
+    );
+    const now = Date.now();
+    const validityCurrent = remote.encryption.record.not_before <= now && now < remote.encryption.record.not_after;
+    const keyIdMatches = remote.encryption.record.key_id === await keyIdFor(remote.encryption.record.pub);
+    const matches = remote.identity.address === expectedAddress &&
+      remote.identity.identity_pub === local.identity_pub &&
+      remote.encryption.record.pub === local.encryption_pub &&
+      remote.encryption.record.epoch === local.epoch && signatureValid && validityCurrent && keyIdMatches;
+    checks.push({
+      name: "published identity keys", ok: matches,
+      detail: matches ? `relay matches local epoch ${local.epoch}` : "relay records do not match the persisted local keys",
+      hint: matches ? undefined : `run \`agentcall keys publish --line ${paths.name}\``,
+    });
+  } catch (error) {
+    checks.push({ name: "published identity keys", ok: false, detail: short(error), hint: `run \`agentcall keys publish --line ${paths.name}\`` });
+  }
+  return checks;
 }
 
 // Verifies every line on this install can answer calls, printing one line
@@ -96,6 +143,9 @@ export async function runDoctor(deps: DoctorDeps): Promise<number> {
     });
   }
 
+  const peerStore = checkKnownPeersStore(deps.machine);
+  report({ name: "known-peer trust store", ok: peerStore.ok, detail: peerStore.detail });
+
   const lineList = listLines(deps.machine);
   if (lineList.length === 0) {
     // "No agentcall config found" is pinned by the packed-CLI consumer job in
@@ -128,6 +178,8 @@ export async function runDoctor(deps: DoctorDeps): Promise<number> {
     }
     const cfg: LineConfig = line.config;
     report({ name: "config", ok: true, detail: `${cfg.handle} -> ${relayUrl(cfg)}` });
+
+    for (const keyCheck of await (deps.keyHealthFn ?? checkLineKeyHealth)(cfg, line.paths)) report(keyCheck);
 
     if (!cfg.agent_kind) {
       log("caller-only — no agent to verify. You can still call others.");
