@@ -13,6 +13,7 @@ import { loadPerson, resolvePrimary, savePerson } from "../person.js";
 import { DEFAULT_POLICY } from "../policy.js";
 import { installListenerService, uninstallListenerService } from "../listener-service.js";
 import { formatCheck, verifyAgent, type VerifyFns } from "../verify.js";
+import { withFileLock } from "../file-lock.js";
 
 export interface AddLineOpts {
   name: string;
@@ -118,6 +119,13 @@ export async function addLine(m: MachinePaths, opts: AddLineOpts): Promise<{ add
     }
     throw error;
   }
+  return withFileLock(paths.configFile, "line credential", async () => {
+  // Recovery may have won the sidecar immediately after our directory mkdir.
+  // Recheck under the shared lock before spending the invite or publishing a
+  // token, so whichever operation wins makes the other fail harmlessly.
+  if (existsSync(paths.configFile) || existsSync(paths.recoveryPendingFile)) {
+    throw new Error(`A line named "${opts.name}" was created while this command was waiting for its credential lock.`);
+  }
   let keys: StoredKeys;
   let registration: Awaited<ReturnType<typeof registerHandle>>;
   try {
@@ -193,6 +201,7 @@ export async function addLine(m: MachinePaths, opts: AddLineOpts): Promise<{ add
   // first setup never leaves primary_line pointing at a broken line.
   if (!existsSync(m.personFile)) savePerson(m, { primary_line: opts.name });
   return { address };
+  });
 }
 
 export interface RemoveLineOpts {

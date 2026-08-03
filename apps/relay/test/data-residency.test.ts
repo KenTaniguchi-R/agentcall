@@ -15,7 +15,7 @@ describe("cloud data map", () => {
     expect(tables).toEqual([
       "audit_export_acknowledgements", "audit_legal_holds", "audit_retention_policies",
       "audit_retention_policy_requests", "cards", "encryption_keys", "handles", "identity_keys", "invites", "org_events",
-      "roster_events", "roster_join_keys", "roster_members", "rosters", "telemetry_health",
+      "recovery_evictions", "recovery_receipts", "roster_events", "roster_join_keys", "roster_members", "rosters", "telemetry_health",
     ]);
     for (const table of tables) expect(dataMap).toContain(`| \`${table}\` |`);
   });

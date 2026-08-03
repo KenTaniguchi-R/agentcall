@@ -1,4 +1,4 @@
-import { fetchKeys, getStatus } from "./api.js";
+import { fetchKeys, getRecoveryStatus, getStatus } from "./api.js";
 import { lstatSync, readFileSync, realpathSync, statSync } from "node:fs";
 import { execFileSync } from "node:child_process";
 import { encryptionKeyTranscript, importIdentityPublicKey, keyIdFor, verifyTranscript } from "@benree/agentcall-shared";
@@ -25,6 +25,7 @@ export interface DoctorDeps {
   // Test seams — production callers should leave these as the defaults.
   verifyFns?: VerifyFns;
   getStatusFn?: typeof getStatus;
+  getRecoveryStatusFn?: typeof getRecoveryStatus;
   callFn?: typeof callAgent;
   platform?: NodeJS.Platform;
   inspectListenerServiceFn?: (machine: MachinePaths) => ListenerServiceStatus;
@@ -205,6 +206,28 @@ export async function checkLineKeyHealth(
   return checks;
 }
 
+export async function checkRecoveryHealth(
+  cfg: LineConfig, fetchFn: typeof getRecoveryStatus = getRecoveryStatus,
+): Promise<VerifyCheck> {
+  try {
+    const status = await fetchFn(
+      relayUrl(cfg), { org: cfg.org, handle: cfg.handle, token: cfg.token },
+    );
+    return status.issued
+      ? {
+        name: "recovery proof", ok: true,
+        detail: `generation ${status.generation}; public ID ${status.recovery_public_id}; long-lived full-authority backup`,
+      }
+      : {
+        name: "recovery proof", ok: true, warn: true,
+        detail: "not issued; loss of this line token is unrecoverable",
+        hint: "run `agentcall recovery issue` for this line and save the proof out of band",
+      };
+  } catch (error) {
+    return { name: "recovery proof", ok: false, detail: short(error) };
+  }
+}
+
 // Verifies every line on this install can answer calls, printing one line
 // per check under a `line <name>` header for each. Ladder semantics (see the
 // design spec): static checks are informational and never block the agent
@@ -313,6 +336,8 @@ export async function runDoctor(deps: DoctorDeps): Promise<number> {
     }
     const cfg: LineConfig = line.config;
     report({ name: "config", ok: true, detail: `${cfg.handle} -> ${relayUrl(cfg)}` });
+
+    report(await checkRecoveryHealth(cfg, deps.getRecoveryStatusFn));
 
     for (const keyCheck of await (deps.keyHealthFn ?? checkLineKeyHealth)(cfg, line.paths)) report(keyCheck);
 

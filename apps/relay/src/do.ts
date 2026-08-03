@@ -22,6 +22,7 @@ type CallerAttachment = {
   call_id?: string;
   correlation_id?: string;
   timeoutMs?: number;
+  credentialGeneration?: number;
 };
 type ListenerAttachment = {
   kind: "listener";
@@ -30,6 +31,7 @@ type ListenerAttachment = {
   actorIp?: string;
   actorCountry?: string;
   relayOrigin?: string;
+  credentialGeneration?: number;
 };
 
 type CallAuditEvent = Extract<OrgAuditEvent, `call.${string}`>;
@@ -66,6 +68,9 @@ const RATE_LIMIT_PRUNE_CONTINUE_DELAY_MS = 1_000;
 const CANCEL_CONFIRM_TIMEOUT_MS = 10_000;
 const CALL_AUDIT_PREFIX = "audit:";
 const CALL_AUDIT_RETRY_MS = 1_000;
+const CREDENTIAL_GENERATION_FLOOR_PREFIX = "meta:credential-generation-floor:";
+const credentialGenerationFloorKey = (org: string, handle: string) =>
+  `${CREDENTIAL_GENERATION_FLOOR_PREFIX}${JSON.stringify([org, handle])}`;
 // A D1 batch counts every statement against the per-Worker-invocation query
 // limit (50 on Workers Free). In the worst case each intent belongs to a
 // different org and needs its own retention trim, so 24 intents use at most 48
@@ -242,6 +247,27 @@ export class HandleDO extends DurableObject {
 
   override async fetch(req: Request): Promise<Response> {
     const url = new URL(req.url);
+    if (url.pathname === "/credentials/evict" && req.method === "POST") {
+      const org = req.headers.get("X-Credential-Org") ?? "";
+      const handle = req.headers.get("X-Credential-Handle") ?? "";
+      const generation = Number(req.headers.get("X-Recovery-Generation"));
+      if (!org || !handle || !Number.isSafeInteger(generation) || generation < 1) {
+        return Response.json({ error: "invalid eviction command" }, { status: 400 });
+      }
+      const floorKey = credentialGenerationFloorKey(org, handle);
+      await this.ctx.storage.transaction(async (txn) => {
+        const current = await txn.get<number>(floorKey) ?? 0;
+        if (generation > current) await txn.put(floorKey, generation);
+      });
+      for (const socket of this.ctx.getWebSockets()) {
+        const attachment = socket.deserializeAttachment() as CallerAttachment | ListenerAttachment | null;
+        const credentialHandle = attachment?.kind === "caller" ? attachment.from : attachment?.handle;
+        if (attachment?.org !== org || credentialHandle !== handle ||
+          (attachment.credentialGeneration ?? 0) >= generation) continue;
+        try { socket.close(4001, "credentials revoked"); } catch { /* already closed */ }
+      }
+      return Response.json({ evicted: true });
+    }
     if (url.pathname === "/status") {
       return Response.json({ online: this.ctx.getWebSockets("listener").length > 0 });
     }
@@ -256,6 +282,13 @@ export class HandleDO extends DurableObject {
       const actorIp = req.headers.get("X-Verified-Actor-IP") || undefined;
       const actorCountry = req.headers.get("X-Verified-Actor-Country") || undefined;
       const relayOrigin = req.headers.get("X-Verified-Relay-Origin") || undefined;
+      const credentialGeneration = Number(req.headers.get("X-Verified-Credential-Generation")) || 0;
+      const credentialGenerationFloor = await this.ctx.storage.get<number>(
+        credentialGenerationFloorKey(org ?? "", from),
+      ) ?? 0;
+      if (credentialGeneration < credentialGenerationFloor) {
+        return new Response("stale credentials", { status: 401 });
+      }
       let groups: string[] = [];
       try {
         const parsed = JSON.parse(req.headers.get("X-Verified-Groups") ?? "[]");
@@ -270,12 +303,14 @@ export class HandleDO extends DurableObject {
         this.ctx.acceptWebSocket(server, ["listener"]);
         server.serializeAttachment({
           kind: "listener", org, handle: target, actorIp, actorCountry, relayOrigin,
+          credentialGeneration,
         } satisfies ListenerAttachment);
       } else {
         this.ctx.acceptWebSocket(server, ["caller"]);
         server.serializeAttachment({
           kind: "caller", from, org, to: target, actorIp, actorCountry,
           groups, timeoutMs: testTimeout, relayOrigin,
+          credentialGeneration,
         } satisfies CallerAttachment);
       }
       return new Response(null, { status: 101, webSocket: client });

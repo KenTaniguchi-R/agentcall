@@ -3,7 +3,7 @@ import { dirname } from "node:path";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
-import { checkCredentialStorage, checkLineKeyHealth, runDoctor } from "../src/doctor.js";
+import { checkCredentialStorage, checkLineKeyHealth, checkRecoveryHealth, runDoctor } from "../src/doctor.js";
 import { saveLineConfig } from "../src/lines.js";
 import { getLinePaths, getMachinePaths, type MachinePaths } from "../src/paths.js";
 import { GUARD_PROBE_LINE } from "../src/verify.js";
@@ -55,6 +55,7 @@ const baseDeps = {
   platform: "darwin" as const,
   inspectListenerServiceFn: () => ({ kind: "launchd" as const, installed: true, running: true }),
   getStatusFn: async () => ({ online: true }),
+  getRecoveryStatusFn: async () => ({ issued: true, generation: 2, recovery_public_id: "agr_aaaaaaaaaaaaaaaa" }),
   verifyFns: okVerifyFns,
   callFn: fakeCall,
   // Never spawn a real `claude` in tests: checkGuard's default probe does
@@ -217,6 +218,25 @@ describe("doctor credential storage", () => {
       name: "handle credential storage",
       ok: true,
       warn: true,
+    });
+  });
+});
+
+describe("doctor recovery health", () => {
+  const cfg = { org: "acme", handle: "ken", token: "secret", relay: "https://relay.example" };
+
+  it("reports the generation without exposing either credential", async () => {
+    const check = await checkRecoveryHealth(cfg, async () => ({
+      issued: true, generation: 7, recovery_public_id: "agr_aaaaaaaaaaaaaaaa",
+    }));
+    expect(check).toMatchObject({ name: "recovery proof", ok: true });
+    expect(check.detail).toContain("generation 7");
+    expect(check.detail).not.toContain("secret");
+  });
+
+  it("warns that an unissued proof makes token loss unrecoverable", async () => {
+    expect(await checkRecoveryHealth(cfg, async () => ({ issued: false, generation: 0 }))).toMatchObject({
+      name: "recovery proof", ok: true, warn: true,
     });
   });
 });

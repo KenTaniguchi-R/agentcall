@@ -2,7 +2,8 @@ import { rotateToken } from "../api.js";
 import { relayUrl } from "../config.js";
 import type { LineContext } from "../lineContext.js";
 import { listenerServiceRestartCommand } from "../listener-service.js";
-import { saveLineConfig } from "../lines.js";
+import { loadLineConfig, saveLineConfig } from "../lines.js";
+import { withFileLock } from "../file-lock.js";
 
 export interface RotateDeps {
   rotate?: typeof rotateToken;
@@ -18,11 +19,16 @@ export interface RotateDeps {
 // alive without re-authenticating). Because this only ever touches
 // ctx.paths for the resolved line, no other line's config is disturbed.
 export async function rotateLine(ctx: LineContext, deps: RotateDeps = {}): Promise<void> {
+  return withFileLock(ctx.paths.configFile, "line credential", () => rotateLineLocked(ctx, deps));
+}
+
+async function rotateLineLocked(ctx: LineContext, deps: RotateDeps): Promise<void> {
+  const current = loadLineConfig(ctx.paths);
   const log = deps.log ?? console.log;
   const { token } = await (deps.rotate ?? rotateToken)(
-    relayUrl(ctx.config), { org: ctx.config.org, handle: ctx.config.handle, token: ctx.config.token },
+    relayUrl(current), { org: current.org, handle: current.handle, token: current.token },
   );
-  saveLineConfig(ctx.paths, { ...ctx.config, token });
+  saveLineConfig(ctx.paths, { ...current, token });
   // A caller-only line (no agent_kind) has no listener socket of its own — the
   // whole "next reconnect" / "restart to force it off now" paragraph below is
   // about a listener this line doesn't have. Pre-lines code guarded this with
@@ -32,11 +38,11 @@ export async function rotateLine(ctx: LineContext, deps: RotateDeps = {}): Promi
   const backgroundGuidance = restartCommand
     ? `, or for the background one, \`${restartCommand}\``
     : "";
-  const listenerGuidance = ctx.config.agent_kind
+  const listenerGuidance = current.agent_kind
     ? `, but this line's listener won't use the new one until its next reconnect — other lines are ` +
       `unaffected either way.\n` +
       `If the old token may have leaked, restart the listener now to force it off the relay immediately ` +
       `instead of waiting for that reconnect: \`agentcall listen\` in the foreground${backgroundGuidance}.`
     : ".";
-  log(`Token rotated for line "${ctx.name}" (${ctx.config.handle}). The old token is invalid for new connections immediately${listenerGuidance}`);
+  log(`Token rotated for line "${ctx.name}" (${current.handle}). The old token is invalid for new connections immediately${listenerGuidance}`);
 }

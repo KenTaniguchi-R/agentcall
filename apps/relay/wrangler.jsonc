@@ -26,6 +26,9 @@
     "RateLimiterDO": { "type": "durable-object", "storage": "sqlite" }
   },
   "routes": [{ "pattern": "agentcall.benree.tech", "custom_domain": true }],
+  // Durable recovery eviction delivery. Each alarm drains a bounded page and
+  // failed jobs retain exponential backoff state in D1.
+  "triggers": { "crons": ["*/5 * * * *"] },
   // Burst/abuse throttling only — the binding's `period` must be 10 or 60
   // seconds (no hourly window like RATE_LIMIT_PER_HOUR on the DO side), so
   // this is a much shorter-window cap than that per-hour call limit.

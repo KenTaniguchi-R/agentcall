@@ -13,6 +13,7 @@ import { authenticateRequest, deploymentOrgAllows, identityKey, registrationAddr
 import { sharedRosterIds } from "./groups.js";
 import { checkLimit, NATIVE_CARD, NATIVE_READ, REGISTER, type RateLimitEnv } from "./ratelimit/index.js";
 import { parseStoredCard } from "./stored-card.js";
+import { drainRecoveryEvictions, mountRecovery } from "./recovery.js";
 
 export { HandleDO } from "./do.js";
 export { RateLimiterDO } from "./ratelimit/do.js";
@@ -34,6 +35,7 @@ mountInvites(app);
 mountKeys(app);
 mountPresence(app);
 mountRoster(app);
+mountRecovery(app);
 
 async function handleExists(db: D1Database, org: string, handle: string): Promise<boolean> {
   return !!(await db.prepare("SELECT 1 FROM handles WHERE org = ? AND handle = ?").bind(org, handle).first());
@@ -135,8 +137,11 @@ app.post("/v1/token/rotate", async (c) => {
   const next = generateToken();
   // UPDATE, never INSERT: an unregistered handle can't reach here (it fails
   // the auth check above), so this must not be able to conjure a row.
-  await c.env.DB.prepare("UPDATE handles SET token_hash = ? WHERE org = ? AND handle = ?")
-    .bind(await sha256Hex(next), org, handle).run();
+  const presented = (c.req.header("Authorization") ?? "").replace(/^Bearer\s+/i, "");
+  const result = await c.env.DB.prepare(
+    "UPDATE handles SET token_hash = ? WHERE org = ? AND handle = ? AND token_hash = ?",
+  ).bind(await sha256Hex(next), org, handle, await sha256Hex(presented)).run();
+  if ((result.meta.changes ?? 0) !== 1) return c.json({ error: "credential changed" }, 409);
   return c.json({ token: next });
 });
 
@@ -204,6 +209,7 @@ app.get("/v1/ws", async (c) => {
   fwd.headers.set("X-Verified-From", handle);
   fwd.headers.set("X-Verified-Org", org);
   fwd.headers.set("X-Verified-Target", target);
+  fwd.headers.set("X-Verified-Credential-Generation", String(identity.recoveryGeneration));
   fwd.headers.set("X-Verified-Relay-Origin", registrationAddressHost(org, c.req.url));
   fwd.headers.set("X-Verified-Groups", JSON.stringify(groups));
   fwd.headers.set("X-Verified-Actor-IP", c.req.header("cf-connecting-ip") ?? "");
@@ -212,4 +218,10 @@ app.get("/v1/ws", async (c) => {
   return stub.fetch(fwd);
 });
 
-export default app;
+const worker = Object.assign(app, {
+  scheduled(_controller: ScheduledController, env: Env, ctx: ExecutionContext): void {
+    ctx.waitUntil(drainRecoveryEvictions(env));
+  },
+});
+
+export default worker;

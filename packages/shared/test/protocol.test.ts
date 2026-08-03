@@ -11,6 +11,7 @@ import {
   CORRELATION_ID_RE, normalizeTraceparent, CallStatus,
   CONTEXT_ID_RE, ErrorCode,
   CONTEXT_TTL_MS, MAX_CONTEXT_TURNS, MAX_CONTEXTS, RATE_LIMIT_PER_HOUR,
+  RecoveryIssueRequest, RecoveryRedeemRequest, RecoveryReceipt,
 } from "../src/index.js";
 
 const requestEnvelope = {
@@ -32,6 +33,39 @@ describe("handle rules", () => {
   });
   it("rejects invalid handles", () => {
     for (const h of ["K", "-a", "a", "a".repeat(32), "a_b", "a b", ""]) expect(HANDLE_RE.test(h)).toBe(false);
+  });
+});
+
+describe("recovery protocol", () => {
+  const digest = "a".repeat(64);
+  const request = {
+    org: "acme", handle: "alice", generation: 1,
+    current_recovery_proof: "proof-" + "x".repeat(40),
+    operation_id: "A".repeat(22), client_token_digest: digest,
+    client_public_id: `act_${digest.slice(0, 16)}`,
+    successor_recovery_digest: "b".repeat(64),
+    successor_recovery_public_id: `agr_${"b".repeat(16)}`,
+  };
+
+  it("strictly validates issue and redeem payloads", () => {
+    expect(RecoveryIssueRequest.safeParse({
+      expected_generation: 0,
+      successor_recovery_digest: digest,
+      successor_recovery_public_id: `agr_${digest.slice(0, 16)}`,
+    }).success).toBe(true);
+    expect(RecoveryRedeemRequest.safeParse(request).success).toBe(true);
+    expect(RecoveryRedeemRequest.safeParse({ ...request, token: "secret" }).success).toBe(false);
+  });
+
+  it("keeps proofs out of public receipts", () => {
+    const receipt = RecoveryReceipt.parse({
+      org: "acme", handle: "alice", operation_id: request.operation_id,
+      consumed_generation: 1, recovery_generation: 2,
+      client_public_id: request.client_public_id,
+      recovery_public_id: request.successor_recovery_public_id,
+      committed_at: 1, eviction_confirmed: true,
+    });
+    expect(JSON.stringify(receipt)).not.toContain("proof");
   });
 });
 

@@ -1,6 +1,7 @@
 import {
   HANDLE_RE, AgentCard, AuditExportPage, CreateOrgInviteResponse, CreateRosterResponse, IssueRosterJoinKeyResponse,
   ListOrgInvitesResponse, ListRosterJoinKeysResponse, RegisterResponse, RevokeOrgInviteResponse,
+  RecoveryIssueResponse, RecoveryReceipt, RecoveryStatusResponse,
   RevokeRosterJoinKeyResponse, RosterBundle,
   EncryptionKeyRecord, IdentityRecord, HPKE_SUITE, MAX_ENCRYPTION_KEY_VALIDITY_MS,
   encryptionKeyTranscript, encryptionKeyTranscriptHash, fromBase64Url, identityTranscript, keyIdFor, signTranscript,
@@ -11,6 +12,9 @@ import {
   type OrgRoleType,
   type RosterJoinKeyMetadataType,
   type EncryptionKeyRecordType, type IdentityRecordType,
+  type RecoveryIssueRequestType, type RecoveryIssueResponseType,
+  type RecoveryStatusResponseType,
+  type RecoveryRedeemRequestType, type RecoveryReceiptType,
 } from "@benree/agentcall-shared";
 import {
   choosePendingEncryptionPublication, loadKeys, loadPendingEncryptionPublication,
@@ -228,6 +232,44 @@ export async function rotateToken(
   if (res.status === 429) throw new ApiError("Too many rotations — try again in a minute.", "network");
   if (!res.ok) throw new ApiError(`Token rotation failed (${res.status}).`, "network");
   return (await res.json()) as { token: string };
+}
+
+export async function issueRecovery(
+  relay: string, auth: Auth, request: RecoveryIssueRequestType, opts: { timeoutMs?: number } = {},
+): Promise<RecoveryIssueResponseType> {
+  const res = await relayFetch(relay, "/v1/recovery/issue", {
+    method: "POST",
+    headers: { ...authHeaders(auth), "content-type": "application/json" },
+    body: JSON.stringify(request),
+  }, opts.timeoutMs ?? RELAY_TIMEOUT_MS);
+  if (res.status === 401) throw new ApiError("Your credentials were rejected. Re-run recovery if the token is lost.", "invalid");
+  if (res.status === 409) throw new ApiError("The online credential changed during recovery setup. Retry.", "invalid");
+  if (res.status === 429) throw new ApiError("Too many recovery operations — try again in a minute.", "network");
+  if (!res.ok) throw new ApiError(`Recovery proof issuance failed (${res.status}).`, "network");
+  return RecoveryIssueResponse.parse(await res.json());
+}
+
+export async function getRecoveryStatus(
+  relay: string, auth: Auth, opts: { timeoutMs?: number } = {},
+): Promise<RecoveryStatusResponseType> {
+  const res = await relayFetch(relay, "/v1/recovery/status", {
+    method: "GET", headers: authHeaders(auth),
+  }, opts.timeoutMs ?? RELAY_TIMEOUT_MS);
+  if (res.status === 401) throw new ApiError("Your credentials were rejected.", "invalid");
+  if (!res.ok) throw new ApiError(`Recovery status failed (${res.status}).`, "network");
+  return RecoveryStatusResponse.parse(await res.json());
+}
+
+export async function redeemRecovery(
+  relay: string, request: RecoveryRedeemRequestType, opts: { timeoutMs?: number } = {},
+): Promise<RecoveryReceiptType> {
+  const res = await relayFetch(relay, "/v1/recovery/redeem", {
+    method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(request),
+  }, opts.timeoutMs ?? RELAY_TIMEOUT_MS);
+  if (res.status === 401) throw new ApiError("Recovery failed. Check the identity, generation, proofs, and pending operation.", "invalid");
+  if (res.status === 429) throw new ApiError("Too many recovery attempts — try again in a minute.", "network");
+  if (!res.ok) throw new ApiError(`Recovery failed (${res.status}).`, "network");
+  return RecoveryReceipt.parse(await res.json());
 }
 
 export async function pushCard(

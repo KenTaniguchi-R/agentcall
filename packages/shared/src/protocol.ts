@@ -138,6 +138,49 @@ export const RegisterRequest = z.object({
 });
 export const RegisterResponse = z.object({ org: z.string().regex(ORG_RE), token: z.string(), address: z.string() });
 
+export const SHA256_HEX_RE = /^[0-9a-f]{64}$/;
+export const CREDENTIAL_PUBLIC_ID_RE = /^(?:act|agr)_[0-9a-f]{16}$/;
+export const RECOVERY_OPERATION_ID_RE = /^[A-Za-z0-9_-]{22,64}$/;
+
+export const RecoveryIssueRequest = z.object({
+  expected_generation: z.number().int().nonnegative(),
+  successor_recovery_digest: z.string().regex(SHA256_HEX_RE),
+  successor_recovery_public_id: z.string().regex(/^agr_[0-9a-f]{16}$/),
+}).strict();
+export const RecoveryIssueResponse = z.object({
+  generation: z.number().int().positive(),
+  recovery_public_id: z.string().regex(/^agr_[0-9a-f]{16}$/),
+}).strict();
+export const RecoveryStatusResponse = z.object({
+  issued: z.boolean(),
+  generation: z.number().int().nonnegative(),
+  recovery_public_id: z.string().regex(/^agr_[0-9a-f]{16}$/).optional(),
+}).strict();
+export const RecoveryRedeemRequest = z.object({
+  org: z.string().regex(ORG_RE),
+  handle: z.string().regex(HANDLE_RE),
+  generation: z.number().int().positive(),
+  current_recovery_proof: z.string().min(32).max(200),
+  operation_id: z.string().regex(RECOVERY_OPERATION_ID_RE),
+  client_token_digest: z.string().regex(SHA256_HEX_RE),
+  client_public_id: z.string().regex(/^act_[0-9a-f]{16}$/),
+  successor_recovery_digest: z.string().regex(SHA256_HEX_RE),
+  successor_recovery_public_id: z.string().regex(/^agr_[0-9a-f]{16}$/),
+}).strict();
+export const RecoveryReceipt = z.object({
+  org: z.string().regex(ORG_RE),
+  handle: z.string().regex(HANDLE_RE),
+  operation_id: z.string().regex(RECOVERY_OPERATION_ID_RE),
+  consumed_generation: z.number().int().positive(),
+  recovery_generation: z.number().int().positive(),
+  client_public_id: z.string().regex(/^act_[0-9a-f]{16}$/),
+  recovery_public_id: z.string().regex(/^agr_[0-9a-f]{16}$/),
+  committed_at: z.number().int().nonnegative(),
+  // Confirms the recovered identity's current DO applied its tombstone. Before
+  // #154, this is not a claim that caller sockets housed in remote DOs closed.
+  eviction_confirmed: z.boolean(),
+}).strict();
+
 export type ErrorCodeType = z.infer<typeof ErrorCode>;
 export type RelayOperationalErrorCodeType = z.infer<typeof RelayOperationalErrorCode>;
 export type PeerFailureCodeType = z.infer<typeof PeerFailureCode>;
@@ -149,6 +192,11 @@ export type CallCancelledType = z.infer<typeof CallCancelled>;
 export type CallNotCancelledType = z.infer<typeof CallNotCancelled>;
 export type RegisterRequestType = z.infer<typeof RegisterRequest>;
 export type RegisterResponseType = z.infer<typeof RegisterResponse>;
+export type RecoveryIssueRequestType = z.infer<typeof RecoveryIssueRequest>;
+export type RecoveryIssueResponseType = z.infer<typeof RecoveryIssueResponse>;
+export type RecoveryStatusResponseType = z.infer<typeof RecoveryStatusResponse>;
+export type RecoveryRedeemRequestType = z.infer<typeof RecoveryRedeemRequest>;
+export type RecoveryReceiptType = z.infer<typeof RecoveryReceipt>;
 
 export function parseAddress(addr: string): { handle: string; host: string } | null {
   const at = addr.indexOf("@");

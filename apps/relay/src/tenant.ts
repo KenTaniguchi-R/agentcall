@@ -1,12 +1,12 @@
 import { ORG_RE, type OrgRoleType } from "@benree/agentcall-shared";
-import { authenticatedHandleRole } from "./auth.js";
+import { authenticatedHandle } from "./auth.js";
 
 export const HOSTED_RELAY_HOST = "agentcall.benree.tech";
 
 type RequestLike = { header(name: string): string | undefined; url: string };
 export type DeploymentMode = "hosted" | "self-hosted";
 type TenantAuthEnv = { DB: D1Database; DEPLOYMENT_MODE?: string; SELF_HOSTED_ORG?: string };
-export type Identity = { org: string; handle: string; role: OrgRoleType };
+export type Identity = { org: string; handle: string; role: OrgRoleType; recoveryGeneration: number };
 
 export function deploymentOrgAllows(
   mode: string | undefined, configuredOrg: string | undefined, org: string,
@@ -40,8 +40,8 @@ export async function authenticateRequest(
   const handle = req.header("X-AgentCall-Handle") ?? "";
   const token = (req.header("Authorization") ?? "").replace(/^Bearer\s+/i, "");
   if (!org) return null;
-  const role = await authenticatedHandleRole(env.DB, org, handle, token);
-  return role ? { org, handle, role } : null;
+  const authenticated = await authenticatedHandle(env.DB, org, handle, token);
+  return authenticated ? { org, handle, ...authenticated } : null;
 }
 
 export function requireOrgAdmin(identity: Identity): boolean {
