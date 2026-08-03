@@ -1,11 +1,11 @@
-import { chmodSync, closeSync, existsSync, mkdirSync, openSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
-import { randomUUID } from "node:crypto";
+import { chmodSync, existsSync, mkdirSync, readFileSync, statSync } from "node:fs";
 import { z } from "zod";
 import {
   encryptionKeyTranscript, fingerprint, identityTranscript, importIdentityPublicKey,
   verifyTranscript, type EncryptionKeyRecordType, type IdentityRecordType,
 } from "@benree/agentcall-shared";
 import { writeJsonAtomic } from "./json-store.js";
+import { withFileLock } from "./file-lock.js";
 import type { MachinePaths } from "./paths.js";
 
 export const MAX_KNOWN_PEERS = 10_000;
@@ -54,8 +54,6 @@ function saveKnownPeers(machine: MachinePaths, peers: KnownPeer[]): void {
   chmodSync(machine.dir, 0o700);
 }
 
-const LOCK_WAIT_MS = 10_000;
-
 async function withStoreLock<T>(machine: MachinePaths, operation: () => Promise<T>): Promise<T> {
   // Never silently repair permissions around an existing trust root. If it
   // may have been exposed, fail closed and make the owner inspect it first.
@@ -65,41 +63,7 @@ async function withStoreLock<T>(machine: MachinePaths, operation: () => Promise<
     mkdirSync(machine.dir, { recursive: true, mode: 0o700 });
     chmodSync(machine.dir, 0o700);
   }
-  const lockFile = `${machine.knownPeersFile}.lock`;
-  const owner = `${process.pid}:${randomUUID()}`;
-  const deadline = Date.now() + LOCK_WAIT_MS;
-  let fd: number | undefined;
-  while (fd === undefined) {
-    try {
-      fd = openSync(lockFile, "wx", 0o600);
-      writeFileSync(fd, owner);
-    } catch (error) {
-      if ((error as NodeJS.ErrnoException).code !== "EEXIST") throw error;
-      // A PID probe cannot prove that the lock we inspected is still the lock
-      // at this path when we remove it. Another process may replace an orphaned
-      // lock between those operations, so automatic stale-lock recovery can
-      // break mutual exclusion. Fail closed and require deliberate recovery.
-      if (Date.now() >= deadline) {
-        throw new Error(
-          `Timed out waiting for the known-peer trust-store lock at ${lockFile}. ` +
-          "After confirming no AgentCall process is using the trust store, remove that lock file manually and retry.",
-        );
-      }
-      await new Promise((resolve) => setTimeout(resolve, 10));
-    }
-  }
-  closeSync(fd);
-  try {
-    return await operation();
-  } finally {
-    // Only remove a lock we still own. A stale-lock recovery must never let an
-    // older process unlink a newer process's lock.
-    try {
-      if (readFileSync(lockFile, "utf8") === owner) rmSync(lockFile, { force: true });
-    } catch (error) {
-      if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
-    }
-  }
+  return withFileLock(machine.knownPeersFile, "known-peer trust-store", operation);
 }
 
 export async function verifyAndPinPeer(
