@@ -32,9 +32,7 @@ type CursorPayload = {
   handle: string;
   after: number | null;
   before: number | null;
-  actor: string | null;
-  event: string | null;
-  actorIp: string | null;
+  filterDigest: string;
   pageSize: number;
   checkpoint: Checkpoint;
   position: Position;
@@ -69,6 +67,15 @@ async function encodeCursor(payload: CursorPayload, secret: string): Promise<str
   return `${base64Url(encoded)}.${base64Url(signature)}`;
 }
 
+async function filterDigest(query: ExportQuery): Promise<string> {
+  const encoded = new TextEncoder().encode(JSON.stringify([
+    query.actor ?? null,
+    query.event ?? null,
+    query.actorIp ?? null,
+  ]));
+  return base64Url(new Uint8Array(await crypto.subtle.digest("SHA-256", encoded)));
+}
+
 async function decodeCursor(
   token: string, secret: string, org: string, handle: string, query: ExportQuery,
 ): Promise<CursorPayload | null> {
@@ -88,8 +95,7 @@ async function decodeCursor(
     if (
       payload.org !== org || payload.handle !== handle ||
       payload.after !== (query.after ?? null) || payload.before !== (query.before ?? null) ||
-      payload.actor !== (query.actor ?? null) || payload.event !== (query.event ?? null) ||
-      payload.actorIp !== (query.actorIp ?? null) ||
+      payload.filterDigest !== await filterDigest(query) ||
       payload.pageSize !== query.pageSize ||
       !Number.isSafeInteger(payload.checkpoint?.orgEventId) || payload.checkpoint.orgEventId < 0 ||
       !Number.isSafeInteger(payload.checkpoint?.orgEventCount) || payload.checkpoint.orgEventCount < 0 ||
@@ -219,7 +225,7 @@ export function mountAudit(app: Hono<{ Bindings: Env }>): void {
       ? await encodeCursor({
         org: identity.org, handle: identity.handle,
         after: query.after ?? null, before: query.before ?? null, pageSize: query.pageSize,
-        actor: query.actor ?? null, event: query.event ?? null, actorIp: query.actorIp ?? null,
+        filterDigest: await filterDigest(query),
         checkpoint,
         position: { at: last.at, ledger: last.ledger, id: last.id },
       }, secret)

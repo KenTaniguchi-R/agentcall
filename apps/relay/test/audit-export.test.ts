@@ -232,4 +232,31 @@ describe("organization audit export", () => {
       `https://relay.test/v1/audit/events?event=${encodeURIComponent("é".repeat(129))}`, { headers },
     )).status).toBe(400);
   });
+
+  it("keeps cursors bounded when accepted filters require JSON escaping", async () => {
+    const token = await registerHandle("escaped-filter-admin", "claude", "escaped-filter-org", "admin");
+    const escaped = "\u0001".repeat(256);
+    for (const at of [1_000, 2_000]) {
+      await env.DB.prepare(
+        "INSERT INTO org_events (event, action_type, org, actor, actor_type, target_type, " +
+          "target_id, actor_ip, description, at) VALUES (?, 'C', ?, ?, 'handle', 'invite', ?, ?, 'escaped', ?)",
+      ).bind("org.invite.issue", "escaped-filter-org", escaped, `target-${at}`, escaped, at).run();
+    }
+    const search = new URLSearchParams({
+      actor: escaped, event: "org.invite.issue", actor_ip: escaped, page_size: "1",
+    });
+    const first = await SELF.fetch(`https://relay.test/v1/audit/events?${search}`, {
+      headers: wsAuth("escaped-filter-admin", token, "escaped-filter-org"),
+    });
+    expect(first.status).toBe(200);
+    const page = await first.json<any>();
+    expect(page.next_page_token.length).toBeLessThanOrEqual(2_048);
+
+    search.set("page_token", page.next_page_token);
+    const second = await SELF.fetch(`https://relay.test/v1/audit/events?${search}`, {
+      headers: wsAuth("escaped-filter-admin", token, "escaped-filter-org"),
+    });
+    expect(second.status).toBe(200);
+    expect((await second.json<any>()).events).toHaveLength(1);
+  });
 });
