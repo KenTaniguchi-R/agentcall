@@ -178,6 +178,134 @@ describe("key publication endpoints", () => {
     expect(json.identity.address).toBe(json.encryption.record.address);
   });
 
+  it("serves the org-prefixed apex address, not URL.host verbatim (regression)", async () => {
+    // The test above uses relay.test, where registrationAddressHost and a
+    // naive `new URL(url).host` reconstruction happen to agree — org and host
+    // collapse to the same string, so a reverted fix still passes it. They
+    // diverge on the real hosted relay's apex host: registrationAddressHost
+    // prefixes the org (`acme.agentcall.benree.tech`) while `new
+    // URL(url).host` does not (`agentcall.benree.tech`). This is the case the
+    // bug actually shipped in.
+    const APEX = "agentcall.benree.tech";
+    const handle = "kp-apex2";
+    const address = `${handle}@acme.${APEX}`;
+    const token = await registerHandle(handle);
+    const idKp = await generateIdentityKeyPair();
+    const identity = {
+      v: 1 as const, address, identity_pub: await exportPublicKey(idKp.publicKey),
+    };
+    const headers = {
+      "content-type": "application/json",
+      Authorization: `Bearer ${token}`,
+      "X-AgentCall-Org": "acme",
+      "X-AgentCall-Handle": handle,
+    };
+
+    const putId = await SELF.fetch(`https://${APEX}/v1/keys/identity`, {
+      method: "PUT",
+      headers,
+      body: JSON.stringify({
+        record: identity,
+        signature: await signTranscript(idKp.privateKey, identityTranscript(identity)),
+      }),
+    });
+    expect(putId.status).toBe(200);
+
+    const encKp = await generateEncryptionKeyPair();
+    const pub = await exportPublicKey(encKp.publicKey);
+    const encryption = {
+      v: 1 as const,
+      address,
+      key_id: await keyIdFor(pub),
+      suite: HPKE_SUITE,
+      pub,
+      epoch: 1,
+      not_before: 1_754_000_000_000,
+      not_after: 1_754_000_000_000 + 86_400_000,
+      prev: null,
+    };
+    const putEnc = await SELF.fetch(`https://${APEX}/v1/keys/encryption`, {
+      method: "PUT",
+      headers,
+      body: JSON.stringify({
+        record: encryption,
+        signature: await signTranscript(idKp.privateKey, encryptionKeyTranscript(encryption)),
+      }),
+    });
+    expect(putEnc.status).toBe(200);
+
+    const got = await SELF.fetch(`https://${APEX}/v1/keys/${handle}`, { headers });
+    expect(got.status).toBe(200);
+    const json = await got.json<{
+      identity: { address: string }; encryption: { record: { address: string } };
+    }>();
+    expect(json.identity.address).toBe(address);
+    expect(json.encryption.record.address).toBe(address);
+  });
+
+  it("serves the org-prefixed apex address when the request URL carries a port (regression)", async () => {
+    // registrationAddressHost derives the address from URL.hostname (no
+    // port); the reverted bug used URL.host, which includes a port when one
+    // is present. relay.test and the bare-apex test above never carry a port,
+    // so neither exercises this half of the divergence.
+    const APEX = "agentcall.benree.tech";
+    const handle = "kp-apex-port";
+    const address = `${handle}@acme.${APEX}`;
+    const origin = `https://${APEX}:8443`;
+    const token = await registerHandle(handle);
+    const idKp = await generateIdentityKeyPair();
+    const identity = {
+      v: 1 as const, address, identity_pub: await exportPublicKey(idKp.publicKey),
+    };
+    const headers = {
+      "content-type": "application/json",
+      Authorization: `Bearer ${token}`,
+      "X-AgentCall-Org": "acme",
+      "X-AgentCall-Handle": handle,
+    };
+
+    const putId = await SELF.fetch(`${origin}/v1/keys/identity`, {
+      method: "PUT",
+      headers,
+      body: JSON.stringify({
+        record: identity,
+        signature: await signTranscript(idKp.privateKey, identityTranscript(identity)),
+      }),
+    });
+    expect(putId.status).toBe(200);
+
+    const encKp = await generateEncryptionKeyPair();
+    const pub = await exportPublicKey(encKp.publicKey);
+    const encryption = {
+      v: 1 as const,
+      address,
+      key_id: await keyIdFor(pub),
+      suite: HPKE_SUITE,
+      pub,
+      epoch: 1,
+      not_before: 1_754_000_000_000,
+      not_after: 1_754_000_000_000 + 86_400_000,
+      prev: null,
+    };
+    const putEnc = await SELF.fetch(`${origin}/v1/keys/encryption`, {
+      method: "PUT",
+      headers,
+      body: JSON.stringify({
+        record: encryption,
+        signature: await signTranscript(idKp.privateKey, encryptionKeyTranscript(encryption)),
+      }),
+    });
+    expect(putEnc.status).toBe(200);
+
+    const got = await SELF.fetch(`${origin}/v1/keys/${handle}`, { headers });
+    expect(got.status).toBe(200);
+    const json = await got.json<{
+      identity: { address: string }; encryption: { record: { address: string } };
+    }>();
+    expect(json.identity.address).toBe(address);
+    expect(json.encryption.record.address).toBe(address);
+  });
+
   it("rejects an encryption record signed by the wrong identity", async () => {
     const who = await newIdentity("kp-four");
     await putIdentity(who);
