@@ -20,6 +20,15 @@ security evidence. The hosted service cannot currently promise a tenant-level,
 person-level, or time-based erasure request. That is a product/compliance
 blocker for an organization that requires one.
 
+Presence reads are not a third audit ledger. `agentcall_status_reads` contains
+only identity-unlinked outcome points in Analytics Engine and is sampled, retained
+for three months, and fail-open. The `telemetry_health` D1 singleton counts only
+locally observed binding-call failures. Neither surface can establish that an
+individual read occurred or support tenant audit export. The durable store for
+future access decisions and centrally retained abuse verdicts belongs to issue
+#17 and must satisfy this policy's export, retention, erasure, legal-hold, and
+failure-visibility requirements.
+
 ## Accepted target — not implemented
 
 The [subject-erasure and retention decision](../superpowers/specs/2026-08-02-subject-erasure-and-retention-design.md)

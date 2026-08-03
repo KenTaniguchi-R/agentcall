@@ -43,31 +43,29 @@ so denied namespace sweeps consume the same read budget as allowed reads.
 ## Status-read evidence
 
 Reads do not enter `roster_events`: that bounded D1 ledger is append-only
-evidence for successful membership mutations. Instead, the Worker writes one
-point per authenticated, rate-limit-admitted status probe to the
-`agentcall_status_reads` Analytics Engine dataset.
+evidence for successful membership mutations. The later
+[presence telemetry and audit boundary](./2026-08-02-presence-telemetry-audit-boundary.md)
+removed subject-bearing access metadata from Analytics Engine. The Worker now
+writes one identity-unlinked statistical point per authenticated, rate-limit-admitted
+status probe to `agentcall_status_reads`.
 
 The positional schema is:
 
 | Field | Meaning |
 |---|---|
-| `index1` | organization (sampling and query boundary) |
-| `blob1` | viewer handle |
-| `blob2` | requested target handle (malformed values capped at 256 characters) |
-| `blob3` | `allowed` or `denied` |
-| `blob4` | source IP, or empty when unavailable |
-| `blob5` | source country, or empty when unavailable |
+| `index1` | `allowed` or `denied` (sampling and grouping boundary) |
 | `double1` | event time in epoch milliseconds |
 
-The target's online/offline state is deliberately absent. The dataset records
-access, not a presence timeline. Analytics failure is reported with safe
-metadata and does not turn observability into an availability dependency.
+The target's online/offline state and all tenant, subject, and network dimensions
+are deliberately absent. The dataset records statistical volume, not access
+evidence or a presence timeline. A locally observable binding failure increments
+the non-personal `telemetry_health` D1 singleton; asynchronous ingestion and
+sampling remain unknowable and do not turn observability into availability.
 
-Cloudflare's current Analytics Engine contract permits one index, twenty blobs,
-twenty doubles, 16 KB total blob data, and a 96-byte index. `ORG_RE` caps the
-index at 63 ASCII characters; authenticated viewer handles are bounded and a
-malformed target is capped before writing, keeping each data point well below
-the blob limit. Datasets are created on first write from the Wrangler binding.
+Cloudflare's current Analytics Engine contract permits 250 points per invocation
+and retains points for three months. This route writes one small point. Queries
+must weight sampled rows by `_sample_interval`; individual records and exact
+sequences are not guaranteed retrievable.
 
 ## Verification invariants
 
