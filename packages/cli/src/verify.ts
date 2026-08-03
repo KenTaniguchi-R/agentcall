@@ -220,7 +220,9 @@ const CODEX_GUARD_HINT =
 export async function checkCodexGuard(
   workdir: string,
   probe: CodexGuardProbeFn = defaultCodexGuardProbe,
+  requireToolTelemetry = true,
 ): Promise<VerifyCheck> {
+  const checkName = requireToolTelemetry ? "codex tool telemetry" : "codex session guard";
   const input = [
     JSON.stringify({
       id: 1,
@@ -250,14 +252,14 @@ export async function checkCodexGuard(
       : undefined;
     if (!entry) {
       return {
-        name: "codex tool telemetry", ok: false,
+        name: checkName, ok: false,
         detail: "AgentCall's session hook is absent",
         hint: CODEX_GUARD_HINT,
       };
     }
     if (entry.enabled !== true) {
       return {
-        name: "codex tool telemetry", ok: false,
+        name: checkName, ok: false,
         detail: "AgentCall's session hook is disabled",
         hint: CODEX_GUARD_HINT,
       };
@@ -265,10 +267,13 @@ export async function checkCodexGuard(
     if (entry.trustStatus !== "trusted") {
       const status = typeof entry.trustStatus === "string" ? entry.trustStatus : "unknown";
       return {
-        name: "codex tool telemetry", ok: false,
+        name: checkName, ok: false,
         detail: `AgentCall's session hook trust is ${status}`,
         hint: CODEX_GUARD_HINT,
       };
+    }
+    if (!requireToolTelemetry) {
+      return { name: checkName, ok: true, detail: "trusted PreToolUse hook" };
     }
     const postEntry = hooks.find((hook: any) => hook?.key === CODEX_SESSION_TOOL_TELEMETRY_KEY);
     if (!postEntry) {
@@ -296,7 +301,7 @@ export async function checkCodexGuard(
     return { name: "codex tool telemetry", ok: true, detail: "trusted session lifecycle hooks" };
   } catch (error) {
     return {
-      name: "codex tool telemetry", ok: false, detail: short(error),
+      name: checkName, ok: false, detail: short(error),
       hint: CODEX_GUARD_HINT,
     };
   }

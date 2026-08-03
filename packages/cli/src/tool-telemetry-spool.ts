@@ -1,9 +1,9 @@
 import {
-  chmodSync, closeSync, constants, fstatSync, lstatSync, mkdirSync, openSync, readSync, readdirSync,
-  statSync, unlinkSync, writeFileSync,
+  closeSync, constants, fchmodSync, fstatSync, lstatSync, mkdirSync, openSync, readSync,
+  unlinkSync, writeFileSync,
 } from "node:fs";
 import { join } from "node:path";
-import { createHmac, randomBytes, randomUUID } from "node:crypto";
+import { createHmac, randomBytes } from "node:crypto";
 import { getMachinePaths } from "./paths.js";
 import {
   TOOL_EVENT_MAX_DURATION_MS, TOOL_EVENT_MAX_EVENTS, TOOL_EVENT_MAX_ID_BYTES,
@@ -13,6 +13,7 @@ import {
 
 const MAX_LIFECYCLES = 256;
 export const TOOL_EVENT_MAX_SPOOL_FILES = 64;
+const TOOL_EVENT_STALE_FILE_MS = 60 * 60 * 1_000;
 
 export interface ToolLifecycle {
   callId: string;
@@ -143,20 +144,41 @@ function collect(
   }
 }
 
-function pruneSpoolDir(spoolDir: string): void {
-  const candidates = readdirSync(spoolDir, { withFileTypes: true })
-    .filter((entry) => /^\d+-[0-9a-f-]{36}\.jsonl$/.test(entry.name))
-    .flatMap((entry) => {
-      const file = join(spoolDir, entry.name);
-      try {
-        const stat = lstatSync(file);
-        return stat.isDirectory() ? [] : [{ file, mtimeMs: stat.mtimeMs }];
-      } catch { return []; }
-    })
-    .sort((a, b) => a.mtimeMs - b.mtimeMs);
-  for (const stale of candidates.slice(0, Math.max(0, candidates.length - TOOL_EVENT_MAX_SPOOL_FILES + 1))) {
-    try { unlinkSync(stale.file); } catch { /* best-effort stale cleanup */ }
+function sameIdentity(file: string, identity: SpoolIdentity): boolean {
+  try {
+    const current = lstatSync(file);
+    return current.dev === identity.dev && current.ino === identity.ino;
+  } catch {
+    return false;
   }
+}
+
+function createInFixedSlot(spoolDir: string): { file: string; identity: SpoolIdentity } | undefined {
+  const firstSlot = randomBytes(2).readUInt16BE() % TOOL_EVENT_MAX_SPOOL_FILES;
+  for (let offset = 0; offset < TOOL_EVENT_MAX_SPOOL_FILES; offset += 1) {
+    const slot = (firstSlot + offset) % TOOL_EVENT_MAX_SPOOL_FILES;
+    const file = join(spoolDir, `slot-${slot}.jsonl`);
+    try {
+      writeFileSync(file, "", { encoding: "utf8", flag: "wx", mode: 0o600 });
+      const created = lstatSync(file);
+      if (!created.isFile() || (created.mode & 0o777) !== 0o600 || created.nlink !== 1) {
+        removeIfSame(file, created);
+        continue;
+      }
+      return { file, identity: { dev: created.dev, ino: created.ino } };
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== "EEXIST") continue;
+      try {
+        const occupied = lstatSync(file);
+        if (occupied.isFile() && occupied.nlink === 1
+            && Date.now() - occupied.mtimeMs > TOOL_EVENT_STALE_FILE_MS) {
+          removeIfSame(file, occupied);
+          offset -= 1;
+        }
+      } catch { /* another process changed the slot; retry the next one */ }
+    }
+  }
+  return undefined;
 }
 
 export function createToolEventSpool(
@@ -167,12 +189,27 @@ export function createToolEventSpool(
   try {
     const spoolDir = join(privateStateDir, "tool-events");
     mkdirSync(spoolDir, { recursive: true, mode: 0o700 });
-    chmodSync(spoolDir, 0o700);
-    pruneSpoolDir(spoolDir);
-    const file = join(spoolDir, `${process.pid}-${randomUUID()}.jsonl`);
-    writeFileSync(file, "", { encoding: "utf8", flag: "wx", mode: 0o600 });
-    const created = statSync(file);
-    const identity = { dev: created.dev, ino: created.ino };
+    const dirFd = openSync(
+      spoolDir,
+      constants.O_RDONLY | (constants.O_DIRECTORY ?? 0) | (constants.O_NOFOLLOW ?? 0),
+    );
+    let directoryIdentity: SpoolIdentity;
+    try {
+      const openedDir = fstatSync(dirFd);
+      if (!openedDir.isDirectory()) return undefined;
+      fchmodSync(dirFd, 0o700);
+      directoryIdentity = { dev: openedDir.dev, ino: openedDir.ino };
+      if (!sameIdentity(spoolDir, directoryIdentity)) return undefined;
+    } finally {
+      closeSync(dirFd);
+    }
+    const allocated = createInFixedSlot(spoolDir);
+    if (!allocated) return undefined;
+    const { file, identity } = allocated;
+    if (!sameIdentity(spoolDir, directoryIdentity)) {
+      removeIfSame(file, identity);
+      return undefined;
+    }
     const idKey = randomBytes(32);
     const createdAtMs = now();
     let consumed = false;

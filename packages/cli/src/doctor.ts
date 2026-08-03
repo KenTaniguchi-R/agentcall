@@ -36,6 +36,7 @@ export interface DoctorDeps {
   guardBinaryFn?: GuardBinaryProbeFn;
   codexGuardFn?: CodexGuardProbeFn;
   codexTelemetryEnabledFn?: () => boolean;
+  telemetryOptInFn?: () => boolean;
   keyHealthFn?: (cfg: LineConfig, paths: LinePaths) => Promise<VerifyCheck[]>;
   pkgFn?: () => CliPackageManifest;
   selfPathFn?: () => string;
@@ -420,7 +421,8 @@ export async function runDoctor(deps: DoctorDeps): Promise<number> {
       }
       report(guardCheck);
     } else if (cfg.agent_kind === "codex" && agentOk) {
-      if (!(deps.codexTelemetryEnabledFn ?? codexToolTelemetryEnabled)()) {
+      const telemetryOptIn = (deps.telemetryOptInFn ?? (() => process.env.AGENTCALL_OTEL === "1"))();
+      if (telemetryOptIn && !(deps.codexTelemetryEnabledFn ?? codexToolTelemetryEnabled)()) {
         report({
           name: "codex tool telemetry",
           ok: false,
@@ -428,7 +430,7 @@ export async function runDoctor(deps: DoctorDeps): Promise<number> {
           hint: "install the verified codex-cli release or disable local OpenTelemetry until this release is re-probed",
         });
       } else {
-        report(await checkCodexGuard(agentWorkdir, deps.codexGuardFn));
+        report(await checkCodexGuard(agentWorkdir, deps.codexGuardFn, telemetryOptIn));
       }
     }
 

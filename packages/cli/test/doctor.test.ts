@@ -572,6 +572,7 @@ describe("runDoctor", () => {
       guardFn: async () => {
         throw new Error("checkGuard must not run for a codex install");
       },
+      telemetryOptInFn: () => true,
       codexGuardFn: async () => JSON.stringify({
         id: 2,
         result: { data: [{ cwd: p.shareDir, hooks: [
@@ -612,11 +613,11 @@ describe("runDoctor", () => {
       log: (line) => lines.push(line),
     });
     expect(code).toBe(1);
-    expect(lines.join("\n")).toContain("✗ codex tool telemetry");
+    expect(lines.join("\n")).toContain("✗ codex session guard");
     expect(lines.join("\n")).toContain("allow_managed_hooks_only");
   });
 
-  it("matches runtime by failing Codex telemetry on an unverified CLI release", async () => {
+  it("does not fail optional Codex telemetry compatibility when OpenTelemetry is disabled", async () => {
     const m = freshMachine();
     const p = getLinePaths(m, LINE);
     saveLineConfig(p, {
@@ -627,6 +628,33 @@ describe("runDoctor", () => {
       ...baseDeps,
       machine: m,
       codexTelemetryEnabledFn: () => false,
+      telemetryOptInFn: () => false,
+      codexGuardFn: async () => JSON.stringify({
+        id: 2, result: { data: [{ cwd: p.shareDir, hooks: [{
+          key: "/<session-flags>/config.toml:pre_tool_use:0:0",
+          enabled: true,
+          trustStatus: "trusted",
+        }] }] },
+      }),
+      log: (line) => lines.push(line),
+    });
+    expect(code).toBe(0);
+    expect(lines.join("\n")).toContain("✓ codex session guard");
+    expect(lines.join("\n")).not.toContain("last verified: 0.146.0");
+  });
+
+  it("fails Codex telemetry compatibility when OpenTelemetry is enabled", async () => {
+    const m = freshMachine();
+    const p = getLinePaths(m, LINE);
+    saveLineConfig(p, {
+      org: "acme", handle: "ken", token: "t", agent_kind: "codex", relay: "https://relay.example",
+    });
+    const lines: string[] = [];
+    const code = await runDoctor({
+      ...baseDeps,
+      machine: m,
+      codexTelemetryEnabledFn: () => false,
+      telemetryOptInFn: () => true,
       codexGuardFn: async () => { throw new Error("hooks/list must not run for an unverified version"); },
       log: (line) => lines.push(line),
     });

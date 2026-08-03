@@ -1,7 +1,8 @@
 import {
-  appendFileSync, mkdtempSync, readFileSync, readdirSync, rmSync, statSync, unlinkSync, writeFileSync,
+  appendFileSync, chmodSync, mkdtempSync, readFileSync, readdirSync, rmSync, statSync, symlinkSync,
+  unlinkSync, utimesSync, writeFileSync,
 } from "node:fs";
-import { execFileSync } from "node:child_process";
+import { execFileSync, spawn } from "node:child_process";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterAll, describe, expect, it } from "vitest";
@@ -172,11 +173,69 @@ describe("tool telemetry hook spool", () => {
   });
 
   it("bounds aggregate files left by abnormal previous exits", () => {
+    const state = mkdtempSync(join(tmpdir(), "agentcall-tool-spool-cap-"));
     const stale = Array.from({ length: TOOL_EVENT_MAX_SPOOL_FILES + 10 }, (_, index) =>
-      createToolEventSpool(`stale-${index}`, privateState)!);
-    const files = readdirSync(join(privateState, "tool-events"))
+      createToolEventSpool(`stale-${index}`, state));
+    const files = readdirSync(join(state, "tool-events"))
       .filter((name) => name.endsWith(".jsonl"));
     expect(files.length).toBeLessThanOrEqual(TOOL_EVENT_MAX_SPOOL_FILES);
-    for (const spool of stale) spool.dispose();
+    expect(stale.filter(Boolean)).toHaveLength(TOOL_EVENT_MAX_SPOOL_FILES);
+    for (const spool of stale) spool?.dispose();
+    rmSync(state, { recursive: true, force: true });
+  });
+
+  it("rejects a symlinked spool directory without touching its target", () => {
+    const state = mkdtempSync(join(tmpdir(), "agentcall-tool-spool-symlink-"));
+    const target = mkdtempSync(join(tmpdir(), "agentcall-tool-spool-target-"));
+    chmodSync(target, 0o755);
+    symlinkSync(target, join(state, "tool-events"));
+
+    expect(createToolEventSpool("redirected", state)).toBeUndefined();
+    expect(statSync(target).mode & 0o777).toBe(0o755);
+    expect(readdirSync(target)).toEqual([]);
+    rmSync(state, { recursive: true, force: true });
+    rmSync(target, { recursive: true, force: true });
+  });
+
+  it("keeps the aggregate cap under concurrent process allocation", async () => {
+    const state = mkdtempSync(join(tmpdir(), "agentcall-tool-spool-concurrent-"));
+    const start = join(state, "start");
+    const moduleUrl = new URL("../dist/tool-telemetry-spool.js", import.meta.url).href;
+    const script = [
+      `import { existsSync } from "node:fs"`,
+      `import { setTimeout as wait } from "node:timers/promises"`,
+      `import { createToolEventSpool } from ${JSON.stringify(moduleUrl)}`,
+      `while (!existsSync(${JSON.stringify(start)})) await wait(1)`,
+      `for (let i = 0; i < 16; i += 1) createToolEventSpool(process.pid + "-" + i, ${JSON.stringify(state)})`,
+    ].join(";");
+    const children = Array.from({ length: 8 }, () => spawn(process.execPath, [
+      "--input-type=module", "--eval", script,
+    ], { stdio: "ignore" }));
+    writeFileSync(start, "go");
+    await Promise.all(children.map((child) => new Promise<void>((resolve, reject) => {
+      child.once("error", reject);
+      child.once("exit", (code) => code === 0 ? resolve() : reject(new Error(`child exited ${code}`)));
+    })));
+
+    const files = readdirSync(join(state, "tool-events")).filter((name) => name.endsWith(".jsonl"));
+    expect(files).toHaveLength(TOOL_EVENT_MAX_SPOOL_FILES);
+    rmSync(state, { recursive: true, force: true });
+  });
+
+  it("reclaims an abandoned slot after its maximum lifetime", () => {
+    const state = mkdtempSync(join(tmpdir(), "agentcall-tool-spool-reclaim-"));
+    const occupied = Array.from({ length: TOOL_EVENT_MAX_SPOOL_FILES }, (_, index) =>
+      createToolEventSpool(`occupied-${index}`, state)!);
+    expect(createToolEventSpool("full", state)).toBeUndefined();
+    const old = new Date(Date.now() - 2 * 60 * 60 * 1_000);
+    utimesSync(occupied[0]!.file, old, old);
+
+    const reclaimed = createToolEventSpool("reclaimed", state);
+    expect(reclaimed).toBeDefined();
+    expect(readdirSync(join(state, "tool-events")).filter((name) => name.endsWith(".jsonl")))
+      .toHaveLength(TOOL_EVENT_MAX_SPOOL_FILES);
+    for (const spool of occupied.slice(1)) spool.dispose();
+    reclaimed?.dispose();
+    rmSync(state, { recursive: true, force: true });
   });
 });
