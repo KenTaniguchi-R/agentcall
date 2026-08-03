@@ -11,7 +11,9 @@ const metadata = {
 
 describe("organization invite protocol", () => {
   it("defaults bounded creation options", () => {
-    expect(CreateOrgInviteRequest.parse({})).toEqual({ description: "", expires_in_days: 7 });
+    expect(CreateOrgInviteRequest.parse({})).toEqual({ role: "member", description: "", expires_in_days: 7 });
+    expect(CreateOrgInviteRequest.parse({ role: "admin" }).role).toBe("admin");
+    expect(CreateOrgInviteRequest.safeParse({ role: "owner" }).success).toBe(false);
     expect(CreateOrgInviteRequest.safeParse({ expires_in_days: 91 }).success).toBe(false);
     expect(MAX_ACTIVE_ORG_INVITES).toBeLessThanOrEqual(MAX_LISTED_ORG_INVITES);
   });

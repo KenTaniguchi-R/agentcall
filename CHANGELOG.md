@@ -6,6 +6,20 @@ which are released together.
 
 ## Unreleased
 
+### Organization administration and audit export
+
+- Make organization authority explicit with `admin` and `member` roles; the
+  operator bootstrap invite creates the first admin, and admin-issued invites
+  can deliberately delegate either role.
+- Let administrators stream a tenant-scoped, time-filtered NDJSON export that
+  merges organization and roster audit ledgers in deterministic order.
+- Sign pagination cursors with a relay-only secret and bind them to the tenant,
+  administrator, filters, and captured per-ledger ID/count checkpoint so
+  tampering and concurrent appends cannot corrupt export completeness; abort
+  if retention removes a checkpointed row mid-export.
+- Preserve the granted role as structured audit evidence on invite issue,
+  redemption, and revocation events.
+
 ### Linux and isolated container listeners
 
 - Publish the CLI for Linux and install one restartable systemd user service

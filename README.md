@@ -44,18 +44,20 @@ npm install -g @benree/agentcall
 agentcall setup --invite <one-time-token>
 ```
 
-Ask an existing member of your organization to run `agentcall invite create`.
+Ask an organization administrator to run `agentcall invite create`.
 The returned token can enroll exactly one identity and expires after seven days
-by default. Members can inventory and revoke outstanding credentials with
+by default. Administrators can inventory and revoke outstanding credentials with
 `agentcall invite list` and `agentcall invite revoke <id>`; creation accepts
-`--description` and `--expires-in-days` (1–90). The relay no longer serves a
+`--description`, `--expires-in-days` (1–90), and `--role member|admin`.
+Member is the default; granting admin delegates organization-wide invite and
+audit-export authority. The relay no longer serves a
 public shell installer.
 
 For the first member of the first organization, the relay operator configures
 `BOOTSTRAP_TOKEN` with `wrangler secret put BOOTSTRAP_TOKEN`, then creates the
 initial invite with `POST /v1/admin/invite` using that value as a Bearer token
 and `{ "org": "acme" }` as the JSON body. The endpoint is a 404 when the secret
-is not configured.
+is not configured. This bootstrap invite always enrolls an administrator.
 
 `agentcall setup` will:
 - detect `claude` / `codex` on your `PATH` (or prompt you to pick one)
@@ -146,9 +148,27 @@ handle as a reclaimable routing address, and attach credentials and durable
 state to the stable identity. See the
 [identity/address separation decision](docs/superpowers/specs/2026-08-02-identity-address-separation.md).
 
+The CLI provides the current authenticated admin surface. For example, an
+administrator can stream a stable, tenant-scoped snapshot of both relay audit
+ledgers as newline-delimited JSON:
+
+```bash
+agentcall audit export > audit.ndjson
+agentcall audit export --after 2026-01-01T00:00:00Z --before 2027-01-01T00:00:00Z
+```
+
+Each export prints its captured `org_events`/`roster_events` checkpoint to
+stderr. Concurrent events after that checkpoint cannot appear in later pages,
+and the relay aborts if retention removes any checkpointed row before the
+stream finishes, so only a completed stream has a reproducible completeness
+boundary. If an export fails after printing rows, discard that partial output
+and restart it. Exported files
+contain handles, relationship metadata, source IP/country evidence, and event
+descriptions; protect them as sensitive security records.
+
 The repository does not yet ship an admin web UI, a supported self-hosted
 distribution, or Cloudflare Access integration. The future human admin surface
-will use a separate Access-protected hostname, and customer-owned Access is the
+will use a separate Access-protected hostname; customer-owned Access is the
 supported SSO profile planned for self-hosted deployments. Access will not sit
 in front of the current relay API or replace AgentCall authorization; hosted
 multi-tenant SSO remains a separate design. See the
@@ -962,7 +982,8 @@ disabled whenever managed policy is present so IT can pin the deployed version.
 - **Hosted audit events have no supported expiry or erasure workflow.** Roster
   audit rows are retained indefinitely; organization audit rows keep the newest
   10,000 events per organization but have no time-based window. There is no
-  customer deletion/export endpoint or scheduled cleanup, roster deletion
+  customer deletion endpoint or scheduled cleanup. The administrator audit
+  export provides a checkpointed copy of retained rows, but roster deletion
   deliberately preserves its evidence, and the service cannot guarantee
   end-to-end erasure across D1 and backup copies. See the
   [audit retention policy](./docs/security/audit-retention.md) for the current

@@ -27,6 +27,9 @@ export const REGISTER = {
 export const ROSTER_WRITE = {
   backend: "durable", namespace: "roster-write", limit: 10, windowMs: 60_000,
 } as const satisfies DurablePolicy;
+export const AUDIT_READ = {
+  backend: "durable", namespace: "audit-read", limit: 120, windowMs: 60_000,
+} as const satisfies DurablePolicy;
 export const NATIVE_CARD = { backend: "native", binding: "CARD_RL" } as const satisfies NativePolicy;
 export const NATIVE_READ = { backend: "native", binding: "READ_RL" } as const satisfies NativePolicy;
 export const NATIVE_ROSTER_READ = {

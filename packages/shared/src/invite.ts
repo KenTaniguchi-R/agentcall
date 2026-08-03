@@ -7,8 +7,10 @@ export const MAX_LISTED_ORG_INVITES = 200;
 export const MAX_ORG_INVITE_DESCRIPTION = 100;
 export const DEFAULT_ORG_INVITE_EXPIRY_DAYS = 7;
 export const MAX_ORG_INVITE_EXPIRY_DAYS = 90;
+export const OrgRole = z.enum(["admin", "member"]);
 
 export const CreateOrgInviteRequest = z.object({
+  role: OrgRole.optional().default("member"),
   description: z.string().max(MAX_ORG_INVITE_DESCRIPTION).optional().default(""),
   expires_in_days: z.number().int().min(1).max(MAX_ORG_INVITE_EXPIRY_DAYS)
     .optional().default(DEFAULT_ORG_INVITE_EXPIRY_DAYS),
@@ -27,6 +29,8 @@ export const OrgInviteMetadata = z.object({
   used_at: z.number().int().nonnegative().nullable(),
   used_by: z.string().regex(HANDLE_RE).nullable(),
   revoked_at: z.number().int().nonnegative().nullable(),
+  // Optional only for compatibility with relay responses from before org roles.
+  role: OrgRole.optional(),
 });
 
 export const CreateOrgInviteResponse = z.object({
@@ -44,3 +48,4 @@ export const RevokeOrgInviteResponse = z.object({
 });
 
 export type OrgInviteMetadataType = z.infer<typeof OrgInviteMetadata>;
+export type OrgRoleType = z.infer<typeof OrgRole>;

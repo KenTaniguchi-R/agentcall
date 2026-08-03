@@ -1,13 +1,14 @@
 import { existsSync, rmSync } from "node:fs";
 import { Command, CommanderError } from "commander";
-import type { AgentKind } from "@benree/agentcall-shared";
+import type { AgentKind, AuditCheckpointType } from "@benree/agentcall-shared";
 import { getMachinePaths, type LinePaths } from "./paths.js";
 import { addressHost, assertCallableLine, relayUrl, resolveLineWorkdir, type LineConfig } from "./config.js";
 import { callAgent, callStatusMessage, CallError } from "./callClient.js";
 // No rotateToken here: `rotate` goes through commands/rotate.ts's rotateLine,
 // which owns the per-line config write and calls the api helper itself.
 import { getStatus, fetchCard, createInvite, listInvites, revokeInvite, createRoster, joinRoster, leaveRoster,
-  expelRosterMember, issueRosterJoinKey, listRosterJoinKeys, revokeRosterJoinKey, deleteRoster, ApiError } from "./api.js";
+  expelRosterMember, issueRosterJoinKey, listRosterJoinKeys, revokeRosterJoinKey, deleteRoster,
+  fetchAuditExportPage, ApiError } from "./api.js";
 import { startAllListeners } from "./listenAll.js";
 import { startListener } from "./listener.js";
 import { runSetup } from "./setup.js";
@@ -39,6 +40,13 @@ import { getTelemetry, shutdownTelemetry, telemetrySafely } from "./telemetry.js
 export function createProgram(): Command {
 const program = new Command();
 program.name("agentcall").description("Call other people's coding agents").version("0.4.0");
+
+const parseAuditTime = (value: string | undefined, flag: string): number | undefined => {
+  if (value === undefined) return undefined;
+  const parsed = /^\d+$/.test(value) ? Number(value) : Date.parse(value);
+  if (!Number.isSafeInteger(parsed) || parsed < 0) throw new Error(`${flag} must be an epoch-millisecond or ISO timestamp`);
+  return parsed;
+};
 
 program
   .command("setup")
@@ -87,21 +95,67 @@ invite
   .description("create a one-time invite")
   .option("--description <text>", "purpose shown in the organization invite inventory", "")
   .option("--expires-in-days <days>", "expiry from 1 to 90 days", "7")
+  .option("--role <role>", "enrolled organization role: member or admin")
   .option("--line <name>", "line whose organization to invite into (defaults to the primary line)")
-  .action(async (o: { description: string; expiresInDays: string; line?: string }) => {
+  .action(async (o: { description: string; expiresInDays: string; role?: string; line?: string }) => {
     const ctx = lineFor(o.line);
     if (!ctx) return;
     const cfg = ctx.config;
     try {
+      if (o.role !== undefined && o.role !== "admin" && o.role !== "member") {
+        throw new Error("--role must be member or admin");
+      }
       const created = await createInvite(
         relayUrl(cfg), { org: cfg.org, handle: cfg.handle, token: cfg.token },
-        { description: o.description, expires_in_days: Number(o.expiresInDays) },
+        {
+          description: o.description, expires_in_days: Number(o.expiresInDays),
+          ...(o.role ? { role: o.role } : {}),
+        },
       );
       console.log(created.invite);
       console.error(`ID ${created.metadata.id}`);
       console.error(`Expires ${new Date(created.metadata.expires_at).toISOString()}`);
     } catch (e) {
       console.error(e instanceof ApiError ? e.message : String(e));
+      process.exitCode = 1;
+    }
+  });
+
+const audit = program.command("audit").description("export organization audit evidence");
+
+audit
+  .command("export")
+  .description("stream an administrator-only snapshot as newline-delimited JSON")
+  .option("--after <time>", "include events at or after this epoch-millisecond or ISO timestamp")
+  .option("--before <time>", "include events before this epoch-millisecond or ISO timestamp")
+  .option("--page-size <count>", "events fetched per relay page, from 1 to 500", "100")
+  .option("--line <name>", "line whose organization to export (defaults to the primary line)")
+  .action(async (o: { after?: string; before?: string; pageSize: string; line?: string }) => {
+    const ctx = lineFor(o.line);
+    if (!ctx) return;
+    const cfg = ctx.config;
+    try {
+      const after = parseAuditTime(o.after, "--after");
+      const before = parseAuditTime(o.before, "--before");
+      const pageSize = Number(o.pageSize);
+      if (!Number.isInteger(pageSize) || pageSize < 1 || pageSize > 500) {
+        throw new Error("--page-size must be an integer from 1 to 500");
+      }
+      let pageToken: string | undefined;
+      let checkpoint: AuditCheckpointType | undefined;
+      do {
+        const page = await fetchAuditExportPage(
+          relayUrl(cfg), { org: cfg.org, handle: cfg.handle, token: cfg.token },
+          { after, before, page_size: pageSize, page_token: pageToken },
+          { retryRateLimit: true },
+        );
+        for (const event of page.events) console.log(JSON.stringify(event));
+        checkpoint = page.checkpoint;
+        pageToken = page.next_page_token || undefined;
+      } while (pageToken);
+      console.error(`Checkpoint org=${checkpoint?.org_event_id ?? 0} roster=${checkpoint?.roster_event_id ?? 0}`);
+    } catch (e) {
+      console.error(e instanceof ApiError || e instanceof Error ? e.message : String(e));
       process.exitCode = 1;
     }
   });

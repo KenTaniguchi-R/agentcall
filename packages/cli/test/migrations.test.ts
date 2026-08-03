@@ -15,6 +15,7 @@ const repair = readFileSync(join(migrationsDir, "0006_tenancy_and_roster_lifecyc
 const auditEvents = readFileSync(join(migrationsDir, "0007_roster_audit_events.sql"), "utf8");
 const joinKeys = readFileSync(join(migrationsDir, "0008_roster_join_keys.sql"), "utf8");
 const orgInvites = readFileSync(join(migrationsDir, "0009_org_invite_lifecycle.sql"), "utf8");
+const orgRoles = readFileSync(join(migrationsDir, "0013_org_roles.sql"), "utf8");
 
 function legacyDatabase(): DatabaseSync {
   const db = new DatabaseSync(":memory:");
@@ -33,6 +34,29 @@ function tenantDatabase(): DatabaseSync {
 }
 
 describe("D1 migration reconciliation", () => {
+  it("keeps existing handles least-privileged and makes bootstrap enrollment administrative", () => {
+    const db = tenantDatabase();
+    for (const file of [
+      "0007_roster_audit_events.sql", "0008_roster_join_keys.sql", "0009_org_invite_lifecycle.sql",
+      "0010_roster_audit_budget_recovery.sql", "0011_telemetry_health.sql", "0012_key_publication.sql",
+    ]) db.exec(readFileSync(join(migrationsDir, file), "utf8"));
+    db.exec(
+      "INSERT INTO handles (org, handle, token_hash, agent_kind, created_at) VALUES ('acme', 'existing', 'hash', NULL, 1);" +
+      "INSERT INTO invites (token_hash, org, created_by, created_at, expires_at, description) " +
+      "VALUES ('bootstrap', 'acme', NULL, 1, 2, ''), ('member', 'acme', 'existing', 1, 2, '');",
+    );
+
+    db.exec(orgRoles);
+
+    expect(db.prepare("SELECT org_role FROM handles WHERE handle = 'existing'").get())
+      .toEqual({ org_role: "member" });
+    expect(db.prepare("SELECT token_hash, org_role FROM invites ORDER BY token_hash").all()).toEqual([
+      { token_hash: "bootstrap", org_role: "admin" },
+      { token_hash: "member", org_role: "member" },
+    ]);
+    expect(columns(db, "org_events")).toContain("target_role");
+  });
+
   it("preserves legacy handles and cards under the initial tenant", () => {
     const db = legacyDatabase();
     db.exec(

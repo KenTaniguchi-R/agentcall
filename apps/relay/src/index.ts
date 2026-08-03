@@ -1,6 +1,7 @@
 import { Hono } from "hono";
-import { CardUpload, RegisterRequest, visibleTasks } from "@benree/agentcall-shared";
+import { CardUpload, RegisterRequest, visibleTasks, type OrgRoleType } from "@benree/agentcall-shared";
 import { mountA2A } from "./a2a.js";
+import { mountAudit } from "./audit.js";
 import { orgAuditStatement, orgAuditTrimStatement } from "./events.js";
 import { expiredInviteCleanupStatement, mountInvites } from "./invites.js";
 import { mountKeys } from "./keys.js";
@@ -23,6 +24,7 @@ export type Env = RateLimitEnv & {
 };
 const app = new Hono<{ Bindings: Env }>();
 mountA2A(app);
+mountAudit(app);
 mountInvites(app);
 mountKeys(app);
 mountPresence(app);
@@ -53,12 +55,12 @@ app.post("/v1/register", async (c) => {
   if (!body.success) return c.json({ error: "invalid request" }, 400);
   const { invite, handle, agent_kind } = body.data;
   const inviteHash = await sha256Hex(invite);
-  let inviteRow: { org: string } | null;
+  let inviteRow: { org: string; org_role: OrgRoleType } | null;
   try {
     inviteRow = await c.env.DB.prepare(
-      "SELECT org FROM invites WHERE token_hash = ? AND used_at IS NULL " +
+      "SELECT org, org_role FROM invites WHERE token_hash = ? AND used_at IS NULL " +
         "AND revoked_at IS NULL AND expires_at > ?",
-    ).bind(inviteHash, Date.now()).first<{ org: string }>();
+    ).bind(inviteHash, Date.now()).first<{ org: string; org_role: OrgRoleType }>();
   } catch (error) {
     return c.json(registrationDatabaseFailure(error), 503, { "Retry-After": "5" });
   }
@@ -70,8 +72,8 @@ app.post("/v1/register", async (c) => {
     const tokenHash = await sha256Hex(token);
     const results = await c.env.DB.batch([
       c.env.DB.prepare(
-        "INSERT INTO handles (org, handle, token_hash, agent_kind, created_at) " +
-          "SELECT org, ?, ?, ?, ? FROM invites " +
+        "INSERT INTO handles (org, handle, token_hash, agent_kind, created_at, org_role) " +
+          "SELECT org, ?, ?, ?, ?, org_role FROM invites " +
           "WHERE token_hash = ? AND used_at IS NULL AND revoked_at IS NULL AND expires_at > ? " +
           "ON CONFLICT(org, handle) DO NOTHING",
       ).bind(handle, tokenHash, agent_kind ?? null, now, inviteHash, now),
@@ -83,7 +85,8 @@ app.post("/v1/register", async (c) => {
       orgAuditStatement(c, {
         event: "org.invite.redeem", action: "C", org, actor: inviteHash, actorType: "invite",
         targetType: "handle", targetId: handle,
-        description: `Organization invite ${inviteHash} enrolled ${handle}`, at: now,
+        targetRole: inviteRow.org_role,
+        description: `Organization invite ${inviteHash} enrolled ${handle} as ${inviteRow.org_role}`, at: now,
       }, "previous-change"),
       orgAuditTrimStatement(c.env.DB, org),
       expiredInviteCleanupStatement(c.env.DB, org, now),

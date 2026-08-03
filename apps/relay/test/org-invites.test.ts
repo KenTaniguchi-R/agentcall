@@ -18,9 +18,12 @@ describe("organization invite lifecycle", () => {
       description: "contractor onboarding", expires_in_days: 30,
     });
     expect(issued.status).toBe(200);
-    const created = await issued.json<{ invite: string; metadata: { id: string; expires_at: number } }>();
+    const created = await issued.json<{
+      invite: string; metadata: { id: string; expires_at: number; role: string };
+    }>();
     expect(created.invite).toHaveLength(43);
     expect(created.metadata.id).toMatch(/^[a-f0-9]{64}$/);
+    expect(created.metadata.role).toBe("member");
 
     const listed = await SELF.fetch("https://relay.test/v1/invites/list", {
       method: "POST", headers: wsAuth("inviter", token, "tenant-a"),
@@ -45,12 +48,12 @@ describe("organization invite lifecycle", () => {
     expect(await retry.json()).toEqual({ id: created.metadata.id, revoked_at: receipt.revoked_at });
 
     const events = await env.DB.prepare(
-      "SELECT event, actor, actor_type, target_type, target_id FROM org_events " +
+      "SELECT event, actor, actor_type, target_type, target_id, target_role FROM org_events " +
         "WHERE org = ? AND target_id = ? ORDER BY id",
     ).bind("tenant-a", created.metadata.id).all();
     expect(events.results).toEqual([
-      { event: "org.invite.issue", actor: "inviter", actor_type: "handle", target_type: "invite", target_id: created.metadata.id },
-      { event: "org.invite.revoke", actor: "inviter", actor_type: "handle", target_type: "invite", target_id: created.metadata.id },
+      { event: "org.invite.issue", actor: "inviter", actor_type: "handle", target_type: "invite", target_id: created.metadata.id, target_role: "member" },
+      { event: "org.invite.revoke", actor: "inviter", actor_type: "handle", target_type: "invite", target_id: created.metadata.id, target_role: "member" },
     ]);
   });
 
@@ -75,11 +78,14 @@ describe("organization invite lifecycle", () => {
       body: JSON.stringify({ invite: second.invite, handle: "new-member" }),
     })).status).toBe(200);
     expect(await env.DB.prepare(
-      "SELECT event, actor, actor_type, target_type, target_id FROM org_events " +
+      "SELECT org_role FROM handles WHERE org = ? AND handle = ?",
+    ).bind("redemption-org", "new-member").first()).toEqual({ org_role: "member" });
+    expect(await env.DB.prepare(
+      "SELECT event, actor, actor_type, target_type, target_id, target_role FROM org_events " +
         "WHERE event = 'org.invite.redeem' AND target_id = ?",
     ).bind("new-member").first()).toEqual({
       event: "org.invite.redeem", actor: second.metadata.id, actor_type: "invite",
-      target_type: "handle", target_id: "new-member",
+      target_type: "handle", target_id: "new-member", target_role: "member",
     });
   });
 
@@ -165,5 +171,55 @@ describe("organization invite lifecycle", () => {
     expect((await SELF.fetch("https://relay.test/v1/invites/not-a-hash/revoke", {
       method: "POST", headers: wsAuth("shape", token, "shape-org"),
     })).status).toBe(400);
+  });
+
+  it("requires an administrator for organization-wide invite authority", async () => {
+    const adminToken = await registerHandle("role-admin", "claude", "role-org", "admin");
+    const invite = await (await create("role-org", "role-admin", adminToken)).json<{ metadata: { id: string } }>();
+    const memberToken = await registerHandle("ordinary-member", "claude", "role-org", "member");
+    expect((await create("role-org", "ordinary-member", memberToken)).status).toBe(403);
+    expect((await SELF.fetch("https://relay.test/v1/invites/list", {
+      method: "POST", headers: wsAuth("ordinary-member", memberToken, "role-org"),
+    })).status).toBe(403);
+    expect((await SELF.fetch(`https://relay.test/v1/invites/${invite.metadata.id}/revoke`, {
+      method: "POST", headers: wsAuth("ordinary-member", memberToken, "role-org"),
+    })).status).toBe(403);
+  });
+
+  it("delegates admin authority explicitly through an invite", async () => {
+    const issuerToken = await registerHandle("delegating-admin", "claude", "delegation-org", "admin");
+    const issued = await (await create("delegation-org", "delegating-admin", issuerToken, { role: "admin" }))
+      .json<{ invite: string }>();
+    const registered = await SELF.fetch("https://relay.test/v1/register", {
+      method: "POST",
+      headers: { "content-type": "application/json", "cf-connecting-ip": "203.0.113.220" },
+      body: JSON.stringify({ invite: issued.invite, handle: "delegated-admin" }),
+    });
+    const delegatedToken = (await registered.json<{ token: string }>()).token;
+    expect(registered.status).toBe(200);
+    expect((await SELF.fetch("https://relay.test/v1/audit/events", {
+      headers: wsAuth("delegated-admin", delegatedToken, "delegation-org"),
+    })).status).toBe(200);
+  });
+
+  it("always enrolls the operator-bootstrap invite as an administrator", async () => {
+    const issued = await SELF.fetch("https://relay.test/v1/admin/invite", {
+      method: "POST",
+      headers: { Authorization: "Bearer test-bootstrap-token", "content-type": "application/json",
+        "cf-connecting-ip": "203.0.113.221" },
+      body: JSON.stringify({ org: "bootstrap-role-org", role: "member" }),
+    });
+    expect(issued.status).toBe(200);
+    const invite = (await issued.json<{ invite: string }>()).invite;
+    const registered = await SELF.fetch("https://relay.test/v1/register", {
+      method: "POST",
+      headers: { "content-type": "application/json", "cf-connecting-ip": "203.0.113.222" },
+      body: JSON.stringify({ invite, handle: "bootstrap-admin" }),
+    });
+    const token = (await registered.json<{ token: string }>()).token;
+    expect(registered.status).toBe(200);
+    expect((await SELF.fetch("https://relay.test/v1/audit/events", {
+      headers: wsAuth("bootstrap-admin", token, "bootstrap-role-org"),
+    })).status).toBe(200);
   });
 });

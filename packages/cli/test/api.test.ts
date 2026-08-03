@@ -1,7 +1,7 @@
 import { createServer, type Server, type IncomingMessage, type ServerResponse } from "node:http";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { registerHandle, getStatus, fetchCard, pushCard, rotateToken, createInvite, listInvites, revokeInvite,
-  createRoster, joinRoster,
+  createRoster, joinRoster, fetchAuditExportPage,
   fetchRosterBundle, issueRosterJoinKey, listRosterJoinKeys, revokeRosterJoinKey } from "../src/api.js";
 import { generateIdentityKeys, type StoredKeys } from "../src/keys.js";
 import { fetchKeys, publishEncryptionKey, publishIdentityKey } from "../src/api.js";
@@ -225,6 +225,69 @@ describe("api client", () => {
     expect(await listInvites(relay, auth)).toEqual([metadata]);
     expect(await revokeInvite(relay, auth, metadata.id)).toEqual({ id: metadata.id, revoked_at: 3 });
     expect(requests).toEqual(["/v1/invites/list", `/v1/invites/${metadata.id}/revoke`]);
+  });
+
+  it("fetches a filtered audit export page with tenant credentials", async () => {
+    let seen = "";
+    const page = {
+      events: [{
+        ledger: "org", id: 1, event: "org.invite.issue", action_type: "C",
+        roster_id: null, actor: "ken", actor_type: "handle", target_type: "invite",
+        target_id: "abc", target_role: "member", actor_ip: null, actor_country: null, description: "issued", at: 100,
+      }],
+      checkpoint: { org_event_id: 1, org_event_count: 1, roster_event_id: 0, roster_event_count: 0 },
+      next_page_token: "next",
+    };
+    const relay = await startServer((req, res) => {
+      seen = req.url ?? "";
+      res.writeHead(200, { "content-type": "application/json" });
+      res.end(JSON.stringify(page));
+    });
+    expect(await fetchAuditExportPage(
+      relay, { org: "acme", handle: "ken", token: "tok" },
+      { after: 10, before: 200, page_size: 50, page_token: "cursor" },
+    )).toEqual(page);
+    expect(seen).toBe("/v1/audit/events?after=10&before=200&page_size=50&page_token=cursor");
+  });
+
+  it.each([
+    [401, "credentials were rejected"],
+    [403, "not an organization administrator"],
+    [400, "cursor or time range is invalid"],
+    [409, "snapshot changed during export"],
+    [429, "Too many audit export requests"],
+    [503, "Audit export failed (503)"],
+  ])("maps audit export status %i to actionable CLI guidance", async (status, message) => {
+    const relay = await serve(status, { error: "test" });
+    await expect(fetchAuditExportPage(
+      relay, { org: "acme", handle: "ken", token: "tok" },
+    )).rejects.toThrow(message);
+  });
+
+  it("retries a bounded audit rate limit using Retry-After", async () => {
+    let calls = 0;
+    const page = {
+      events: [],
+      checkpoint: { org_event_id: 0, org_event_count: 0, roster_event_id: 0, roster_event_count: 0 },
+      next_page_token: "",
+    };
+    const relay = await startServer((_req, res) => {
+      calls += 1;
+      if (calls === 1) {
+        res.writeHead(429, { "content-type": "application/json", "retry-after": "0" });
+        res.end(JSON.stringify({ error: "rate limited" }));
+        return;
+      }
+      res.writeHead(200, { "content-type": "application/json" });
+      res.end(JSON.stringify(page));
+    });
+    const sleeps: number[] = [];
+    expect(await fetchAuditExportPage(
+      relay, { org: "acme", handle: "ken", token: "tok" }, {},
+      { retryRateLimit: true, sleep: async (ms) => { sleeps.push(ms); } },
+    )).toEqual(page);
+    expect(calls).toBe(2);
+    expect(sleeps).toEqual([0]);
   });
 });
 
