@@ -1,6 +1,6 @@
 ---
 title: Security posture
-description: What AgentCall enforces today, and the risks operators still accept.
+description: Understand AgentCall's current security controls, capability boundary, and residual risk before accepting calls.
 ---
 
 <Warning>
@@ -10,28 +10,26 @@ description: What AgentCall enforces today, and the risks operators still accept
 
 ## What is enforced
 
-- Calls are authenticated and stay within one organization. Cross-organization routing is rejected.
-- The listener resolves the caller's allowed task before the message enters the agent prompt.
-- Claude file-shaped tools are guarded against credential paths and paths outside the task work directory.
-- Policy can limit tasks by caller or relay-attested roster and can apply an administrator ceiling.
-- Calls, outcomes, and observed tool attempts are recorded locally on the callee's machine.
-- The normal CLI refuses nested AgentCall calls from an answering process.
-- `agentcall verify <address>` validates signed encryption-key records and pins the peer identity locally; changed identities and lower epochs fail closed until an explicit `agentcall trust --reset <address>`.
-- Call content and peer outcomes are signed and HPKE-encrypted between endpoints; recipient keys are verified before a caller opens its WebSocket, and listeners reject stale, replayed, misrouted, or unauthenticated payloads before policy or spawn.
-- Pre-chain local key files fail closed because they cannot reconstruct an exact safe publication retry. Preserve them for recovery and enroll a new handle with a new invite; setup cannot replace a relay-pinned identity for the old handle.
+- Calls are authenticated and constrained to one organization.
+- Requests and peer outcomes are signed and HPKE-encrypted between endpoints.
+- Recipient keys are verified before the caller opens its WebSocket.
+- Listeners reject stale, replayed, misrouted, or unauthenticated envelopes before policy or spawn.
+- Task policy is resolved before the caller's message enters an agent prompt.
+- Policy can scope tasks by caller or relay-attested roster and can apply an administrator ceiling.
+- Claude file-shaped tools are guarded against protected credential paths and paths outside the resolved task working directory.
+- The supported answering path refuses nested AgentCall CLI calls to prevent accidental loops.
+- Calls and observed/guarded tool attempts are recorded locally on the callee machine.
 
 ## Residual risks
 
-- The answering process has the same OS identity and network access as its owner; there is no OS-level sandbox or domain firewall.
-- A Claude task with shell execution can read outside its work directory. Shell commands are recorded, not blocked.
-- Codex is observed, not guarded, and has no read floor. Some non-shell reads are not recorded.
-- Codex's authenticated Apps, web search, and image generation are removed from fresh and resumed answering sessions with strict, fail-closed configuration. Its shell and remaining local read surfaces still have no read floor.
-- The relay still sees organization and handle routing, roster intersections, call IDs, lifecycle/timing metadata, source-network metadata where available, and ciphertext sizes. Endpoint and infrastructure logs can add metadata even though content is encrypted.
-- A peer's first identity pin is trust-on-first-use. Compare the fingerprint out of band before relying on it.
-- A2A task recovery is status-only through the original six-minute deadline. The relay retains an opaque encrypted outcome for live delivery but cannot publish reply text, failure detail, task, or context as an A2A artifact.
-- A prompt can consume the callee's tokens and may exfiltrate anything reachable through granted capabilities.
-- Relay tokens do not expire and have no inventory or individual revocation. Rotate a suspected token immediately.
-- Per-handle Agent Cards are not signed; clients trust the relay that serves them.
+- The answering process runs as its owner. There is no OS-level sandbox or AgentCall domain firewall.
+- Claude shell execution can read and change data outside the working directory; it is recorded, not blocked.
+- Codex is observed rather than guarded and has no enforced read floor. Some non-shell reads are not recorded.
+- A caller can consume the callee's model quota and may exfiltrate anything reachable through granted capabilities.
+- First peer identity verification is trust-on-first-use until the fingerprint is compared out of band.
+- Per-handle cards are not signed; clients trust the relay serving them.
+- Relay tokens do not expire and cannot be inventoried or individually revoked.
+- One long-running caller can keep the single-call listener busy.
 
 ## Capability guidance
 
@@ -48,10 +46,10 @@ agentcall card
 For a suspected relay-token leak, run `agentcall rotate` and restart the
 listener so an already-connected socket does not keep using the old credential.
 
+Read [visibility and privacy](/security/visibility-and-privacy) for what each
+party can observe.
+
 Security work is active. Do not infer a guarantee from a planned issue or an
 historical design document; this page describes the current implementation.
-Public deployment of the AgentCall service remains gated on completing the
-remaining work in issues #1–#8; publishing this documentation site does not
-satisfy those gates.
-The [README security model](https://github.com/KenTaniguchi-R/agentcall#security-model-v1-explicit)
+Source of truth: the [README security model](https://github.com/KenTaniguchi-R/agentcall#security-model-v1-explicit)
 is the detailed authority and should be reviewed before deployment.

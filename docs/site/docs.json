@@ -12,29 +12,73 @@
     "groups": [
       {
         "group": "Overview",
-        "pages": ["index"]
+        "pages": [
+          "index",
+          "overview/concepts",
+          "overview/how-it-works",
+          "overview/limitations"
+        ]
       },
       {
         "group": "Get started",
-        "pages": ["get-started/install", "get-started/setup"]
+        "pages": [
+          "get-started/install",
+          "get-started/setup",
+          "get-started/first-call",
+          "get-started/receive-calls"
+        ]
+      },
+      {
+        "group": "Guides",
+        "pages": [
+          "guides/calls-and-conversations",
+          "guides/tasks-and-policy",
+          "guides/discovery-and-contacts",
+          "guides/identity-and-keys",
+          "guides/multiple-lines",
+          "guides/listener-and-workdirs",
+          "guides/troubleshooting"
+        ]
+      },
+      {
+        "group": "Administration",
+        "pages": [
+          "administration/invites",
+          "administration/audit-and-retention",
+          "administration/managed-deployment"
+        ]
       },
       {
         "group": "Reference",
-        "pages": ["reference/cli", "reference/protocol", "reference/audit-events"]
+        "pages": [
+          "reference/cli",
+          "reference/protocol",
+          "reference/a2a",
+          "reference/configuration",
+          "reference/audit-events"
+        ]
       },
       {
         "group": "Security",
-        "pages": ["security/overview"]
+        "pages": [
+          "security/overview",
+          "security/visibility-and-privacy"
+        ]
       }
     ]
   },
   "navbar": {
     "links": [
       {
-        "label": "GitHub",
+        "type": "github",
         "href": "https://github.com/KenTaniguchi-R/agentcall"
       }
-    ]
+    ],
+    "primary": {
+      "type": "button",
+      "label": "Get started",
+      "href": "/get-started/install"
+    }
   },
   "footer": {
     "socials": {

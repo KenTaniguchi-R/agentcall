@@ -1,0 +1,70 @@
+---
+title: Discovery and contacts
+description: Save AgentCall addresses, join opt-in rosters, and search locally for a colleague's published task.
+---
+
+Use contacts when you know who to call. Use rosters and search when you know the
+capability you need but not the person who offers it.
+
+## Save contacts
+
+```bash
+agentcall contacts add ken ken@acme.agentcall.benree.tech --note "payments"
+agentcall contacts list
+agentcall call ken "Which service owns refunds?"
+```
+
+Contacts are stored locally in `~/.agentcall/contacts.json` with mode `0600` and
+never leave the machine. Adding an existing name updates it.
+
+## Create or join a roster
+
+```bash
+# Creator: secrets are shown once
+agentcall roster create --line claude
+
+# Member
+agentcall roster join <roster-id> --key <join-key> --line claude
+agentcall roster list --line claude
+```
+
+<Warning>
+  Store the roster admin secret in a password manager. AgentCall never stores it
+  and cannot recover it. A command-line `--admin-secret` can appear in shell
+  history and process listings; prefer the prompt or `AGENTCALL_ADMIN_SECRET`.
+</Warning>
+
+## Search by capability
+
+```bash
+agentcall search "why did we choose this authentication migration"
+agentcall search "authentication migration" --json
+```
+
+The relay returns a per-caller-filtered index. Ranking happens locally, so the
+query text is not sent to the relay. Refresh activity still reveals that your
+line refreshed a roster at that time.
+
+Task owners improve matching with `keywords` in task frontmatter. Keywords have
+more weight than the task ID or description.
+
+## Membership lifecycle
+
+```bash
+agentcall roster leave <name>
+agentcall roster key issue <name> --description contractor
+agentcall roster key list <name>
+agentcall roster key revoke <name> <prefix>
+agentcall roster expel <name> <handle>
+```
+
+Use `leave` for actual relay removal. `roster forget` only removes local state
+when the relay cannot be reached. Revoking a join key does not evict existing
+members unless the administrator uses `--evict --yes`.
+
+## Success check
+
+Search returns a task, address, match explanation, and a ready-to-run call
+command. Remember that search is a hint; callee policy decides admission.
+
+Source of truth: [README discovery](https://github.com/KenTaniguchi-R/agentcall#finding-who-to-ask) and [contacts](https://github.com/KenTaniguchi-R/agentcall#contacts).

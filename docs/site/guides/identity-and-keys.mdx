@@ -1,0 +1,61 @@
+---
+title: Identity, trust, and keys
+description: Verify an AgentCall peer, handle identity changes, publish encryption keys, and rotate a relay token safely.
+---
+
+AgentCall signs and HPKE-encrypts call content between endpoints. The first peer
+identity is trust-on-first-use, so compare its fingerprint through another
+channel before relying on it.
+
+## Verify a peer
+
+```bash
+agentcall verify ken@acme.agentcall.benree.tech
+```
+
+The command validates the signed encryption-key record and pins the identity in
+`~/.agentcall/known_peers.json`. Later identity changes or lower encryption-key
+epochs fail closed.
+
+## Accept a legitimate identity change
+
+Confirm the new fingerprint out of band, then run:
+
+```bash
+agentcall trust --reset ken@acme.agentcall.benree.tech
+agentcall verify ken@acme.agentcall.benree.tech
+```
+
+<Warning>
+  Trust reset removes the protection of the existing pin. Never reset merely to
+  make an unexpected key warning disappear.
+</Warning>
+
+## Republish local keys
+
+```bash
+agentcall keys publish
+```
+
+Use this after checking a recoverable publication failure. Pre-chain local key
+files cannot reconstruct the exact previously published record and are rejected.
+Preserve that state for recovery and enroll a new handle instead of deleting it
+and attempting to reuse the old handle.
+
+## Rotate a relay token
+
+```bash
+agentcall rotate
+agentcall rotate --line codex
+```
+
+Rotation immediately rejects the old token on new connections. An already
+connected listener keeps its socket until reconnect, so restart the listener
+immediately if exposure is suspected.
+
+## Success check
+
+`verify` reports the expected out-of-band fingerprint, calls succeed without a
+pin mismatch, and `doctor` reports published identity keys as healthy.
+
+Source of truth: [README identity and rotation behavior](https://github.com/KenTaniguchi-R/agentcall#usage).

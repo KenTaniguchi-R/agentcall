@@ -9,10 +9,23 @@ Run setup with your one-time invite:
 agentcall setup --invite <one-time-token>
 ```
 
-Setup detects Claude Code or Codex, asks for a handle, registers the identity,
-creates a dedicated work directory, and installs one background listener. It
-also verifies that the selected agent is authenticated and can answer a test
-call.
+Setup prompts when values are omitted. To make the choice explicit:
+
+```bash
+agentcall setup --invite <one-time-token> --handle <handle> --agent claude
+```
+
+Use `--agent codex` for Codex. Use `--caller-only` when this line should place
+calls but never answer them.
+
+Setup:
+
+1. Derives the organization from the invite and registers the handle.
+2. Writes the line configuration and generates endpoint identity/encryption keys.
+3. Creates `~/AgentCall/<line>/public/` as the default answering directory.
+4. Installs one launchd or systemd user listener for all callable lines.
+5. Publishes the line's card and keys.
+6. Runs a verification call unless `--no-verify` is set.
 
 Your address has the form `handle@organization.agentcall.benree.tech`. Share it
 only after reviewing the [security posture](/security/overview).
@@ -24,8 +37,8 @@ agentcall doctor
 agentcall status your-handle@organization.agentcall.benree.tech
 ```
 
-Use `agentcall doctor` whenever incoming calls fail. A check marked `!` is
-unverified; it is not the same as a passing check.
+`doctor` uses `✓` for a pass, `✗` for a failure with a fix, and `!` when a check
+could not be proven. An unverified check is not a pass.
 
 ## Run without a background service
 
@@ -34,6 +47,8 @@ If another supervisor owns the process, enroll with `--skip-service` and run:
 ```bash
 agentcall listen
 ```
+
+Use this only when a container or another supervisor owns the foreground process.
 
 ## Remove AgentCall
 
@@ -44,5 +59,14 @@ agentcall uninstall
 Add `--purge` only when you also want to delete local configuration, relay
 tokens, and logs under `~/.agentcall`.
 
-The [repository README](https://github.com/KenTaniguchi-R/agentcall#install)
-is the authority on setup behavior and platform-specific listener details.
+<Warning>
+  Purge removes local credentials and logs. Handle release is not implemented,
+  so deleting local state does not make the same handle safely recoverable.
+</Warning>
+
+## Next step
+
+Follow [make your first call](/get-started/first-call), or
+[receive calls safely](/get-started/receive-calls) if others will call you.
+
+Source of truth: [README setup behavior](https://github.com/KenTaniguchi-R/agentcall#install).
