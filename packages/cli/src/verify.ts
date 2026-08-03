@@ -233,11 +233,11 @@ export async function checkCodexGuard(
   ].join("\n") + "\n";
 
   try {
+    const args = ["app-server", "-c", guardCodexConfigArg()];
+    if (requireToolTelemetry) args.push("-c", toolTelemetryCodexConfigArg());
+    args.push("-c", guardCodexTrustArg(requireToolTelemetry));
     const output = await probe(
-      [
-        "app-server", "-c", guardCodexConfigArg(), "-c", toolTelemetryCodexConfigArg(),
-        "-c", guardCodexTrustArg(true),
-      ],
+      args,
       input,
       workdir,
     );

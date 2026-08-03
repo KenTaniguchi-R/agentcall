@@ -238,4 +238,21 @@ describe("tool telemetry hook spool", () => {
     reclaimed?.dispose();
     rmSync(state, { recursive: true, force: true });
   });
+
+  it("advances within a hard bound when stale slots cannot be unlinked", () => {
+    const state = mkdtempSync(join(tmpdir(), "agentcall-tool-spool-unlink-failure-"));
+    const occupied = Array.from({ length: TOOL_EVENT_MAX_SPOOL_FILES }, (_, index) =>
+      createToolEventSpool(`occupied-${index}`, state)!);
+    const old = new Date(Date.now() - 2 * 60 * 60 * 1_000);
+    for (const spool of occupied) utimesSync(spool.file, old, old);
+
+    const started = Date.now();
+    const result = createToolEventSpool("must-not-spin", state, Date.now, () => {
+      throw Object.assign(new Error("immutable"), { code: "EPERM" });
+    });
+    expect(result).toBeUndefined();
+    expect(Date.now() - started).toBeLessThan(1_000);
+    for (const spool of occupied) spool.dispose();
+    rmSync(state, { recursive: true, force: true });
+  });
 });

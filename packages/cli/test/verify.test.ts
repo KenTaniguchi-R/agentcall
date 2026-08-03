@@ -272,6 +272,29 @@ describe("checkCodexGuard", () => {
     expect(calls[0]!.cwd).toBe("/work");
   });
 
+  it("probes only the production PreToolUse configuration when telemetry is disabled", async () => {
+    let seenArgs: string[] = [];
+    const output = JSON.stringify({
+      id: 2,
+      result: { data: [{ cwd: "/work", hooks: [{
+        key: "/<session-flags>/config.toml:pre_tool_use:0:0",
+        enabled: true,
+        trustStatus: "trusted",
+      }] }] },
+    });
+    const check = await checkCodexGuard("/work", async (args) => {
+      seenArgs = args;
+      return output;
+    }, false);
+
+    expect(check).toMatchObject({ name: "codex session guard", ok: true });
+    expect(seenArgs.some((arg) => arg.startsWith("hooks.PreToolUse="))).toBe(true);
+    expect(seenArgs.some((arg) => arg.startsWith("hooks.PostToolUse="))).toBe(false);
+    const trust = seenArgs.find((arg) => arg.startsWith("hooks.state="));
+    expect(trust).toContain(":pre_tool_use:0:0");
+    expect(trust).not.toContain(":post_tool_use:0:0");
+  });
+
   it("fails when managed-only policy removes the session hook", async () => {
     const output = JSON.stringify({ id: 2, result: { data: [{ cwd: "/work", hooks: [] }] } });
     const check = await checkCodexGuard("/work", async () => output);

@@ -76,11 +76,21 @@ function readBounded(file: string, identity: SpoolIdentity): string {
   }
 }
 
-function removeIfSame(file: string, identity: SpoolIdentity): void {
+type UnlinkFile = (file: string) => void;
+
+function removeIfSame(
+  file: string,
+  identity: SpoolIdentity,
+  unlinkFile: UnlinkFile = unlinkSync,
+): boolean {
   try {
     const current = lstatSync(file);
-    if (current.isFile() && current.dev === identity.dev && current.ino === identity.ino) unlinkSync(file);
-  } catch { /* absent, replaced, or inaccessible */ }
+    if (!current.isFile() || current.dev !== identity.dev || current.ino !== identity.ino) return false;
+    unlinkFile(file);
+    return true;
+  } catch {
+    return false;
+  }
 }
 
 function collect(
@@ -90,6 +100,7 @@ function collect(
   idKey: Buffer,
   createdAtMs: number,
   collectedAtMs: number,
+  unlinkFile: UnlinkFile,
 ): ToolLifecycle[] {
   try {
     const raw = readBounded(file, identity);
@@ -140,7 +151,7 @@ function collect(
   } catch {
     return [];
   } finally {
-    removeIfSame(file, identity);
+    removeIfSame(file, identity, unlinkFile);
   }
 }
 
@@ -153,16 +164,24 @@ function sameIdentity(file: string, identity: SpoolIdentity): boolean {
   }
 }
 
-function createInFixedSlot(spoolDir: string): { file: string; identity: SpoolIdentity } | undefined {
+function createInFixedSlot(
+  spoolDir: string,
+  unlinkFile: UnlinkFile,
+): { file: string; identity: SpoolIdentity } | undefined {
   const firstSlot = randomBytes(2).readUInt16BE() % TOOL_EVENT_MAX_SPOOL_FILES;
-  for (let offset = 0; offset < TOOL_EVENT_MAX_SPOOL_FILES; offset += 1) {
+  // A successful stale removal gets one retry of the same slot. The separate
+  // attempts bound prevents an attacker racing replacements from keeping this
+  // synchronous listener path alive indefinitely.
+  for (let offset = 0, attempts = 0;
+    offset < TOOL_EVENT_MAX_SPOOL_FILES && attempts < TOOL_EVENT_MAX_SPOOL_FILES * 2;
+    offset += 1, attempts += 1) {
     const slot = (firstSlot + offset) % TOOL_EVENT_MAX_SPOOL_FILES;
     const file = join(spoolDir, `slot-${slot}.jsonl`);
     try {
       writeFileSync(file, "", { encoding: "utf8", flag: "wx", mode: 0o600 });
       const created = lstatSync(file);
       if (!created.isFile() || (created.mode & 0o777) !== 0o600 || created.nlink !== 1) {
-        removeIfSame(file, created);
+        removeIfSame(file, created, unlinkFile);
         continue;
       }
       return { file, identity: { dev: created.dev, ino: created.ino } };
@@ -172,8 +191,7 @@ function createInFixedSlot(spoolDir: string): { file: string; identity: SpoolIde
         const occupied = lstatSync(file);
         if (occupied.isFile() && occupied.nlink === 1
             && Date.now() - occupied.mtimeMs > TOOL_EVENT_STALE_FILE_MS) {
-          removeIfSame(file, occupied);
-          offset -= 1;
+          if (removeIfSame(file, occupied, unlinkFile)) offset -= 1;
         }
       } catch { /* another process changed the slot; retry the next one */ }
     }
@@ -185,6 +203,7 @@ export function createToolEventSpool(
   callId: string,
   privateStateDir: string = getMachinePaths().dir,
   now: () => number = Date.now,
+  unlinkFile: UnlinkFile = unlinkSync,
 ): ToolEventSpool | undefined {
   try {
     const spoolDir = join(privateStateDir, "tool-events");
@@ -203,11 +222,11 @@ export function createToolEventSpool(
     } finally {
       closeSync(dirFd);
     }
-    const allocated = createInFixedSlot(spoolDir);
+    const allocated = createInFixedSlot(spoolDir, unlinkFile);
     if (!allocated) return undefined;
     const { file, identity } = allocated;
     if (!sameIdentity(spoolDir, directoryIdentity)) {
-      removeIfSame(file, identity);
+      removeIfSame(file, identity, unlinkFile);
       return undefined;
     }
     const idKey = randomBytes(32);
@@ -216,14 +235,14 @@ export function createToolEventSpool(
     const dispose = () => {
       if (consumed) return;
       consumed = true;
-      removeIfSame(file, identity);
+      removeIfSame(file, identity, unlinkFile);
     };
     return {
       file,
       collect: () => {
         if (consumed) return [];
         consumed = true;
-        return collect(file, callId, identity, idKey, createdAtMs, now());
+        return collect(file, callId, identity, idKey, createdAtMs, now(), unlinkFile);
       },
       dispose,
     };
