@@ -20,6 +20,8 @@ test("native Windows CI keeps the engines and unsupported-platform contracts exp
   assert.match(workflow, /#251/);
   assert.match(workflow, /--force/);
   assert.match(workflow, /agentcall\.cmd/);
+  assert.match(workflow, /\$ErrorActionPreference = "Continue"/);
+  assert.match(workflow, /\$ErrorActionPreference = \$previousErrorAction/);
   assert.equal(typeof cliPackage.scripts["test:windows"], "string");
   assert.equal(cliPackage.os.includes("win32"), false);
 });

@@ -173,8 +173,17 @@ jobs:
           if ($LASTEXITCODE -ne 0) { throw "agentcall --help failed" }
 
           function Assert-BlockedBy251([string] $name, [string[]] $commandArgs) {
-            $output = (& $agentcall @commandArgs 2>&1 | Out-String)
-            $code = $LASTEXITCODE
+            # GitHub's pwsh wrapper uses Stop globally. Expected stderr arrives
+            # as ErrorRecord objects, so relax only around this captured command
+            # and restore strict handling before evaluating the result.
+            $previousErrorAction = $ErrorActionPreference
+            try {
+              $ErrorActionPreference = "Continue"
+              $output = (& $agentcall @commandArgs 2>&1 | Out-String)
+              $code = $LASTEXITCODE
+            } finally {
+              $ErrorActionPreference = $previousErrorAction
+            }
             if ($code -eq 0) { throw "$name unexpectedly succeeded before #251" }
             if ($output -notmatch "Managed policy is not supported on win32") {
               throw "$name failed outside the documented #251 blocker: $output"
