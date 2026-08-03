@@ -9,7 +9,7 @@ export const MAX_ENCRYPTION_KEY_VALIDITY_MS = 2_592_000_000;
 
 // handle@host. The relay origin is part of the signed identity so a record
 // published on one relay cannot be presented as valid on another.
-const ADDRESS_RE = /^[a-z0-9][a-z0-9-]{1,30}@[a-z0-9.-]{1,253}$/;
+export const ADDRESS_RE = /^[a-z0-9][a-z0-9-]{1,30}@[a-z0-9.-]{1,253}$/;
 const KEY_ID_RE = /^[0-9a-f]{32}$/;
 // Same width as a key id but a different quantity: the digest of the previous
 // epoch's transcript. It gets its own pattern so that widening one can never
