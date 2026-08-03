@@ -146,7 +146,8 @@ describe("buildSpawnSpec", () => {
     // here, so this stays a test of the spawn shape.
     expect(s.args.filter((a) => ![guardCodexConfigArg(), guardCodexTrustArg()].includes(a))).toEqual([
       "exec", "--ignore-user-config", "--sandbox", "workspace-write", "--cd", WORKDIR,
-      "--skip-git-repo-check", "--json", "-c", "-c", "PROMPT",
+      "--skip-git-repo-check", "--json", "-c", "-c", "--disable", "apps",
+      "--disable", "image_generation", "-c", `web_search="disabled"`, "--strict-config", "PROMPT",
     ]);
     expect(s.cwd).toBe(WORKDIR);
   });
@@ -559,15 +560,21 @@ describe("guard hook wiring", () => {
 
     const spec = spawnSpec("codex", "hi", WORKDIR, () => "/bin/codex");
     const overrides = spec.args.flatMap((arg, i) => arg === "-c" ? [spec.args[i + 1]!] : []);
-    expect(overrides).toEqual([guardCodexConfigArg(), trust]);
+    expect(overrides).toEqual([guardCodexConfigArg(), trust, `web_search="disabled"`]);
     expect(spec.args).not.toContain("--dangerously-bypass-hook-trust");
   });
 
-  // The guard is not codex's read boundary — codex's own deny_read is — so it
-  // must not deny tools it cannot classify and take the runtime down with it.
   it("runs the codex guard in observe mode", () => {
     const spec = spawnSpec("codex", "hi", WORKDIR, () => "/bin/codex", FULL_ACCESS_ENVELOPE, "call-9");
     expect(spec.env?.AGENTCALL_GUARD_MODE).toBe("observe");
+  });
+
+  it("disables bundled Codex remote tools with strict recognized configuration", () => {
+    const spec = spawnSpec("codex", "hi", WORKDIR, () => "/bin/codex", FULL_ACCESS_ENVELOPE, "call-9");
+    const disabled = spec.args.flatMap((arg, index) => arg === "--disable" ? [spec.args[index + 1]] : []);
+    expect(disabled).toEqual(["apps", "image_generation"]);
+    expect(spec.args).toContain(`web_search="disabled"`);
+    expect(spec.args).toContain("--strict-config");
   });
 
   it("leaves the claude spawn in enforcing mode", () => {
@@ -671,14 +678,23 @@ describe("buildSpawnSpec resume (codex)", () => {
     const spec = buildSpawnSpec("codex", "hi", "/w", bin, { caps: ["read"] }, "c1", "line", "sess-abc");
     expect(spec.env?.AGENTCALL_LINE).toBe("line");
   });
+
+  it("keeps bundled remote tools disabled with strict configuration on resume", () => {
+    const spec = buildSpawnSpec("codex", "hi", "/w", bin, { caps: ["read"] }, "c1", "line", "sess-abc");
+    const disabled = spec.args.flatMap((arg, index) => arg === "--disable" ? [spec.args[index + 1]] : []);
+    expect(disabled).toEqual(["apps", "image_generation"]);
+    expect(spec.args).toContain(`web_search="disabled"`);
+    expect(spec.args).toContain("--strict-config");
+  });
 });
 
-// A codex spawn inherits every MCP server, plugin and app in the owner's
+// A codex spawn otherwise inherits every configured MCP server and plugin in the owner's
 // ~/.codex — separate processes that read the filesystem outside codex's
 // sandbox entirely. On a developer machine that routinely includes a
 // filesystem server (serena) and `claude mcp serve`, which re-exposes Read
 // and Bash. Unlike claude, codex has no --allowedTools to fence them off, so
-// the only lever is to not load them.
+// the first lever is to not load them. Bundled apps survive that isolation and
+// are removed by the explicit strict feature override above.
 describe("codex user-config isolation", () => {
   it("ignores the owner's codex config when answering a remote call", () => {
     const spec = spawnSpec("codex", "hi", WORKDIR, () => "/bin/codex");

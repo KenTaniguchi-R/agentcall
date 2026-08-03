@@ -8,6 +8,11 @@
 # Run:  bash scripts/verify-codex-apps-surface.sh
 #       bash scripts/verify-codex-apps-surface.sh --enumerate-only   # phase 0 only
 #
+# This preserves the PRE-C.1 exposed baseline as diagnostic evidence. Current
+# production spawns add the strict remote-tool boundary in buildSpawnSpec();
+# packages/cli/test/codex-hook-trust.probe.test.ts verifies that boundary from
+# the machine-readable tool registry on both fresh and resumed sessions.
+#
 # WHY THIS EXISTS
 # ---------------
 # Issue #30 established that `codex_apps` is REACHABLE: its tools enumerate from
@@ -118,8 +123,9 @@ TOOLS_LOG="$AGENTCALL_HOME/.agentcall/tools.log"
 say()  { printf '\n\033[1m== %s\033[0m\n' "$*"; }
 note() { printf '  \033[2m%s\033[0m\n' "$*"; }
 
-# The EXACT production `-c` value, generated from the built CLI rather than
-# retyped here, so this cannot drift from buildSpawnSpec() without CI noticing.
+# The exact production guard `-c` value, generated from the built CLI rather
+# than retyped here. The remote-tool disables are intentionally omitted below
+# because this script preserves the exposed baseline they were added to close.
 guard_arg() {
   ( cd "$REPO_ROOT" && node -e \
     'import("./packages/cli/dist/runner.js").then(m=>console.log(m.guardCodexConfigArg()))' 2>/dev/null )
@@ -130,9 +136,10 @@ if [ -z "$GUARD_ARG" ]; then
   exit 3
 fi
 
-# The production spawn shape from packages/cli/src/runner.ts buildSpawnSpec()
-# for a read-only envelope, INCLUDING the -c guard hook. (The P2 script omitted
-# that arg; it is included here because phase 3 asks what the guard observes.)
+# The historical pre-C.1 spawn shape for a read-only envelope, INCLUDING the
+# production guard hook but intentionally excluding the remote-tool boundary.
+# The P2 script omitted that hook arg; it is included here because phase 3 asks
+# what the guard would observe on the exposed baseline.
 run() { # run <prompt> [extra codex flags...]
   local prompt="$1"; shift
   AGENTCALL_GUARD_MODE=observe AGENTCALL_CALL_ID=probe-apps \
@@ -390,7 +397,7 @@ if [ "$FUNCTIONAL" = "0" ] && [ "$CLOSED" = "0" ]; then
 fi
 
 # ---------------------------------------------------------------------------
-# UNRESOLVED, and recorded as unresolved rather than guessed at.
+# RESOLVED while closing #1: web__run is a functional outbound channel.
 #
 # web__run is a TOP-LEVEL bundled tool, not a codex_apps member (#30 lists it
 # under the mcp__codex_apps__ prefix; that is wrong — see the enumeration
@@ -398,35 +405,30 @@ fi
 # request carrying data in its query string leaves the machine without touching
 # the deploy surface at all.
 #
-# Its argument schema was not solved. Three shapes, three different rejections,
-# each from the tool's own parser:
+# The original investigation tried three shapes and got three parser errors:
 #
 #   {open: 'https://example.com'}          -> invalid type: string, expected a sequence
 #   {open: [{url: 'https://example.com'}]} -> missing field `ref_id`
 #   {search: [{query: 'example domain'}]}  -> Invalid to send empty calls to web.run
 #
-# `ref_id` is the tell: `open` dereferences a prior search result, not a URL, so
-# arbitrary-URL fetch is not the shape it presents. What these DO establish is
-# that the tool is present and its parser runs. Whether it egresses is UNPROVEN,
-# and this script says so rather than inferring it. The probe below is left
-# pointing at the closest shape so the next person starts one step further on.
-say "2. EGRESS — is web__run a working outbound channel? (UNRESOLVED)"
-note "capability only: a neutral public URL, no probe data in the request."
-note "expect a VOID verdict — the argument schema is unsolved, see the comment above."
+# A neutral search_query call later returned results under these exact baseline
+# flags, proving egress without sending probe data or mutating remote state.
+say "2. EGRESS — web__run baseline outbound channel"
+note "neutral public search only; no probe data or remote mutation."
 
-probe apps_web_run "web__run (bundled egress surface, shape unsolved)" \
-  "$(isolate_prompt "tools.web__run({open: [{url: 'https://example.com'}]})")"
+probe apps_web_run "web__run (functional bundled egress surface)" \
+  "$(isolate_prompt "tools.web__run({search_query: [{q: 'example domain'}]})")"
 
 # ---------------------------------------------------------------------------
 # #30's third question. Per issue #4 the guard NEVER executes under the inline
-# -c form, so the production shape shows nothing either way and cannot answer
+# -c form, so the exposed baseline shows nothing either way and cannot answer
 # this. --dangerously-bypass-hook-trust is added HERE ONLY, as a diagnostic: it
 # answers what the guard WOULD observe once #4 is fixed. It is not part of the
 # production spawn and must not become part of it — #4 explains why (it grants
 # execution to every untrusted hook from every surviving config layer).
 say "3. GUARD VISIBILITY — would the PreToolUse guard see an MCP tool call?"
 BEFORE=0; [ -f "$TOOLS_LOG" ] && BEFORE="$(wc -l < "$TOOLS_LOG" | tr -d ' ')"
-note "tools.log lines before: $BEFORE (production shape, guard untrusted -> expect 0)"
+note "tools.log lines before: $BEFORE (exposed baseline, guard untrusted -> expect 0)"
 
 probe apps_guard_ab "sites_list_sites under --dangerously-bypass-hook-trust" \
   "$(isolate_prompt "tools.mcp__codex_apps__sites_list_sites({})")" \

@@ -34,6 +34,17 @@ which are released together.
 - Limit the artifact to internal, pre-production evaluation until security
   issues #1–#8 close; public and enterprise production remain unsupported.
 
+### Codex account boundary and explicit exec trust
+
+- Disable Codex's bundled authenticated apps with strict recognized configuration
+  on fresh and resumed answering spawns, so remote calls cannot use the owner's
+  account-backed read, deploy, environment, or access-control tools.
+- Remove top-level web search and image generation from the same spawn boundary,
+  preventing undeclared outbound calls that survive user-config isolation.
+- Document `exec` as an explicit broad-authority grant for Claude rather than a
+  read-isolated capability, while keeping Codex's filesystem read floor scoped to
+  the separate kernel-boundary work.
+
 ### Linux and isolated container listeners
 
 - Publish the CLI for Linux and install one restartable systemd user service
