@@ -640,7 +640,7 @@ describe("runDoctor", () => {
     });
     expect(code).toBe(0);
     expect(lines.join("\n")).toContain("✓ codex session guard");
-    expect(lines.join("\n")).not.toContain("last verified: 0.146.0");
+    expect(lines.join("\n")).not.toContain("default-path lifecycle probe");
   });
 
   it("fails Codex telemetry compatibility when OpenTelemetry is enabled", async () => {
@@ -660,7 +660,7 @@ describe("runDoctor", () => {
     });
     expect(code).toBe(1);
     expect(lines.join("\n")).toContain("✗ codex tool telemetry");
-    expect(lines.join("\n")).toContain("last verified: 0.146.0");
+    expect(lines.join("\n")).toContain("no codex-cli release has passed the default-path lifecycle probe");
   });
 
   // A relay string that is syntactically not a URL currently reaches the

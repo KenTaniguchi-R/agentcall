@@ -13,10 +13,14 @@ export type { AgentKind };
 // the security boundary and must be re-probed before resumed sessions are
 // trusted again.
 export const CODEX_THREADING_VERIFIED_VERSION = "0.146.0";
+export const CODEX_GUARD_TRUST_VERIFIED_VERSION = "0.146.0";
 
-// Kept separate from the threading pin: updating resume-sandbox evidence must
-// not silently bless an unreviewed hook-normalization implementation.
-export const CODEX_HOOK_TRUST_VERIFIED_VERSION = "0.146.0";
+// Kept separate from the threading and guard-trust pins: evidence for either
+// must not silently bless incomplete default-path lifecycle coverage.
+// No release is currently verified. The 0.146.0 production probe reached its
+// default code-mode tool path without emitting either lifecycle hook, so tool
+// telemetry stays off rather than changing Codex's available tools.
+export const CODEX_HOOK_TRUST_VERIFIED_VERSION = "none";
 
 export function codexThreadingEnabled(
   resolveBin: (kind: AgentKind) => string = resolveAgentBin,
@@ -256,11 +260,6 @@ export function buildSpawnSpec(
   const codexRemoteBoundary = [
     "--disable", "apps",
     "--disable", "image_generation",
-    // 0.146.0's code-mode `exec` wrapper completed a nested shell call without
-    // emitting either configured lifecycle hook in the production live probe.
-    // Keep Codex on its native exec_command handler, whose stable hook adapter
-    // emits the paired canonical Bash events this telemetry relies on.
-    ...(toolTelemetryFile ? ["--disable", "code_mode_host"] : []),
     "-c", `web_search="disabled"`,
     "--strict-config",
   ];

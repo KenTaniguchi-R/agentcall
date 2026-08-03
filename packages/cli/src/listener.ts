@@ -9,7 +9,7 @@ import type { LinePaths } from "./paths.js";
 import { buildPrompt } from "./prompt.js";
 import {
   AgentRunError, codexThreadingEnabled, codexToolTelemetryEnabled,
-  CODEX_HOOK_TRUST_VERIFIED_VERSION, CODEX_THREADING_VERIFIED_VERSION, runAgent,
+  CODEX_THREADING_VERIFIED_VERSION, runAgent,
 } from "./runner.js";
 import {
   admitContext, loadContexts, mintContextId, pruneContexts, saveContexts, upsertContext,
@@ -116,8 +116,8 @@ export function startListener(deps: ListenerDeps): { stop(): Promise<void> } {
   }
   if (startupKind === "codex" && telemetry && !startupCodexCanReportTools) {
     console.error(
-      `Warning: Codex tool telemetry is disabled because this codex-cli release has not passed ` +
-        `the PostToolUse probe (last verified: ${CODEX_HOOK_TRUST_VERIFIED_VERSION}).`,
+      `Warning: Codex tool telemetry is disabled because no codex-cli release has passed ` +
+        `the default-path lifecycle probe.`,
     );
   }
   let stopped = false;

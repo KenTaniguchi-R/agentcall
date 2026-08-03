@@ -226,8 +226,10 @@ which are released together.
   complete observed lifecycles. Missing, duplicate, mismatched, or oversized
   events are omitted; hook arguments, results, paths, and error text never enter
   the spool or exporter.
-- Extend model-free Codex hook discovery so `agentcall doctor` requires both the
-  exact trusted PreToolUse guard and PostToolUse lifecycle hook.
+- Keep Codex tool spans disabled after its 0.146.0 default code-mode path
+  completed without emitting paired lifecycle hooks. OpenTelemetry never
+  changes Codex's tool surface to manufacture an observable path; doctor
+  reports the compatibility gap while preserving ordinary call telemetry.
 - Keep prompts, replies, handles, paths, policy details, sessions, and exporter
   credentials out of telemetry; answering agent and hook subprocesses inherit
   correlation but no `OTEL_*` or AgentCall exporter configuration.

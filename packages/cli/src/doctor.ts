@@ -13,7 +13,7 @@ import type { LinePaths, MachinePaths } from "./paths.js";
 import { loadKeys } from "./keys.js";
 import { checkKnownPeersStore } from "./known-peers.js";
 import {
-  codexToolTelemetryEnabled, CODEX_HOOK_TRUST_VERIFIED_VERSION, type AgentKind,
+  codexToolTelemetryEnabled, type AgentKind,
 } from "./runner.js";
 import { readTelemetryHealth } from "./telemetry-health.js";
 import {
@@ -426,8 +426,8 @@ export async function runDoctor(deps: DoctorDeps): Promise<number> {
         report({
           name: "codex tool telemetry",
           ok: false,
-          detail: `codex-cli release has not passed the PostToolUse probe (last verified: ${CODEX_HOOK_TRUST_VERIFIED_VERSION})`,
-          hint: "install the verified codex-cli release or disable local OpenTelemetry until this release is re-probed",
+          detail: "no codex-cli release has passed the default-path lifecycle probe",
+          hint: "Codex call telemetry remains available, but tool spans stay disabled until the default tool path emits paired hooks",
         });
       } else {
         report(await checkCodexGuard(agentWorkdir, deps.codexGuardFn, telemetryOptIn));

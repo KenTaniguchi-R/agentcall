@@ -293,9 +293,11 @@ The local implementation exports bounded call metadata and span timing. When
 enabled, paired runtime hooks also emit `execute_tool <name>` child spans and
 `gen_ai.execute_tool.duration` only for tool lifecycles with the same stable
 pre/post tool-call ID. Claude supplies explicit success/failure and native
-duration events; Codex 0.146.0 supplies successful post events only, so a failed
-or missing Codex post event is omitted rather than reported as success. Duplicate,
-mismatched, oversized, and incomplete local observations are discarded.
+duration events. Codex tool spans are currently disabled: the 0.146.0 live
+probe showed its default code-mode tool path can complete without emitting
+either lifecycle hook, and telemetry does not change the runtime's tool surface
+to force an observable path. Duplicate, mismatched, oversized, and incomplete
+local observations are discarded.
 Pairs with non-allowlisted tool names or timestamps outside the invocation's
 spool lifetime are omitted as well.
 

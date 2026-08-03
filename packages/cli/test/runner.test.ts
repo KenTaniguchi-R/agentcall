@@ -64,8 +64,9 @@ describe("codex threading evidence", () => {
 describe("codex tool telemetry evidence", () => {
   const bin = () => "/fake/bin/codex";
 
-  it("enables PostToolUse telemetry only for the release with pinned live evidence", () => {
-    expect(codexToolTelemetryEnabled(bin, () => `codex-cli ${CODEX_HOOK_TRUST_VERIFIED_VERSION}`)).toBe(true);
+  it("keeps PostToolUse telemetry disabled until a default production tool path has paired evidence", () => {
+    expect(codexToolTelemetryEnabled(bin, () => `codex-cli ${CODEX_HOOK_TRUST_VERIFIED_VERSION}`)).toBe(false);
+    expect(codexToolTelemetryEnabled(bin, () => "codex-cli 0.146.0")).toBe(false);
     expect(codexToolTelemetryEnabled(bin, () => "codex-cli 0.147.0")).toBe(false);
     expect(codexToolTelemetryEnabled(bin, () => "codex-cli unknown")).toBe(false);
     expect(codexToolTelemetryEnabled(bin, () => { throw new Error("missing"); })).toBe(false);
@@ -543,7 +544,7 @@ describe("guard hook wiring", () => {
     expect(trust).not.toContain("PostToolUseFailure");
     const disabled = codex.args.flatMap((arg, index) =>
       arg === "--disable" ? [codex.args[index + 1]] : []);
-    expect(disabled).toContain("code_mode_host");
+    expect(disabled).not.toContain("code_mode_host");
   });
 
   it("uses no matcher, so every tool call reaches the guard", () => {
