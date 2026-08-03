@@ -134,6 +134,7 @@ jobs:
         if: matrix.node == 24
         run: |
           pnpm --filter @benree/agentcall-shared test
+          pnpm --filter @benree/agentcall-relay test
           pnpm --filter @benree/agentcall test:windows
       - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8
         with:

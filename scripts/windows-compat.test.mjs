@@ -16,6 +16,7 @@ test("native Windows CI keeps the engines and unsupported-platform contracts exp
   assert.match(workflow, /runs-on: windows-2025/);
   assert.match(workflow, /node: \[20, 22, 24\]/);
   assert.match(workflow, /shell: pwsh/);
+  assert.match(workflow, /pnpm --filter @benree\/agentcall-relay test/);
   assert.match(workflow, /pnpm --filter @benree\/agentcall test:windows/);
   assert.match(workflow, /#251/);
   assert.match(workflow, /--force/);
