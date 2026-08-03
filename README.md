@@ -198,6 +198,16 @@ Call lifecycle rows identify the caller/callee and call ID but deliberately
 exclude prompt and response bodies; their Durable Object outbox retries delivery
 to the organization ledger if D1 is temporarily unavailable.
 
+The relay also exposes an administrator-only retention control plane:
+`GET`/`PUT /v1/audit/retention-policy` reads or version-updates the tenant's
+event window (400-day default, bounded to 30–2,555 days), while
+`GET`/`POST /v1/audit/legal-holds`, `GET /v1/audit/legal-holds/:hold_id`, and
+`POST /v1/audit/legal-holds/:hold_id/release` manage one active tenant legal or
+incident hold. Mutations are idempotent and commit with durable audit evidence.
+There is still no expiry worker: these APIs neither delete rows nor prove
+erasure, and a future worker must require the export watermark and fail closed
+while a hold is active.
+
 The repository ships an experimental, pre-production
 [customer-owned Cloudflare relay runbook](docs/self-hosting.md) and a
 binding-complete Wrangler configuration. It is for internal evaluation while
@@ -1069,13 +1079,15 @@ disabled whenever managed policy is present so IT can pin the deployed version.
   it contains no tenant, viewer, target, source IP/country, or online/offline
   state. Exact timestamps may be correlated with information held elsewhere, so
   this de-identified telemetry is not security audit evidence.
-- **Hosted audit events have no supported expiry or erasure workflow.** Roster
+- **Hosted audit events have no automated expiry or erasure workflow.** Roster
   audit rows are retained indefinitely; organization audit rows keep the newest
   10,000 events per organization but have no time-based window. There is no
   customer deletion endpoint or scheduled cleanup. The administrator audit
   export provides a checkpointed copy of retained rows, and a completed
   unfiltered API export can be explicitly acknowledged as the tenant's
-  monotonic export watermark. No retention job consumes that watermark yet;
+  monotonic export watermark. Administrators can configure a bounded event
+  window and create/release a tenant legal hold, but no retention job consumes
+  the window, hold, or watermark yet;
   roster deletion
   deliberately preserves its evidence, and the service cannot guarantee
   end-to-end erasure across D1 and backup copies. See the

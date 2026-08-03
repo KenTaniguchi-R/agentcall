@@ -18,6 +18,9 @@ The availability date is when the event contract entered the repository migratio
 | `call.fail` | org | `U` | `handle` | `call` | durable outbox | nullable request metadata | 2026-08-03 | `0014_call_audit_events.sql` |
 | `call.cancel` | org | `U` | `handle` | `call` | durable outbox | nullable request metadata | 2026-08-03 | `0014_call_audit_events.sql` |
 | `call.timeout` | org | `U` | `system` | `call` | durable outbox | nullable request metadata | 2026-08-03 | `0014_call_audit_events.sql` |
+| `audit.retention.update` | org | `U` | `handle` | `retention_policy` | synchronous D1 batch | nullable request metadata | 2026-08-03 | `0016_audit_retention_controls.sql` |
+| `audit.hold.create` | org | `C` | `handle` | `legal_hold` | synchronous D1 batch | nullable request metadata | 2026-08-03 | `0016_audit_retention_controls.sql` |
+| `audit.hold.release` | org | `U` | `handle` | `legal_hold` | synchronous D1 batch | nullable request metadata | 2026-08-03 | `0016_audit_retention_controls.sql` |
 | `roster.create` | roster | `C` | `handle` | `roster` | synchronous D1 batch | nullable request metadata | 2026-08-02 | `0007_roster_audit_events.sql` |
 | `roster.join` | roster | `C` | `handle` | `handle` | synchronous D1 batch | nullable request metadata | 2026-08-02 | `0007_roster_audit_events.sql` |
 | `roster.leave` | roster | `D` | `handle` | `handle` | synchronous D1 batch | nullable request metadata | 2026-08-02 | `0007_roster_audit_events.sql` |
@@ -51,6 +54,14 @@ Only the terminal page of an unfiltered, all-time export returns a tenant-bound 
 
 The write is idempotent and advances the organization’s `org_events` and `roster_events` acknowledgement watermarks atomically. Forged and cross-tenant receipts return `400`; a receipt older than either acknowledged ledger watermark returns `409`. Every export page exposes the current `acknowledged_checkpoint`. This records an administrator’s explicit export-completion assertion for future retention—it does not delete rows, implement a legal hold, or prove that an external destination or backup retained the bytes.
 
+## Retention and legal-hold control plane
+
+Organization administrators can read or version-update the tenant event window through `GET`/`PUT /v1/audit/retention-policy`. An absent row reads as the 400-day default; configured values are bounded to 30–2,555 days. Caller-supplied request IDs make retries idempotent, optimistic versions reject stale updates, and every successful mutation commits with `audit.retention.update` evidence.
+
+`GET`/`POST /v1/audit/legal-holds` reads or creates the tenant’s single active legal/incident hold, `GET /v1/audit/legal-holds/:hold_id` reads active or released state by opaque ID, and `POST /v1/audit/legal-holds/:hold_id/release` releases it without mutating its creation evidence. Create/release retries are idempotent, cross-tenant lookup is indistinguishable from absence, and successful mutations commit with durable audit evidence.
+
+This is a control plane only. No cron or deletion path consumes the configured window, active hold, or export acknowledgement. It does not expire events, erase a subject, or prove anything about Time Travel, backups, or external exports.
+
 ## Snapshot and ordering contract
 
 - Page one captures the maximum ID and row count independently for `org_events` and `roster_events`.
@@ -66,6 +77,6 @@ The catalog is exhaustive for the two currently exported durable ledgers. Call e
 
 Sampled traces, metrics, Workers logs, and the identity-unlinked `agentcall_status_reads` Analytics Engine dataset are observability, not a complete audit ledger. They cannot prove that an individual action occurred or did not occur and are not merged into this export.
 
-Current retention is also asymmetric: `org_events` keeps the newest 10,000 rows per organization, while `roster_events` has no time-based deletion path. The roster audit budget gates member-driven mutation churn; it is not a row-count retention ceiling. Legal holds, subject erasure, continuous export, and time-based retention are not implemented.
+Current retention is also asymmetric: `org_events` keeps the newest 10,000 rows per organization, while `roster_events` has no time-based deletion path. The roster audit budget gates member-driven mutation churn; it is not a row-count retention ceiling. The event-window and legal-hold control plane is implemented, but subject erasure, continuous export, and time-based deletion are not.
 
 For export invocation and options, see the [CLI reference](/reference/cli#audit).

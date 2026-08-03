@@ -1,6 +1,8 @@
 import { describe, expect, it } from "vitest";
 import {
+  AuditLegalHold, AuditLegalHoldCreateRequest, AuditLegalHoldReleaseRequest,
   AuditExportAcknowledgement, AuditExportAcknowledgementRequest, AuditExportPage,
+  AuditRetentionPolicy, AuditRetentionPolicyUpdateRequest,
 } from "../src/audit.js";
 
 describe("audit export protocol", () => {
@@ -54,6 +56,43 @@ describe("audit export protocol", () => {
     })).toMatchObject({ acknowledged_by: "admin", acknowledged_at: 1_000 });
     expect(AuditExportAcknowledgementRequest.safeParse({
       completion_receipt: "receipt", org: "must-not-be-client-controlled",
+    }).success).toBe(false);
+  });
+
+  it("validates bounded retention policy and legal hold contracts", () => {
+    expect(AuditRetentionPolicy.parse({
+      event_retention_days: 400, version: 0, updated_by: null, updated_at: null,
+    })).toMatchObject({ event_retention_days: 400, version: 0 });
+    expect(AuditRetentionPolicyUpdateRequest.parse({
+      event_retention_days: 365, expected_version: 0, request_id: "a".repeat(32),
+    })).toMatchObject({ event_retention_days: 365, expected_version: 0 });
+    expect(AuditRetentionPolicyUpdateRequest.safeParse({
+      event_retention_days: 29, expected_version: 0, request_id: "a".repeat(32),
+    }).success).toBe(false);
+    expect(AuditRetentionPolicyUpdateRequest.safeParse({
+      event_retention_days: 2_556, expected_version: 0, request_id: "a".repeat(32),
+    }).success).toBe(false);
+    expect(AuditRetentionPolicy.safeParse({
+      event_retention_days: 400, version: 0, updated_by: "admin", updated_at: 1,
+    }).success).toBe(false);
+
+    const hold = {
+      hold_id: `hold_${"b".repeat(32)}`,
+      reason: "incident preservation",
+      created_by: "admin",
+      created_at: 1,
+      released_by: null,
+      released_at: null,
+    };
+    expect(AuditLegalHold.parse(hold)).toEqual(hold);
+    expect(AuditLegalHold.safeParse({ ...hold, released_by: "admin" }).success).toBe(false);
+    expect(AuditLegalHoldCreateRequest.parse({
+      reason: " incident preservation ", request_id: "c".repeat(32),
+    })).toEqual({ reason: "incident preservation", request_id: "c".repeat(32) });
+    expect(AuditLegalHoldReleaseRequest.parse({ request_id: "d".repeat(32) }))
+      .toEqual({ request_id: "d".repeat(32) });
+    expect(AuditLegalHoldCreateRequest.safeParse({
+      reason: "", request_id: "c".repeat(32), org: "must-not-be-client-controlled",
     }).success).toBe(false);
   });
 });
