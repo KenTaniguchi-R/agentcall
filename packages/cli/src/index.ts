@@ -50,7 +50,8 @@ const parseAuditTime = (value: string | undefined, flag: string): number | undef
 
 const parseAuditFilter = (value: string | undefined, flag: string): string | undefined => {
   if (value === undefined) return undefined;
-  if (value.length < 1 || value.length > 256) throw new Error(`${flag} must contain 1 to 256 characters`);
+  const bytes = new TextEncoder().encode(value).length;
+  if (bytes < 1 || bytes > 256) throw new Error(`${flag} must contain 1 to 256 UTF-8 bytes`);
   return value;
 };
 

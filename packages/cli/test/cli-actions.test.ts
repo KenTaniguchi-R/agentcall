@@ -379,7 +379,10 @@ describe.sequential("CLI command actions", () => {
     expect(invalidFormat.stderr).toContain("--format must be ndjson or csv");
     const invalidFilter = await runCommand(testHome, ["audit", "export", "--actor", ""]);
     expect(invalidFilter.code).toBe(1);
-    expect(invalidFilter.stderr).toContain("--actor must contain 1 to 256 characters");
+    expect(invalidFilter.stderr).toContain("--actor must contain 1 to 256 UTF-8 bytes");
+    const multibyteFilter = await runCommand(testHome, ["audit", "export", "--event", "é".repeat(129)]);
+    expect(multibyteFilter.code).toBe(1);
+    expect(multibyteFilter.stderr).toContain("--event must contain 1 to 256 UTF-8 bytes");
   });
 
   it("does not print a final checkpoint when a paged snapshot becomes incomplete", async () => {

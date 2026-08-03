@@ -114,7 +114,8 @@ function parseInteger(value: string | null): number | undefined | null {
 
 function parseFilter(value: string | null): string | undefined | null {
   if (value === null) return undefined;
-  if (value.length < 1 || value.length > MAX_FILTER_LENGTH) return null;
+  const bytes = new TextEncoder().encode(value).length;
+  if (bytes < 1 || bytes > MAX_FILTER_LENGTH) return null;
   return value;
 }
 

@@ -228,5 +228,8 @@ describe("organization audit export", () => {
     expect((await SELF.fetch(
       `https://relay.test/v1/audit/events?event=${"x".repeat(257)}`, { headers },
     )).status).toBe(400);
+    expect((await SELF.fetch(
+      `https://relay.test/v1/audit/events?event=${encodeURIComponent("é".repeat(129))}`, { headers },
+    )).status).toBe(400);
   });
 });
