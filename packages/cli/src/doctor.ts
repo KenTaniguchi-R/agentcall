@@ -1,5 +1,5 @@
 import { fetchKeys, getStatus } from "./api.js";
-import { statSync } from "node:fs";
+import { lstatSync, statSync } from "node:fs";
 import { encryptionKeyTranscript, importIdentityPublicKey, keyIdFor, verifyTranscript } from "@benree/agentcall-shared";
 import { callAgent } from "./callClient.js";
 import { addressHost, relayUrl, resolveLineWorkdir, type LineConfig, type Workdir } from "./config.js";
@@ -32,6 +32,57 @@ export interface DoctorDeps {
   guardBinaryFn?: GuardBinaryProbeFn;
   codexGuardFn?: CodexGuardProbeFn;
   keyHealthFn?: (cfg: LineConfig, paths: LinePaths) => Promise<VerifyCheck[]>;
+}
+
+// The relay token is still plaintext at rest. Until a signed standalone
+// listener can bind an OS-keystore ACL to AgentCall's own executable identity,
+// the honest local floor is a private regular file inside a private line
+// directory. Report the exact storage location without ever reading or
+// printing the credential itself.
+export function checkCredentialStorage(
+  paths: LinePaths,
+  platform: NodeJS.Platform = process.platform,
+): VerifyCheck {
+  try {
+    const dir = lstatSync(paths.dir);
+    const file = lstatSync(paths.configFile);
+    if (!dir.isDirectory() || dir.isSymbolicLink()) {
+      throw new Error(`${paths.dir} must be a real directory, not a symlink`);
+    }
+    if (!file.isFile() || file.isSymbolicLink()) {
+      throw new Error(`${paths.configFile} must be a regular file, not a symlink`);
+    }
+    if (platform === "win32") {
+      return {
+        name: "handle credential storage",
+        ok: true,
+        warn: true,
+        detail: `plaintext file at ${paths.configFile}; Windows ACLs were not evaluated`,
+        hint: "restrict this file to the current user; OS credential storage is not implemented yet",
+      };
+    }
+
+    const dirMode = dir.mode & 0o777;
+    const fileMode = file.mode & 0o777;
+    const secure = dirMode === 0o700 && fileMode === 0o600;
+    return {
+      name: "handle credential storage",
+      ok: secure,
+      detail: secure
+        ? `plaintext file at ${paths.configFile}; permissions 600 in a 700 directory`
+        : `plaintext file at ${paths.configFile}; permissions ${fileMode.toString(8)} in a ${dirMode.toString(8)} directory`,
+      hint: secure
+        ? undefined
+        : `run \`chmod 700 "${paths.dir}" && chmod 600 "${paths.configFile}"\``,
+    };
+  } catch (error) {
+    return {
+      name: "handle credential storage",
+      ok: false,
+      detail: short(error),
+      hint: `restore a regular config file at ${paths.configFile}, then run \`chmod 700 "${paths.dir}" && chmod 600 "${paths.configFile}"\``,
+    };
+  }
 }
 
 export async function checkLineKeyHealth(
@@ -166,6 +217,10 @@ export async function runDoctor(deps: DoctorDeps): Promise<number> {
 
   for (const line of lineList) {
     log(`line ${line.name}`);
+    // Report storage independently of JSON/schema validity. A corrupt
+    // credential file is still a credential file, and its permission/type
+    // failure must not disappear behind the config parse failure below.
+    report(checkCredentialStorage(line.paths, platform));
 
     if (!line.ok || !line.config) {
       report({

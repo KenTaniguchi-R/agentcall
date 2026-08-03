@@ -3,7 +3,7 @@ import { dirname } from "node:path";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
-import { checkLineKeyHealth, runDoctor } from "../src/doctor.js";
+import { checkCredentialStorage, checkLineKeyHealth, runDoctor } from "../src/doctor.js";
 import { saveLineConfig } from "../src/lines.js";
 import { getLinePaths, getMachinePaths, type MachinePaths } from "../src/paths.js";
 import { GUARD_PROBE_LINE } from "../src/verify.js";
@@ -61,6 +61,61 @@ const baseDeps = {
   guardBinaryFn: async () => true,
   keyHealthFn: async () => [],
 };
+
+describe("doctor credential storage", () => {
+  it("reports the plaintext location and private POSIX permissions without exposing the token", () => {
+    const m = freshMachine();
+    const paths = getLinePaths(m, LINE);
+    saveLineConfig(paths, { org: "acme", handle: "ken", token: "never-print-me", relay: "https://relay.example" });
+
+    const check = checkCredentialStorage(paths, "darwin");
+
+    expect(check).toMatchObject({ name: "handle credential storage", ok: true });
+    expect(check.detail).toContain(paths.configFile);
+    expect(check.detail).toContain("permissions 600 in a 700 directory");
+    expect(check.detail).not.toContain("never-print-me");
+  });
+
+  it("fails when the token file or containing line directory is not private", () => {
+    const m = freshMachine();
+    const paths = getLinePaths(m, LINE);
+    saveLineConfig(paths, { org: "acme", handle: "ken", token: "t", relay: "https://relay.example" });
+    chmodSync(paths.dir, 0o755);
+    chmodSync(paths.configFile, 0o644);
+
+    const check = checkCredentialStorage(paths, "linux");
+
+    expect(check).toMatchObject({ name: "handle credential storage", ok: false });
+    expect(check.detail).toContain("permissions 644 in a 755 directory");
+    expect(check.hint).toContain("chmod 700");
+    expect(check.hint).toContain("chmod 600");
+  });
+
+  it("makes an insecure credential store fail the complete doctor run", async () => {
+    const m = freshMachine();
+    const paths = getLinePaths(m, LINE);
+    saveLineConfig(paths, { org: "acme", handle: "ken", token: "t", relay: "https://relay.example" });
+    chmodSync(paths.configFile, 0o644);
+    const lines: string[] = [];
+
+    const code = await runDoctor({ ...baseDeps, machine: m, log: (line) => lines.push(line) });
+
+    expect(code).toBe(1);
+    expect(lines.join("\n")).toContain("✗ handle credential storage");
+  });
+
+  it("does not pretend to evaluate Windows ACLs with POSIX mode bits", () => {
+    const m = freshMachine();
+    const paths = getLinePaths(m, LINE);
+    saveLineConfig(paths, { org: "acme", handle: "ken", token: "t", relay: "https://relay.example" });
+
+    expect(checkCredentialStorage(paths, "win32")).toMatchObject({
+      name: "handle credential storage",
+      ok: true,
+      warn: true,
+    });
+  });
+});
 
 describe("doctor key health", () => {
   const signed = async (local: StoredKeys, record: EncryptionKeyRecordType) => {

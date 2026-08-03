@@ -1,5 +1,5 @@
 import { describe, expect, it, beforeEach } from "vitest";
-import { mkdtempSync, mkdirSync, readFileSync, writeFileSync, statSync } from "node:fs";
+import { mkdtempSync, mkdirSync, readFileSync, symlinkSync, writeFileSync, statSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { getLinePaths, getMachinePaths, type MachinePaths } from "../src/paths.js";
@@ -149,6 +149,23 @@ describe("listLines", () => {
     mkdirSync(l.dir, { recursive: true });
     writeFileSync(l.configFile, JSON.stringify({ handle: "x" }));
     expect(listLines(m)[0]!.ok).toBe(false);
+  });
+
+  it("rejects a non-regular config before attempting to read it", () => {
+    const l = getLinePaths(m, "nonregular");
+    mkdirSync(l.configFile, { recursive: true });
+    expect(() => loadLineConfig(l)).toThrow(/regular file/);
+  });
+
+  it("reports a symlinked line directory instead of silently omitting it", () => {
+    const target = getLinePaths(m, "target");
+    saveLineConfig(target, cfg);
+    symlinkSync(target.dir, getLinePaths(m, "linked").dir);
+
+    const linked = listLines(m).find((line) => line.name === "linked");
+
+    expect(linked).toMatchObject({ ok: false });
+    expect(linked?.error).toMatch(/real directory, not a symlink/);
   });
 
   it("ignores files and invalid names sitting in linesDir", () => {
