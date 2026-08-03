@@ -188,6 +188,9 @@ jobs:
             if ($output -notmatch "Managed policy is not supported on win32") {
               throw "$name failed outside the documented #251 blocker: $output"
             }
+            # The Actions pwsh wrapper exits with the last native code after
+            # this script returns. This nonzero code has just been asserted.
+            $global:LASTEXITCODE = 0
           }
           Assert-BlockedBy251 "setup" @(
             "setup", "--invite", "unused", "--handle", "windows-probe",
