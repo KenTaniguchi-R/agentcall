@@ -1,0 +1,44 @@
+{
+  "$schema": "https://mintlify.com/docs.json",
+  "theme": "mint",
+  "name": "AgentCall",
+  "description": "Call another person's coding agent across the internet.",
+  "colors": {
+    "primary": "#16A34A",
+    "light": "#22C55E",
+    "dark": "#15803D"
+  },
+  "navigation": {
+    "groups": [
+      {
+        "group": "Overview",
+        "pages": ["index"]
+      },
+      {
+        "group": "Get started",
+        "pages": ["get-started/install", "get-started/setup"]
+      },
+      {
+        "group": "Reference",
+        "pages": ["reference/cli", "reference/protocol"]
+      },
+      {
+        "group": "Security",
+        "pages": ["security/overview"]
+      }
+    ]
+  },
+  "navbar": {
+    "links": [
+      {
+        "label": "GitHub",
+        "href": "https://github.com/KenTaniguchi-R/agentcall"
+      }
+    ]
+  },
+  "footer": {
+    "socials": {
+      "github": "https://github.com/KenTaniguchi-R/agentcall"
+    }
+  }
+}
