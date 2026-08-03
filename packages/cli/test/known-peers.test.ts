@@ -1,7 +1,8 @@
-import { chmodSync, mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
+import { chmodSync, mkdirSync, mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { spawnSync } from "node:child_process";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   encryptionKeyTranscript, exportPublicKey, generateEncryptionKeyPair, generateIdentityKeyPair,
   HPKE_SUITE, keyIdFor, signTranscript, type EncryptionKeyRecordType,
@@ -18,7 +19,10 @@ beforeEach(() => {
   root = mkdtempSync(join(tmpdir(), "agentcall-peers-"));
   machine = getMachinePaths(root, root);
 });
-afterEach(() => rmSync(root, { recursive: true, force: true }));
+afterEach(() => {
+  vi.useRealTimers();
+  rmSync(root, { recursive: true, force: true });
+});
 
 async function bundle(identity?: CryptoKeyPair, epoch = 1, address = PEER) {
   identity ??= await generateIdentityKeyPair();
@@ -163,5 +167,29 @@ describe("known-peer identity pins", () => {
     ]);
     expect(results.some((result) => result.status === "fulfilled")).toBe(true);
     expect(loadKnownPeers(machine)[0]?.highest_encryption_epoch).toBe(3);
+  });
+
+  it("never removes an existing lock after another process replaces its owner", async () => {
+    const first = await bundle();
+    mkdirSync(machine.dir, { recursive: true, mode: 0o700 });
+    const lockFile = `${machine.knownPeersFile}.lock`;
+    writeFileSync(lockFile, "2147483647:orphaned", { mode: 0o600 });
+
+    vi.useFakeTimers();
+    const verification = verifyAndPinPeer(machine, PEER, first.value, NOW);
+    const replacement = "2147483646:new-owner";
+    const child = spawnSync(process.execPath, [
+      "-e",
+      "require('node:fs').writeFileSync(process.argv[1], process.argv[2])",
+      lockFile,
+      replacement,
+    ]);
+    expect(child.status).toBe(0);
+
+    const rejection = expect(verification).rejects.toThrow(/Timed out waiting/);
+    await vi.advanceTimersByTimeAsync(10_001);
+    await rejection;
+    expect(readFileSync(lockFile, "utf8")).toBe(replacement);
+    expect(loadKnownPeers(machine)).toEqual([]);
   });
 });
