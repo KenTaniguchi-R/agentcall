@@ -1,5 +1,5 @@
 import { describe, expect, it, beforeEach } from "vitest";
-import { existsSync, mkdtempSync, mkdirSync, writeFileSync, readFileSync, statSync } from "node:fs";
+import { existsSync, mkdtempSync, mkdirSync, writeFileSync, readFileSync, readdirSync, statSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { getMachinePaths, type MachinePaths } from "../src/paths.js";
@@ -16,6 +16,7 @@ describe("savePerson / loadPerson", () => {
   it("round-trips and writes 0600", () => {
     savePerson(m, { primary_line: "claude" });
     expect(loadPerson(m).primary_line).toBe("claude");
+    expect(statSync(m.dir).mode & 0o777).toBe(0o700);
     expect(statSync(m.personFile).mode & 0o777).toBe(0o600);
   });
 
@@ -36,7 +37,27 @@ describe("savePerson / loadPerson", () => {
     // rename(2) doesn't require the source to vanish for the destination to
     // exist. Actually stat the .tmp path to prove the claim in the name.
     expect(existsSync(`${m.personFile}.tmp`)).toBe(false);
+    expect(readdirSync(m.dir).filter((name) => name.startsWith(".person.json.") && name.endsWith(".tmp"))).toEqual([]);
     expect(readFileSync(m.personFile, "utf8")).toContain("claude");
+  });
+
+  it("does not let the legacy fixed temp path block a save", () => {
+    mkdirSync(`${m.personFile}.tmp`);
+
+    expect(() => savePerson(m, { primary_line: "claude" })).not.toThrow();
+    expect(loadPerson(m).primary_line).toBe("claude");
+    expect(statSync(`${m.personFile}.tmp`).isDirectory()).toBe(true);
+  });
+
+  it("preserves the previous primary line when serialization fails", () => {
+    savePerson(m, { primary_line: "claude" });
+    const circular: Record<string, unknown> = {};
+    circular.self = circular;
+
+    expect(() => savePerson(m, { primary_line: "codex", circular } as never))
+      .toThrow(/circular/i);
+    expect(loadPerson(m).primary_line).toBe("claude");
+    expect(readdirSync(m.dir).filter((name) => name.startsWith(".person.json.") && name.endsWith(".tmp"))).toEqual([]);
   });
 });
 

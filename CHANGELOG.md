@@ -13,6 +13,13 @@ which are released together.
   longer shares the staging inode, and a serialization failure preserves the
   previous credential.
 
+### Primary-line persistence
+
+- Route `person.json` saves through the shared unique-temp atomic writer. A
+  stale legacy `person.json.tmp` path or concurrent writer no longer shares the
+  staging inode, and a serialization failure preserves the previous primary
+  line.
+
 ### Authorization permission vocabulary
 
 - Name existing authorization decisions with stable `resource:action`
