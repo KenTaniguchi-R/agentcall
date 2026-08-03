@@ -332,6 +332,39 @@ describe.sequential("CLI command actions", () => {
     ]);
   });
 
+  it("forwards audit filters and streams spreadsheet-safe CSV", async () => {
+    const requests: string[] = [];
+    const relay = await startRelay((url) => {
+      requests.push(url);
+      return { status: 200, body: {
+        events: [{
+          ledger: "org", id: 1, event: "org.invite.issue", action_type: "C", roster_id: null,
+          actor: "ken", actor_type: "handle", target_type: "invite", target_id: "target",
+          target_role: "member", actor_ip: "203.0.113.10", actor_country: "US",
+          description: "=1+1, \"sensitive\"", at: 1,
+        }],
+        checkpoint: { org_event_id: 1, org_event_count: 1, roster_event_id: 0, roster_event_count: 0 },
+        next_page_token: "",
+      } };
+    });
+    const testHome = home();
+    seedConfig(testHome, relay);
+
+    const out = await runCommand(testHome, [
+      "audit", "export", "--actor", "ken", "--event", "org.invite.issue",
+      "--ip", "203.0.113.10", "--format", "csv",
+    ]);
+    expect(out.code).toBe(0);
+    const lines = out.stdout.trim().split("\n");
+    expect(lines[0]).toBe(
+      "ledger,id,event,action_type,roster_id,actor,actor_type,target_type,target_id,target_role,actor_ip,actor_country,description,at",
+    );
+    expect(lines[1]).toContain('"\'=1+1, ""sensitive"""');
+    expect(requests).toEqual([
+      "/v1/audit/events?actor=ken&event=org.invite.issue&actor_ip=203.0.113.10&page_size=100",
+    ]);
+  });
+
   it("rejects invalid audit time and page size before contacting the relay", async () => {
     const testHome = home();
     seedConfig(testHome, "http://127.0.0.1:1");
@@ -341,6 +374,12 @@ describe.sequential("CLI command actions", () => {
     const invalidPage = await runCommand(testHome, ["audit", "export", "--page-size", "501"]);
     expect(invalidPage.code).toBe(1);
     expect(invalidPage.stderr).toContain("--page-size must be an integer from 1 to 500");
+    const invalidFormat = await runCommand(testHome, ["audit", "export", "--format", "xml"]);
+    expect(invalidFormat.code).toBe(1);
+    expect(invalidFormat.stderr).toContain("--format must be ndjson or csv");
+    const invalidFilter = await runCommand(testHome, ["audit", "export", "--actor", ""]);
+    expect(invalidFilter.code).toBe(1);
+    expect(invalidFilter.stderr).toContain("--actor must contain 1 to 256 characters");
   });
 
   it("does not print a final checkpoint when a paged snapshot becomes incomplete", async () => {

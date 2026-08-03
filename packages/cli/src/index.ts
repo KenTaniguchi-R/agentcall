@@ -1,6 +1,6 @@
 import { existsSync, rmSync } from "node:fs";
 import { Command, CommanderError } from "commander";
-import type { AgentKind, AuditCheckpointType } from "@benree/agentcall-shared";
+import type { AgentKind, AuditCheckpointType, AuditExportEventType } from "@benree/agentcall-shared";
 import { getMachinePaths, type LinePaths } from "./paths.js";
 import { addressHost, assertCallableLine, relayUrl, resolveLineWorkdir, type LineConfig } from "./config.js";
 import { callAgent, callStatusMessage, CallError } from "./callClient.js";
@@ -47,6 +47,29 @@ const parseAuditTime = (value: string | undefined, flag: string): number | undef
   if (!Number.isSafeInteger(parsed) || parsed < 0) throw new Error(`${flag} must be an epoch-millisecond or ISO timestamp`);
   return parsed;
 };
+
+const parseAuditFilter = (value: string | undefined, flag: string): string | undefined => {
+  if (value === undefined) return undefined;
+  if (value.length < 1 || value.length > 256) throw new Error(`${flag} must contain 1 to 256 characters`);
+  return value;
+};
+
+const AUDIT_CSV_COLUMNS = [
+  "ledger", "id", "event", "action_type", "roster_id", "actor", "actor_type",
+  "target_type", "target_id", "target_role", "actor_ip", "actor_country", "description", "at",
+] as const satisfies readonly (keyof AuditExportEventType)[];
+
+const csvCell = (value: unknown): string => {
+  if (value === null || value === undefined) return "";
+  const raw = String(value);
+  // Audit fields include peer-controlled handles and descriptions. Quoting is
+  // not enough to stop spreadsheet software from evaluating formula prefixes.
+  const text = /^\s*[=+\-@]/.test(raw) ? `'${raw}` : raw;
+  return /[",\r\n]/.test(text) ? `"${text.replaceAll('"', '""')}"` : text;
+};
+
+const auditCsvRow = (event: AuditExportEventType): string =>
+  AUDIT_CSV_COLUMNS.map((column) => csvCell(event[column])).join(",");
 
 program
   .command("setup")
@@ -125,31 +148,56 @@ const audit = program.command("audit").description("export organization audit ev
 
 audit
   .command("export")
-  .description("stream an administrator-only snapshot as newline-delimited JSON")
+  .description("stream an administrator-only snapshot as NDJSON or CSV")
   .option("--after <time>", "include events at or after this epoch-millisecond or ISO timestamp")
   .option("--before <time>", "include events before this epoch-millisecond or ISO timestamp")
+  .option("--actor <actor>", "include events whose actor field exactly matches")
+  .option("--event <event>", "include events whose event type exactly matches")
+  .option("--ip <address>", "include events whose source IP exactly matches")
+  .option("--format <format>", "output format: ndjson or csv", "ndjson")
   .option("--page-size <count>", "events fetched per relay page, from 1 to 500", "100")
   .option("--line <name>", "line whose organization to export (defaults to the primary line)")
-  .action(async (o: { after?: string; before?: string; pageSize: string; line?: string }) => {
+  .action(async (o: {
+    after?: string;
+    before?: string;
+    actor?: string;
+    event?: string;
+    ip?: string;
+    format: string;
+    pageSize: string;
+    line?: string;
+  }) => {
     const ctx = lineFor(o.line);
     if (!ctx) return;
     const cfg = ctx.config;
     try {
       const after = parseAuditTime(o.after, "--after");
       const before = parseAuditTime(o.before, "--before");
+      const actor = parseAuditFilter(o.actor, "--actor");
+      const event = parseAuditFilter(o.event, "--event");
+      const actorIp = parseAuditFilter(o.ip, "--ip");
       const pageSize = Number(o.pageSize);
       if (!Number.isInteger(pageSize) || pageSize < 1 || pageSize > 500) {
         throw new Error("--page-size must be an integer from 1 to 500");
       }
+      if (o.format !== "ndjson" && o.format !== "csv") {
+        throw new Error("--format must be ndjson or csv");
+      }
+      if (o.format === "csv") console.log(AUDIT_CSV_COLUMNS.join(","));
       let pageToken: string | undefined;
       let checkpoint: AuditCheckpointType | undefined;
       do {
         const page = await fetchAuditExportPage(
           relayUrl(cfg), { org: cfg.org, handle: cfg.handle, token: cfg.token },
-          { after, before, page_size: pageSize, page_token: pageToken },
+          {
+            after, before, actor, event, actor_ip: actorIp,
+            page_size: pageSize, page_token: pageToken,
+          },
           { retryRateLimit: true },
         );
-        for (const event of page.events) console.log(JSON.stringify(event));
+        for (const event of page.events) {
+          console.log(o.format === "csv" ? auditCsvRow(event) : JSON.stringify(event));
+        }
         checkpoint = page.checkpoint;
         pageToken = page.next_page_token || undefined;
       } while (pageToken);

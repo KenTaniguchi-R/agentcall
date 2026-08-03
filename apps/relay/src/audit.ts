@@ -9,6 +9,7 @@ import { authenticateRequest, requireOrgAdmin } from "./tenant.js";
 const DEFAULT_PAGE_SIZE = 100;
 const MAX_PAGE_SIZE = 500;
 const MAX_PAGE_TOKEN_LENGTH = 2_048;
+const MAX_FILTER_LENGTH = 256;
 
 type Checkpoint = {
   orgEventId: number;
@@ -17,12 +18,23 @@ type Checkpoint = {
   rosterEventCount: number;
 };
 type Position = { at: number; ledger: "org" | "roster"; id: number };
-type ExportQuery = { after?: number; before?: number; pageSize: number; pageToken?: string };
+type ExportQuery = {
+  after?: number;
+  before?: number;
+  actor?: string;
+  event?: string;
+  actorIp?: string;
+  pageSize: number;
+  pageToken?: string;
+};
 type CursorPayload = {
   org: string;
   handle: string;
   after: number | null;
   before: number | null;
+  actor: string | null;
+  event: string | null;
+  actorIp: string | null;
   pageSize: number;
   checkpoint: Checkpoint;
   position: Position;
@@ -76,6 +88,8 @@ async function decodeCursor(
     if (
       payload.org !== org || payload.handle !== handle ||
       payload.after !== (query.after ?? null) || payload.before !== (query.before ?? null) ||
+      payload.actor !== (query.actor ?? null) || payload.event !== (query.event ?? null) ||
+      payload.actorIp !== (query.actorIp ?? null) ||
       payload.pageSize !== query.pageSize ||
       !Number.isSafeInteger(payload.checkpoint?.orgEventId) || payload.checkpoint.orgEventId < 0 ||
       !Number.isSafeInteger(payload.checkpoint?.orgEventCount) || payload.checkpoint.orgEventCount < 0 ||
@@ -98,13 +112,25 @@ function parseInteger(value: string | null): number | undefined | null {
   return Number.isSafeInteger(parsed) ? parsed : null;
 }
 
+function parseFilter(value: string | null): string | undefined | null {
+  if (value === null) return undefined;
+  if (value.length < 1 || value.length > MAX_FILTER_LENGTH) return null;
+  return value;
+}
+
 function parseQuery(url: URL): ExportQuery | null {
   const after = parseInteger(url.searchParams.get("after"));
   const before = parseInteger(url.searchParams.get("before"));
+  const actor = parseFilter(url.searchParams.get("actor"));
+  const event = parseFilter(url.searchParams.get("event"));
+  const actorIp = parseFilter(url.searchParams.get("actor_ip"));
   const pageSize = parseInteger(url.searchParams.get("page_size")) ?? DEFAULT_PAGE_SIZE;
-  if (after === null || before === null || pageSize === null || pageSize < 1 || pageSize > MAX_PAGE_SIZE) return null;
+  if (
+    after === null || before === null || actor === null || event === null || actorIp === null ||
+    pageSize === null || pageSize < 1 || pageSize > MAX_PAGE_SIZE
+  ) return null;
   if (after !== undefined && before !== undefined && after >= before) return null;
-  return { after, before, pageSize, pageToken: url.searchParams.get("page_token") ?? undefined };
+  return { after, before, actor, event, actorIp, pageSize, pageToken: url.searchParams.get("page_token") ?? undefined };
 }
 
 async function captureCheckpoint(db: D1Database, org: string): Promise<Checkpoint> {
@@ -146,12 +172,15 @@ async function readPage(
       "SELECT 'roster' AS ledger, id, event, action_type, roster_id, actor, actor_type, " +
       "target_type, target_id, NULL AS target_role, actor_ip, actor_country, description, at FROM roster_events " +
       "WHERE org = ? AND id <= ?) AS combined " +
-      "WHERE (? IS NULL OR at >= ?) AND (? IS NULL OR at < ?) AND (" +
+      "WHERE (? IS NULL OR at >= ?) AND (? IS NULL OR at < ?) " +
+      "AND (? IS NULL OR actor = ?) AND (? IS NULL OR event = ?) AND (? IS NULL OR actor_ip = ?) AND (" +
       "? IS NULL OR at > ? OR (at = ? AND (ledger > ? OR (ledger = ? AND id > ?)))) " +
       "ORDER BY at ASC, ledger ASC, id ASC LIMIT ?",
   ).bind(
     org, checkpoint.orgEventId, org, checkpoint.rosterEventId,
     query.after ?? null, query.after ?? null, query.before ?? null, query.before ?? null,
+    query.actor ?? null, query.actor ?? null, query.event ?? null, query.event ?? null,
+    query.actorIp ?? null, query.actorIp ?? null,
     position?.at ?? null, position?.at ?? null, position?.at ?? null,
     position?.ledger ?? null, position?.ledger ?? null, position?.id ?? null,
     query.pageSize + 1,
@@ -189,6 +218,7 @@ export function mountAudit(app: Hono<{ Bindings: Env }>): void {
       ? await encodeCursor({
         org: identity.org, handle: identity.handle,
         after: query.after ?? null, before: query.before ?? null, pageSize: query.pageSize,
+        actor: query.actor ?? null, event: query.event ?? null, actorIp: query.actorIp ?? null,
         checkpoint,
         position: { at: last.at, ledger: last.ledger, id: last.id },
       }, secret)

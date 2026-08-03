@@ -189,4 +189,44 @@ describe("organization audit export", () => {
     );
     expect(await empty.json<any>()).toMatchObject({ events: [], next_page_token: "" });
   });
+
+  it("filters by exact actor, event, and source IP and binds filters into the cursor", async () => {
+    const token = await registerHandle("filter-admin", "claude", "filter-org", "admin");
+    await seedOrgEvent("filter-org", 1_000, "invite-a");
+    await seedRosterEvent("filter-org", 2_000, "roster-a");
+    await seedOrgEvent("filter-org", 3_000, "invite-b");
+    await seedOrgEvent("filter-org", 4_000, "invite-other-actor");
+    await env.DB.prepare("UPDATE org_events SET actor = ? WHERE org = ? AND target_id = ?")
+      .bind("other", "filter-org", "invite-other-actor").run();
+
+    const first = await SELF.fetch(
+      "https://relay.test/v1/audit/events?actor=admin&event=org.invite.issue&actor_ip=203.0.113.10&page_size=1",
+      { headers: wsAuth("filter-admin", token, "filter-org") },
+    );
+    expect(first.status).toBe(200);
+    const page = await first.json<any>();
+    expect(page.events.map((event: any) => event.target_id)).toEqual(["invite-a"]);
+    expect(page.next_page_token).toEqual(expect.any(String));
+
+    const changed = await SELF.fetch(
+      `https://relay.test/v1/audit/events?actor=other&event=org.invite.issue&actor_ip=203.0.113.10&page_size=1&page_token=${encodeURIComponent(page.next_page_token)}`,
+      { headers: wsAuth("filter-admin", token, "filter-org") },
+    );
+    expect(changed.status).toBe(400);
+
+    const second = await SELF.fetch(
+      `https://relay.test/v1/audit/events?actor=admin&event=org.invite.issue&actor_ip=203.0.113.10&page_size=1&page_token=${encodeURIComponent(page.next_page_token)}`,
+      { headers: wsAuth("filter-admin", token, "filter-org") },
+    );
+    expect((await second.json<any>()).events.map((event: any) => event.target_id)).toEqual(["invite-b"]);
+  });
+
+  it("rejects empty and oversized audit filters", async () => {
+    const token = await registerHandle("invalid-filter-admin", "claude", "invalid-filter-org", "admin");
+    const headers = wsAuth("invalid-filter-admin", token, "invalid-filter-org");
+    expect((await SELF.fetch("https://relay.test/v1/audit/events?actor=", { headers })).status).toBe(400);
+    expect((await SELF.fetch(
+      `https://relay.test/v1/audit/events?event=${"x".repeat(257)}`, { headers },
+    )).status).toBe(400);
+  });
 });

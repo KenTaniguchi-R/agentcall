@@ -150,12 +150,17 @@ state to the stable identity. See the
 
 The CLI provides the current authenticated admin surface. For example, an
 administrator can stream a stable, tenant-scoped snapshot of both relay audit
-ledgers as newline-delimited JSON:
+ledgers as newline-delimited JSON or CSV, with exact actor, event-type, and
+source-IP filters:
 
 ```bash
 agentcall audit export > audit.ndjson
 agentcall audit export --after 2026-01-01T00:00:00Z --before 2027-01-01T00:00:00Z
+agentcall audit export --actor ken --event org.invite.issue --ip 203.0.113.10 --format csv > audit.csv
 ```
+
+CSV neutralizes spreadsheet formula prefixes in string fields. Use the default
+NDJSON format when byte-exact field values are required for downstream tooling.
 
 Each export prints its captured `org_events`/`roster_events` checkpoint to
 stderr. Concurrent events after that checkpoint cannot appear in later pages,
