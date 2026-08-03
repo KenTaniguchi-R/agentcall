@@ -2,7 +2,7 @@
 
 Production infrastructure metadata and Cloudflare documentation were last
 verified on 2026-08-02. The application-state inventory was updated on
-2026-08-03 for issue #216; deployment verification remains pending.
+2026-08-03 through issue #227; deployment verification remains pending.
 
 This is the living inventory for data persisted or processed by AgentCall's
 hosted relay. Update it whenever a migration, Durable Object storage key,
@@ -56,8 +56,10 @@ chooses:
 - explicit pending/held results for Analytics Engine, logs, Time Travel, backups, or
   legal holds that prevent verified completion.
 
-None of that workflow exists yet. The tables below continue to describe deployed
-behavior. Do not promise erasure, expiry, or an SLA from the accepted design alone.
+The event-window and tenant legal-hold control plane now exists, but no job
+deletes audit evidence or implements subject erasure. The tables below continue
+to describe deployed storage behavior. Do not promise erasure, expiry, or an SLA
+from configuration alone.
 
 ## D1 inventory
 
@@ -71,7 +73,10 @@ there is no time-based cleanup job.
 | `handles` | Organization, handle, admin/member role, token hash, agent kind, creation time. Direct identity, authority, and an authentication verifier; personal data. | Indefinite. Token rotation replaces the hash. Handle release/deletion is not implemented. |
 | `invites` | Invite hash/public ID, organization, granted role, purpose, issuer handle, creation/expiry/use/revocation times, and enrolled handle. Authentication, authority, and relationship data; personal data when issuer or user handles identify people. | Active rows remain until used, revoked, or expired. An admin invite write deletes terminal rows after 30 days; D1 Time Travel and exported backups retain separate copies. |
 | `audit_export_acknowledgements` | Organization, acknowledged per-ledger ID/count checkpoint, acknowledging administrator handle, and time. Retention-control evidence and personal data; no exported event or prompt/reply content. | One monotonic row per organization, replaced only by a checkpoint that does not regress either ledger. No deletion path exists; future retention may consume but must not exceed these watermarks. |
-| `org_events` | Organization-invite and call-lifecycle action, organization, actor and target identities/types, granted target role where applicable, source IP/country, description, and time. Call rows identify caller/callee addresses and a call ID but exclude prompt/response bodies. Security audit evidence and personal data. | The newest 10,000 events per organization are retained. Invite mutations trim in their D1 batch; call transitions use an idempotent Durable Object outbox and trim on D1 delivery. Invite-row cleanup does not otherwise delete audit evidence. Admin-only checkpointed export is supported; time-based/legal retention remains separate policy work. |
+| `audit_legal_holds` | Organization, opaque hold ID, administrator-provided reason, creator/releaser handles, idempotency keys, and timestamps. Legal/incident preservation policy plus personal and potentially confidential data. | Immutable creation fields and released state are retained indefinitely. At most one active hold exists per tenant. No expiry worker consumes it yet. |
+| `audit_retention_policies` | Organization, configured 30–2,555-day event window, optimistic version, updater handle/time, and last idempotency key. Retention policy and personal administration metadata. | One current row per configured organization; absent rows read as the 400-day default. No deletion path exists and the value does not yet trigger expiry. |
+| `audit_retention_policy_requests` | Organization, idempotency key, requested window, expected/resulting versions, actor handle, and time. Mutation replay/conflict evidence and personal administration metadata. | Retained indefinitely. It prevents an old request ID from mutating policy again; no cleanup policy exists yet. |
+| `org_events` | Organization-invite, call-lifecycle, retention-policy, and legal-hold administration action; organization; actor and target identities/types; granted target role where applicable; source IP/country; description; and time. Call rows identify caller/callee addresses and a call ID but exclude prompt/response bodies. Security audit evidence and personal data. | The newest 10,000 events per organization are retained. Invite and audit-control mutations trim in their D1 batch; call transitions use an idempotent Durable Object outbox and trim on D1 delivery. Invite-row cleanup does not otherwise delete audit evidence. Admin-only checkpointed export is supported; configured time-based/legal retention does not yet trigger expiry. |
 | `cards` | Handle, agent description/type, task catalogue/examples/keywords, default offers, per-caller grants/blocks, roster-group grants, update time. User-authored content plus relationship policy; potentially confidential and personal. | Indefinite, with an upsert replacing the prior card. No delete path exists. |
 | `encryption_keys` | Organization, handle, key ID, cryptographic suite, public key, monotonic epoch, validity window, predecessor, signature, and creation time. Signed key material and key-rotation provenance; cryptographic identity data. | Indefinite. Epochs are monotonic per identity to prevent relay-orchestrated key rollback. Revocation and cleanup of expired keys are not currently implemented. |
 | `identity_keys` | Organization, handle, identity public key, and creation time. Cryptographic identity root; the trust anchor for a given identity pinned by contacts. | Indefinite. One per identity; the relay refuses replacement to prevent silent re-pointing of pinned relationships. Losing an identity key requires registering a new identity. |
@@ -81,7 +86,8 @@ there is no time-based cleanup job.
 | `roster_events` | Append-only mutation event/action, roster/organization, actor and target identities/types, source IP/country, human-readable description, time. Security audit evidence and personal data. | Indefinite, including after roster deletion. The per-roster 10,000-event counter gates member-driven join/leave churn; administrator and system events remain appendable for recovery and are not bounded by that counter. The counter is not a row-count ceiling. |
 | `telemetry_health` | Sink name, cumulative locally observed write-failure count, and first/last failure times. Non-personal operational health metadata; it contains no tenant, subject, outcome, route, or network dimension. | Indefinite. There is no reset or application deletion path. It proves only that the Worker observed a binding-call failure, not how many events Analytics Engine later sampled or lost. |
 
-The current operational and future deletion rules for both event ledgers are
+The current operational and future deletion rules for both event ledgers and
+their retention/hold controls are
 defined in the [audit retention policy](./audit-retention.md). In particular,
 the repository has no automated expiry or supported erasure path today;
 count-bounding `org_events` is a capacity control, not a retention period.

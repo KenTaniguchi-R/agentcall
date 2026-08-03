@@ -2,12 +2,12 @@ import { readFileSync } from "node:fs";
 import { describe, expect, it } from "vitest";
 import { AUDIT_EVENT_CATALOG } from "../src/audit-catalog.js";
 
-const relaySources = ["roster.ts", "invites.ts", "index.ts", "do.ts"].map((file) =>
+const relaySources = ["roster.ts", "invites.ts", "index.ts", "do.ts", "audit.ts"].map((file) =>
   readFileSync(new URL(`../../../apps/relay/src/${file}`, import.meta.url), "utf8"));
 
 describe("durable audit event catalog", () => {
   it("exactly matches every durable event literal emitted by relay mutations", () => {
-    const emitted = relaySources.flatMap((source) => [...source.matchAll(/(?:event:\s*|callAuditIntent\()"((?:org|roster|call)\.[a-z_.]+)"/g)]
+    const emitted = relaySources.flatMap((source) => [...source.matchAll(/(?:event:\s*|callAuditIntent\(|_EVENT:\s*OrgAuditEvent\s*=\s*)"((?:org|roster|call|audit)\.[a-z_.]+)"/g)]
       .map((match) => match[1]!));
     expect([...new Set(emitted)].sort()).toEqual(AUDIT_EVENT_CATALOG.map((entry) => entry.event).sort());
   });
@@ -42,6 +42,9 @@ describe("durable audit event catalog", () => {
       "0010_roster_audit_budget_recovery.sql": ["roster.audit_budget_reset"],
       "0014_call_audit_events.sql": [
         "call.accept", "call.cancel", "call.complete", "call.fail", "call.submit", "call.timeout",
+      ],
+      "0016_audit_retention_controls.sql": [
+        "audit.hold.create", "audit.hold.release", "audit.retention.update",
       ],
     });
   });

@@ -61,6 +61,10 @@ which are released together.
 - Issue a tenant-bound completion receipt only for terminal unfiltered exports,
   and let administrators explicitly advance an atomic, monotonic per-ledger
   acknowledgement watermark as the export-before-expiry retention prerequisite.
+- Add an administrator-only, tenant-scoped retention control plane with a
+  versioned 400-day default event window, bounded overrides, and one explicit
+  legal/incident hold whose create/release lifecycle is idempotent and audited;
+  keep deletion and erasure explicitly unimplemented.
 
 ### Experimental customer-owned Cloudflare relay
 

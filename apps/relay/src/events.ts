@@ -6,7 +6,7 @@ export type AuditAction = "C" | "R" | "U" | "D";
 export type AuditActor = "handle" | "admin_secret" | "system";
 export type AuditTarget = "handle" | "roster" | "join_key";
 export type OrgAuditActor = "handle" | "bootstrap" | "invite";
-export type OrgAuditTarget = "invite" | "handle";
+export type OrgAuditTarget = "invite" | "handle" | "call" | "retention_policy" | "legal_hold";
 
 type RosterAudit = {
   event: RosterAuditEvent;
@@ -22,6 +22,7 @@ type RosterAudit = {
 };
 
 type OrgAudit = {
+  eventKey?: string;
   event: OrgAuditEvent;
   action: "C" | "U";
   org: string;
@@ -75,14 +76,14 @@ export function orgAuditStatement(
   c: Context<{ Bindings: Env }>, audit: OrgAudit, condition: "always" | "previous-change" = "always",
 ): D1PreparedStatement {
   const [actorIp, actorCountry] = auditLocation(c);
-  const values = "?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?";
+  const values = "?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?";
   const predicate = condition === "previous-change" ? " WHERE changes() > 0" : "";
   return c.env.DB.prepare(
-    "INSERT INTO org_events (event, action_type, org, actor, actor_type, target_type, target_id, " +
+    "INSERT INTO org_events (event_key, event, action_type, org, actor, actor_type, target_type, target_id, " +
       "target_role, actor_ip, actor_country, description, at) " +
       (condition === "always" ? `VALUES (${values})` : `SELECT ${values}${predicate}`),
   ).bind(
-    audit.event, audit.action, audit.org, audit.actor, audit.actorType, audit.targetType, audit.targetId,
+    audit.eventKey ?? null, audit.event, audit.action, audit.org, audit.actor, audit.actorType, audit.targetType, audit.targetId,
     audit.targetRole ?? null, actorIp, actorCountry, audit.description, audit.at,
   );
 }

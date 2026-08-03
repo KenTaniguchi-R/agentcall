@@ -17,6 +17,7 @@ const rosterKeys = "0008_roster_join_keys.sql";
 const orgInvites = "0009_org_invite_lifecycle.sql";
 const rosterBudget = "0010_roster_audit_budget_recovery.sql";
 const callEvents = "0014_call_audit_events.sql";
+const retentionControls = "0016_audit_retention_controls.sql";
 
 /** Durable, tenant-exportable event types implemented by the relay. */
 export const AUDIT_EVENT_CATALOG = [
@@ -29,6 +30,9 @@ export const AUDIT_EVENT_CATALOG = [
   { event: "call.fail", ledger: "org", action: "U", actors: ["handle"], target: "call", source_ip: "nullable_request_metadata", source_country: "nullable_request_metadata", collection: "durable_object_outbox", available_since: "2026-08-03", migration: callEvents, description: "The callee reported that a call failed." },
   { event: "call.cancel", ledger: "org", action: "U", actors: ["handle"], target: "call", source_ip: "nullable_request_metadata", source_country: "nullable_request_metadata", collection: "durable_object_outbox", available_since: "2026-08-03", migration: callEvents, description: "The callee confirmed that a call was canceled." },
   { event: "call.timeout", ledger: "org", action: "U", actors: ["system"], target: "call", source_ip: "nullable_request_metadata", source_country: "nullable_request_metadata", collection: "durable_object_outbox", available_since: "2026-08-03", migration: callEvents, description: "The relay expired a call at its deadline." },
+  { event: "audit.retention.update", ledger: "org", action: "U", actors: ["handle"], target: "retention_policy", source_ip: "nullable_request_metadata", source_country: "nullable_request_metadata", collection: "synchronous_d1_batch", available_since: "2026-08-03", migration: retentionControls, description: "An organization administrator changed the audit event retention window." },
+  { event: "audit.hold.create", ledger: "org", action: "C", actors: ["handle"], target: "legal_hold", source_ip: "nullable_request_metadata", source_country: "nullable_request_metadata", collection: "synchronous_d1_batch", available_since: "2026-08-03", migration: retentionControls, description: "An organization administrator created an audit legal or incident hold." },
+  { event: "audit.hold.release", ledger: "org", action: "U", actors: ["handle"], target: "legal_hold", source_ip: "nullable_request_metadata", source_country: "nullable_request_metadata", collection: "synchronous_d1_batch", available_since: "2026-08-03", migration: retentionControls, description: "An organization administrator released an audit legal or incident hold." },
   { event: "roster.create", ledger: "roster", action: "C", actors: ["handle"], target: "roster", source_ip: "nullable_request_metadata", source_country: "nullable_request_metadata", collection: "synchronous_d1_batch", available_since: "2026-08-02", migration: rosterBase, description: "A roster was created." },
   { event: "roster.join", ledger: "roster", action: "C", actors: ["handle"], target: "handle", source_ip: "nullable_request_metadata", source_country: "nullable_request_metadata", collection: "synchronous_d1_batch", available_since: "2026-08-02", migration: rosterBase, description: "A handle joined a roster." },
   { event: "roster.leave", ledger: "roster", action: "D", actors: ["handle"], target: "handle", source_ip: "nullable_request_metadata", source_country: "nullable_request_metadata", collection: "synchronous_d1_batch", available_since: "2026-08-02", migration: rosterBase, description: "A handle left a roster." },
