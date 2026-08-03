@@ -171,6 +171,13 @@ and restart it. Exported files
 contain handles, relationship metadata, source IP/country evidence, and event
 descriptions; protect them as sensitive security records.
 
+API polling clients receive a strong `ETag` on each validated audit page. Keep
+the validator with that exact request URL and resend it in `If-None-Match`; an
+unchanged page returns a bodyless `304`, while changed checkpoint/page bytes
+return `200` with a new validator. Responses are private and require
+revalidation. `agentcall audit export` remains a one-shot complete-stream
+client rather than a polling daemon.
+
 The generated [audit event catalog](docs/site/reference/audit-events.mdx) is the
 exhaustive contract for event availability, collection-to-export lag, snapshot
 ordering, and evidence that is not yet centrally retained.
