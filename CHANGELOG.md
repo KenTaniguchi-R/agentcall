@@ -20,6 +20,13 @@ which are released together.
   staging inode, and a serialization failure preserves the previous primary
   line.
 
+### Conversation context persistence
+
+- Save inbound conversation bindings with a unique same-directory staging file
+  and atomic rename. A planted `contexts.json` symlink is now replaced instead
+  of overwriting its target, and failed serialization preserves the previous
+  context store.
+
 ### Authorization permission vocabulary
 
 - Name existing authorization decisions with stable `resource:action`
