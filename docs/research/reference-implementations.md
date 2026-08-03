@@ -150,6 +150,7 @@ Current watch points, checked 2026-08-02:
 Applied in AgentCall:
 
 - [Agent identity compatibility decision](../superpowers/specs/2026-08-02-agent-identity-compatibility.md)
+- [Signed Agent Cards](../superpowers/specs/2026-08-02-signed-agent-card-design.md)
 
 ### XMPP, Matrix, NATS, and SPIFFE: federation
 
