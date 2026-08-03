@@ -1,9 +1,16 @@
-import WebSocket from "ws";
+import WebSocket, { type RawData } from "ws";
 import { randomBytes } from "node:crypto";
 import {
-  CORRELATION_ID_RE, RelayToCallerFrame, normalizeTraceparent, safeParseFrame, sanitizeDetail,
-  type CallReplyType, type CallStatusType, type ErrorCodeType,
+  CORRELATION_ID_RE, E2EERelayToCallerFrame, MAX_E2EE_WIRE_BYTES, RELAY_CALL_TIMEOUT_MS, keyIdFor,
+  normalizeTraceparent, requestTranscript, safeParseFrame, sanitizeDetail, transcriptHash,
+  type CallStatusType, type E2EERequestPayloadType, type ErrorCodeType,
 } from "@benree/agentcall-shared";
+import { ApiError, assertValidHandle, fetchKeys } from "./api.js";
+import { openE2EEResponse, sealE2EERequest } from "./e2ee.js";
+import { loadKeys } from "./keys.js";
+import { verifyAndPinPeer } from "./known-peers.js";
+import type { LinePaths } from "./paths.js";
+import { relayAddressHost } from "./config.js";
 
 export class CallError extends Error {
   constructor(
@@ -12,6 +19,7 @@ export class CallError extends Error {
     public offered?: string[],
     public callId?: string,
     public correlationId?: string,
+    public origin: "peer" | "relay" | "transport" = "transport",
   ) {
     super(message);
   }
@@ -36,6 +44,7 @@ const HUMAN: Record<string, string> = {
 
 export interface CallOpts {
   relay: string; org: string; from: string; token: string; to: string; message: string;
+  paths: LinePaths;
   contextId?: string;
   onStatus?: (state: CallStatusType["state"], frame: CallStatusType) => void;
   timeoutMs?: number;
@@ -46,6 +55,22 @@ export interface CallOpts {
   pingIntervalMs?: number;
   // Task id from the callee's card to perform; omitted lets the callee's
   // policy pick a default (single offered task, or "ask").
+  task?: string;
+  /** Internal test seams; production always uses the real trust/key stores. */
+  keyDeps?: {
+    fetchKeys?: typeof fetchKeys;
+    verifyAndPinPeer?: typeof verifyAndPinPeer;
+    loadKeys?: typeof loadKeys;
+    now?: () => number;
+  };
+}
+
+export interface CallReply {
+  type: "call_reply";
+  call_id: string;
+  correlation_id?: string;
+  text: string;
+  context_id?: string;
   task?: string;
 }
 
@@ -59,15 +84,97 @@ export function createCorrelationId(): string {
   return randomBytes(16).toString("hex");
 }
 
-export function callAgent(opts: CallOpts): Promise<CallReplyType> {
+function rawWireBytes(raw: RawData): number {
+  return Array.isArray(raw)
+    ? raw.reduce((total, chunk) => total + chunk.byteLength, 0)
+    : raw.byteLength;
+}
+
+export async function callAgent(opts: CallOpts): Promise<CallReply> {
   const correlationId = opts.correlationId && CORRELATION_ID_RE.test(opts.correlationId)
     ? opts.correlationId
     : createCorrelationId();
   const traceparent = normalizeTraceparent(correlationId, opts.traceparent);
+  const relayOrigin = relayAddressHost(opts.relay, opts.org);
+  const fromAddress = `${opts.from}@${relayOrigin}`;
+  const toAddress = `${opts.to}@${relayOrigin}`;
+  const auth = { org: opts.org, handle: opts.from, token: opts.token };
+  try {
+    assertValidHandle(opts.to);
+  } catch (error) {
+    const detail = sanitizeDetail(error instanceof Error ? error.message : String(error));
+    throw new CallError(
+      `Invalid call target: ${detail}`, "protocol_error",
+      undefined, undefined, correlationId, "transport",
+    );
+  }
+  // No socket opens until the recipient record is validated against the local
+  // trust store. A missing, changed, stale, invalid, or expired key therefore
+  // cannot cause even a partial plaintext-compatible call attempt.
+  let recipientBundle;
+  try {
+    recipientBundle = await (opts.keyDeps?.fetchKeys ?? fetchKeys)(opts.relay, auth, opts.to);
+  } catch (error) {
+    const detail = sanitizeDetail(error instanceof Error ? error.message : String(error));
+    if (!(error instanceof ApiError) || error.code === "network") {
+      throw new CallError(
+        `Connection failed: ${detail}`, "connection_failed",
+        undefined, undefined, correlationId, "transport",
+      );
+    }
+    const code = error.code === "unknown_handle"
+      ? "unknown_handle"
+      : error.code === "unauthorized"
+        ? "unauthorized"
+        : "protocol_error";
+    throw new CallError(
+      `Unauthenticated relay status: ${detail}`, code,
+      undefined, undefined, correlationId, "relay",
+    );
+  }
+  const recipientPeer = await (opts.keyDeps?.verifyAndPinPeer ?? verifyAndPinPeer)(
+    opts.paths.machine, toAddress, recipientBundle,
+  );
+  const senderKeys = (opts.keyDeps?.loadKeys ?? loadKeys)(opts.paths);
+  const issuedAt = (opts.keyDeps?.now ?? Date.now)();
+  const request: E2EERequestPayloadType = {
+    v: 1,
+    direction: "request",
+    relay_origin: relayOrigin,
+    from: fromAddress,
+    to: toAddress,
+    request_id: randomBytes(16).toString("hex"),
+    sender_identity_key_id: await keyIdFor(senderKeys.identity_pub),
+    recipient_encryption_key_id: recipientBundle.encryption.record.key_id,
+    recipient_epoch: recipientBundle.encryption.record.epoch,
+    issued_at: issuedAt,
+    expires_at: issuedAt + RELAY_CALL_TIMEOUT_MS,
+    message: opts.message,
+    ...(opts.contextId ? { context_id: opts.contextId } : {}),
+    ...(opts.task ? { task: opts.task } : {}),
+  };
+  const envelope = await sealE2EERequest(request, senderKeys, {
+    pub: recipientBundle.encryption.record.pub,
+    key_id: recipientBundle.encryption.record.key_id,
+    epoch: recipientBundle.encryption.record.epoch,
+  });
+  const requestBinding = {
+    request_id: request.request_id,
+    request_transcript_hash: await transcriptHash(requestTranscript(request)),
+  };
+  const responseExpected = {
+    relay_origin: relayOrigin,
+    from: toAddress,
+    to: fromAddress,
+    key_id: await keyIdFor(senderKeys.encryption_pub),
+    epoch: senderKeys.epoch,
+  };
   const wsUrl = opts.relay.replace(/^http/, "ws") + `/v1/ws?role=call&to=${encodeURIComponent(opts.to)}`;
   return new Promise((resolve, reject) => {
     const ws = new WebSocket(wsUrl, {
       headers: { Authorization: `Bearer ${opts.token}`, "X-AgentCall-Org": opts.org, "X-AgentCall-Handle": opts.from },
+      perMessageDeflate: false,
+      maxPayload: MAX_E2EE_WIRE_BYTES,
     });
     let settled = false;
     let pingTimer: ReturnType<typeof setInterval> | undefined;
@@ -87,14 +194,15 @@ export function callAgent(opts: CallOpts): Promise<CallReplyType> {
 
     ws.on("unexpected-response", (_req, res) => {
       const code: ErrorCodeType = res.statusCode === 404 ? "unknown_handle" : "unauthorized";
-      finish(() => reject(new CallError(HUMAN[code], code)));
+      finish(() => reject(new CallError(
+        `Unauthenticated relay status: ${HUMAN[code]}`, code,
+        undefined, undefined, correlationId, "relay",
+      )));
     });
     ws.on("error", (e) => finish(() => reject(new CallError(`Connection failed: ${e.message}`, "connection_failed"))));
     ws.on("open", () => {
       ws.send(JSON.stringify({
-        type: "call_request", to: opts.to, message: opts.message,
-        context_id: opts.contextId, task: opts.task,
-        correlation_id: correlationId, traceparent,
+        type: "call_request", envelope, correlation_id: correlationId, traceparent,
       }));
       // Cloudflare's idle timeout can drop a long-running call (agent answers
       // can take up to AGENT_TIMEOUT_MS) if the socket goes quiet. Ping keeps
@@ -102,20 +210,59 @@ export function callAgent(opts: CallOpts): Promise<CallReplyType> {
       pingTimer = setInterval(() => { try { ws.send("ping"); } catch { /* dead */ } }, opts.pingIntervalMs ?? 30_000);
       pingTimer.unref?.();
     });
-    ws.on("message", (raw) => {
-      const frame = safeParseFrame(RelayToCallerFrame, String(raw));
+    ws.on("message", async (raw) => {
+      if (rawWireBytes(raw) > MAX_E2EE_WIRE_BYTES) {
+        finish(() => reject(new CallError(
+          "Encrypted relay frame exceeded the wire limit.", "protocol_error",
+          undefined, undefined, correlationId, "transport",
+        )));
+        return;
+      }
+      const frame = safeParseFrame(E2EERelayToCallerFrame, String(raw));
       if (!frame) return;
       if (frame.type === "call_status") opts.onStatus?.(frame.state, frame);
-      else if (frame.type === "call_reply") finish(() => resolve(frame));
+      else if (frame.type === "call_outcome") {
+        try {
+          const response = await openE2EEResponse(
+            frame.envelope, senderKeys.encryption_pkcs8, recipientPeer.identity_pub,
+            responseExpected, requestBinding,
+          );
+          const outcome = response.outcome;
+          const authenticatedTerminal = outcome.kind === "reply" ? "completed" : "failed";
+          if (frame.terminal !== authenticatedTerminal) {
+            throw new Error("Encrypted peer outcome does not match its relay-visible terminal state.");
+          }
+          if (outcome.kind === "reply") {
+            finish(() => resolve({
+              type: "call_reply", call_id: frame.call_id, correlation_id: correlationId,
+              text: outcome.text,
+              ...(outcome.context_id ? { context_id: outcome.context_id } : {}),
+              ...(outcome.task ? { task: outcome.task } : {}),
+            }));
+          } else {
+            const detail = outcome.detail === undefined
+              ? undefined
+              : sanitizeDetail(outcome.detail);
+            const base = detail ?? HUMAN[outcome.code] ?? outcome.code;
+            const msg = outcome.offered?.length
+              ? `Authenticated peer response: ${base} Tasks offered to you: ${outcome.offered.join(", ")}`
+              : `Authenticated peer response: ${base}`;
+            finish(() => reject(new CallError(
+              msg, outcome.code, outcome.offered,
+              frame.call_id, correlationId, "peer",
+            )));
+          }
+        } catch (error) {
+          finish(() => reject(new CallError(
+            `Encrypted peer outcome failed authentication: ${error instanceof Error ? error.message : String(error)}`,
+            "protocol_error", undefined, frame.call_id, correlationId, "transport",
+          )));
+        }
+      }
       else if (frame.type === "call_error") {
-        // Sanitized again here, not just at the relay: the relay and the CLI
-        // deploy independently, so this process must not print bytes it got
-        // over the wire on the assumption that some other version cleaned them.
-        const detail = frame.detail === undefined ? undefined : sanitizeDetail(frame.detail);
-        const base = detail ?? HUMAN[frame.code] ?? frame.code;
-        const msg = frame.offered?.length ? `${base} Tasks offered to you: ${frame.offered.join(", ")}` : base;
+        const msg = `Unauthenticated relay status: ${HUMAN[frame.code] ?? frame.code}`;
         finish(() => reject(new CallError(
-          msg, frame.code, frame.offered, frame.call_id, frame.correlation_id,
+          msg, frame.code, undefined, frame.call_id, frame.correlation_id, "relay",
         )));
       }
     });

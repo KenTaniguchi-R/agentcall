@@ -1,7 +1,9 @@
 import { SELF } from "cloudflare:test";
 import { describe, expect, it, vi } from "vitest";
 import { A2AListTasksResponse, A2ATask } from "@benree/agentcall-shared";
-import { nextFrame, openWs, registerHandle, wsAuth as baseWsAuth } from "./helpers.js";
+import {
+  encryptedCallOutcome, encryptedCallRequest, nextFrame, openWs, registerHandle, wsAuth as baseWsAuth,
+} from "./helpers.js";
 
 const ORIGIN = "https://relay.test";
 
@@ -24,15 +26,9 @@ async function startCall(
   caller: string,
   callerToken: string,
   listener: WebSocket,
-  contextId?: string,
 ) {
   const socket = await openWs(`/v1/ws?role=call&to=${callee}`, wsAuth(caller, callerToken));
-  socket.send(JSON.stringify({
-    type: "call_request",
-    to: callee,
-    message: `question from ${caller}`,
-    ...(contextId ? { context_id: contextId } : {}),
-  }));
+  socket.send(JSON.stringify(encryptedCallRequest(caller, callee)));
   const ringing = await nextFrame(socket);
   const incoming = await nextFrame(listener);
   expect(incoming.call_id).toBe(ringing.call_id);
@@ -65,18 +61,19 @@ describe("A2A task store", () => {
       });
       expect((await response.json<any>()).status.state).toBe("TASK_STATE_WORKING");
     });
-    listener.send(JSON.stringify({ type: "call_result", call_id: callId, text: "finished after disconnect" }));
+    listener.send(JSON.stringify(encryptedCallOutcome(callId, "task-callee", "task-caller")));
 
     await vi.waitFor(async () => {
       const response = await SELF.fetch(taskUrl("task-callee", `tasks/${callId}`), {
         headers: wsAuth("task-caller", callerToken),
       });
       expect(response.status).toBe(200);
-      expect(await response.json<any>()).toMatchObject({
+      const task = await response.json<any>();
+      expect(task).toMatchObject({
         id: callId,
         status: { state: "TASK_STATE_COMPLETED" },
-        artifacts: [{ parts: [{ text: "finished after disconnect" }] }],
       });
+      expect(task).not.toHaveProperty("artifacts");
     });
   });
 
@@ -112,13 +109,11 @@ describe("A2A task store", () => {
     const firstToken = await registerHandle("list-first");
     const secondToken = await registerHandle("list-second");
     const listener = await openWs("/v1/ws?role=listen", wsAuth("list-callee", calleeToken));
-    const contextId = "ctx_AAAAAAAAAAAAAAAAAAAAAA";
-
-    const first = await startCall("list-callee", "list-first", firstToken, listener, contextId);
-    const second = await startCall("list-callee", "list-first", firstToken, listener, contextId);
+    const first = await startCall("list-callee", "list-first", firstToken, listener);
+    const second = await startCall("list-callee", "list-first", firstToken, listener);
     await startCall("list-callee", "list-second", secondToken, listener);
 
-    const page1 = await SELF.fetch(taskUrl("list-callee", `tasks?contextId=${contextId}&pageSize=1`), {
+    const page1 = await SELF.fetch(taskUrl("list-callee", "tasks?pageSize=1"), {
       headers: wsAuth("list-first", firstToken),
     });
     expect(page1.status).toBe(200);
@@ -131,7 +126,7 @@ describe("A2A task store", () => {
 
     const page2 = await SELF.fetch(taskUrl(
       "list-callee",
-      `tasks?contextId=${contextId}&pageSize=1&pageToken=${encodeURIComponent(body1.nextPageToken)}`,
+      `tasks?pageSize=1&pageToken=${encodeURIComponent(body1.nextPageToken)}`,
     ), { headers: wsAuth("list-first", firstToken) });
     const body2 = A2AListTasksResponse.parse(await page2.json());
     expect(body2.tasks).toHaveLength(1);
@@ -140,7 +135,7 @@ describe("A2A task store", () => {
 
     const replayedWithDifferentFilter = await SELF.fetch(taskUrl(
       "list-callee",
-      `tasks?pageSize=1&pageToken=${encodeURIComponent(body1.nextPageToken)}`,
+      `tasks?pageSize=1&includeArtifacts=true&pageToken=${encodeURIComponent(body1.nextPageToken)}`,
     ), { headers: wsAuth("list-first", firstToken) });
     expect(replayedWithDifferentFilter.status).toBe(400);
 
@@ -148,13 +143,13 @@ describe("A2A task store", () => {
     const forged = `${cursorPayload}.${cursorSignature.startsWith("A") ? "B" : "A"}${cursorSignature.slice(1)}`;
     const forgedResponse = await SELF.fetch(taskUrl(
       "list-callee",
-      `tasks?contextId=${contextId}&pageSize=1&pageToken=${encodeURIComponent(forged)}`,
+      `tasks?pageSize=1&pageToken=${encodeURIComponent(forged)}`,
     ), { headers: wsAuth("list-first", firstToken) });
     expect(forgedResponse.status).toBe(400);
 
     const crossCallerReplay = await SELF.fetch(taskUrl(
       "list-callee",
-      `tasks?contextId=${contextId}&pageSize=1&pageToken=${encodeURIComponent(body1.nextPageToken)}`,
+      `tasks?pageSize=1&pageToken=${encodeURIComponent(body1.nextPageToken)}`,
     ), { headers: wsAuth("list-second", secondToken) });
     expect(crossCallerReplay.status).toBe(400);
 
@@ -162,7 +157,7 @@ describe("A2A task store", () => {
     await openWs("/v1/ws?role=listen", wsAuth("list-other-callee", otherCalleeToken));
     const crossCalleeReplay = await SELF.fetch(taskUrl(
       "list-other-callee",
-      `tasks?contextId=${contextId}&pageSize=1&pageToken=${encodeURIComponent(body1.nextPageToken)}`,
+      `tasks?pageSize=1&pageToken=${encodeURIComponent(body1.nextPageToken)}`,
     ), { headers: wsAuth("list-first", firstToken) });
     expect(crossCalleeReplay.status).toBe(400);
 
@@ -175,7 +170,7 @@ describe("A2A task store", () => {
   it("filters by state and timestamp and omits artifacts from lists by default", async () => {
     const { callerToken, listener } = await setupPair("filter-callee", "filter-caller");
     const { callId } = await startCall("filter-callee", "filter-caller", callerToken, listener);
-    listener.send(JSON.stringify({ type: "call_result", call_id: callId, text: "list result" }));
+    listener.send(JSON.stringify(encryptedCallOutcome(callId, "filter-callee", "filter-caller")));
 
     await vi.waitFor(async () => {
       const response = await SELF.fetch(taskUrl(
@@ -190,7 +185,7 @@ describe("A2A task store", () => {
       "filter-callee", "tasks?status=TASK_STATE_COMPLETED&includeArtifacts=true",
     ), { headers: wsAuth("filter-caller", callerToken) });
     const completedBody = await withArtifacts.json<any>();
-    expect(completedBody.tasks[0].artifacts[0].parts[0].text).toBe("list result");
+    expect(completedBody.tasks[0]).not.toHaveProperty("artifacts");
 
     const timestamp = completedBody.tasks[0].status.timestamp as string;
     const oneNanosecondAfter = timestamp.replace(/(\.\d{3})Z$/, "$1000001Z");
@@ -209,8 +204,12 @@ describe("A2A task store", () => {
   it("projects failures and refuses to overwrite terminal state with a duplicate frame", async () => {
     const { callerToken, listener } = await setupPair("terminal-callee", "terminal-caller");
     const completed = await startCall("terminal-callee", "terminal-caller", callerToken, listener);
-    listener.send(JSON.stringify({ type: "call_result", call_id: completed.callId, text: "winner" }));
-    listener.send(JSON.stringify({ type: "call_failed", call_id: completed.callId, code: "agent_error" }));
+    listener.send(JSON.stringify(encryptedCallOutcome(
+      completed.callId, "terminal-callee", "terminal-caller",
+    )));
+    listener.send(JSON.stringify(encryptedCallOutcome(
+      completed.callId, "terminal-callee", "terminal-caller", "failed",
+    )));
 
     await vi.waitFor(async () => {
       const response = await SELF.fetch(taskUrl("terminal-callee", `tasks/${completed.callId}`), {
@@ -218,12 +217,13 @@ describe("A2A task store", () => {
       });
       expect(await response.json<any>()).toMatchObject({
         status: { state: "TASK_STATE_COMPLETED" },
-        artifacts: [{ parts: [{ text: "winner" }] }],
       });
     });
 
     const failed = await startCall("terminal-callee", "terminal-caller", callerToken, listener);
-    listener.send(JSON.stringify({ type: "call_failed", call_id: failed.callId, code: "agent_error" }));
+    listener.send(JSON.stringify(encryptedCallOutcome(
+      failed.callId, "terminal-callee", "terminal-caller", "failed",
+    )));
     await vi.waitFor(async () => {
       const response = await SELF.fetch(taskUrl("terminal-callee", `tasks/${failed.callId}`), {
         headers: wsAuth("terminal-caller", callerToken),
@@ -247,6 +247,7 @@ describe("A2A task store", () => {
     expect((await SELF.fetch(taskUrl("valid-callee", "tasks?pageToken=not-valid-%25"), { headers })).status).toBe(400);
     expect((await SELF.fetch(taskUrl("valid-callee", `tasks?pageToken=${"A".repeat(1025)}`), { headers })).status).toBe(400);
     expect((await SELF.fetch(taskUrl("valid-callee", "tasks?includeArtifacts=yes"), { headers })).status).toBe(400);
+    expect((await SELF.fetch(taskUrl("valid-callee", "tasks?contextId=encrypted"), { headers })).status).toBe(400);
     expect((await SELF.fetch(taskUrl("valid-callee", "tasks?pageSize=1.5"), { headers })).status).toBe(400);
     expect((await SELF.fetch(taskUrl("valid-callee", `tasks/${callId}:cancel`), { headers })).status).toBe(404);
     expect((await SELF.fetch(taskUrl("valid-callee", `tasks/${callId}:unknown`), {
@@ -333,7 +334,7 @@ describe("A2A task store", () => {
     expect(response.status).toBe(409);
     expect((await response.json<any>()).error.details[0].reason).toBe("TASK_NOT_CANCELABLE");
 
-    listener.send(JSON.stringify({ type: "call_result", call_id: callId, text: "completion won" }));
+    listener.send(JSON.stringify(encryptedCallOutcome(callId, "refuse-callee", "refuse-caller")));
     await vi.waitFor(async () => {
       const task = await SELF.fetch(taskUrl("refuse-callee", `tasks/${callId}`), {
         headers: wsAuth("refuse-caller", callerToken),
@@ -348,9 +349,7 @@ describe("A2A task store", () => {
       "/v1/ws?role=call&to=expiry-callee&test_timeout_ms=100",
       wsAuth("expiry-caller", callerToken),
     );
-    socket.send(JSON.stringify({
-      type: "call_request", to: "expiry-callee", message: "expire this task",
-    }));
+    socket.send(JSON.stringify(encryptedCallRequest("expiry-caller", "expiry-callee")));
     const ringing = await nextFrame(socket);
     await nextFrame(listener);
     expect(await nextFrame(socket, 10_000)).toMatchObject({ type: "call_error", code: "timeout" });
@@ -369,7 +368,7 @@ describe("A2A task store", () => {
       "/v1/ws?role=call&to=accepted-callee&test_timeout_ms=500",
       wsAuth("accepted-caller", callerToken),
     );
-    socket.send(JSON.stringify({ type: "call_request", to: "accepted-callee", message: "accept me" }));
+    socket.send(JSON.stringify(encryptedCallRequest("accepted-caller", "accepted-callee")));
     const ringing = await nextFrame(socket);
     await nextFrame(listener);
     listener.send(JSON.stringify({ type: "call_accepted", call_id: ringing.call_id }));
@@ -380,7 +379,9 @@ describe("A2A task store", () => {
     });
     expect((await accepted.json<any>()).status.state).toBe("TASK_STATE_SUBMITTED");
 
-    listener.send(JSON.stringify({ type: "call_result", call_id: ringing.call_id, text: "short result" }));
+    listener.send(JSON.stringify(encryptedCallOutcome(
+      ringing.call_id, "accepted-callee", "accepted-caller",
+    )));
     await nextFrame(socket);
     await vi.waitFor(async () => {
       const expired = await SELF.fetch(taskUrl("accepted-callee", `tasks/${ringing.call_id}`), {
@@ -415,7 +416,7 @@ describe("A2A task store", () => {
       "/v1/ws?role=call&to=no-ack-callee&test_timeout_ms=250",
       wsAuth("no-ack-caller", callerToken),
     );
-    socket.send(JSON.stringify({ type: "call_request", to: "no-ack-callee", message: "cancel without ack" }));
+    socket.send(JSON.stringify(encryptedCallRequest("no-ack-caller", "no-ack-callee")));
     const ringing = await nextFrame(socket);
     await nextFrame(listener);
 
@@ -441,7 +442,7 @@ describe("A2A task store", () => {
       `/v1/ws?role=call&to=${callee}`,
       wsAuth(caller, alphaCallerToken, "alpha-org"),
     );
-    socket.send(JSON.stringify({ type: "call_request", to: callee, message: "alpha only" }));
+    socket.send(JSON.stringify(encryptedCallRequest(caller, callee)));
     const ringing = await nextFrame(socket);
     await nextFrame(listener);
 
@@ -482,7 +483,7 @@ describe("A2A task store", () => {
       body: "{}",
     });
     expect(await nextFrame(listener)).toEqual({ type: "cancel_call", call_id: callId });
-    listener.send(JSON.stringify({ type: "call_result", call_id: callId, text: "completed first" }));
+    listener.send(JSON.stringify(encryptedCallOutcome(callId, "race-callee", "race-caller")));
     expect((await cancel).status).toBe(409);
 
     const task = await SELF.fetch(taskUrl("race-callee", `tasks/${callId}`), {
@@ -490,7 +491,6 @@ describe("A2A task store", () => {
     });
     expect(await task.json<any>()).toMatchObject({
       status: { state: "TASK_STATE_COMPLETED" },
-      artifacts: [{ parts: [{ text: "completed first" }] }],
     });
   });
 });

@@ -64,7 +64,7 @@ export const DEFAULT_POLICY: Policy = { description: "", default_offer: ["ask"],
 
 // Missing file -> safe default (fresh install). Malformed file -> THROW:
 // silently falling back to DEFAULT_POLICY would grant `ask` to callers the
-// owner explicitly blocked. The listener maps the throw to a call_failed
+// owner explicitly blocked. The listener maps the throw to an encrypted failure
 // agent_error without spawning anything.
 function readOptionalJson<T>(file: string, label: string, schema: z.ZodType<T>): T | undefined {
   let raw: string;

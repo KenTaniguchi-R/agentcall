@@ -1,36 +1,42 @@
 import { describe, expect, it } from "vitest";
-import { closed, nextFrame, openWs, registerHandle, wsAuth } from "./helpers.js";
+import {
+  encryptedCallOutcome, encryptedCallRequest, nextFrame, openWs, registerHandle, wsAuth,
+} from "./helpers.js";
 
 async function setupPair(callee: string, callerHandle: string) {
   const calleeToken = await registerHandle(callee);
   const callerToken = await registerHandle(callerHandle);
   const listener = await openWs("/v1/ws?role=listen", wsAuth(callee, calleeToken));
   const caller = await openWs(`/v1/ws?role=call&to=${callee}`, wsAuth(callerHandle, callerToken));
-  return { listener, caller, callee };
+  return { listener, caller, callee, callerHandle };
 }
 
-describe("task/offered passthrough", () => {
-  it("forwards call_request.task to the listener and echoes call_result.task in call_reply", async () => {
-    const { listener, caller, callee } = await setupPair("task-echo-callee", "task-echo-caller");
-    caller.send(JSON.stringify({ type: "call_request", to: callee, message: "next tue?", task: "schedule-meeting" }));
-    await nextFrame(caller); // ringing
+describe("encrypted content routing", () => {
+  it("forwards only a request envelope, never task/message/context fields", async () => {
+    const { listener, caller, callee, callerHandle } = await setupPair("task-echo-callee", "task-echo-caller");
+    caller.send(JSON.stringify(encryptedCallRequest(callerHandle, callee)));
+    await nextFrame(caller);
     const incoming = await nextFrame(listener);
-    expect(incoming).toMatchObject({ type: "incoming_call", task: "schedule-meeting" });
-    listener.send(JSON.stringify({ type: "call_result", call_id: incoming.call_id, text: "booked", task: "schedule-meeting" }));
-    const reply = await nextFrame(caller);
-    expect(reply).toMatchObject({ type: "call_reply", text: "booked", task: "schedule-meeting" });
+    expect(incoming).toMatchObject({ type: "incoming_call", from: callerHandle, envelope: { direction: "request" } });
+    expect(incoming).not.toHaveProperty("message");
+    expect(incoming).not.toHaveProperty("task");
+    expect(incoming).not.toHaveProperty("context_id");
+
+    const outcome = encryptedCallOutcome(incoming.call_id, callee, callerHandle);
+    listener.send(JSON.stringify(outcome));
+    expect(await nextFrame(caller)).toEqual(outcome);
   });
 
-  it("forwards call_failed.offered to the caller as call_error.offered", async () => {
-    const { listener, caller, callee } = await setupPair("task-fail-callee", "task-fail-caller");
-    caller.send(JSON.stringify({ type: "call_request", to: callee, message: "hi", task: "deploy-prod" }));
-    await nextFrame(caller); // ringing
+  it("forwards peer failures as opaque outcomes, never detail/offered fields", async () => {
+    const { listener, caller, callee, callerHandle } = await setupPair("task-fail-callee", "task-fail-caller");
+    caller.send(JSON.stringify(encryptedCallRequest(callerHandle, callee)));
+    await nextFrame(caller);
     const incoming = await nextFrame(listener);
-    listener.send(JSON.stringify({
-      type: "call_failed", call_id: incoming.call_id, code: "task_not_offered", offered: ["ask", "owner-introduction"],
-    }));
-    const err = await nextFrame(caller);
-    expect(err).toMatchObject({ type: "call_error", code: "task_not_offered", offered: ["ask", "owner-introduction"] });
-    await closed(caller);
+    const outcome = encryptedCallOutcome(incoming.call_id, callee, callerHandle, "failed");
+    listener.send(JSON.stringify(outcome));
+    const relayed = await nextFrame(caller);
+    expect(relayed).toEqual(outcome);
+    expect(relayed).not.toHaveProperty("detail");
+    expect(relayed).not.toHaveProperty("offered");
   });
 });

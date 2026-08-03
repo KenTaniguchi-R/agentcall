@@ -1,7 +1,9 @@
 import { env, SELF } from "cloudflare:test";
 import { describe, expect, it, vi } from "vitest";
 import app from "../src/index.js";
-import { fixedRateLimit, registerHandle, issueInvite, wsAuth, openWs, closed, nextFrame } from "./helpers.js";
+import {
+  closed, encryptedCallRequest, fixedRateLimit, issueInvite, nextFrame, openWs, registerHandle, wsAuth,
+} from "./helpers.js";
 
 describe("listener attach + status", () => {
   it("401s a listener with a bad token", async () => {
@@ -74,13 +76,13 @@ describe("listener attach + status", () => {
     const { token } = await res.json<{ token: string }>();
 
     const caller = await openWs("/v1/ws?role=call&to=host1", wsAuth("solo2", token));
-    caller.send(JSON.stringify({ type: "call_request", to: "host1", message: "hi" }));
+    caller.send(JSON.stringify(encryptedCallRequest("solo2", "host1")));
     const frame = await incoming;
     expect(frame.type).toBe("incoming_call");
     expect(frame.from).toBe("solo2");
   });
 
-  it("attests only rosters shared by caller and callee and ignores caller-asserted groups", async () => {
+  it("attests only rosters shared by caller and callee", async () => {
     const targetToken = await registerHandle("group-target");
     const callerToken = await registerHandle("group-caller");
     const listener = await openWs("/v1/ws?role=listen", wsAuth("group-target", targetToken));
@@ -100,9 +102,7 @@ describe("listener attach + status", () => {
 
     const incoming = nextFrame(listener);
     const caller = await openWs("/v1/ws?role=call&to=group-target", wsAuth("group-caller", callerToken));
-    caller.send(JSON.stringify({
-      type: "call_request", to: "group-target", message: "hi", groups: [callerOnly, "attacker-chosen"],
-    }));
+    caller.send(JSON.stringify(encryptedCallRequest("group-caller", "group-target")));
 
     expect(await incoming).toMatchObject({
       type: "incoming_call", from: "group-caller", groups: [shared],
@@ -128,7 +128,7 @@ describe("listener attach + status", () => {
 
     const incoming = nextFrame(listener);
     const caller = await openWs("/v1/ws?role=call&to=open-target", wsAuth("open-caller", callerToken));
-    caller.send(JSON.stringify({ type: "call_request", to: "open-target", message: "hello" }));
+    caller.send(JSON.stringify(encryptedCallRequest("open-caller", "open-target")));
 
     expect(await incoming).toMatchObject({
       type: "incoming_call", from: "open-caller", groups: [],
@@ -154,8 +154,9 @@ describe("listener attach + status", () => {
     const acmeCaller = await registerHandle("caller", "claude", "acme-do");
     const incoming = nextFrame(acmeListener);
     const caller = await openWs("/v1/ws?role=call&to=same-person", wsAuth("caller", acmeCaller, "acme-do"));
-    caller.send(JSON.stringify({ type: "call_request", to: "same-person", message: "acme only" }));
-    expect(await incoming).toMatchObject({ type: "incoming_call", from: "caller", message: "acme only" });
+    caller.send(JSON.stringify(encryptedCallRequest("caller", "same-person")));
+    expect(await incoming).toMatchObject({ type: "incoming_call", from: "caller" });
+    expect(await incoming).not.toHaveProperty("message");
   });
   // /v1/status was anonymous and unthrottled, which made it a presence
   // oracle: 404-vs-200 enumerates registered handles (the namespace is

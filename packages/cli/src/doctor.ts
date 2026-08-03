@@ -261,7 +261,7 @@ export async function runDoctor(deps: DoctorDeps): Promise<number> {
     }
 
     if (agentOk && online) {
-      report(await checkRelaySelfCall(cfg, deps.callFn));
+      report(await checkRelaySelfCall(cfg, line.paths, deps.callFn));
     } else if (agentOk) {
       log("skipping relay self-call (agent offline).");
     }

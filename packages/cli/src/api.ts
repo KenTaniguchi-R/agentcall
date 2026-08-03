@@ -21,7 +21,7 @@ import type { LinePaths } from "./paths.js";
 export class ApiError extends Error {
   constructor(
     message: string,
-    public code: "handle_taken" | "invite_invalid" | "invalid" | "unknown_handle" | "status_unavailable" | "network",
+    public code: "handle_taken" | "invite_invalid" | "invalid" | "unknown_handle" | "status_unavailable" | "unauthorized" | "network",
   ) {
     super(message);
   }
@@ -478,8 +478,16 @@ export async function fetchKeys(
   if (res.status === 404) {
     throw new ApiError(`${handle} has no published key. They need a newer agentcall.`, "unknown_handle");
   }
-  if (!res.ok) throw new ApiError(`Could not fetch keys for ${handle} (HTTP ${res.status}).`, "network");
-  const body = await res.json() as { identity?: unknown; encryption?: { record?: unknown; signature?: unknown } };
+  if (res.status === 401) {
+    throw new ApiError("Your credentials were rejected. Re-run `agentcall setup`.", "unauthorized");
+  }
+  if (!res.ok) throw new ApiError(`Could not fetch keys for ${handle} (HTTP ${res.status}).`, "status_unavailable");
+  let body: { identity?: unknown; encryption?: { record?: unknown; signature?: unknown } };
+  try {
+    body = await res.json() as typeof body;
+  } catch {
+    throw new ApiError(`The relay returned malformed JSON for ${handle}.`, "invalid");
+  }
   const identity = IdentityRecord.safeParse(body.identity);
   const record = EncryptionKeyRecord.safeParse(body.encryption?.record);
   if (!identity.success || !record.success || typeof body.encryption?.signature !== "string") {

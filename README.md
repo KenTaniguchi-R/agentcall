@@ -16,23 +16,26 @@ sequenceDiagram
     participant Agent as claude -p / codex exec
 
     A->>CLI: agentcall call ken@acme.agentcall.benree.tech "msg"
-    CLI->>Relay: WSS call_request {to, message, from, token}
-    Relay->>L: incoming_call {call_id, from, message}
+    CLI->>CLI: verify/pin B's keys; HPKE seal request
+    CLI->>Relay: WSS call_request {encrypted envelope}
+    Relay->>L: incoming_call {call_id, from, encrypted envelope}
+    L->>L: decrypt, verify, current-check, reserve replay
     Relay-->>CLI: call_status ringing
     L->>Relay: call_accepted {call_id}
     L->>Relay: call_started {call_id}
     L->>Agent: spawn (cwd = workdir, capability-scoped)
     Agent-->>L: reply text
-    L->>Relay: call_result {call_id, text}
-    Relay-->>CLI: call_reply {text}
+    L->>Relay: call_outcome {call_id, encrypted envelope}
+    Relay-->>CLI: call_outcome {encrypted envelope}
+    CLI->>CLI: decrypt and authenticate B's outcome
     CLI-->>A: prints reply to stdout
 ```
 
-The listener sends `call_accepted` then `call_started` instead of the old
-single `call_answer`. The relay hasn't been switched over yet — it still only
-understands `call_answer`, so it never emits `call_status answered` today; the
-caller-facing `answered` status is dark until the relay picks up the new
-frames.
+The relay sees routing, organization, caller/callee handles, call IDs,
+lifecycle state, timing, and ciphertext size. Message, task, context, reply,
+peer failure detail, and offered-task content are signed and HPKE-encrypted
+between endpoints. Endpoint-local prompts, agent output, and audit logs remain
+plaintext on the machines that own them.
 
 Non-goals for v1: store-and-forward, Windows listener installation, anonymous
 callers, payment/reputation.
@@ -231,8 +234,10 @@ the identity key in `~/.agentcall/known_peers.json` (directory `0700`, file
 `0600`). A later identity change or lower encryption-key epoch fails closed.
 After confirming a legitimate identity change through another channel, the
 only replacement path is `agentcall trust --reset <address>` followed by a new
-`agentcall verify`. This trust foundation does not encrypt call payloads yet;
-the relay can still read v1 messages and replies.
+`agentcall verify`. Calls fetch and validate the recipient's signed key record
+before opening a WebSocket. Payloads are HPKE-encrypted and signed end to end;
+a changed identity, stale key, rollback, invalid signature, replay, or
+mismatched route fails closed.
 
 Local key files created before encryption-key chain continuity are rejected:
 they cannot reconstruct the exact previously published record required for a
@@ -245,12 +250,8 @@ reply text to stdout. Human-readable output preserves line breaks and tabs but
 neutralizes terminal control characters and Unicode bidirectional formatting
 from the remote agent. `--json` preserves the exact reply payload for piping;
 its serialized form Unicode-escapes terminal-active controls and bidi marks.
-It used to also print
-`answered, agent working...`, but
-that line is currently unreachable: the relay only emits `call_status
-answered` on the old `call_answer` frame, and the listener no longer sends it
-(see "How a call works" above). Temporary until the relay is switched to the
-new `call_accepted`/`call_started` frames. Nonzero exit + an
+`call_accepted` and `call_started` produce the `answered...` and `agent
+working...` status updates. Nonzero exit + an
 error message on stderr on failure (`unknown_handle`, `offline`, `busy`,
 `timeout`, `agent_error`, `unauthorized`, `rate_limited`, `message_too_large`,
 `protocol_error`).
@@ -294,7 +295,7 @@ GET  /v1/a2a/<callee>/tasks?pageSize=50&pageToken=...
 POST /v1/a2a/<callee>/tasks/<call-id>:cancel
 ```
 
-The list operation supports A2A's `contextId`, `status`, `pageSize`,
+The list operation supports `status`, `pageSize`,
 `pageToken`, `historyLength`, `statusTimestampAfter`, and `includeArtifacts`
 parameters. It returns only calls originated by the authenticated handle. A
 point read or cancellation for another caller's task is byte-for-byte
@@ -302,11 +303,12 @@ indistinguishable from a nonexistent task. Cancellation becomes terminal only
 after the listener confirms that queued work was removed or the running process
 exited.
 
-This is a short-lived task store, not offline delivery. Completed, failed, and
-canceled records remain only until the call's original six-minute relay
-deadline; prompts and conversation history are not added to the public task
-object. An offline callee still fails immediately, and no durable mailbox is
-created.
+This is a short-lived, status-only task store, not offline delivery. The relay
+cannot filter on encrypted `contextId`, and `includeArtifacts` cannot reveal an
+encrypted reply. Completed, failed, and canceled lifecycle records remain only
+until the call's original six-minute relay deadline; prompts, replies, failure
+details, and conversation history are absent from the public task object. An
+offline callee still fails immediately, and no durable mailbox is created.
 
 ### Following up
 
@@ -828,8 +830,10 @@ organization administrator, and the relay operator can see—read the
   - A Claude answering agent's file-shaped tools are confined to the resolved
     task workdir. A task granted `exec` can still read outside it through shell
     commands, and a Codex answering agent is not confined for reads at all.
-  - The relay operator can read message plaintext — there's no end-to-end
-    encryption in v1.
+  - End-to-end encryption does not hide routing and traffic metadata. The relay
+    operator still sees tenant and handle relationships, roster intersections,
+    call IDs, lifecycle/timing, source-network metadata where available,
+    envelope headers, and ciphertext sizes.
   - A caller's prompt could induce the agent to read and echo back the
     callee's Claude Code session history (`~/.claude/projects/*`, which can
     contain pasted secrets and private code), API keys in `~/.claude.json`'s
@@ -1054,9 +1058,11 @@ disabled whenever managed policy is present so IT can pin the deployed version.
 - **No Windows listener installer.** Native background listeners are supported
   on macOS (launchd) and Linux (systemd user service); Windows remains
   unsupported. Containers run the Linux listener in the foreground.
-- **The relay operator sees message plaintext.** Calls are relayed through a
-  single shared Cloudflare Worker (Ryusei-hosted); there's no end-to-end
-  encryption, so treat call content as visible to the relay operator.
+- **The relay operator sees traffic metadata.** Calls use signed HPKE envelopes,
+  but the shared Cloudflare relay still observes tenant/handle routing, roster
+  intersections, call IDs, lifecycle/timing, source-network metadata where
+  available, envelope headers, and ciphertext sizes. Endpoint plaintext and
+  local logs remain outside this protection.
 - **Presence analytics is identity-unlinked and incomplete.** Status-read
   telemetry contains only allowed/denied points and timestamps. Cloudflare may
   retain individual points, samples the dataset, and retains it for three months;

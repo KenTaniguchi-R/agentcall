@@ -349,6 +349,7 @@ program
         token: cfg.token,
         to: parsed.handle,
         message,
+        paths: ctx.paths,
         task,
         contextId,
         correlationId: callerSpan?.correlationId,

@@ -1,8 +1,10 @@
-import WebSocket from "ws";
+import WebSocket, { type RawData } from "ws";
 import {
-  AGENT_TIMEOUT_MS, RelayToListenerFrame, safeParseFrame,
+  AGENT_TIMEOUT_MS, E2EERelayToListenerFrame, MAX_E2EE_WIRE_BYTES, keyIdFor, requestTranscript,
+  safeParseFrame, transcriptHash, type E2EEOutcomeType, type E2EEResponsePayloadType,
 } from "@benree/agentcall-shared";
-import { resolveLineWorkdir, type CallableLineConfig } from "./config.js";
+import { fetchKeys } from "./api.js";
+import { relayAddressHost, resolveLineWorkdir, type CallableLineConfig } from "./config.js";
 import type { LinePaths } from "./paths.js";
 import { buildPrompt } from "./prompt.js";
 import { AgentRunError, codexThreadingEnabled, CODEX_THREADING_VERIFIED_VERSION, runAgent } from "./runner.js";
@@ -17,6 +19,10 @@ import { appendPrivateLogLine } from "./audit-log.js";
 import {
   getTelemetry, shutdownTelemetry, telemetrySafely, type AgentCallTelemetry,
 } from "./telemetry.js";
+import { openE2EERequest, sealE2EEResponse } from "./e2ee.js";
+import { loadKeys } from "./keys.js";
+import { verifyAndPinPeer } from "./known-peers.js";
+import { reserveReplay } from "./replay-store.js";
 
 export interface ListenerDeps {
   relay: string;
@@ -31,18 +37,40 @@ export interface ListenerDeps {
   // WebSocketServer round-trip works but makes asserting per-attempt
   // Authorization headers awkward. Production leaves this unset and gets a
   // real `ws` socket.
-  socketFactory?: (url: string, opts: { headers: Record<string, string> }) => WebSocket;
+  socketFactory?: (
+    url: string,
+    opts: { headers: Record<string, string>; perMessageDeflate: false; maxPayload: number },
+  ) => WebSocket;
   codexThreadingEnabled?: () => boolean;
   telemetry?: AgentCallTelemetry;
+  fetchKeys?: typeof fetchKeys;
+  verifyAndPinPeer?: typeof verifyAndPinPeer;
+  loadKeys?: typeof loadKeys;
+  reserveReplay?: typeof reserveReplay;
+  sealE2EEResponse?: typeof sealE2EEResponse;
+}
+
+function rawWireBytes(raw: RawData): number {
+  return Array.isArray(raw)
+    ? raw.reduce((total, chunk) => total + chunk.byteLength, 0)
+    : raw.byteLength;
 }
 
 export function startListener(deps: ListenerDeps): { stop(): Promise<void> } {
   const run = deps.run ?? runAgent;
-  const newSocket = deps.socketFactory ?? ((url: string, opts: { headers: Record<string, string> }) => new WebSocket(url, opts));
+  const newSocket = deps.socketFactory ?? ((
+    url: string,
+    opts: { headers: Record<string, string>; perMessageDeflate: false; maxPayload: number },
+  ) => new WebSocket(url, opts));
   const persistContexts = deps.saveContexts ?? saveContexts;
   const telemetry = deps.telemetry ?? getTelemetry(process.env, {
     healthFile: deps.paths.machine.telemetryHealthFile,
   });
+  const fetchPeerKeys = deps.fetchKeys ?? fetchKeys;
+  const verifyPeer = deps.verifyAndPinPeer ?? verifyAndPinPeer;
+  const loadLocalKeys = deps.loadKeys ?? loadKeys;
+  const reserveRequest = deps.reserveReplay ?? reserveReplay;
+  const sealResponse = deps.sealE2EEResponse ?? sealE2EEResponse;
   // Validate before opening the socket. Hot edits are still loaded per call
   // below, but a listener must never advertise availability when its initial
   // effective policy (user layer + the machine's managed ceiling) is malformed
@@ -121,15 +149,21 @@ export function startListener(deps: ListenerDeps): { stop(): Promise<void> } {
         "X-AgentCall-Org": config.org,
         "X-AgentCall-Handle": config.handle,
       },
+      perMessageDeflate: false,
+      maxPayload: MAX_E2EE_WIRE_BYTES,
     });
     ws.on("open", () => {
       attempt = 0;
       pingTimer = setInterval(() => { try { ws?.send("ping"); } catch { /* dead */ } }, 30_000);
     });
-    ws.on("message", (raw) => {
+    ws.on("message", async (raw) => {
+      if (rawWireBytes(raw) > MAX_E2EE_WIRE_BYTES) {
+        try { ws?.close(1009, "Encrypted relay frame exceeded the wire limit."); } catch { /* dead */ }
+        return;
+      }
       const s = String(raw);
       if (s === "pong") return;
-      const frame = safeParseFrame(RelayToListenerFrame, s);
+      const frame = safeParseFrame(E2EERelayToListenerFrame, s);
       if (!frame) return;
       const send = (obj: unknown) => { try { ws?.send(JSON.stringify(obj)); } catch { /* dead */ } };
 
@@ -151,11 +185,89 @@ export function startListener(deps: ListenerDeps): { stop(): Promise<void> } {
       let admissionOutcome = "agent_error";
       try {
       const {
-        call_id, correlation_id, from, groups, message,
-        task: requestedTask, context_id,
+        call_id, correlation_id, from, groups,
       } = frame;
       const correlation = correlation_id ? { correlation_id } : {};
       const started = Date.now();
+      const relayOrigin = relayAddressHost(deps.relay, config.org);
+      const fromAddress = `${from}@${relayOrigin}`;
+      const toAddress = `${config.handle}@${relayOrigin}`;
+      let request;
+      let callerBundle;
+      let callerPeer;
+      let localKeys;
+      try {
+        callerBundle = await fetchPeerKeys(
+          deps.relay,
+          { org: config.org, handle: config.handle, token: config.token },
+          from,
+        );
+        callerPeer = await verifyPeer(deps.paths.machine, fromAddress, callerBundle);
+        localKeys = loadLocalKeys(deps.paths);
+        request = await openE2EERequest(
+          frame.envelope,
+          localKeys.encryption_pkcs8,
+          callerPeer.identity_pub,
+          {
+            relay_origin: relayOrigin,
+            from: fromAddress,
+            to: toAddress,
+            key_id: await keyIdFor(localKeys.encryption_pub),
+            epoch: localKeys.epoch,
+          },
+        );
+        await reserveRequest(deps.paths.machine, {
+          sender_fingerprint: callerPeer.fingerprint,
+          request_id: request.request_id,
+          expires_at: request.expires_at,
+        });
+      } catch (error) {
+        admissionOutcome = "protocol_error";
+        send({ type: "call_rejected", call_id, code: "protocol_error" });
+        audit({
+          call_id, ...correlation, from, status: "protocol_error", duration_ms: Date.now() - started,
+          error: String(error).slice(0, 2_000),
+        });
+        return;
+      }
+
+      const { message, task: requestedTask, context_id } = request;
+      const requestHash = await transcriptHash(requestTranscript(request));
+      const trySendOutcome = async (outcome: E2EEOutcomeType): Promise<string | undefined> => {
+        try {
+          const issuedAt = Date.now();
+          const payload: E2EEResponsePayloadType = {
+            v: 1,
+            direction: "response",
+            relay_origin: relayOrigin,
+            from: toAddress,
+            to: fromAddress,
+            request_id: request.request_id,
+            sender_identity_key_id: await keyIdFor(localKeys.identity_pub),
+            recipient_encryption_key_id: callerBundle.encryption.record.key_id,
+            recipient_epoch: callerBundle.encryption.record.epoch,
+            issued_at: issuedAt,
+            expires_at: request.expires_at,
+            request_transcript_hash: requestHash,
+            outcome,
+          };
+          const envelope = await sealResponse(payload, localKeys, {
+            pub: callerBundle.encryption.record.pub,
+            key_id: callerBundle.encryption.record.key_id,
+            epoch: callerBundle.encryption.record.epoch,
+          });
+          send({
+            type: "call_outcome", call_id,
+            terminal: outcome.kind === "reply" ? "completed" : "failed",
+            envelope,
+          });
+          return undefined;
+        } catch (error) {
+          const detail = String(error).slice(0, 2_000);
+          console.error(`Listener could not seal outcome for encrypted call ${call_id}: ${detail}`);
+          return detail;
+        }
+      };
 
       // Resolve caller -> task -> envelope BEFORE the message is placed in any
       // prompt (see policy.ts). Refusals never enqueue and never spawn: no
@@ -165,14 +277,14 @@ export function startListener(deps: ListenerDeps): { stop(): Promise<void> } {
         resolution = resolveTask(loadPolicy(deps.paths), loadTasks(deps.paths), from, requestedTask, groups);
       } catch (e) {
         admissionOutcome = "policy_error";
-        send({ type: "call_failed", call_id, code: "agent_error", detail: "A local policy error prevented this call from completing." });
-        audit({ call_id, ...correlation, from, message: message.slice(0, 500), status: "policy_error", duration_ms: 0, error: String(e).slice(0, 2000) });
+        const outcomeDeliveryError = await trySendOutcome({ kind: "failure", code: "agent_error", detail: "A local policy error prevented this call from completing." });
+        audit({ call_id, ...correlation, from, message: message.slice(0, 500), status: "policy_error", duration_ms: 0, error: String(e).slice(0, 2000), outcome_delivery_error: outcomeDeliveryError });
         return;
       }
       if (!resolution.ok) {
         admissionOutcome = resolution.code;
-        send({ type: "call_failed", call_id, code: resolution.code, offered: resolution.offered });
-        audit({ call_id, ...correlation, from, message: message.slice(0, 500), task: requestedTask, status: resolution.code, duration_ms: 0 });
+        const outcomeDeliveryError = await trySendOutcome({ kind: "failure", code: resolution.code, offered: resolution.offered });
+        audit({ call_id, ...correlation, from, message: message.slice(0, 500), task: requestedTask, status: resolution.code, duration_ms: 0, outcome_delivery_error: outcomeDeliveryError });
         return;
       }
       const task = resolution.task;
@@ -216,9 +328,9 @@ export function startListener(deps: ListenerDeps): { stop(): Promise<void> } {
         // because a silent almost-right answer is the #43/#51 failure mode.
         if (!binding) {
           admissionOutcome = "context_unknown";
-          send({ type: "call_failed", call_id, code: "context_unknown" });
+          const outcomeDeliveryError = await trySendOutcome({ kind: "failure", code: "context_unknown" });
           audit({ call_id, ...correlation, from, message: message.slice(0, 500), task: task.id,
-                  status: "context_unknown", duration_ms: 0 });
+                  status: "context_unknown", duration_ms: 0, outcome_delivery_error: outcomeDeliveryError });
           return;
         }
       }
@@ -306,7 +418,20 @@ export function startListener(deps: ListenerDeps): { stop(): Promise<void> } {
           // context_id, never out.session_id: the minted handle is the only
           // thing that travels. The audit log gets the same treatment — it is
           // the owner's file, but it is also what gets pasted into a bug report.
-          send({ type: "call_result", call_id, text: out.text, context_id: contextId, task: task.id });
+          const outcomeDeliveryError = await trySendOutcome({
+            kind: "reply", text: out.text, context_id: contextId, task: task.id,
+          });
+          if (outcomeDeliveryError) {
+            telemetrySafely(() => invocationSpan?.end("agent_error"));
+            audit({
+              call_id, ...correlation, from, message: message.slice(0, 500), task: task.id,
+              status: "outcome_delivery_error", duration_ms: Date.now() - started,
+              outcome_delivery_error: outcomeDeliveryError,
+              context_id: contextId, turn: (binding?.turns ?? 0) + 1,
+              context_persist_error: contextPersistError,
+            });
+            return;
+          }
           telemetrySafely(() => invocationSpan?.end("success", contextId));
           audit({
             call_id, ...correlation, from, message: message.slice(0, 500), reply: out.text.slice(0, 500),
@@ -325,7 +450,7 @@ export function startListener(deps: ListenerDeps): { stop(): Promise<void> } {
             audit({ call_id, ...correlation, from, message: message.slice(0, 500), task: task.id, status: "canceled", duration_ms: Date.now() - started });
             return;
           }
-          send({ type: "call_failed", call_id, code, detail: "The agent hit an internal error while answering." });
+          const outcomeDeliveryError = await trySendOutcome({ kind: "failure", code, detail: "The agent hit an internal error while answering." });
           // The agent's own error text can echo the session id back at us: a
           // stale binding makes `claude --resume <id>` print that id, and
           // runAgent folds the child's stderr/stdout into its message. Scrubbed
@@ -338,14 +463,25 @@ export function startListener(deps: ListenerDeps): { stop(): Promise<void> } {
           audit({
             call_id, ...correlation, from, message: message.slice(0, 500), task: task.id, status: code,
             duration_ms: Date.now() - started, error: err.slice(0, 2000),
+            outcome_delivery_error: outcomeDeliveryError,
           });
         }
       });
       admissionOutcome = accepted ? "accepted" : "busy";
       if (!accepted) {
-        send({ type: "call_failed", call_id, code: "busy" });
-        audit({ call_id, ...correlation, from, message: message.slice(0, 500), task: task.id, status: "busy", duration_ms: 0 });
+        const outcomeDeliveryError = await trySendOutcome({ kind: "failure", code: "busy" });
+        audit({ call_id, ...correlation, from, message: message.slice(0, 500), task: task.id, status: "busy", duration_ms: 0, outcome_delivery_error: outcomeDeliveryError });
       }
+      } catch (error) {
+        // EventEmitter does not observe a rejected async message callback.
+        // Contain unexpected key-store/sealing failures here so one malformed
+        // or expired call cannot become an unhandled process rejection.
+        admissionOutcome = "protocol_error";
+        send({ type: "call_rejected", call_id: frame.call_id, code: "protocol_error" });
+        console.error(
+          `Listener could not finish encrypted call ${frame.call_id}: ` +
+          `${error instanceof Error ? error.message : String(error)}`,
+        );
       } finally {
         telemetrySafely(() => inboundSpan?.endAdmission(admissionOutcome));
       }

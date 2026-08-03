@@ -1,50 +1,51 @@
 import { describe, expect, it } from "vitest";
 import {
-  AgentCard, CallError, CallFailed, CallRequest, CallReply, CallResult,
-  CardUpload, ErrorCode, IncomingCall, MAX_OFFERED_TASKS, TASK_ID_RE,
+  AgentCard, CardUpload, E2EEOutcome, E2EERequestPayload,
+  ErrorCode, MAX_OFFERED_TASKS, TASK_ID_RE,
 } from "../src/index.js";
 
-describe("task fields on call frames", () => {
-  it("accepts call_request with an optional task id", () => {
-    const ok = CallRequest.safeParse({ type: "call_request", to: "ken", message: "hi", task: "schedule-meeting" });
+const request = {
+  v: 1 as const, direction: "request" as const, relay_origin: "relay.test",
+  from: "alice@relay.test", to: "ken@relay.test", request_id: "1".repeat(32),
+  sender_identity_key_id: "2".repeat(32), recipient_encryption_key_id: "3".repeat(32),
+  recipient_epoch: 1, issued_at: 1, expires_at: 2, message: "hi",
+};
+
+describe("task fields inside encrypted payloads", () => {
+  it("accepts a request payload with an optional task id", () => {
+    const ok = E2EERequestPayload.safeParse({ ...request, task: "schedule-meeting" });
     expect(ok.success).toBe(true);
-    const noTask = CallRequest.safeParse({ type: "call_request", to: "ken", message: "hi" });
+    const noTask = E2EERequestPayload.safeParse(request);
     expect(noTask.success).toBe(true);
   });
   it("rejects a malformed task id", () => {
-    const bad = CallRequest.safeParse({ type: "call_request", to: "ken", message: "hi", task: "Bad_Task!" });
+    const bad = E2EERequestPayload.safeParse({ ...request, task: "Bad_Task!" });
     expect(bad.success).toBe(false);
   });
-  it("carries task through incoming_call, call_result, and call_reply", () => {
-    expect(IncomingCall.safeParse({
-      type: "incoming_call", call_id: "c1", from: "a", message: "m", task: "ask", groups: ["g".repeat(22)],
-    }).success).toBe(true);
-    expect(CallResult.safeParse({ type: "call_result", call_id: "c1", text: "t", task: "ask" }).success).toBe(true);
-    expect(CallReply.safeParse({ type: "call_reply", call_id: "c1", text: "t", task: "ask" }).success).toBe(true);
+  it("carries task on a successful encrypted outcome", () => {
+    expect(E2EEOutcome.safeParse({ kind: "reply", text: "t", task: "ask" }).success).toBe(true);
   });
-  it("carries offered[] on call_failed and call_error", () => {
-    expect(CallFailed.safeParse({ type: "call_failed", call_id: "c1", code: "task_not_offered", offered: ["ask"] }).success).toBe(true);
-    expect(CallError.safeParse({ type: "call_error", code: "blocked", offered: [] }).success).toBe(true);
+  it("carries offered[] on an authenticated failure outcome", () => {
+    expect(E2EEOutcome.safeParse({
+      kind: "failure", code: "task_not_offered", offered: ["ask"],
+    }).success).toBe(true);
   });
   it("rejects an offered[] entry that isn't a valid task id (terminal-injection guard)", () => {
-    const badFailed = CallFailed.safeParse({
-      type: "call_failed", call_id: "c1", code: "task_not_offered", offered: ["Bad\x1b[31mTask"],
+    const badFailed = E2EEOutcome.safeParse({
+      kind: "failure", code: "task_not_offered", offered: ["Bad\x1b[31mTask"],
     });
     expect(badFailed.success).toBe(false);
-    const badError = CallError.safeParse({ type: "call_error", code: "blocked", offered: ["Bad\x1b[31mTask"] });
-    expect(badError.success).toBe(false);
   });
   it("rejects offered[] longer than MAX_OFFERED_TASKS (unbounded relay payload guard)", () => {
     const tooMany = Array.from({ length: MAX_OFFERED_TASKS + 1 }, (_, i) => `task-${i}`);
-    expect(CallFailed.safeParse({
-      type: "call_failed", call_id: "c1", code: "task_not_offered", offered: tooMany,
+    expect(E2EEOutcome.safeParse({
+      kind: "failure", code: "task_not_offered", offered: tooMany,
     }).success).toBe(false);
-    expect(CallError.safeParse({ type: "call_error", code: "blocked", offered: tooMany }).success).toBe(false);
   });
   it("still accepts a valid offered[] list at or under the cap", () => {
     const okMany = Array.from({ length: MAX_OFFERED_TASKS }, (_, i) => `task-${i}`);
-    expect(CallFailed.safeParse({
-      type: "call_failed", call_id: "c1", code: "task_not_offered", offered: okMany,
+    expect(E2EEOutcome.safeParse({
+      kind: "failure", code: "task_not_offered", offered: okMany,
     }).success).toBe(true);
   });
   it("accepts the new error codes", () => {
@@ -52,9 +53,8 @@ describe("task fields on call frames", () => {
       expect(ErrorCode.safeParse(code).success).toBe(true);
     }
   });
-  it("requires the dedicated confirmation frame for cancellation", () => {
-    expect(CallError.safeParse({ type: "call_error", code: "canceled" }).success).toBe(true);
-    expect(CallFailed.safeParse({ type: "call_failed", call_id: "c1", code: "canceled" }).success).toBe(false);
+  it("keeps cancellation out of peer-authenticated failure outcomes", () => {
+    expect(E2EEOutcome.safeParse({ kind: "failure", code: "canceled" }).success).toBe(false);
   });
 });
 

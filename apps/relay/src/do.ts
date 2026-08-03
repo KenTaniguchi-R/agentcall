@@ -1,8 +1,8 @@
 import { DurableObject } from "cloudflare:workers";
 import {
-  a2aError, CallerFrame, ListenerToRelayFrame, MAX_MESSAGE_BYTES, MAX_REPLY_BYTES,
-  RATE_LIMIT_PER_HOUR, RELAY_CALL_TIMEOUT_MS, safeParseFrame, sanitizeDetail,
-  standardError, type CallStatusType, type ErrorCodeType, type OrgAuditEvent,
+  a2aError, E2EECallerFrame, E2EEListenerToRelayFrame, MAX_E2EE_WIRE_BYTES,
+  RATE_LIMIT_PER_HOUR, RELAY_CALL_TIMEOUT_MS, safeParseFrame, standardError,
+  type CallStatusType, type OrgAuditEvent, type RelayOperationalErrorCodeType,
 } from "@benree/agentcall-shared";
 import {
   listCallerTasks, parseTaskListQuery, taskBelongsToCaller, taskIsTerminal,
@@ -18,6 +18,7 @@ type CallerAttachment = {
   actorIp?: string;
   actorCountry?: string;
   groups: string[];
+  relayOrigin?: string;
   call_id?: string;
   correlation_id?: string;
   timeoutMs?: number;
@@ -28,6 +29,7 @@ type ListenerAttachment = {
   handle?: string;
   actorIp?: string;
   actorCountry?: string;
+  relayOrigin?: string;
 };
 
 type CallAuditEvent = Extract<OrgAuditEvent, `call.${string}`>;
@@ -193,19 +195,6 @@ export function clampTimeoutMs(requestedMs: number | undefined): number {
   return Math.min(requestedMs ?? RELAY_CALL_TIMEOUT_MS, RELAY_CALL_TIMEOUT_MS);
 }
 
-/**
- * Truncate text to at most maxBytes of UTF-8, cutting on a code-point
- * boundary rather than a UTF-16 code-unit boundary — a naive
- * `text.slice(0, maxBytes)` can split a multi-byte character (e.g. CJK)
- * and either overshoot the byte cap or corrupt the string.
- */
-export function truncateUtf8Bytes(text: string, maxBytes: number): string {
-  const bytes = new TextEncoder().encode(text);
-  if (bytes.byteLength <= maxBytes) return text;
-  const sliced = bytes.slice(0, maxBytes);
-  return new TextDecoder("utf-8", { fatal: false }).decode(sliced).replace(/�+$/, "");
-}
-
 function callAuditIntent(
   event: CallAuditEvent,
   task: PersistedTask,
@@ -266,6 +255,7 @@ export class HandleDO extends DurableObject {
       const target = req.headers.get("X-Verified-Target") || undefined;
       const actorIp = req.headers.get("X-Verified-Actor-IP") || undefined;
       const actorCountry = req.headers.get("X-Verified-Actor-Country") || undefined;
+      const relayOrigin = req.headers.get("X-Verified-Relay-Origin") || undefined;
       let groups: string[] = [];
       try {
         const parsed = JSON.parse(req.headers.get("X-Verified-Groups") ?? "[]");
@@ -279,13 +269,13 @@ export class HandleDO extends DurableObject {
         for (const old of this.ctx.getWebSockets("listener")) old.close(4000, "replaced");
         this.ctx.acceptWebSocket(server, ["listener"]);
         server.serializeAttachment({
-          kind: "listener", org, handle: target, actorIp, actorCountry,
+          kind: "listener", org, handle: target, actorIp, actorCountry, relayOrigin,
         } satisfies ListenerAttachment);
       } else {
         this.ctx.acceptWebSocket(server, ["caller"]);
         server.serializeAttachment({
           kind: "caller", from, org, to: target, actorIp, actorCountry,
-          groups, timeoutMs: testTimeout,
+          groups, timeoutMs: testTimeout, relayOrigin,
         } satisfies CallerAttachment);
       }
       return new Response(null, { status: 101, webSocket: client });
@@ -379,13 +369,11 @@ export class HandleDO extends DurableObject {
 
   private fail(
     ws: WebSocket,
-    code: ErrorCodeType,
-    detail?: string,
-    offered?: string[],
+    code: RelayOperationalErrorCodeType,
     close = true,
     context: { call_id?: string; correlation_id?: string } = {},
   ): void {
-    this.send(ws, { type: "call_error", code, detail, offered, ...context });
+    this.send(ws, { type: "call_error", origin: "relay", code, ...context });
     if (close) { try { ws.close(1000, code); } catch { /* already closed */ } }
   }
 
@@ -493,8 +481,8 @@ export class HandleDO extends DurableObject {
       task_state: state === "working" ? "TASK_STATE_WORKING" : (record.task_state ?? "TASK_STATE_SUBMITTED"),
       updated_at: Date.now(),
     } satisfies PersistedTask;
-    // Starting work from ringing is an implicit acceptance (including the
-    // legacy call_answer path), so it must not leave a lifecycle gap. A later
+    // Starting work from ringing is an implicit acceptance, so it must not
+    // leave a lifecycle gap. A later
     // explicit acceptance is rank-rejected and cannot duplicate the event.
     const accepted = state === "answered" || (state === "working" && current === "ringing")
       ? callAuditIntent("call.accept", next, record.to ?? listener.handle ?? "", "handle", listener, next.updated_at!)
@@ -516,36 +504,37 @@ export class HandleDO extends DurableObject {
 
     if (att.kind === "caller") {
       if (att.call_id) {
-        return this.fail(ws, "protocol_error", undefined, undefined, true, {
+        return this.fail(ws, "protocol_error", true, {
           call_id: att.call_id,
           correlation_id: att.correlation_id,
         });
       }
-      const frame = safeParseFrame(CallerFrame, raw);
+      const oversized = new TextEncoder().encode(raw).byteLength > MAX_E2EE_WIRE_BYTES;
+      const now = Date.now();
+      const stamps = await readLiveRateLimitStamps(this.ctx.storage, att.from, now);
+      if (stamps.length >= RATE_LIMIT_PER_HOUR) {
+        return this.fail(ws, "rate_limited", true);
+      }
+      if (oversized) {
+        await recordRateLimitHit(this.ctx.storage, att.from, stamps, now);
+        await this.scheduleNextAlarm();
+        return this.fail(ws, "message_too_large");
+      }
+      const frame = safeParseFrame(E2EECallerFrame, raw);
       if (!frame) return this.fail(ws, "protocol_error");
+      if (
+        !att.relayOrigin || !att.to ||
+        frame.envelope.relay_origin !== att.relayOrigin ||
+        frame.envelope.from !== `${att.from}@${att.relayOrigin}` ||
+        frame.envelope.to !== `${att.to}@${att.relayOrigin}`
+      ) return this.fail(ws, "protocol_error");
       // New callers always mint this. During mixed-version overlap, minting at
       // the first new relay preserves delivery and gives the new listener a
       // bounded application join key even when the old caller omitted it.
       const correlation_id = frame.correlation_id ?? crypto.randomUUID().replaceAll("-", "");
 
-      // Rate limit is checked before the size check so an over-budget caller
-      // is turned away before an oversized-message parse/response cycle, but
-      // an oversized frame still charges one unit of the hourly budget
-      // below — otherwise unlimited oversized frames could be sent for free
-      // without ever tripping the limit.
-      const now = Date.now();
-      const stamps = await readLiveRateLimitStamps(this.ctx.storage, att.from, now);
-      if (stamps.length >= RATE_LIMIT_PER_HOUR) {
-        return this.fail(ws, "rate_limited", undefined, undefined, true, { correlation_id });
-      }
-
-      if (new TextEncoder().encode(frame.message).byteLength > MAX_MESSAGE_BYTES) {
-        const needsContinuation = await recordRateLimitHit(this.ctx.storage, att.from, stamps, now);
-        if (needsContinuation) await this.scheduleNextAlarm();
-        return this.fail(ws, "message_too_large", undefined, undefined, true, { correlation_id });
-      }
       const listener = this.ctx.getWebSockets("listener")[0];
-      if (!listener) return this.fail(ws, "offline", undefined, undefined, true, { correlation_id });
+      if (!listener) return this.fail(ws, "offline", true, { correlation_id });
 
       await recordRateLimitHit(this.ctx.storage, att.from, stamps, now);
       const call_id = crypto.randomUUID();
@@ -554,7 +543,6 @@ export class HandleDO extends DurableObject {
       const task = {
         call_id, correlation_id, from: att.from, org: att.org, to: att.to, deadline, state: "ringing",
         task_state: "TASK_STATE_SUBMITTED", created_at: now, updated_at: now,
-        context_id: frame.context_id,
       } satisfies PersistedTask;
       await this.persistTaskWithAudit(
         task,
@@ -565,13 +553,14 @@ export class HandleDO extends DurableObject {
       this.send(listener, {
         type: "incoming_call", call_id, correlation_id, traceparent: frame.traceparent,
         from: att.from, groups: att.groups,
-        message: frame.message, context_id: frame.context_id, task: frame.task,
+        envelope: frame.envelope,
       });
       return;
     }
 
     // listener frames
-    const frame = safeParseFrame(ListenerToRelayFrame, raw);
+    if (new TextEncoder().encode(raw).byteLength > MAX_E2EE_WIRE_BYTES) return;
+    const frame = safeParseFrame(E2EEListenerToRelayFrame, raw);
     if (!frame) return;
     const record = await this.ctx.storage.get<PersistedTask>(`call:${frame.call_id}`);
     if (!record) return; // stale/unknown call
@@ -582,9 +571,7 @@ export class HandleDO extends DurableObject {
       await this.advanceCall(record, "answered", caller, att);
       return;
     }
-    if (frame.type === "call_answer" || frame.type === "call_started") {
-      // Legacy call_answer was emitted only once the job started, so preserve
-      // that truth when old listeners overlap a new relay deployment.
+    if (frame.type === "call_started") {
       await this.advanceCall(record, "working", caller, att);
       return;
     }
@@ -600,7 +587,7 @@ export class HandleDO extends DurableObject {
         callAuditIntent("call.cancel", canceled, record.to ?? att.handle ?? "", "handle", att, canceled.updated_at!),
       );
       if (caller) {
-        this.fail(caller, "canceled", undefined, undefined, true, {
+        this.fail(caller, "canceled", true, {
           call_id: frame.call_id, correlation_id: record.correlation_id,
         });
       }
@@ -615,45 +602,45 @@ export class HandleDO extends DurableObject {
       this.settleCancellation(frame.call_id, { kind: "not_cancelable" });
       return;
     }
-    if (frame.type === "call_result") {
-      const text = truncateUtf8Bytes(frame.text, MAX_REPLY_BYTES);
-      const completed = updateTask(record, {
-        task_state: "TASK_STATE_COMPLETED",
-        context_id: frame.context_id ?? record.context_id,
-        result_text: text,
-      });
-      await this.persistTaskWithAudit(
-        completed,
-        callAuditIntent("call.complete", completed, record.to ?? att.handle ?? "", "handle", att, completed.updated_at!),
-      );
-      if (caller) {
-        this.send(caller, {
-          type: "call_reply", call_id: frame.call_id, correlation_id: record.correlation_id,
-          text, context_id: frame.context_id, task: frame.task,
-        });
-        try { caller.close(1000, "done"); } catch { /* closed */ }
-      }
-      this.settleCancellation(frame.call_id, { kind: "not_cancelable" });
-      return;
-    }
-    if (frame.type === "call_failed") {
-      // The listener is an untrusted peer here — same posture as call_result's
-      // text above. sanitizeDetail bounds the string and strips the control
-      // characters that would otherwise reach the caller's terminal verbatim.
-      const detail = frame.detail === undefined ? undefined : sanitizeDetail(frame.detail);
-      const failed = updateTask(record, {
-        task_state: "TASK_STATE_FAILED", failure_code: frame.code,
-      });
+    if (frame.type === "call_rejected") {
+      const failed = updateTask(record, { task_state: "TASK_STATE_FAILED" });
       await this.persistTaskWithAudit(
         failed,
         callAuditIntent("call.fail", failed, record.to ?? att.handle ?? "", "handle", att, failed.updated_at!),
       );
+      if (caller) this.fail(caller, "protocol_error", true, {
+        call_id: frame.call_id, correlation_id: record.correlation_id,
+      });
+      this.settleCancellation(frame.call_id, { kind: "not_cancelable" });
+      return;
+    }
+    if (frame.type === "call_outcome") {
+      if (
+        !att.relayOrigin || !att.handle ||
+        frame.envelope.relay_origin !== att.relayOrigin ||
+        frame.envelope.from !== `${att.handle}@${att.relayOrigin}` ||
+        frame.envelope.to !== `${record.from}@${att.relayOrigin}`
+      ) return;
+      const terminal = frame.terminal === "completed"
+        ? "TASK_STATE_COMPLETED" as const
+        : "TASK_STATE_FAILED" as const;
+      const finished = updateTask(record, {
+        task_state: terminal,
+        outcome_envelope: frame.envelope,
+      });
+      const intent = frame.terminal === "completed"
+        ? callAuditIntent("call.complete", finished, record.to ?? att.handle, "handle", att, finished.updated_at!)
+        : callAuditIntent("call.fail", finished, record.to ?? att.handle, "handle", att, finished.updated_at!);
+      await this.persistTaskWithAudit(
+        finished,
+        intent,
+      );
       if (caller) {
-        this.fail(caller, frame.code, detail, frame.offered, true, {
-          call_id: frame.call_id, correlation_id: record.correlation_id,
-        });
+        this.send(caller, frame);
+        try { caller.close(1000, "done"); } catch { /* closed */ }
       }
       this.settleCancellation(frame.call_id, { kind: "not_cancelable" });
+      return;
     }
   }
 
@@ -691,7 +678,7 @@ export class HandleDO extends DurableObject {
     for (const rec of timedOut) {
       const caller = this.callerFor(rec.call_id);
       if (caller) {
-        this.fail(caller, "timeout", undefined, undefined, true, {
+        this.fail(caller, "timeout", true, {
           call_id: rec.call_id, correlation_id: rec.correlation_id,
         });
       }

@@ -1,14 +1,30 @@
 import { describe, expect, it } from "vitest";
 import {
-  CallRequest, CallerFrame, RelayToCallerFrame, ListenerToRelayFrame,
+  E2EECallerFrame, E2EEListenerToRelayFrame, E2EERelayToCallerFrame, E2EERelayToListenerFrame,
+  E2EERequestPayload, E2EEOutcome,
   HANDLE_RE, MAX_MESSAGE_BYTES, parseAddress, safeParseFrame,
-  RegisterRequest, CallReply, CallError, MAX_DETAIL_LENGTH, sanitizeDetail, sanitizeTerminalOutput,
+  RegisterRequest, MAX_DETAIL_LENGTH, sanitizeDetail, sanitizeTerminalOutput,
   stringifyTerminalSafeJson,
-  CallAccepted, CallStarted, CancelCall, CallCancelled, CallNotCancelled, RelayToListenerFrame,
+  CallAccepted, CallStarted, CancelCall, CallCancelled, CallNotCancelled,
   AGENT_KINDS, AgentKindSchema,
   TASK_ID_RE, MAX_TASK_ID_LENGTH,
-  CORRELATION_ID_RE, normalizeTraceparent, IncomingCall, CallStatus,
+  CORRELATION_ID_RE, normalizeTraceparent, CallStatus,
+  CONTEXT_ID_RE, ErrorCode,
+  CONTEXT_TTL_MS, MAX_CONTEXT_TURNS, MAX_CONTEXTS, RATE_LIMIT_PER_HOUR,
 } from "../src/index.js";
+
+const requestEnvelope = {
+  v: 1 as const, direction: "request" as const, relay_origin: "relay.test",
+  from: "alice@relay.test", to: "ken@relay.test", key_id: "a".repeat(32),
+  epoch: 1, enc: "A", ct: "B",
+};
+
+const innerRequest = {
+  v: 1 as const, direction: "request" as const, relay_origin: "relay.test",
+  from: "alice@relay.test", to: "ken@relay.test", request_id: "1".repeat(32),
+  sender_identity_key_id: "2".repeat(32), recipient_encryption_key_id: "3".repeat(32),
+  recipient_epoch: 1, issued_at: 1, expires_at: 2, message: "hi",
+};
 
 describe("handle rules", () => {
   it("accepts valid handles", () => {
@@ -40,24 +56,21 @@ describe("parseAddress", () => {
 });
 
 describe("frames", () => {
-  it("round-trips a call_request", () => {
-    const f = { type: "call_request", to: "ken", message: "hi" };
-    expect(CallRequest.parse(f)).toEqual(f);
-    expect(safeParseFrame(CallerFrame, JSON.stringify(f))).toEqual(f);
+  it("round-trips an encrypted call_request", () => {
+    const f = { type: "call_request", envelope: requestEnvelope };
+    expect(safeParseFrame(E2EECallerFrame, JSON.stringify(f))).toEqual(f);
   });
   it("rejects unknown type via safeParseFrame", () => {
-    expect(safeParseFrame(CallerFrame, JSON.stringify({ type: "nope" }))).toBeNull();
-    expect(safeParseFrame(CallerFrame, "not json")).toBeNull();
+    expect(safeParseFrame(E2EECallerFrame, JSON.stringify({ type: "nope" }))).toBeNull();
+    expect(safeParseFrame(E2EECallerFrame, "not json")).toBeNull();
   });
-  it("relay->caller union covers status/reply/error", () => {
-    expect(safeParseFrame(RelayToCallerFrame, JSON.stringify({ type: "call_status", state: "ringing" }))).not.toBeNull();
-    expect(safeParseFrame(RelayToCallerFrame, JSON.stringify({ type: "call_reply", call_id: "x", text: "y" }))).not.toBeNull();
-    expect(safeParseFrame(RelayToCallerFrame, JSON.stringify({ type: "call_error", code: "offline" }))).not.toBeNull();
-  });
-  it("listener->relay union covers answer/result/failed", () => {
-    expect(safeParseFrame(ListenerToRelayFrame, JSON.stringify({ type: "call_answer", call_id: "x" }))).not.toBeNull();
-    expect(safeParseFrame(ListenerToRelayFrame, JSON.stringify({ type: "call_result", call_id: "x", text: "t" }))).not.toBeNull();
-    expect(safeParseFrame(ListenerToRelayFrame, JSON.stringify({ type: "call_failed", call_id: "x", code: "busy" }))).not.toBeNull();
+  it("relay->caller errors are explicitly relay-originated", () => {
+    expect(safeParseFrame(E2EERelayToCallerFrame, JSON.stringify({
+      type: "call_error", origin: "relay", code: "offline",
+    }))).not.toBeNull();
+    expect(safeParseFrame(E2EERelayToCallerFrame, JSON.stringify({
+      type: "call_error", code: "offline",
+    }))).toBeNull();
   });
   it("exposes size constants", () => {
     expect(MAX_MESSAGE_BYTES).toBe(64_000);
@@ -85,16 +98,15 @@ describe("call correlation", () => {
   });
 
   it("ignores invalid optional traceparent without rejecting a valid call", () => {
-    const parsed = CallRequest.parse({
-      type: "call_request", to: "ken", message: "hi", correlation_id: correlationId,
+    const parsed = E2EECallerFrame.parse({
+      type: "call_request", envelope: requestEnvelope, correlation_id: correlationId,
       traceparent: `00-${"3".repeat(32)}-${parentId}-01`,
     });
     expect(parsed).toMatchObject({ correlation_id: correlationId });
     expect(parsed).not.toHaveProperty("traceparent");
   });
 
-  it("keeps correlation fields optional on received frames during mixed-version overlap", () => {
-    expect(IncomingCall.safeParse({ type: "incoming_call", call_id: "c1", from: "a", message: "m" }).success).toBe(true);
+  it("keeps correlation fields optional on operational status frames", () => {
     expect(CallStatus.safeParse({ type: "call_status", state: "ringing" }).success).toBe(true);
     expect(CallStatus.safeParse({
       type: "call_status", state: "ringing", call_id: "c1", correlation_id: correlationId,
@@ -102,20 +114,7 @@ describe("call correlation", () => {
   });
 });
 
-describe("CallReply task bounds", () => {
-  it("bounds CallReply.task with the same TASK_ID_RE as other task fields", () => {
-    expect(CallReply.safeParse({ type: "call_reply", call_id: "x", text: "t", task: "Not Valid!" }).success).toBe(false);
-    expect(CallReply.safeParse({ type: "call_reply", call_id: "x", text: "t", task: "valid-task" }).success).toBe(true);
-  });
-});
-
 describe("detail bounds and sanitization", () => {
-  it("bounds CallError.detail — it is printed straight to a caller's terminal", () => {
-    const over = "x".repeat(MAX_DETAIL_LENGTH + 1);
-    expect(CallError.safeParse({ type: "call_error", code: "agent_error", detail: over }).success).toBe(false);
-    expect(CallError.safeParse({ type: "call_error", code: "agent_error", detail: "x".repeat(MAX_DETAIL_LENGTH) }).success).toBe(true);
-  });
-
   it("sanitizeDetail strips the ESC that makes a CSI/OSC sequence dangerous", () => {
     const out = sanitizeDetail("\u001b[31mred\u001b[0m\u001b]0;pwned");
     expect(out).not.toContain("\u001b");
@@ -151,10 +150,10 @@ describe("detail bounds and sanitization", () => {
     expect(/[\ud800-\udfff]/.test(cut)).toBe(false);
   });
 
-  it("sanitized output always satisfies the CallError.detail bound", () => {
+  it("sanitized output always satisfies the encrypted failure detail bound", () => {
     const hostile = ("\u001b[2J" + "y".repeat(50)).repeat(100);
     const detail = sanitizeDetail(hostile);
-    expect(CallError.safeParse({ type: "call_error", code: "agent_error", detail }).success).toBe(true);
+    expect(detail.length).toBeLessThanOrEqual(MAX_DETAIL_LENGTH);
   });
 });
 
@@ -253,18 +252,13 @@ describe("cancellation and acknowledgement frames", () => {
       { type: "call_cancelled", call_id: "c1", phase: "running" },
       { type: "call_not_cancelled", call_id: "c1", reason: "too_late" },
     ]) {
-      expect(ListenerToRelayFrame.safeParse(f).success, JSON.stringify(f)).toBe(true);
-      expect(RelayToListenerFrame.safeParse(f).success, JSON.stringify(f)).toBe(false);
+      expect(E2EEListenerToRelayFrame.safeParse(f).success, JSON.stringify(f)).toBe(true);
+      expect(E2EERelayToListenerFrame.safeParse(f).success, JSON.stringify(f)).toBe(false);
     }
-    expect(RelayToListenerFrame.safeParse({ type: "cancel_call", call_id: "c1" }).success).toBe(true);
-    expect(ListenerToRelayFrame.safeParse({ type: "cancel_call", call_id: "c1" }).success).toBe(false);
+    expect(E2EERelayToListenerFrame.safeParse({ type: "cancel_call", call_id: "c1" }).success).toBe(true);
+    expect(E2EEListenerToRelayFrame.safeParse({ type: "cancel_call", call_id: "c1" }).success).toBe(false);
   });
 });
-
-import {
-  CONTEXT_ID_RE, ErrorCode,
-  CONTEXT_TTL_MS, MAX_CONTEXT_TURNS, MAX_CONTEXTS, RATE_LIMIT_PER_HOUR,
-} from "../src/protocol.js";
 
 describe("context_id", () => {
   const good = "ctx_AAAAAAAAAAAAAAAAAAAAAA"; // 22 base64url chars
@@ -287,19 +281,13 @@ describe("context_id", () => {
   // The old MAX_SESSION_ID_LENGTH cap allowed any string up to 256 bytes.
   // A consumed field gets a shape, not a size limit.
   it("rejects a 256-char string the old length cap allowed", () => {
-    expect(CallRequest.safeParse({
-      type: "call_request", to: "ken", message: "hi", context_id: "x".repeat(256),
-    }).success).toBe(false);
+    expect(E2EERequestPayload.safeParse({ ...innerRequest, context_id: "x".repeat(256) }).success).toBe(false);
   });
 
-  it("round-trips on request and reply, and stays optional", () => {
-    expect(CallRequest.safeParse({
-      type: "call_request", to: "ken", message: "hi", context_id: good,
-    }).success).toBe(true);
-    expect(CallRequest.safeParse({ type: "call_request", to: "ken", message: "hi" }).success).toBe(true);
-    expect(CallReply.safeParse({
-      type: "call_reply", call_id: "c1", text: "ok", context_id: good,
-    }).success).toBe(true);
+  it("round-trips inside encrypted request/reply payloads and stays optional", () => {
+    expect(E2EERequestPayload.safeParse({ ...innerRequest, context_id: good }).success).toBe(true);
+    expect(E2EERequestPayload.safeParse(innerRequest).success).toBe(true);
+    expect(E2EEOutcome.safeParse({ kind: "reply", text: "ok", context_id: good }).success).toBe(true);
   });
 
   it("adds context_unknown to the error codes", () => {

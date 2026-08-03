@@ -1,4 +1,5 @@
 import { execFileSync } from "node:child_process";
+import { generateKeyPairSync } from "node:crypto";
 import { createServer, type Server } from "node:http";
 import { mkdirSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -14,8 +15,11 @@ import { loadKnownPeers } from "../src/known-peers.js";
 import { writeJsonAtomic } from "../src/json-store.js";
 import {
   encryptionKeyTranscript, exportPublicKey, fingerprint, generateEncryptionKeyPair, identityTranscript,
-  generateIdentityKeyPair, HPKE_SUITE, keyIdFor, signTranscript,
+  generateIdentityKeyPair, HPKE_SUITE, keyIdFor, RELAY_CALL_TIMEOUT_MS, requestTranscript,
+  signTranscript, transcriptHash, type E2EEOutcomeType, type E2EEResponsePayloadType,
 } from "@benree/agentcall-shared";
+import { openE2EERequest, sealE2EEResponse } from "../src/e2ee.js";
+import type { StoredKeys } from "../src/keys.js";
 
 // The "local-sota" contact stands in for an address on whichever relay the
 // current test spun up. pickOutboundLine (src/outbound.ts) now matches the
@@ -182,11 +186,57 @@ function startRelay(
   });
 }
 
-function startCallRelay(
-  onFrame: (frame: Record<string, unknown>, ws: import("ws").WebSocket) => void,
+async function testKeys(): Promise<StoredKeys> {
+  const identity = await generateIdentityKeyPair();
+  const encryption = await generateEncryptionKeyPair();
+  const privateKey = async (key: CryptoKey) => Buffer.from(await crypto.subtle.exportKey("pkcs8", key)).toString("base64url");
+  return {
+    identity_pkcs8: await privateKey(identity.privateKey),
+    identity_pub: await exportPublicKey(identity.publicKey),
+    encryption_pkcs8: await privateKey(encryption.privateKey),
+    encryption_pub: await exportPublicKey(encryption.publicKey),
+    epoch: 1,
+    previous_encryption_transcript_hash: null,
+  };
+}
+
+const localCallKeys = new Map<string, StoredKeys>();
+
+async function startCallRelay(
+  onFrame: (
+    frame: Record<string, unknown>,
+    reply: (outcome: E2EEOutcomeType) => Promise<void>,
+  ) => void | Promise<void>,
 ): Promise<{ relay: string; connections: () => number }> {
+  const remote = await testKeys();
+  const relayOrigin = "127.0.0.1";
+  const remoteAddress = `sota@${relayOrigin}`;
+  const identity = { v: 1 as const, address: remoteAddress, identity_pub: remote.identity_pub };
+  const record = {
+    v: 1 as const, address: remoteAddress, key_id: await keyIdFor(remote.encryption_pub),
+    suite: HPKE_SUITE, pub: remote.encryption_pub, epoch: 1,
+    not_before: Date.now() - 1_000, not_after: Date.now() + 60_000, prev: null,
+  };
+  const keyResponse = {
+    identity,
+    encryption: {
+      record,
+      signature: await signTranscript(
+        await crypto.subtle.importKey(
+          "pkcs8", Buffer.from(remote.identity_pkcs8, "base64url"),
+          { name: "ECDSA", namedCurve: "P-256" }, false, ["sign"],
+        ),
+        encryptionKeyTranscript(record),
+      ),
+    },
+  };
   return new Promise((resolve) => {
-    const server = createServer((_req, res) => {
+    const server = createServer((req, res) => {
+      if (req.url === "/v1/keys/sota") {
+        res.writeHead(200, { "content-type": "application/json" });
+        res.end(JSON.stringify(keyResponse));
+        return;
+      }
       res.writeHead(404);
       res.end();
     });
@@ -194,8 +244,42 @@ function startCallRelay(
     let connectionCount = 0;
     wss.on("connection", (ws) => {
       connectionCount += 1;
-      ws.on("message", (raw) => {
-        if (String(raw) !== "ping") onFrame(JSON.parse(String(raw)), ws);
+      ws.on("message", async (raw) => {
+        if (String(raw) === "ping") return;
+        const outer = JSON.parse(String(raw));
+        const local = localCallKeys.get(relayOrigin);
+        if (!local) throw new Error("test caller keys were not seeded");
+        const request = await openE2EERequest(
+          outer.envelope, remote.encryption_pkcs8, local.identity_pub,
+          {
+            relay_origin: relayOrigin, from: `ken@${relayOrigin}`, to: remoteAddress,
+            key_id: record.key_id, epoch: record.epoch,
+          },
+        );
+        const reply = async (outcome: E2EEOutcomeType) => {
+          const issuedAt = Date.now();
+          const response: E2EEResponsePayloadType = {
+            v: 1, direction: "response", relay_origin: relayOrigin,
+            from: remoteAddress, to: `ken@${relayOrigin}`, request_id: request.request_id,
+            sender_identity_key_id: await keyIdFor(remote.identity_pub),
+            recipient_encryption_key_id: await keyIdFor(local.encryption_pub),
+            recipient_epoch: local.epoch, issued_at: issuedAt,
+            expires_at: Math.min(request.expires_at, issuedAt + RELAY_CALL_TIMEOUT_MS),
+            request_transcript_hash: await transcriptHash(requestTranscript(request)), outcome,
+          };
+          ws.send(JSON.stringify({
+            type: "call_outcome", call_id: `call-${connectionCount}`,
+            terminal: outcome.kind === "reply" ? "completed" : "failed",
+            envelope: await sealE2EEResponse(response, remote, {
+              pub: local.encryption_pub, key_id: response.recipient_encryption_key_id, epoch: local.epoch,
+            }),
+          }));
+        };
+        await onFrame({
+          type: "call_request", to: "sota", message: request.message,
+          ...(request.task ? { task: request.task } : {}),
+          ...(request.context_id ? { context_id: request.context_id } : {}),
+        }, reply);
       });
     });
     servers.push(server);
@@ -214,6 +298,25 @@ function startCallRelay(
 function seedConfig(testHome: string, relay: string): LinePaths {
   const paths = getLinePaths(getMachinePaths(testHome), "claude");
   saveLineConfig(paths, { org: "acme", handle: "ken", token: "tok", relay });
+  const pair = () => generateKeyPairSync("ec", { namedCurve: "prime256v1" });
+  const rawPublic = (key: ReturnType<typeof pair>["publicKey"]) => {
+    const jwk = key.export({ format: "jwk" });
+    return Buffer.concat([
+      Buffer.from([4]), Buffer.from(jwk.x!, "base64url"), Buffer.from(jwk.y!, "base64url"),
+    ]).toString("base64url");
+  };
+  const identity = pair();
+  const encryption = pair();
+  const keys: StoredKeys = {
+    identity_pkcs8: identity.privateKey.export({ type: "pkcs8", format: "der" }).toString("base64url"),
+    identity_pub: rawPublic(identity.publicKey),
+    encryption_pkcs8: encryption.privateKey.export({ type: "pkcs8", format: "der" }).toString("base64url"),
+    encryption_pub: rawPublic(encryption.publicKey),
+    epoch: 1,
+    previous_encryption_transcript_hash: null,
+  };
+  writeJsonAtomic(paths.identityKeyFile, keys);
+  localCallKeys.set(new URL(relay).hostname, keys);
   return paths;
 }
 
@@ -812,12 +915,9 @@ describe.sequential("CLI command actions", () => {
   it("stores a returned context and continues it with the resolved task while keeping stdout parseable", async () => {
     const frames: Record<string, unknown>[] = [];
     const contextId = "ctx_AAAAAAAAAAAAAAAAAAAAAA";
-    const callRelay = await startCallRelay((frame, ws) => {
+    const callRelay = await startCallRelay(async (frame, reply) => {
       frames.push(frame);
-      ws.send(JSON.stringify({
-        type: "call_reply", call_id: `call-${frames.length}`, text: `reply-${frames.length}`,
-        task: "resolved-task", context_id: contextId,
-      }));
+      await reply({ kind: "reply", text: `reply-${frames.length}`, task: "resolved-task", context_id: contextId });
     });
     routing.host = new URL(callRelay.relay).host;
     const testHome = home();
@@ -842,8 +942,8 @@ describe.sequential("CLI command actions", () => {
 
   it("neutralizes terminal controls and bidi overrides in displayed reply text", async () => {
     const hostile = "line one\n\tline two\u001b[2J\rFAKE\u009b31m\u202espoof";
-    const callRelay = await startCallRelay((_frame, ws) => {
-      ws.send(JSON.stringify({ type: "call_reply", call_id: "call-1", text: hostile }));
+    const callRelay = await startCallRelay(async (_frame, reply) => {
+      await reply({ kind: "reply", text: hostile });
     });
     routing.host = new URL(callRelay.relay).host;
     const testHome = home();
@@ -859,8 +959,8 @@ describe.sequential("CLI command actions", () => {
 
   it("preserves the exact reply payload under --json", async () => {
     const hostile = "line one\n\u001b[2J\rFAKE\u009b31m\u202espoof";
-    const callRelay = await startCallRelay((_frame, ws) => {
-      ws.send(JSON.stringify({ type: "call_reply", call_id: "call-1", text: hostile }));
+    const callRelay = await startCallRelay(async (_frame, reply) => {
+      await reply({ kind: "reply", text: hostile });
     });
     routing.host = new URL(callRelay.relay).host;
     const testHome = home();

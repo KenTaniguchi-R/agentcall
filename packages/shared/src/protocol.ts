@@ -6,11 +6,9 @@ export const TASK_ID_RE = /^[a-z0-9][a-z0-9-]{0,63}$/;
 // Bounds derived from TASK_ID_RE: 1 (mandatory first char) + 63 (0-63 range) = 64.
 // Must stay consistent with TASK_ID_RE; drift is caught by test/protocol.test.ts.
 export const MAX_TASK_ID_LENGTH = 64;
-// Bounds the `offered` list on call_failed/call_error: without a cap, a
-// hostile listener could hand back thousands of entries (unbounded relay
-// payload); without the TASK_ID_RE constraint on each entry, an unvalidated
-// string could carry terminal-escape/control sequences straight into a
-// caller's stdout (terminal injection).
+// Bounds the authenticated peer failure's `offered` list: without a cap, a
+// hostile peer could hand back thousands of entries; without TASK_ID_RE, an
+// entry could carry terminal controls into caller output.
 export const MAX_OFFERED_TASKS = 50;
 export const MAX_MESSAGE_BYTES = 64_000;
 export const MAX_REPLY_BYTES = 256_000;
@@ -36,7 +34,7 @@ export function normalizeTraceparent(correlationId: string | undefined, value: u
   return value;
 }
 
-function normalizeTraceContext(input: unknown): unknown {
+export function normalizeTraceContext(input: unknown): unknown {
   if (typeof input !== "object" || input === null || Array.isArray(input)) return input;
   const frame = { ...input } as Record<string, unknown>;
   const traceparent = normalizeTraceparent(
@@ -48,7 +46,7 @@ function normalizeTraceContext(input: unknown): unknown {
   return frame;
 }
 
-const CorrelationId = z.string().regex(CORRELATION_ID_RE);
+export const CorrelationId = z.string().regex(CORRELATION_ID_RE);
 
 // A context is a follow-up within one sitting, not a durable relationship. See
 // the "Out of scope" section of the multi-turn design for why cross-day
@@ -78,80 +76,29 @@ export const ErrorCode = z.enum([
   "unauthorized", "rate_limited", "message_too_large", "protocol_error",
   "blocked", "task_not_offered", "task_unknown", "context_unknown",
 ]);
-// A listener may only claim cancellation with CallCancelled, whose phase says
-// whether queued work was removed or a running process was observed exited.
-// Generic call_failed must not bypass that confirmation contract.
-export const CallFailureCode = ErrorCode.exclude(["canceled"]);
+export const RelayOperationalErrorCode = z.enum([
+  "unknown_handle", "offline", "timeout", "canceled", "unauthorized",
+  "rate_limited", "message_too_large", "protocol_error",
+]);
+export const PeerFailureCode = z.enum([
+  "busy", "timeout", "agent_error", "blocked", "task_not_offered", "task_unknown", "context_unknown",
+]);
 
-export const CallRequest = z.preprocess(normalizeTraceContext, z.object({
-  type: z.literal("call_request"),
-  to: z.string().regex(HANDLE_RE),
-  message: z.string().min(1),
-  context_id: z.string().regex(CONTEXT_ID_RE).optional(),
-  task: z.string().regex(TASK_ID_RE).optional(),
-  correlation_id: CorrelationId.optional(),
-  traceparent: z.string().optional(),
-}));
 export const CallStatus = z.object({
   type: z.literal("call_status"),
   state: z.enum(["ringing", "answered", "working"]),
   call_id: z.string().optional(),
   correlation_id: CorrelationId.optional(),
 });
-export const CallReply = z.object({
-  type: z.literal("call_reply"),
-  call_id: z.string(),
-  correlation_id: CorrelationId.optional(),
-  text: z.string(),
-  context_id: z.string().regex(CONTEXT_ID_RE).optional(),
-  task: z.string().regex(TASK_ID_RE).optional(),
-});
-// detail is bounded here but NOT on CallFailed below: the same split the
-// protocol already makes for reply text. Listener->relay fields arrive from
-// an untrusted peer and are normalized by the relay (see do.ts's
-// truncateUtf8Bytes / sanitizeDetail); relay->caller fields are a contract
-// the relay guarantees, so bounding them here would turn a verbose callee
-// into a dropped frame and a 6-minute caller hang.
-export const CallError = z.object({
+export const RelayCallError = z.object({
   type: z.literal("call_error"),
-  code: ErrorCode,
+  origin: z.literal("relay"),
+  code: RelayOperationalErrorCode,
   call_id: z.string().optional(),
   correlation_id: CorrelationId.optional(),
-  detail: z.string().max(MAX_DETAIL_LENGTH).optional(),
-  offered: z.array(z.string().regex(TASK_ID_RE)).max(MAX_OFFERED_TASKS).optional(),
-});
-export const IncomingCall = z.preprocess(normalizeTraceContext, z.object({
-  type: z.literal("incoming_call"),
-  call_id: z.string(),
-  correlation_id: CorrelationId.optional(),
-  traceparent: z.string().optional(),
-  from: z.string(),
-  message: z.string(),
-  // Relay-attested opaque roster ids. The caller never sends this field: the
-  // relay derives the caller/callee intersection during websocket admission.
-  // Missing defaults to no groups, which fails closed with an older relay.
-  groups: z.array(z.string().regex(/^[A-Za-z0-9_-]{16,64}$/)).max(MAX_CALLER_GROUPS).default([]),
-  context_id: z.string().regex(CONTEXT_ID_RE).optional(),
-  task: z.string().regex(TASK_ID_RE).optional(),
-}));
-export const CallAnswer = z.object({ type: z.literal("call_answer"), call_id: z.string() });
-export const CallResult = z.object({
-  type: z.literal("call_result"),
-  call_id: z.string(),
-  text: z.string(),
-  context_id: z.string().regex(CONTEXT_ID_RE).optional(),
-  task: z.string().regex(TASK_ID_RE).optional(),
-});
-export const CallFailed = z.object({
-  type: z.literal("call_failed"),
-  call_id: z.string(),
-  code: CallFailureCode,
-  detail: z.string().optional(),
-  offered: z.array(z.string().regex(TASK_ID_RE)).max(MAX_OFFERED_TASKS).optional(),
-});
-
-// Acknowledgement splits in two because `call_answer` fired when the job
-// STARTED, which left the relay unable to distinguish "frame never arrived"
+}).strict();
+// Acknowledgement splits in two because acceptance and process start are
+// distinct lifecycle events. This lets the relay distinguish "frame never arrived"
 // from "listener owns it but hasn't spawned yet". The task store needs that
 // distinction to map SUBMITTED vs WORKING and to decide whether a cancel
 // request must be negotiated with the listener at all.
@@ -173,18 +120,11 @@ export const CallNotCancelled = z.object({
   call_id: z.string(),
   reason: z.enum(["already_terminal", "unknown", "too_late"]),
 });
-
-// CallRequest and IncomingCall preprocess optional trace context, so they are
-// not valid options for z.discriminatedUnion even though their `type` fields
-// remain literal. A single caller frame needs no union; the two relay frames
-// use a regular bounded union.
-export const CallerFrame = CallRequest;
-export const ListenerToRelayFrame = z.discriminatedUnion("type", [
-  CallAnswer, CallResult, CallFailed,
-  CallAccepted, CallStarted, CallCancelled, CallNotCancelled,
-]);
-export const RelayToCallerFrame = z.discriminatedUnion("type", [CallStatus, CallReply, CallError]);
-export const RelayToListenerFrame = z.union([IncomingCall, CancelCall]);
+export const CallRejected = z.object({
+  type: z.literal("call_rejected"),
+  call_id: z.string(),
+  code: z.literal("protocol_error"),
+}).strict();
 
 export const AGENT_KINDS = ["claude", "codex"] as const;
 export type AgentKind = (typeof AGENT_KINDS)[number];
@@ -199,14 +139,9 @@ export const RegisterRequest = z.object({
 export const RegisterResponse = z.object({ org: z.string().regex(ORG_RE), token: z.string(), address: z.string() });
 
 export type ErrorCodeType = z.infer<typeof ErrorCode>;
-export type CallRequestType = z.infer<typeof CallRequest>;
+export type RelayOperationalErrorCodeType = z.infer<typeof RelayOperationalErrorCode>;
+export type PeerFailureCodeType = z.infer<typeof PeerFailureCode>;
 export type CallStatusType = z.infer<typeof CallStatus>;
-export type CallReplyType = z.infer<typeof CallReply>;
-export type CallErrorType = z.infer<typeof CallError>;
-export type IncomingCallType = z.infer<typeof IncomingCall>;
-export type CallAnswerType = z.infer<typeof CallAnswer>;
-export type CallResultType = z.infer<typeof CallResult>;
-export type CallFailedType = z.infer<typeof CallFailed>;
 export type CallAcceptedType = z.infer<typeof CallAccepted>;
 export type CallStartedType = z.infer<typeof CallStarted>;
 export type CancelCallType = z.infer<typeof CancelCall>;
@@ -214,10 +149,6 @@ export type CallCancelledType = z.infer<typeof CallCancelled>;
 export type CallNotCancelledType = z.infer<typeof CallNotCancelled>;
 export type RegisterRequestType = z.infer<typeof RegisterRequest>;
 export type RegisterResponseType = z.infer<typeof RegisterResponse>;
-export type CallerFrameType = z.infer<typeof CallerFrame>;
-export type ListenerToRelayFrameType = z.infer<typeof ListenerToRelayFrame>;
-export type RelayToCallerFrameType = z.infer<typeof RelayToCallerFrame>;
-export type RelayToListenerFrameType = z.infer<typeof RelayToListenerFrame>;
 
 export function parseAddress(addr: string): { handle: string; host: string } | null {
   const at = addr.indexOf("@");

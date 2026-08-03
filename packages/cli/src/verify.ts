@@ -4,7 +4,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { callAgent } from "./callClient.js";
 import { relayUrl, type LineConfig } from "./config.js";
-import { getLinePaths, getMachinePaths } from "./paths.js";
+import { getLinePaths, getMachinePaths, type LinePaths } from "./paths.js";
 import {
   AgentRunError, buildSpawnSpec, CODEX_SESSION_GUARD_KEY, guardCodexConfigArg, guardCodexTrustArg,
   guardEntryPath, guardSettingsJson, runAgent, type AgentKind,
@@ -364,7 +364,9 @@ export async function verifyAgent(kind: AgentKind, workdir: string, fns: VerifyF
 // keychain) — a direct checkAgentSpawn from an interactive shell can pass
 // while this fails. Works under the default policy because the built-in
 // "ask" task always exists.
-export async function checkRelaySelfCall(cfg: LineConfig, callFn: typeof callAgent = callAgent): Promise<VerifyCheck> {
+export async function checkRelaySelfCall(
+  cfg: LineConfig, paths: LinePaths, callFn: typeof callAgent = callAgent,
+): Promise<VerifyCheck> {
   try {
     await callFn({
       relay: relayUrl(cfg),
@@ -373,6 +375,7 @@ export async function checkRelaySelfCall(cfg: LineConfig, callFn: typeof callAge
       token: cfg.token,
       to: cfg.handle,
       message: "agentcall doctor self-test: reply briefly",
+      paths,
       // Bound below callAgent's 420s default: the spawn budget plus a
       // margin for relay round-trip, so a stuck self-call fails promptly
       // instead of hanging the whole doctor run.

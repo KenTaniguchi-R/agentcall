@@ -34,6 +34,29 @@ export function wsAuth(handle: string, token: string, org = "acme"): Record<stri
   return { Authorization: `Bearer ${token}`, "X-AgentCall-Org": org, "X-AgentCall-Handle": handle };
 }
 
+function envelope(direction: "request" | "response", from: string, to: string) {
+  return {
+    v: 1 as const, direction, relay_origin: "relay.test",
+    from: `${from}@relay.test`, to: `${to}@relay.test`, key_id: "a".repeat(32),
+    epoch: 1, enc: "A", ct: "Q2lwaGVydGV4dA",
+  };
+}
+
+export function encryptedCallRequest(
+  from: string, to: string, metadata: { correlation_id?: string; traceparent?: string } = {},
+) {
+  return { type: "call_request" as const, envelope: envelope("request", from, to), ...metadata };
+}
+
+export function encryptedCallOutcome(
+  callId: string, from: string, to: string, terminal: "completed" | "failed" = "completed",
+) {
+  return {
+    type: "call_outcome" as const, call_id: callId, terminal,
+    envelope: envelope("response", from, to),
+  };
+}
+
 export function fixedRateLimit(limit: number): RateLimit {
   let used = 0;
   return {

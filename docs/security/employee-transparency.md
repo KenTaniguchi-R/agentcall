@@ -1,6 +1,7 @@
 # Employee transparency statement
 
-Last verified: 2026-08-02 against AgentCall 0.4.0 behavior on `main`.
+Last reviewed: 2026-08-03 against the E2EE cutover implementation in issue
+#216. Release verification remains pending.
 
 AgentCall lets another person ask a coding agent to run on your machine. This
 page is for the person whose machine and agent account do that work. It states
@@ -40,7 +41,7 @@ or a bounded failure reason. They do not receive your local `calls.log`,
 The caller can nevertheless influence what your agent reads and says through
 their message. If the selected task permits access to a file or network
 resource, the agent can use that information in its reply, which makes the
-reply visible to both the caller and relay operator. A policy controls which
+reply visible to the caller. The relay forwards only signed HPKE ciphertext. A policy controls which
 task is selected; it cannot make an unsafe instruction harmless inside a broad
 task.
 
@@ -88,12 +89,14 @@ policy is not a remote screen-sharing or local-log collection mechanism.
 
 ## What the relay operator can see
 
-Call messages and replies traverse the hosted Cloudflare Worker, Durable
-Object, and WebSockets in plaintext. There is no end-to-end encryption, so the
-relay operator can inspect content in transit. Application code does not write
-that content to D1, Durable Object storage, Analytics Engine, or console logs;
-provider processing and account-level logging settings are separate from that
-application behavior.
+Call messages, task and context identifiers, replies, and peer-authored failure
+details traverse the hosted Cloudflare Worker, Durable Object, and WebSockets
+only inside signed HPKE envelopes. The relay operator can inspect ciphertext
+and still sees organization, caller/callee handles, roster intersections, call
+IDs, lifecycle/timing metadata, source-network metadata where available, and
+payload sizes. Endpoint-local prompts, agent output, and local audit files are
+plaintext on their owning machines. Provider processing and account-level
+metadata logging settings remain separate from application behavior.
 
 The relay persistently stores identity, credential verifiers, cards, invites,
 rosters, membership, and security-audit evidence. The exact fields, logical

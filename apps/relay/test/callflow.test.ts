@@ -1,8 +1,10 @@
 import { describe, expect, it, vi } from "vitest";
 import { env, SELF } from "cloudflare:test";
-import { MAX_DETAIL_LENGTH, RELAY_CALL_TIMEOUT_MS, RATE_LIMIT_PER_HOUR } from "@benree/agentcall-shared";
-import { registerHandle, wsAuth, openWs, nextFrame, closed } from "./helpers.js";
-import { clampTimeoutMs, truncateUtf8Bytes } from "../src/do.js";
+import { MAX_E2EE_WIRE_BYTES, RELAY_CALL_TIMEOUT_MS, RATE_LIMIT_PER_HOUR } from "@benree/agentcall-shared";
+import {
+  closed, encryptedCallOutcome, encryptedCallRequest, nextFrame, openWs, registerHandle, wsAuth,
+} from "./helpers.js";
+import { clampTimeoutMs } from "../src/do.js";
 
 async function setupPair(callee: string, caller: string) {
   const calleeToken = await registerHandle(callee);
@@ -17,10 +19,9 @@ describe("call flow", () => {
     const caller = await openWs("/v1/ws?role=call&to=h-callee", wsAuth("h-caller", callerToken));
     const correlationId = "1".repeat(32);
     const traceparent = `00-${correlationId}-${"2".repeat(16)}-01`;
-    caller.send(JSON.stringify({
-      type: "call_request", to: "h-callee", message: "what is 2+2?",
+    caller.send(JSON.stringify(encryptedCallRequest("h-caller", "h-callee", {
       correlation_id: correlationId, traceparent,
-    }));
+    })));
 
     const ringing = await nextFrame(caller);
     expect(ringing).toMatchObject({
@@ -30,7 +31,7 @@ describe("call flow", () => {
     const incoming = await nextFrame(listener);
     expect(incoming).toMatchObject({
       type: "incoming_call", call_id: ringing.call_id, from: "h-caller",
-      message: "what is 2+2?", correlation_id: correlationId, traceparent,
+      correlation_id: correlationId, traceparent, envelope: { direction: "request" },
     });
 
     listener.send(JSON.stringify({ type: "call_accepted", call_id: incoming.call_id }));
@@ -42,12 +43,9 @@ describe("call flow", () => {
       type: "call_status", state: "working", call_id: incoming.call_id, correlation_id: correlationId,
     });
 
-    const ctxId = "ctx_AAAAAAAAAAAAAAAAAAAAAA";
-    listener.send(JSON.stringify({ type: "call_result", call_id: incoming.call_id, text: "4", context_id: ctxId }));
-    expect(await nextFrame(caller)).toMatchObject({
-      type: "call_reply", call_id: incoming.call_id, text: "4", context_id: ctxId,
-      correlation_id: correlationId,
-    });
+    const outcome = encryptedCallOutcome(incoming.call_id, "h-callee", "h-caller");
+    listener.send(JSON.stringify(outcome));
+    expect(await nextFrame(caller)).toEqual(outcome);
     expect((await closed(caller)).code).toBe(1000);
   });
 
@@ -63,16 +61,12 @@ describe("call flow", () => {
       ...wsAuth("audit-caller", callerToken, org),
       "cf-connecting-ip": "203.0.113.10",
     });
-    caller.send(JSON.stringify({
-      type: "call_request", to: "audit-callee", message: "TOP-SECRET-PROMPT",
-    }));
+    caller.send(JSON.stringify(encryptedCallRequest("audit-caller", "audit-callee")));
     const ringing = await nextFrame(caller);
     const incoming = await nextFrame(listener);
     listener.send(JSON.stringify({ type: "call_accepted", call_id: incoming.call_id }));
     await nextFrame(caller);
-    listener.send(JSON.stringify({
-      type: "call_result", call_id: incoming.call_id, text: "TOP-SECRET-RESPONSE",
-    }));
+    listener.send(JSON.stringify(encryptedCallOutcome(incoming.call_id, "audit-callee", "audit-caller")));
     await nextFrame(caller);
 
     const { results } = await env.DB.prepare(
@@ -120,7 +114,7 @@ describe("call flow", () => {
         "/v1/ws?role=call&to=retry-callee",
         wsAuth("retry-caller", callerToken, org),
       );
-      caller.send(JSON.stringify({ type: "call_request", to: "retry-callee", message: "retry" }));
+      caller.send(JSON.stringify(encryptedCallRequest("retry-caller", "retry-callee")));
       const ringing = await nextFrame(caller);
       const incoming = await nextFrame(listener);
       expect(ringing).toMatchObject({ type: "call_status", state: "ringing" });
@@ -136,8 +130,9 @@ describe("call flow", () => {
       }
       expect(delivered).toEqual({ event: "call.submit" });
 
-      listener.send(JSON.stringify({ type: "call_result", call_id: incoming.call_id, text: "done" }));
-      expect(await nextFrame(caller)).toMatchObject({ type: "call_reply", text: "done" });
+      const outcome = encryptedCallOutcome(incoming.call_id, "retry-callee", "retry-caller");
+      listener.send(JSON.stringify(outcome));
+      expect(await nextFrame(caller)).toEqual(outcome);
     } finally {
       error.mockRestore();
       await env.DB.exec("DROP TRIGGER IF EXISTS fail_retry_call_audit");
@@ -162,10 +157,10 @@ describe("call flow", () => {
           `/v1/ws?role=call&to=${callee}`,
           wsAuth(callerHandle, callerToken, org),
         );
-        caller.send(JSON.stringify({ type: "call_request", to: callee, message: `call ${index}` }));
+        caller.send(JSON.stringify(encryptedCallRequest(callerHandle, callee)));
         await nextFrame(caller);
         const incoming = await nextFrame(listener);
-        listener.send(JSON.stringify({ type: "call_result", call_id: incoming.call_id, text: "done" }));
+        listener.send(JSON.stringify(encryptedCallOutcome(incoming.call_id, callee, callerHandle)));
         await nextFrame(caller);
       }
       await env.DB.exec("DROP TRIGGER fail_backlog_call_audit");
@@ -191,11 +186,10 @@ describe("call flow", () => {
     const { callerToken, listener } = await setupPair("trace-callee", "trace-caller");
     const caller = await openWs("/v1/ws?role=call&to=trace-callee", wsAuth("trace-caller", callerToken));
     const correlationId = "3".repeat(32);
-    caller.send(JSON.stringify({
-      type: "call_request", to: "trace-callee", message: "hello",
+    caller.send(JSON.stringify(encryptedCallRequest("trace-caller", "trace-callee", {
       correlation_id: correlationId,
       traceparent: `00-${"4".repeat(32)}-${"5".repeat(16)}-01`,
-    }));
+    })));
 
     const ringing = await nextFrame(caller);
     expect(ringing).toMatchObject({ type: "call_status", state: "ringing", correlation_id: correlationId });
@@ -204,21 +198,23 @@ describe("call flow", () => {
     expect(incoming).not.toHaveProperty("traceparent");
   });
 
-  it("keeps accepting the legacy call_answer frame during listener upgrades", async () => {
+  it("does not accept the legacy plaintext-era call_answer frame", async () => {
     const { callerToken, listener } = await setupPair("legacy-callee", "legacy-caller");
     const caller = await openWs("/v1/ws?role=call&to=legacy-callee", wsAuth("legacy-caller", callerToken));
-    caller.send(JSON.stringify({ type: "call_request", to: "legacy-callee", message: "hello" }));
+    caller.send(JSON.stringify(encryptedCallRequest("legacy-caller", "legacy-callee")));
     await nextFrame(caller); // ringing
     const incoming = await nextFrame(listener);
 
     listener.send(JSON.stringify({ type: "call_answer", call_id: incoming.call_id }));
+    await expect(nextFrame(caller, 50)).rejects.toThrow(/timeout/);
+    listener.send(JSON.stringify({ type: "call_started", call_id: incoming.call_id }));
     expect(await nextFrame(caller)).toMatchObject({ type: "call_status", state: "working" });
   });
 
   it("does not regress or repeat caller status for out-of-order acknowledgements", async () => {
     const { callerToken, listener } = await setupPair("order-callee", "order-caller");
     const caller = await openWs("/v1/ws?role=call&to=order-callee", wsAuth("order-caller", callerToken));
-    caller.send(JSON.stringify({ type: "call_request", to: "order-callee", message: "hello" }));
+    caller.send(JSON.stringify(encryptedCallRequest("order-caller", "order-callee")));
     await nextFrame(caller); // ringing
     const incoming = await nextFrame(listener);
 
@@ -226,8 +222,9 @@ describe("call flow", () => {
     expect(await nextFrame(caller)).toMatchObject({ type: "call_status", state: "working" });
     listener.send(JSON.stringify({ type: "call_accepted", call_id: incoming.call_id }));
     listener.send(JSON.stringify({ type: "call_started", call_id: incoming.call_id }));
-    listener.send(JSON.stringify({ type: "call_result", call_id: incoming.call_id, text: "done" }));
-    expect(await nextFrame(caller)).toMatchObject({ type: "call_reply", text: "done" });
+    const outcome = encryptedCallOutcome(incoming.call_id, "order-callee", "order-caller");
+    listener.send(JSON.stringify(outcome));
+    expect(await nextFrame(caller)).toEqual(outcome);
     expect(await env.DB.prepare(
       "SELECT COUNT(*) AS n FROM org_events WHERE target_id = ? AND event = 'call.accept'",
     ).bind(incoming.call_id).first()).toEqual({ n: 1 });
@@ -236,7 +233,7 @@ describe("call flow", () => {
   it("terminates the caller with canceled after the listener confirms cancellation", async () => {
     const { callerToken, listener } = await setupPair("cancel-callee", "cancel-caller");
     const caller = await openWs("/v1/ws?role=call&to=cancel-callee", wsAuth("cancel-caller", callerToken));
-    caller.send(JSON.stringify({ type: "call_request", to: "cancel-callee", message: "stop me" }));
+    caller.send(JSON.stringify(encryptedCallRequest("cancel-caller", "cancel-callee")));
     await nextFrame(caller); // ringing
     const incoming = await nextFrame(listener);
 
@@ -251,31 +248,33 @@ describe("call flow", () => {
   it("keeps the call live when the listener cannot confirm cancellation", async () => {
     const { callerToken, listener } = await setupPair("late-callee", "late-caller");
     const caller = await openWs("/v1/ws?role=call&to=late-callee", wsAuth("late-caller", callerToken));
-    caller.send(JSON.stringify({ type: "call_request", to: "late-callee", message: "still running" }));
+    caller.send(JSON.stringify(encryptedCallRequest("late-caller", "late-callee")));
     await nextFrame(caller); // ringing
     const incoming = await nextFrame(listener);
 
     listener.send(JSON.stringify({ type: "call_not_cancelled", call_id: incoming.call_id, reason: "too_late" }));
-    listener.send(JSON.stringify({ type: "call_result", call_id: incoming.call_id, text: "finished" }));
-    expect(await nextFrame(caller)).toMatchObject({ type: "call_reply", text: "finished" });
+    const outcome = encryptedCallOutcome(incoming.call_id, "late-callee", "late-caller");
+    listener.send(JSON.stringify(outcome));
+    expect(await nextFrame(caller)).toEqual(outcome);
   });
 
   it("returns offline immediately when no listener", async () => {
     await registerHandle("off-callee");
     const t = await registerHandle("off-caller");
     const caller = await openWs("/v1/ws?role=call&to=off-callee", wsAuth("off-caller", t));
-    caller.send(JSON.stringify({ type: "call_request", to: "off-callee", message: "hi" }));
+    caller.send(JSON.stringify(encryptedCallRequest("off-caller", "off-callee")));
     expect(await nextFrame(caller)).toMatchObject({ type: "call_error", code: "offline" });
   });
 
-  it("relays call_failed as call_error", async () => {
+  it("relays an opaque authenticated failure outcome", async () => {
     const { callerToken, listener } = await setupPair("f-callee", "f-caller");
     const caller = await openWs("/v1/ws?role=call&to=f-callee", wsAuth("f-caller", callerToken));
-    caller.send(JSON.stringify({ type: "call_request", to: "f-callee", message: "hi" }));
+    caller.send(JSON.stringify(encryptedCallRequest("f-caller", "f-callee")));
     await nextFrame(caller); // ringing
     const incoming = await nextFrame(listener);
-    listener.send(JSON.stringify({ type: "call_failed", call_id: incoming.call_id, code: "busy" }));
-    expect(await nextFrame(caller)).toMatchObject({ type: "call_error", code: "busy" });
+    const outcome = encryptedCallOutcome(incoming.call_id, "f-callee", "f-caller", "failed");
+    listener.send(JSON.stringify(outcome));
+    expect(await nextFrame(caller)).toEqual(outcome);
     expect(await env.DB.prepare(
       "SELECT event, actor, target_id FROM org_events WHERE org = ? AND target_id = ? AND event = ?",
     ).bind("acme", incoming.call_id, "call.fail").first()).toEqual({
@@ -283,32 +282,25 @@ describe("call flow", () => {
     });
   });
 
-  // `detail` is peer-controlled free-form text the CLI puts in front of a
-  // caller. The relay must not
-  // pass raw control bytes or an unbounded string through, the same way it
-  // already truncates call_result text.
-  it("sanitizes and bounds call_failed detail before relaying it", async () => {
+  it("never accepts plaintext peer detail or offered fields", async () => {
     const { callerToken, listener } = await setupPair("d-callee", "d-caller");
     const caller = await openWs("/v1/ws?role=call&to=d-callee", wsAuth("d-caller", callerToken));
-    caller.send(JSON.stringify({ type: "call_request", to: "d-callee", message: "hi" }));
+    caller.send(JSON.stringify(encryptedCallRequest("d-caller", "d-callee")));
     await nextFrame(caller); // ringing
     const incoming = await nextFrame(listener);
     listener.send(JSON.stringify({
-      type: "call_failed", call_id: incoming.call_id, code: "agent_error",
-      detail: "\u001b[2Jwiped\u001b]0;retitled\u0007" + "z".repeat(MAX_DETAIL_LENGTH * 2),
+      ...encryptedCallOutcome(incoming.call_id, "d-callee", "d-caller", "failed"),
+      detail: "plaintext", offered: ["ask"],
     }));
-    const err = await nextFrame(caller);
-    expect(err).toMatchObject({ type: "call_error", code: "agent_error" });
-    expect(err.detail).not.toContain("\u001b");
-    expect(/[\u0000-\u001f\u007f-\u009f]/.test(err.detail)).toBe(false);
-    expect(err.detail.length).toBeLessThanOrEqual(MAX_DETAIL_LENGTH);
-    expect(err.detail).toContain("wiped");
+    await expect(nextFrame(caller, 50)).rejects.toThrow(/timeout/);
   });
 
-  it("rejects oversized messages", async () => {
+  it("rejects oversized ciphertext frames", async () => {
     const { callerToken } = await setupPair("big-callee", "big-caller");
     const caller = await openWs("/v1/ws?role=call&to=big-callee", wsAuth("big-caller", callerToken));
-    caller.send(JSON.stringify({ type: "call_request", to: "big-callee", message: "x".repeat(65_000) }));
+    const frame = encryptedCallRequest("big-caller", "big-callee");
+    frame.envelope.ct = "A".repeat(MAX_E2EE_WIRE_BYTES);
+    caller.send(JSON.stringify(frame));
     expect(await nextFrame(caller)).toMatchObject({ type: "call_error", code: "message_too_large" });
   });
 
@@ -316,11 +308,13 @@ describe("call flow", () => {
     const { callerToken } = await setupPair("ovr-rl-callee", "ovr-rl-caller");
     for (let i = 0; i < RATE_LIMIT_PER_HOUR; i++) {
       const c = await openWs("/v1/ws?role=call&to=ovr-rl-callee", wsAuth("ovr-rl-caller", callerToken));
-      c.send(JSON.stringify({ type: "call_request", to: "ovr-rl-callee", message: "x".repeat(65_000) }));
+      const frame = encryptedCallRequest("ovr-rl-caller", "ovr-rl-callee");
+      frame.envelope.ct = "A".repeat(MAX_E2EE_WIRE_BYTES);
+      c.send(JSON.stringify(frame));
       expect(await nextFrame(c)).toMatchObject({ type: "call_error", code: "message_too_large" });
     }
     const overLimit = await openWs("/v1/ws?role=call&to=ovr-rl-callee", wsAuth("ovr-rl-caller", callerToken));
-    overLimit.send(JSON.stringify({ type: "call_request", to: "ovr-rl-callee", message: "one too many" }));
+    overLimit.send(JSON.stringify(encryptedCallRequest("ovr-rl-caller", "ovr-rl-callee")));
     expect(await nextFrame(overLimit)).toMatchObject({ type: "call_error", code: "rate_limited" });
   });
 
@@ -328,21 +322,21 @@ describe("call flow", () => {
     const { callerToken, listener } = await setupPair("rl-callee", "rl-caller");
     for (let i = 0; i < RATE_LIMIT_PER_HOUR; i++) {
       const c = await openWs("/v1/ws?role=call&to=rl-callee", wsAuth("rl-caller", callerToken));
-      c.send(JSON.stringify({ type: "call_request", to: "rl-callee", message: `call ${i}` }));
+      c.send(JSON.stringify(encryptedCallRequest("rl-caller", "rl-callee")));
       await nextFrame(c); // ringing
       const inc = await nextFrame(listener);
-      listener.send(JSON.stringify({ type: "call_result", call_id: inc.call_id, text: "ok" }));
+      listener.send(JSON.stringify(encryptedCallOutcome(inc.call_id, "rl-callee", "rl-caller")));
       await nextFrame(c); // reply
     }
     const overLimit = await openWs("/v1/ws?role=call&to=rl-callee", wsAuth("rl-caller", callerToken));
-    overLimit.send(JSON.stringify({ type: "call_request", to: "rl-callee", message: "one too many" }));
+    overLimit.send(JSON.stringify(encryptedCallRequest("rl-caller", "rl-callee")));
     expect(await nextFrame(overLimit)).toMatchObject({ type: "call_error", code: "rate_limited" });
   });
 
   it("times out a call whose listener never replies", async () => {
     const { callerToken } = await setupPair("to-callee", "to-caller");
     const caller = await openWs("/v1/ws?role=call&to=to-callee&test_timeout_ms=100", wsAuth("to-caller", callerToken));
-    caller.send(JSON.stringify({ type: "call_request", to: "to-callee", message: "hello?" }));
+    caller.send(JSON.stringify(encryptedCallRequest("to-caller", "to-callee")));
     const ringing = await nextFrame(caller);
     expect(await nextFrame(caller, 10_000)).toMatchObject({ type: "call_error", code: "timeout" });
     expect(await env.DB.prepare(
@@ -358,10 +352,10 @@ describe("call flow", () => {
       "/v1/ws?role=call&to=done-callee&test_timeout_ms=100",
       wsAuth("done-caller", callerToken),
     );
-    caller.send(JSON.stringify({ type: "call_request", to: "done-callee", message: "finish" }));
+    caller.send(JSON.stringify(encryptedCallRequest("done-caller", "done-callee")));
     const ringing = await nextFrame(caller);
     const incoming = await nextFrame(listener);
-    listener.send(JSON.stringify({ type: "call_result", call_id: incoming.call_id, text: "done" }));
+    listener.send(JSON.stringify(encryptedCallOutcome(incoming.call_id, "done-callee", "done-caller")));
     await nextFrame(caller);
     await new Promise((resolve) => setTimeout(resolve, 150));
     expect(await env.DB.prepare(
@@ -372,9 +366,9 @@ describe("call flow", () => {
   it("rejects a second call_request on the same socket", async () => {
     const { callerToken } = await setupPair("p-callee", "p-caller");
     const caller = await openWs("/v1/ws?role=call&to=p-callee", wsAuth("p-caller", callerToken));
-    caller.send(JSON.stringify({ type: "call_request", to: "p-callee", message: "one" }));
+    caller.send(JSON.stringify(encryptedCallRequest("p-caller", "p-callee")));
     const ringing = await nextFrame(caller);
-    caller.send(JSON.stringify({ type: "call_request", to: "p-callee", message: "two" }));
+    caller.send(JSON.stringify(encryptedCallRequest("p-caller", "p-callee")));
     expect(await nextFrame(caller)).toMatchObject({
       type: "call_error",
       code: "protocol_error",
@@ -386,7 +380,7 @@ describe("call flow", () => {
   it("retains admitted call context when the second caller frame is malformed", async () => {
     const { callerToken } = await setupPair("pm-callee", "pm-caller");
     const caller = await openWs("/v1/ws?role=call&to=pm-callee", wsAuth("pm-caller", callerToken));
-    caller.send(JSON.stringify({ type: "call_request", to: "pm-callee", message: "one" }));
+    caller.send(JSON.stringify(encryptedCallRequest("pm-caller", "pm-callee")));
     const ringing = await nextFrame(caller);
     caller.send("not json");
     expect(await nextFrame(caller)).toMatchObject({
@@ -400,13 +394,14 @@ describe("call flow", () => {
   it("survives listener reconnect mid-call", async () => {
     const { calleeToken, callerToken, listener } = await setupPair("rc-callee", "rc-caller");
     const caller = await openWs("/v1/ws?role=call&to=rc-callee", wsAuth("rc-caller", callerToken));
-    caller.send(JSON.stringify({ type: "call_request", to: "rc-callee", message: "slow one" }));
+    caller.send(JSON.stringify(encryptedCallRequest("rc-caller", "rc-callee")));
     await nextFrame(caller); // ringing
     const incoming = await nextFrame(listener);
     listener.close(1000, "network blip");
     const listener2 = await openWs("/v1/ws?role=listen", wsAuth("rc-callee", calleeToken));
-    listener2.send(JSON.stringify({ type: "call_result", call_id: incoming.call_id, text: "late but here" }));
-    expect(await nextFrame(caller)).toMatchObject({ type: "call_reply", text: "late but here" });
+    const outcome = encryptedCallOutcome(incoming.call_id, "rc-callee", "rc-caller");
+    listener2.send(JSON.stringify(outcome));
+    expect(await nextFrame(caller)).toEqual(outcome);
   });
 
   it("uses the authenticated handle for from, not a forged header", async () => {
@@ -415,25 +410,27 @@ describe("call flow", () => {
       ...wsAuth("id-caller", callerToken),
       "X-Verified-From": "forged-identity",
     });
-    caller.send(JSON.stringify({ type: "call_request", to: "id-callee", message: "hi" }));
+    caller.send(JSON.stringify(encryptedCallRequest("id-caller", "id-callee")));
     await nextFrame(caller); // ringing
     const incoming = await nextFrame(listener);
     expect(incoming.from).toBe("id-caller");
   });
 
-  it("truncates an oversized CJK call_result to MAX_REPLY_BYTES on a code-point boundary", async () => {
+  it("drops an oversized encrypted outcome and accepts a later bounded outcome", async () => {
     const { callerToken, listener } = await setupPair("cjk-callee", "cjk-caller");
     const caller = await openWs("/v1/ws?role=call&to=cjk-callee", wsAuth("cjk-caller", callerToken));
-    caller.send(JSON.stringify({ type: "call_request", to: "cjk-callee", message: "hi" }));
+    caller.send(JSON.stringify(encryptedCallRequest("cjk-caller", "cjk-callee")));
     await nextFrame(caller); // ringing
     const incoming = await nextFrame(listener);
 
-    const bigReply = "あ".repeat(200_000); // ~600KB UTF-8 (3 bytes/char)
-    listener.send(JSON.stringify({ type: "call_result", call_id: incoming.call_id, text: bigReply }));
-    const reply = await nextFrame(caller);
-    expect(reply.type).toBe("call_reply");
-    expect(new TextEncoder().encode(reply.text).byteLength).toBeLessThanOrEqual(256_000);
-    expect(reply.text.includes("�")).toBe(false);
+    const oversized = encryptedCallOutcome(incoming.call_id, "cjk-callee", "cjk-caller");
+    oversized.envelope.ct = "A".repeat(MAX_E2EE_WIRE_BYTES);
+    listener.send(JSON.stringify(oversized));
+    await expect(nextFrame(caller, 50)).rejects.toThrow(/timeout/);
+
+    const bounded = encryptedCallOutcome(incoming.call_id, "cjk-callee", "cjk-caller");
+    listener.send(JSON.stringify(bounded));
+    expect(await nextFrame(caller)).toEqual(bounded);
   });
 });
 
@@ -448,19 +445,5 @@ describe("clampTimeoutMs", () => {
 
   it("defaults to RELAY_CALL_TIMEOUT_MS when no timeout is requested", () => {
     expect(clampTimeoutMs(undefined)).toBe(RELAY_CALL_TIMEOUT_MS);
-  });
-});
-
-describe("truncateUtf8Bytes", () => {
-  it("returns text unchanged when already within the byte cap", () => {
-    expect(truncateUtf8Bytes("hello", 100)).toBe("hello");
-  });
-
-  it("truncates on a UTF-8 byte boundary without corrupting the string", () => {
-    const text = "あ".repeat(10); // 30 bytes (3 bytes/char)
-    const truncated = truncateUtf8Bytes(text, 20);
-    expect(new TextEncoder().encode(truncated).byteLength).toBeLessThanOrEqual(20);
-    expect(truncated.includes("�")).toBe(false);
-    expect(truncated).toBe("あ".repeat(6)); // 18 bytes fits, 7th char (21 bytes) doesn't
   });
 });

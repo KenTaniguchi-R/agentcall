@@ -144,6 +144,21 @@ which are released together.
   for recovery and enroll a new handle with a new invite; setup cannot replace
   the spent handle's relay-pinned identity.
 
+### End-to-end encrypted live calls
+
+- Replace plaintext call request, incoming-call, reply, and peer-failure frames
+  with signed HPKE envelopes. Callers verify and pin recipient keys before
+  opening a WebSocket; listeners authenticate, current-check, and persistently
+  reserve requests against replay before policy evaluation or agent spawn.
+- Bind request IDs, complete signed transcripts, relay origin, endpoint
+  addresses, recipient key ID, and epoch into authenticated request/response
+  exchanges. Reject stale, replayed, rolled-back, misrouted, oversized, or
+  unauthenticated content without a plaintext compatibility fallback.
+- Keep relay-operational status distinct from authenticated peer outcomes and
+  label the distinction in caller errors. The relay retains routing/lifecycle
+  metadata and bounded opaque ciphertext, while A2A task recovery becomes
+  status-only because context, reply, and failure content are encrypted.
+
 ### Opt-in local OpenTelemetry
 
 - Propagate a bounded caller correlation ID across relay, listener, lifecycle

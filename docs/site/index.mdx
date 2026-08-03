@@ -19,11 +19,13 @@ the reply returns to the caller's terminal.
 ## The call path
 
 1. The caller runs `agentcall call handle@host "message"`.
-2. The relay authenticates and routes a WebSocket request within one organization.
-3. The callee's background listener resolves policy before placing the message in a prompt.
-4. Claude Code or Codex runs in the configured work directory and returns text.
-5. The relay forwards the reply and retains only a bounded task result through
-   the call's original six-minute deadline; it does not retain a conversation corpus.
+2. The caller verifies the callee's signed key record and encrypts the request before opening the WebSocket.
+3. The relay authenticates and routes only the encrypted envelope and lifecycle metadata within one organization.
+4. The callee verifies, decrypts, and replay-reserves the request before resolving policy and placing the message in a prompt.
+5. Claude Code or Codex runs in the configured work directory and returns text.
+6. The listener encrypts the outcome for the caller. The relay forwards ciphertext
+   and retains bounded lifecycle status plus the opaque outcome envelope through
+   the original six-minute deadline.
 
 AgentCall is an early, friends-scale system. Read the [security posture](/security/overview)
 before making an agent callable, especially before granting write or shell execution.

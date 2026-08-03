@@ -21,6 +21,12 @@ import {
 } from "../src/telemetry.js";
 import { TelemetryHealthReporter } from "../src/telemetry-health.js";
 
+const encryptedRequest = {
+  v: 1 as const, direction: "request" as const, relay_origin: "relay.example",
+  from: "caller@relay.example", to: "callee@relay.example", key_id: "a".repeat(32),
+  epoch: 1, enc: "A", ct: "B",
+};
+
 function remoteParent(index: number, sampled = true) {
   const traceId = index.toString(16).padStart(32, "0").replace(/^0+$/, "1".repeat(32));
   return trace.setSpanContext(ROOT_CONTEXT, {
@@ -203,7 +209,7 @@ describe("AgentCallTelemetry", () => {
     const incoming = {
       type: "incoming_call" as const,
       call_id: "call-1", correlation_id: caller.correlationId, traceparent: caller.traceparent,
-      from: "private-handle", groups: [], message: "private prompt", task: "ask",
+      from: "private-handle", groups: [], envelope: encryptedRequest,
     };
     const inbound = telemetry.startInbound(incoming);
     inbound.endAdmission("accepted");
@@ -255,7 +261,7 @@ describe("AgentCallTelemetry", () => {
     const caller = telemetry.startCaller({ relay: "https://relay.example" });
     const inbound = telemetry.startInbound({
       type: "incoming_call", call_id: "call-1", correlation_id: caller.correlationId,
-      traceparent: caller.traceparent, from: "hidden", groups: [], message: "hidden",
+      traceparent: caller.traceparent, from: "hidden", groups: [], envelope: encryptedRequest,
     });
     const invocation = inbound.startInvocation({
       task: "owner-task-with-unbounded-name", runtime: "codex", callId: "call-1",
