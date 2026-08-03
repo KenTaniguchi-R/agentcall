@@ -1,10 +1,10 @@
-import { ORG_RE } from "@benree/agentcall-shared";
-import { verifyHandleToken } from "./auth.js";
+import { ORG_RE, type OrgRoleType } from "@benree/agentcall-shared";
+import { authenticatedHandleRole } from "./auth.js";
 
 export const HOSTED_RELAY_HOST = "agentcall.benree.tech";
 
 type RequestLike = { header(name: string): string | undefined; url: string };
-export type Identity = { org: string; handle: string };
+export type Identity = { org: string; handle: string; role: OrgRoleType };
 
 export function requestOrg(req: RequestLike): string {
   const header = req.header("X-AgentCall-Org") ?? "";
@@ -21,7 +21,13 @@ export async function authenticateRequest(db: D1Database, req: RequestLike): Pro
   const org = requestOrg(req);
   const handle = req.header("X-AgentCall-Handle") ?? "";
   const token = (req.header("Authorization") ?? "").replace(/^Bearer\s+/i, "");
-  return org && (await verifyHandleToken(db, org, handle, token)) ? { org, handle } : null;
+  if (!org) return null;
+  const role = await authenticatedHandleRole(db, org, handle, token);
+  return role ? { org, handle, role } : null;
+}
+
+export function requireOrgAdmin(identity: Identity): boolean {
+  return identity.role === "admin";
 }
 
 export function identityKey(org: string, handle: string): string {

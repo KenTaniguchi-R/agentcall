@@ -1,12 +1,14 @@
 import {
-  HANDLE_RE, AgentCard, CreateOrgInviteResponse, CreateRosterResponse, IssueRosterJoinKeyResponse,
+  HANDLE_RE, AgentCard, AuditExportPage, CreateOrgInviteResponse, CreateRosterResponse, IssueRosterJoinKeyResponse,
   ListOrgInvitesResponse, ListRosterJoinKeysResponse, RegisterResponse, RevokeOrgInviteResponse,
   RevokeRosterJoinKeyResponse, RosterBundle,
   EncryptionKeyRecord, IdentityRecord, HPKE_SUITE, MAX_ENCRYPTION_KEY_VALIDITY_MS,
   encryptionKeyTranscript, fromBase64Url, identityTranscript, keyIdFor, signTranscript,
   // AgentKind is ours: registerHandle takes it, and it is the shared type that
   // replaced the inline "claude" | "codex" unions.
-  type AgentCardType, type AgentKind, type CardUploadType, type OrgInviteMetadataType, type RosterBundleType,
+  type AgentCardType, type AgentKind, type AuditExportPageType, type CardUploadType,
+  type OrgInviteMetadataType, type RosterBundleType,
+  type OrgRoleType,
   type RosterJoinKeyMetadataType,
   type EncryptionKeyRecordType, type IdentityRecordType,
 } from "@benree/agentcall-shared";
@@ -84,7 +86,8 @@ export async function registerHandle(
 
 export async function createInvite(
   relay: string, auth: Auth,
-  input: { description?: string; expires_in_days?: number } = {}, opts: { timeoutMs?: number } = {},
+  input: { description?: string; expires_in_days?: number; role?: OrgRoleType } = {},
+  opts: { timeoutMs?: number } = {},
 ): Promise<{ invite: string; metadata: OrgInviteMetadataType }> {
   const res = await relayFetch(
     relay,
@@ -96,6 +99,7 @@ export async function createInvite(
     opts.timeoutMs ?? RELAY_TIMEOUT_MS,
   );
   if (res.status === 401) throw new ApiError("Your credentials were rejected. Re-run `agentcall setup`.", "invalid");
+  if (res.status === 403) throw new ApiError("This line is not an organization administrator.", "invalid");
   if (res.status === 429) throw new ApiError("Too many invites created — try again in a minute.", "network");
   if (!res.ok) throw new ApiError(`Invite creation failed (${res.status}).`, "network");
   return CreateOrgInviteResponse.parse(await res.json());
@@ -109,6 +113,7 @@ export async function listInvites(
     opts.timeoutMs ?? RELAY_TIMEOUT_MS,
   );
   if (res.status === 401) throw new ApiError("Your credentials were rejected. Re-run `agentcall setup`.", "invalid");
+  if (res.status === 403) throw new ApiError("This line is not an organization administrator.", "invalid");
   if (res.status === 429) throw new ApiError("Too many invite operations — try again in a minute.", "network");
   if (!res.ok) throw new ApiError(`Invite listing failed (${res.status}).`, "network");
   return ListOrgInvitesResponse.parse(await res.json()).invites;
@@ -122,11 +127,48 @@ export async function revokeInvite(
     opts.timeoutMs ?? RELAY_TIMEOUT_MS,
   );
   if (res.status === 401) throw new ApiError("Your credentials were rejected. Re-run `agentcall setup`.", "invalid");
+  if (res.status === 403) throw new ApiError("This line is not an organization administrator.", "invalid");
   if (res.status === 400) throw new ApiError("Invite ID must be the 64-character ID shown by `agentcall invite list`.", "invalid");
   if (res.status === 404) throw new ApiError("Invite not found or already used.", "invalid");
   if (res.status === 429) throw new ApiError("Too many invite operations — try again in a minute.", "network");
   if (!res.ok) throw new ApiError(`Invite revocation failed (${res.status}).`, "network");
   return RevokeOrgInviteResponse.parse(await res.json());
+}
+
+export async function fetchAuditExportPage(
+  relay: string,
+  auth: Auth,
+  query: { after?: number; before?: number; page_size?: number; page_token?: string } = {},
+  opts: { timeoutMs?: number; retryRateLimit?: boolean; sleep?: (ms: number) => Promise<void> } = {},
+): Promise<AuditExportPageType> {
+  const search = new URLSearchParams();
+  if (query.after !== undefined) search.set("after", String(query.after));
+  if (query.before !== undefined) search.set("before", String(query.before));
+  if (query.page_size !== undefined) search.set("page_size", String(query.page_size));
+  if (query.page_token) search.set("page_token", query.page_token);
+  let res: Response;
+  let rateLimitRetries = 0;
+  while (true) {
+    res = await relayFetch(
+      relay, `/v1/audit/events${search.size ? `?${search}` : ""}`,
+      { headers: authHeaders(auth) }, opts.timeoutMs ?? RELAY_TIMEOUT_MS,
+    );
+    if (res.status !== 429 || !opts.retryRateLimit || rateLimitRetries >= 2) break;
+    rateLimitRetries += 1;
+    const retryAfter = Number(res.headers.get("Retry-After"));
+    const delayMs = Number.isFinite(retryAfter) && retryAfter >= 0
+      ? Math.min(retryAfter * 1_000, 60_000)
+      : 60_000;
+    await res.body?.cancel();
+    await (opts.sleep ?? ((ms) => new Promise((resolve) => setTimeout(resolve, ms))))(delayMs);
+  }
+  if (res.status === 401) throw new ApiError("Your credentials were rejected. Re-run `agentcall setup`.", "invalid");
+  if (res.status === 403) throw new ApiError("This line is not an organization administrator.", "invalid");
+  if (res.status === 400) throw new ApiError("The audit export cursor or time range is invalid.", "invalid");
+  if (res.status === 409) throw new ApiError("The audit snapshot changed during export. Discard the partial output and retry.", "network");
+  if (res.status === 429) throw new ApiError("Too many audit export requests — try again in a minute.", "network");
+  if (!res.ok) throw new ApiError(`Audit export failed (${res.status}).`, "network");
+  return AuditExportPage.parse(await res.json());
 }
 
 // Presence is self-or-shared-roster on the relay, so this always authenticates.

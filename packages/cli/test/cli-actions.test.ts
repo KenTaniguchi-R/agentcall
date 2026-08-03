@@ -282,7 +282,7 @@ describe.sequential("CLI command actions", () => {
     seedConfig(testHome, relay);
 
     const created = await runCommand(testHome, [
-      "invite", "create", "--description", "contractor", "--expires-in-days", "30",
+      "invite", "create", "--description", "contractor", "--expires-in-days", "30", "--role", "admin",
     ]);
     const listed = await runCommand(testHome, ["invite", "list"]);
     const revoked = await runCommand(testHome, ["invite", "revoke", id]);
@@ -294,10 +294,74 @@ describe.sequential("CLI command actions", () => {
     expect(listed.stdout).not.toContain(secret);
     expect(revoked).toMatchObject({ code: 0, stdout: expect.stringContaining(`Revoked ${id}`) });
     expect(requests).toEqual([
-      { url: "/v1/invites", body: JSON.stringify({ description: "contractor", expires_in_days: 30 }) },
+      { url: "/v1/invites", body: JSON.stringify({ description: "contractor", expires_in_days: 30, role: "admin" }) },
       { url: "/v1/invites/list", body: "" },
       { url: `/v1/invites/${id}/revoke`, body: "" },
     ]);
+  });
+
+  it("streams every audit page as NDJSON and prints the final checkpoint", async () => {
+    const requests: string[] = [];
+    const relay = await startRelay((url) => {
+      requests.push(url);
+      const second = url.includes("page_token=next");
+      return { status: 200, body: {
+        events: [{
+          ledger: second ? "roster" : "org", id: 1,
+          event: second ? "roster.create" : "org.invite.issue", action_type: "C",
+          roster_id: second ? "r1" : null, actor: "ken", actor_type: "handle",
+          target_type: second ? "roster" : "invite", target_id: "target", target_role: null,
+          actor_ip: null, actor_country: null, description: "event", at: second ? 2 : 1,
+        }],
+        checkpoint: { org_event_id: 1, org_event_count: 1, roster_event_id: 1, roster_event_count: 1 },
+        next_page_token: second ? "" : "next",
+      } };
+    });
+    const testHome = home();
+    seedConfig(testHome, relay);
+
+    const out = await runCommand(testHome, [
+      "audit", "export", "--after", "1970-01-01T00:00:00.000Z", "--before", "100", "--page-size", "1",
+    ]);
+    expect(out.code).toBe(0);
+    expect(out.stdout.split("\n").map((line) => JSON.parse(line).ledger)).toEqual(["org", "roster"]);
+    expect(out.stderr).toContain("Checkpoint org=1 roster=1");
+    expect(requests).toEqual([
+      "/v1/audit/events?after=0&before=100&page_size=1",
+      "/v1/audit/events?after=0&before=100&page_size=1&page_token=next",
+    ]);
+  });
+
+  it("rejects invalid audit time and page size before contacting the relay", async () => {
+    const testHome = home();
+    seedConfig(testHome, "http://127.0.0.1:1");
+    const invalidTime = await runCommand(testHome, ["audit", "export", "--after", "not-a-time"]);
+    expect(invalidTime.code).toBe(1);
+    expect(invalidTime.stderr).toContain("--after must be an epoch-millisecond or ISO timestamp");
+    const invalidPage = await runCommand(testHome, ["audit", "export", "--page-size", "501"]);
+    expect(invalidPage.code).toBe(1);
+    expect(invalidPage.stderr).toContain("--page-size must be an integer from 1 to 500");
+  });
+
+  it("does not print a final checkpoint when a paged snapshot becomes incomplete", async () => {
+    const relay = await startRelay((url) => url.includes("page_token=next")
+      ? { status: 409, body: { error: "audit snapshot changed; restart export" } }
+      : { status: 200, body: {
+        events: [{
+          ledger: "org", id: 1, event: "org.invite.issue", action_type: "C", roster_id: null,
+          actor: "ken", actor_type: "handle", target_type: "invite", target_id: "target",
+          target_role: "member", actor_ip: null, actor_country: null, description: "event", at: 1,
+        }],
+        checkpoint: { org_event_id: 2, org_event_count: 2, roster_event_id: 0, roster_event_count: 0 },
+        next_page_token: "next",
+      } });
+    const testHome = home();
+    seedConfig(testHome, relay);
+    const out = await runCommand(testHome, ["audit", "export", "--page-size", "1"]);
+    expect(out.code).toBe(1);
+    expect(out.stdout).toContain('"target_id":"target"');
+    expect(out.stderr).toContain("Discard the partial output and retry");
+    expect(out.stderr).not.toContain("Checkpoint org=");
   });
 
   it("captures Commander validation failures without exiting the process", async () => {

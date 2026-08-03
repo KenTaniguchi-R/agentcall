@@ -1,4 +1,5 @@
 import type { Context } from "hono";
+import type { OrgRoleType } from "@benree/agentcall-shared";
 import type { Env } from "./index.js";
 
 export type RosterAuditEvent =
@@ -33,6 +34,7 @@ type OrgAudit = {
   actorType: OrgAuditActor;
   targetType: OrgAuditTarget;
   targetId: string;
+  targetRole?: OrgRoleType | null;
   description: string;
   at: number;
 };
@@ -78,15 +80,15 @@ export function orgAuditStatement(
   c: Context<{ Bindings: Env }>, audit: OrgAudit, condition: "always" | "previous-change" = "always",
 ): D1PreparedStatement {
   const [actorIp, actorCountry] = auditLocation(c);
-  const values = "?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?";
+  const values = "?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?";
   const predicate = condition === "previous-change" ? " WHERE changes() > 0" : "";
   return c.env.DB.prepare(
     "INSERT INTO org_events (event, action_type, org, actor, actor_type, target_type, target_id, " +
-      "actor_ip, actor_country, description, at) " +
+      "target_role, actor_ip, actor_country, description, at) " +
       (condition === "always" ? `VALUES (${values})` : `SELECT ${values}${predicate}`),
   ).bind(
     audit.event, audit.action, audit.org, audit.actor, audit.actorType, audit.targetType, audit.targetId,
-    actorIp, actorCountry, audit.description, audit.at,
+    audit.targetRole ?? null, actorIp, actorCountry, audit.description, audit.at,
   );
 }
 

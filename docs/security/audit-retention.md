@@ -1,7 +1,6 @@
 # Audit retention policy
 
-Last verified: 2026-08-02 against repository migration
-`0010_roster_audit_budget_recovery.sql`.
+Last verified: 2026-08-03 against repository migration `0013_org_roles.sql`.
 
 This document is the current retention contract for the hosted relay's D1
 security-audit ledgers. It describes implemented behavior, not a compliance
@@ -11,12 +10,20 @@ certification or a promise that deletion is available.
 
 | Ledger | Current application retention | Deletion and export |
 |---|---|---|
-| `roster_events` | Indefinite, including after roster deletion. The 10,000-event audit budget suppresses member-driven join/leave churn after exhaustion; administrator and system security events remain appendable, so it is not a row-count ceiling. | No customer or application deletion path. No supported export exists. |
-| `org_events` | Newest 10,000 events per organization. Every audited organization-invite mutation atomically trims older rows, but there is no time-based window. | No customer deletion path. No supported export exists. Rows removed by the rolling cap are not archived by the application. |
+| `roster_events` | Indefinite, including after roster deletion. The 10,000-event audit budget suppresses member-driven join/leave churn after exhaustion; administrator and system security events remain appendable, so it is not a row-count ceiling. | No customer or application deletion path. Included in the supported administrator export. |
+| `org_events` | Newest 10,000 events per organization. Every audited organization-invite mutation atomically trims older rows, but there is no time-based window. | No customer deletion path. Included in the supported administrator export; rows removed by the rolling cap are not archived by the application. |
 
 Both tables contain actor and target identifiers, source IP/country, event
 descriptions, and timestamps. They can therefore contain personal data and
-security evidence. The hosted service cannot currently promise a tenant-level,
+security evidence. Organization administrators can export both ledgers through
+`GET /v1/audit/events` or `agentcall audit export`. The API captures maximum IDs
+and row counts for both ledgers on page one, orders by event time/ledger/ID, and
+uses a relay-secret HMAC to bind every continuation token to that checkpoint,
+tenant, administrator, time filters, and page size. A concurrent append cannot
+enter an in-progress export. Every continuation also recounts rows at or below
+the checkpoint and aborts with `409` if retention removed one, so a caller must
+discard partial output unless the stream reaches its final checkpoint. The
+hosted service still cannot promise a tenant-level,
 person-level, or time-based erasure request. That is a product/compliance
 blocker for an organization that requires one.
 
@@ -29,7 +36,7 @@ future access decisions and centrally retained abuse verdicts belongs to issue
 #17 and must satisfy this policy's export, retention, erasure, legal-hold, and
 failure-visibility requirements.
 
-## Accepted target — not implemented
+## Accepted retention target — not implemented
 
 The [subject-erasure and retention decision](../superpowers/specs/2026-08-02-subject-erasure-and-retention-design.md)
 commits the hosted product to a 400-day default for structured audit events and a
@@ -42,7 +49,7 @@ readable identity evidence and delete subject-linked network evidence without ed
 the append-only event. Pseudonymous event fields remain personal data and still expire
 normally.
 
-Automatic expiry remains gated on the export, checkpoint, hold, backup, bounded-batch,
+Automatic expiry remains gated on hold, backup, bounded-batch,
 and failure-visibility requirements below. Until those ship, the current behavior in
 the table above remains authoritative.
 
@@ -67,11 +74,12 @@ must inventory them separately.
 Time-based expiry belongs to the org-level audit/export work in issue #17 and
 must not ship independently. Expiry is safe only when all of these are true:
 
-1. A supported export combines `roster_events` and `org_events` into one
-   ordered, tenant-scoped contract while preserving each event's ledger/scope.
-2. The operator can prove export completeness through the deletion cutoff,
-   using a stable checkpoint or equivalent deduplication boundary, before any
-   row is removed.
+1. **Implemented:** the supported export combines `roster_events` and
+   `org_events` into one ordered, tenant-scoped contract while preserving each
+   event's ledger/scope.
+2. **Implemented for export:** each stream carries stable per-ledger checkpoints.
+   Retention automation must still persist and verify the relevant completed
+   checkpoint before deleting through a cutoff.
 3. A documented default window and a bounded configurable window are applied
    uniformly by event time. Configuration changes are themselves audited.
 4. Deletion runs in bounded batches, resumes safely after interruption, exposes
@@ -83,6 +91,7 @@ must not ship independently. Expiry is safe only when all of these are true:
 7. Tests cover tenant isolation, cutoff boundaries, interrupted retries,
    concurrent writes, export failure, legal holds, and both event ledgers.
 
-Until those requirements are implemented, the honest statement is: roster
-audit evidence is retained indefinitely, organization audit evidence is
-count-bounded only, and neither ledger has a supported erasure workflow.
+Until the remaining requirements are implemented, the honest statement is:
+both ledgers have a supported admin export, roster audit evidence is retained
+indefinitely, organization audit evidence is count-bounded only, and neither
+ledger has a supported erasure workflow.

@@ -3,17 +3,20 @@ import { expect } from "vitest";
 import { sha256Hex } from "../src/auth.js";
 
 let inviteCounter = 0;
-export async function issueInvite(org = "acme", label = "test"): Promise<string> {
+export async function issueInvite(
+  org = "acme", label = "test", role: "admin" | "member" = "admin",
+): Promise<string> {
   const invite = `${label}-${++inviteCounter}-${"x".repeat(40)}`;
   const now = Date.now();
   await env.DB.prepare(
-    "INSERT INTO invites (token_hash, org, created_at, expires_at) VALUES (?, ?, ?, ?)",
-  ).bind(await sha256Hex(invite), org, now, now + 60_000).run();
+    "INSERT INTO invites (token_hash, org, created_at, expires_at, org_role) VALUES (?, ?, ?, ?, ?)",
+  ).bind(await sha256Hex(invite), org, now, now + 60_000, role).run();
   return invite;
 }
 
 export async function registerHandle(
   handle: string, kind: "claude" | "codex" = "claude", org = "acme",
+  role: "admin" | "member" = "admin",
 ): Promise<string> {
   const res = await SELF.fetch("https://relay.test/v1/register", {
     method: "POST",
@@ -21,7 +24,7 @@ export async function registerHandle(
     // shares the same "unknown" fallback key and would collide with the
     // register-endpoint rate limit across unrelated tests.
     headers: { "content-type": "application/json", "cf-connecting-ip": `test-${handle}` },
-    body: JSON.stringify({ invite: await issueInvite(org, handle), handle, agent_kind: kind }),
+    body: JSON.stringify({ invite: await issueInvite(org, handle, role), handle, agent_kind: kind }),
   });
   expect(res.status).toBe(200);
   return (await res.json<{ token: string }>()).token;
