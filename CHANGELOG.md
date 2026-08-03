@@ -55,6 +55,9 @@ which are released together.
 - Retain tenant-scoped call submission and terminal lifecycle evidence without
   prompt/reply bodies, using an idempotent Durable Object outbox so call truth
   and retryable audit intent commit atomically across temporary D1 failures.
+- Let API clients conditionally poll exact audit pages with strong response
+  ETags and private revalidation, without weakening authorization, rate limits,
+  cursor validation, or checkpoint-gap detection.
 
 ### Experimental customer-owned Cloudflare relay
 

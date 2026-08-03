@@ -3,6 +3,7 @@ import {
   AuditExportPage, type AuditExportEventType, type AuditExportPageType,
 } from "@benree/agentcall-shared";
 import type { Env } from "./index.js";
+import { sha256Hex } from "./auth.js";
 import { AUDIT_READ, checkLimit } from "./ratelimit/index.js";
 import { authenticateRequest, requireOrgAdmin } from "./tenant.js";
 
@@ -10,6 +11,10 @@ const DEFAULT_PAGE_SIZE = 100;
 const MAX_PAGE_SIZE = 500;
 const MAX_PAGE_TOKEN_LENGTH = 2_048;
 const MAX_FILTER_LENGTH = 256;
+const AUDIT_CACHE_HEADERS = {
+  "Cache-Control": "private, no-cache, no-transform",
+  Vary: "Authorization, X-AgentCall-Org, X-AgentCall-Handle",
+} as const;
 
 type Checkpoint = {
   orgEventId: number;
@@ -37,6 +42,40 @@ type CursorPayload = {
   checkpoint: Checkpoint;
   position: Position;
 };
+
+function parseIfNoneMatch(value: string): "*" | string[] | null {
+  // HTTP optional whitespace is SP / HTAB only. String.trim() also removes
+  // NBSP and other Unicode whitespace, which could promote malformed input
+  // such as NBSP + `*` into a matching wildcard.
+  const input = value.replace(/^[ \t]+|[ \t]+$/g, "");
+  if (input === "*") return "*";
+  const tags: string[] = [];
+  let index = 0;
+  while (index < input.length) {
+    // RFC 9110's list extension permits empty members; skip OWS and commas.
+    while (index < input.length && (input[index] === " " || input[index] === "\t" || input[index] === ",")) index++;
+    if (index >= input.length) break;
+    if (input.startsWith("W/", index)) index += 2;
+    if (input[index] !== '"') return null;
+    const start = index++;
+    while (index < input.length && input[index] !== '"') {
+      const code = input.charCodeAt(index);
+      if (!(code === 0x21 || (code >= 0x23 && code <= 0x7e) || (code >= 0x80 && code <= 0xff))) return null;
+      index++;
+    }
+    if (index >= input.length) return null;
+    tags.push(input.slice(start, ++index));
+    while (index < input.length && (input[index] === " " || input[index] === "\t")) index++;
+    if (index < input.length && input[index] !== ",") return null;
+  }
+  return tags;
+}
+
+function ifNoneMatchMatches(value: string | undefined, current: string): boolean {
+  if (value === undefined) return false;
+  const parsed = parseIfNoneMatch(value);
+  return parsed === "*" || (parsed !== null && parsed.some((tag) => tag === current));
+}
 
 function base64Url(bytes: Uint8Array): string {
   let binary = "";
@@ -240,6 +279,15 @@ export function mountAudit(app: Hono<{ Bindings: Env }>): void {
       },
       next_page_token: nextPageToken,
     };
-    return c.json(AuditExportPage.parse(response));
+    const body = JSON.stringify(AuditExportPage.parse(response));
+    const etag = `"${await sha256Hex(body)}"`;
+    const headers = { ...AUDIT_CACHE_HEADERS, ETag: etag };
+    if (ifNoneMatchMatches(c.req.header("if-none-match"), etag)) {
+      return new Response(null, { status: 304, headers });
+    }
+    return new Response(body, {
+      status: 200,
+      headers: { ...headers, "Content-Type": "application/json; charset=UTF-8" },
+    });
   });
 }

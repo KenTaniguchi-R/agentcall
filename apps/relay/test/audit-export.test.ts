@@ -24,6 +24,70 @@ async function seedRosterEvent(org: string, at: number, rosterId: string) {
 }
 
 describe("organization audit export", () => {
+  it("supports private conditional polling with strong response validators", async () => {
+    const org = "etag-org";
+    const token = await registerHandle("etag-admin", "claude", org, "admin");
+    await seedOrgEvent(org, 1_000, "first");
+    const headers = wsAuth("etag-admin", token, org);
+
+    const first = await SELF.fetch("https://relay.test/v1/audit/events", { headers });
+    expect(first.status).toBe(200);
+    const etag = first.headers.get("etag");
+    expect(etag).toMatch(/^"[a-f0-9]{64}"$/);
+    expect(first.headers.get("cache-control")).toBe("private, no-cache, no-transform");
+    expect(first.headers.get("vary")).toBe("Authorization, X-AgentCall-Org, X-AgentCall-Handle");
+    const firstBytes = await first.text();
+    const digest = new Uint8Array(await crypto.subtle.digest("SHA-256", new TextEncoder().encode(firstBytes)));
+    expect(etag).toBe(`"${[...digest].map((byte) => byte.toString(16).padStart(2, "0")).join("")}"`);
+
+    for (const ifNoneMatch of [etag!, `W/${etag}`, `W/"other,tag", W/${etag}`, "*"]) {
+      const unchanged = await SELF.fetch("https://relay.test/v1/audit/events", {
+        headers: { ...headers, "If-None-Match": ifNoneMatch },
+      });
+      expect(unchanged.status).toBe(304);
+      expect(unchanged.headers.get("etag")).toBe(etag);
+      expect(unchanged.headers.get("cache-control")).toBe("private, no-cache, no-transform");
+      expect(await unchanged.text()).toBe("");
+    }
+
+    const mismatch = await SELF.fetch("https://relay.test/v1/audit/events", {
+      headers: { ...headers, "If-None-Match": '"not-current"' },
+    });
+    expect(mismatch.status).toBe(200);
+    expect(mismatch.headers.get("etag")).toBe(etag);
+    expect(await mismatch.text()).toBe(firstBytes);
+
+    // A wildcard mixed into a list is invalid, not a wildcard precondition.
+    const invalidWildcardList = await SELF.fetch("https://relay.test/v1/audit/events", {
+      headers: { ...headers, "If-None-Match": `*, ${etag}` },
+    });
+    expect(invalidWildcardList.status).toBe(200);
+    const invalidObsTextWhitespace = await SELF.fetch("https://relay.test/v1/audit/events", {
+      headers: { ...headers, "If-None-Match": "\u00a0*" },
+    });
+    expect(invalidObsTextWhitespace.status).toBe(200);
+
+    await seedOrgEvent(org, 2_000, "second");
+    const changed = await SELF.fetch("https://relay.test/v1/audit/events", {
+      headers: { ...headers, "If-None-Match": etag! },
+    });
+    expect(changed.status).toBe(200);
+    const changedEtag = changed.headers.get("etag");
+    expect(changedEtag).not.toBe(etag);
+    expect(await changed.text()).not.toBe(firstBytes);
+
+    const changedFilter = await SELF.fetch("https://relay.test/v1/audit/events?event=roster.create", {
+      headers: { ...headers, "If-None-Match": changedEtag! },
+    });
+    expect(changedFilter.status).toBe(200);
+    expect(changedFilter.headers.get("etag")).not.toBe(changedEtag);
+
+    const crossTenant = await SELF.fetch("https://relay.test/v1/audit/events", {
+      headers: { ...wsAuth("etag-admin", token, "another-org"), "If-None-Match": etag! },
+    });
+    expect(crossTenant.status).toBe(401);
+  });
+
   it("exports both ledgers in a stable tenant-scoped snapshot", async () => {
     const token = await registerHandle("audit-admin", "claude", "audit-org", "admin");
     await seedOrgEvent("audit-org", 1_000, "invite-a");
@@ -146,7 +210,7 @@ describe("organization audit export", () => {
 
     const response = await SELF.fetch(
       `https://relay.test/v1/audit/events?page_size=1&before=3000&page_token=${encodeURIComponent(page.next_page_token)}`,
-      { headers: wsAuth("gap-admin", token, "gap-org") },
+      { headers: { ...wsAuth("gap-admin", token, "gap-org"), "If-None-Match": first.headers.get("etag")! } },
     );
     expect(response.status).toBe(409);
     expect(await response.json()).toEqual({ error: "audit snapshot changed; restart export" });
