@@ -146,11 +146,15 @@ review; **D** is competitive parity; **E** is positioning.
       semantically the same object. Conforming buys interop cheaply and avoids competing
       in the standards game — which is Cotal's fight against Google's A2A, and the
       hardest game in infra.
-- [ ] **Reconcile GTM sequencing with the differentiator.** The demand doc sequences
+- [x] **Reconcile GTM sequencing with the differentiator.** The demand doc sequences
       non-EU, non-unionised 100–500 person orgs first. Our sharpest differentiator —
       "we don't ingest your employees' data" — is worth most to exactly the EU-exposed
       and regulated buyers that sequencing defers. One of the two should move.
-      Confidence: **medium**; this is an inference from two docs, not new research.
+      **Resolved 2026-08-03:** keep the initial segment, lead with measured senior-time
+      recovery, and narrow the differentiator to no retained central call-content
+      corpus or indexing of connected employee systems. The absolute ingestion line
+      is not accurate for the hosted relay. See the
+      [GTM sequencing decision](../superpowers/specs/2026-08-03-gtm-sequencing-design.md).
 
 ---
 

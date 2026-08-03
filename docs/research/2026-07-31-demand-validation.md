@@ -11,6 +11,13 @@ actual state of enterprise agent adoption, and what stops deals?
 > firewall” sentence. The open position is narrower: governed, person-scoped delegation
 > to the callee's own agent, with caller-specific pre-prompt policy and audit evidence.
 > See [the MCP positioning decision](../superpowers/specs/2026-08-02-mcp-positioning-design.md).
+>
+> **Amended 2026-08-03.** “We do not ingest employee data” below is too broad. The
+> relay processes plaintext calls and centrally retains metadata and authored card
+> content. The accepted claim is that AgentCall does not retain a central corpus of
+> call prompts/replies or index connected mail, chat, and documents into a persistent
+> twin. The initial non-EU beachhead remains. See the
+> [GTM sequencing decision](../superpowers/specs/2026-08-03-gtm-sequencing-design.md).
 
 ---
 

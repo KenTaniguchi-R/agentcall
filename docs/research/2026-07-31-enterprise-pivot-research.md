@@ -5,6 +5,12 @@
 **Companion doc:** [2026-07-31-agent-coordination-landscape.md](./2026-07-31-agent-coordination-landscape.md)
 (broad market map). This doc covers the enterprise in-network pivot specifically.
 
+> **Amended 2026-08-03.** The “we don't ingest your data” line below is too broad.
+> The hosted relay processes plaintext calls and persists metadata plus authored card
+> content. The accepted distinction is no retained central corpus of call content and
+> no indexing of connected mail, chat, and documents into a persistent employee twin.
+> See the [GTM sequencing decision](../superpowers/specs/2026-08-03-gtm-sequencing-design.md).
+
 ---
 
 ## The proposed direction
