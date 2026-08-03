@@ -3,7 +3,10 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { registerHandle, getStatus, fetchCard, pushCard, rotateToken, createInvite, listInvites, revokeInvite,
   createRoster, joinRoster, fetchAuditExportPage,
   fetchRosterBundle, issueRosterJoinKey, listRosterJoinKeys, revokeRosterJoinKey } from "../src/api.js";
-import { generateIdentityKeys, type StoredKeys } from "../src/keys.js";
+import {
+  generateIdentityKeys, loadKeys, loadPendingEncryptionPublication, rotateEncryptionKey,
+  type StoredKeys,
+} from "../src/keys.js";
 import { fetchKeys, publishEncryptionKey, publishIdentityKey } from "../src/api.js";
 import { getLinePaths, getMachinePaths } from "../src/paths.js";
 import { mkdtempSync, rmSync } from "node:fs";
@@ -441,6 +444,15 @@ async function importIdentityPrivateKeyForTest(pkcs8B64url: string): Promise<Cry
   );
 }
 
+async function previousTranscriptHash(record: EncryptionKeyRecordType): Promise<string> {
+  const digest = await crypto.subtle.digest(
+    "SHA-256", encryptionKeyTranscript(record) as BufferSource,
+  );
+  return Array.from(new Uint8Array(digest).slice(0, 16))
+    .map((byte) => byte.toString(16).padStart(2, "0"))
+    .join("");
+}
+
 async function buildValidKeysResponse(
   keys: StoredKeys, address: string,
 ): Promise<{ identity: IdentityRecordType; encryption: { record: EncryptionKeyRecordType; signature: string } }> {
@@ -513,7 +525,7 @@ describe("key publication", () => {
         return new Response(JSON.stringify({ ok: true }), { status: 200 });
       }));
 
-      await publishEncryptionKey("https://relay.test", auth, keys, "relay.test", 1_754_000_000_000);
+      await publishEncryptionKey("https://relay.test", auth, linePaths(home), "relay.test", 1_754_000_000_000);
 
       const body = JSON.parse(seen!) as { record: EncryptionKeyRecordType; signature: string };
       expect(body.record.epoch).toBe(keys.epoch);
@@ -528,6 +540,183 @@ describe("key publication", () => {
         encryptionKeyTranscript(body.record),
         body.signature,
       )).toBe(true);
+    } finally {
+      vi.unstubAllGlobals();
+      rmSync(home, { recursive: true, force: true });
+    }
+  });
+
+  it("chains three locally rotated encryption-key transcripts", async () => {
+    const home = mkdtempSync(join(tmpdir(), "agentcall-api-chain-"));
+    try {
+      const paths = linePaths(home);
+      let keys = await generateIdentityKeys(paths);
+      const publications: Array<{ record: EncryptionKeyRecordType; signature: string }> = [];
+      const requests: Array<{ url: string; method: string | undefined }> = [];
+      vi.stubGlobal("fetch", vi.fn(async (url: string, init: RequestInit) => {
+        requests.push({ url, method: init.method });
+        publications.push(JSON.parse(String(init.body)) as {
+          record: EncryptionKeyRecordType; signature: string;
+        });
+        return new Response(JSON.stringify({ ok: true }), { status: 200 });
+      }));
+
+      await publishEncryptionKey("https://relay.test", auth, paths, "relay.test", 1_754_000_000_000);
+      keys = await rotateEncryptionKey(paths);
+      await publishEncryptionKey("https://relay.test", auth, paths, "relay.test", 1_754_001_000_000);
+      keys = await rotateEncryptionKey(paths);
+      await publishEncryptionKey("https://relay.test", auth, paths, "relay.test", 1_754_002_000_000);
+
+      const records = publications.map(({ record }) => record);
+      expect(records.map((record) => record.epoch)).toEqual([1, 2, 3]);
+      expect(records[0]!.prev).toBeNull();
+      expect(records[1]!.prev).toBe(await previousTranscriptHash(records[0]!));
+      expect(records[1]!.prev).not.toBeNull();
+      expect(records[2]!.prev).toBe(await previousTranscriptHash(records[1]!));
+      const identityKey = await importIdentityPublicKey(keys.identity_pub);
+      for (const publication of publications) {
+        expect(await verifyTranscript(
+          identityKey, encryptionKeyTranscript(publication.record), publication.signature,
+        )).toBe(true);
+      }
+      expect(requests).toEqual(Array.from({ length: 3 }, () => ({
+        url: "https://relay.test/v1/keys/encryption", method: "PUT",
+      })));
+    } finally {
+      vi.unstubAllGlobals();
+      rmSync(home, { recursive: true, force: true });
+    }
+  });
+
+  it("does not make a failed publication the basis of a future rotation", async () => {
+    const home = mkdtempSync(join(tmpdir(), "agentcall-api-chain-fail-"));
+    try {
+      const paths = linePaths(home);
+      await generateIdentityKeys(paths);
+      vi.stubGlobal("fetch", vi.fn(async () => new Response("{}", { status: 503 })));
+      await expect(publishEncryptionKey(
+        "https://relay.test", auth, paths, "relay.test", 1_754_000_000_000,
+      )).rejects.toThrow(/could not publish/i);
+      await expect(rotateEncryptionKey(paths)).rejects.toThrow(/not been published/i);
+    } finally {
+      vi.unstubAllGlobals();
+      rmSync(home, { recursive: true, force: true });
+    }
+  });
+
+  it("retries the exact signed epoch after commit succeeds but the response is lost", async () => {
+    const home = mkdtempSync(join(tmpdir(), "agentcall-api-chain-retry-"));
+    try {
+      const paths = linePaths(home);
+      await generateIdentityKeys(paths);
+      const bodies: string[] = [];
+      let attempt = 0;
+      vi.stubGlobal("fetch", vi.fn(async (_url: string, init: RequestInit) => {
+        bodies.push(String(init.body));
+        if (attempt++ === 0) throw new TypeError("response lost after commit");
+        return new Response(JSON.stringify({ ok: true }), { status: 200 });
+      }));
+
+      await expect(publishEncryptionKey(
+        "https://relay.test", auth, paths, "relay.test", 1_754_000_000_000,
+      )).rejects.toMatchObject({ code: "network" });
+      expect(loadPendingEncryptionPublication(paths)).toBeDefined();
+
+      // A different `now` proves retry reuses persisted signed bytes rather
+      // than constructing a conflicting record at the same epoch.
+      await publishEncryptionKey(
+        "https://relay.test", auth, paths, "relay.test", 1_755_000_000_000,
+      );
+      expect(bodies[1]).toBe(bodies[0]);
+      expect(loadPendingEncryptionPublication(paths)).toBeDefined();
+      expect(loadKeys(paths).published_encryption_transcript_hash).toMatch(/^[0-9a-f]{32}$/);
+      expect((await rotateEncryptionKey(paths)).epoch).toBe(2);
+      expect(loadPendingEncryptionPublication(paths)).toBeUndefined();
+    } finally {
+      vi.unstubAllGlobals();
+      rmSync(home, { recursive: true, force: true });
+    }
+  });
+
+  it("serializes concurrent publishers onto the response-loss-recoverable pending body", async () => {
+    const home = mkdtempSync(join(tmpdir(), "agentcall-api-chain-concurrent-"));
+    try {
+      const paths = linePaths(home);
+      await generateIdentityKeys(paths);
+      const bodies: string[] = [];
+      let releaseBoth!: () => void;
+      const bothStarted = new Promise<void>((resolve) => { releaseBoth = resolve; });
+      let attempt = 0;
+      vi.stubGlobal("fetch", vi.fn(async (_url: string, init: RequestInit) => {
+        const thisAttempt = attempt++;
+        bodies.push(String(init.body));
+        if (bodies.length === 2) releaseBoth();
+        await bothStarted;
+        // The first request committed but its response vanished. The second
+        // exact retry is the acknowledgement that lets local state advance.
+        if (thisAttempt === 0) throw new TypeError("response lost after commit");
+        return new Response(JSON.stringify({ ok: true }), { status: 200 });
+      }));
+
+      const results = await Promise.allSettled([
+        publishEncryptionKey("https://relay.test", auth, paths, "relay.test", 1_754_000_000_000),
+        publishEncryptionKey("https://relay.test", auth, paths, "relay.test", 1_755_000_000_000),
+      ]);
+
+      expect(results.map(({ status }) => status).sort()).toEqual(["fulfilled", "rejected"]);
+      expect(bodies).toHaveLength(2);
+      expect(bodies[1]).toBe(bodies[0]);
+      const stored = loadKeys(paths);
+      expect(loadPendingEncryptionPublication(paths, stored)).toBeDefined();
+      expect(stored.published_encryption_transcript_hash).toMatch(/^[0-9a-f]{32}$/);
+      expect((await rotateEncryptionKey(paths)).epoch).toBe(2);
+      expect(loadPendingEncryptionPublication(paths)).toBeUndefined();
+    } finally {
+      vi.unstubAllGlobals();
+      rmSync(home, { recursive: true, force: true });
+    }
+  });
+
+  it("does not let a paused old publisher roll local state back after later rotations", async () => {
+    const home = mkdtempSync(join(tmpdir(), "agentcall-api-chain-paused-publisher-"));
+    try {
+      const paths = linePaths(home);
+      await generateIdentityKeys(paths);
+      let firstStarted!: () => void;
+      let releaseFirst!: () => void;
+      const started = new Promise<void>((resolve) => { firstStarted = resolve; });
+      const release = new Promise<void>((resolve) => { releaseFirst = resolve; });
+      let request = 0;
+      vi.stubGlobal("fetch", vi.fn(async () => {
+        const current = request++;
+        if (current === 0) {
+          firstStarted();
+          await release;
+        }
+        return new Response(JSON.stringify({ ok: true }), { status: 200 });
+      }));
+
+      const oldPublisher = publishEncryptionKey(
+        "https://relay.test", auth, paths, "relay.test", 1_754_000_000_000,
+      );
+      await started;
+      // An exact concurrent publisher receives the acknowledgement and records
+      // epoch 1 while the first process remains paused after its PUT.
+      await publishEncryptionKey(
+        "https://relay.test", auth, paths, "relay.test", 1_755_000_000_000,
+      );
+      const second = await rotateEncryptionKey(paths);
+      await publishEncryptionKey(
+        "https://relay.test", auth, paths, "relay.test", 1_756_000_000_000,
+      );
+      const third = await rotateEncryptionKey(paths);
+      expect(second.epoch).toBe(2);
+      expect(third.epoch).toBe(3);
+
+      releaseFirst();
+      await oldPublisher;
+      expect(loadKeys(paths).epoch).toBe(3);
+      expect(loadKeys(paths).encryption_pub).toBe(third.encryption_pub);
     } finally {
       vi.unstubAllGlobals();
       rmSync(home, { recursive: true, force: true });

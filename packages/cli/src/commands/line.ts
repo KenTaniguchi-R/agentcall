@@ -41,7 +41,7 @@ export interface AddLineOpts {
   // undefined without constructing a full card upload.
   register?: typeof registerHandle;
   publishCardFn?: (cfg: LineConfig, p: LinePaths) => Promise<unknown>;
-  publishKeysFn?: (cfg: LineConfig, keys: StoredKeys) => Promise<void>;
+  publishKeysFn?: (cfg: LineConfig, keys: StoredKeys, paths: LinePaths) => Promise<void>;
   installListenerServiceFn?: typeof installListenerService;
   // Dirs (an agent/npx binary resolved outside launchd's fixed base PATH) to
   // prepend to the listener service's PATH. Defaults to listenerPathDirs(m,
@@ -58,12 +58,13 @@ export interface AddLineOpts {
 export async function publishStoredKeys(
   line: LineConfig,
   stored: StoredKeys,
+  paths: LinePaths,
   fns: { identity?: typeof publishIdentityKey; encryption?: typeof publishEncryptionKey } = {},
 ): Promise<void> {
   const auth = { org: line.org, handle: line.handle, token: line.token };
   const canonicalHost = addressHost(line);
   await (fns.identity ?? publishIdentityKey)(line.relay, auth, stored, canonicalHost);
-  await (fns.encryption ?? publishEncryptionKey)(line.relay, auth, stored, canonicalHost);
+  await (fns.encryption ?? publishEncryptionKey)(line.relay, auth, paths, canonicalHost);
 }
 
 // A handle that is `<existing>-<something>` is guessable from an address the
@@ -141,7 +142,7 @@ export async function addLine(m: MachinePaths, opts: AddLineOpts): Promise<{ add
 
   const publishKeys = opts.publishKeysFn ?? publishStoredKeys;
   try {
-    await publishKeys(cfg, keys);
+    await publishKeys(cfg, keys, paths);
   } catch (error) {
     (opts.warn ?? console.error)(
       `Warning: keys are safely stored but could not be published (${String(error)}). ` +

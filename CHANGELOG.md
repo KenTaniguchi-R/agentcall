@@ -129,6 +129,21 @@ which are released together.
 - Gate regulated and EU expansion on shipped security, audit, retention,
   administration, runtime, residency, and worker-governance controls.
 
+### Encryption-key rotation continuity
+
+- Chain each rotated encryption-key record to the previous canonical signed
+  transcript, persist the basis only after successful publication, and refuse
+  rotation when no trustworthy local chain basis exists.
+- Make publication retries and next-epoch key rotation converge safely across
+  concurrent CLI processes using immutable epoch elections and public retirement
+  tombstones, without retaining superseded encryption private keys.
+- Record the #171 requirement that future peer-chain verification reject missing
+  key epochs rather than fetch relay-supplied history.
+- Breaking migration: reject pre-chain local key files because they cannot
+  reconstruct the exact previously published record. Preserve the old state
+  for recovery and enroll a new handle with a new invite; setup cannot replace
+  the spent handle's relay-pinned identity.
+
 ### Opt-in local OpenTelemetry
 
 - Propagate a bounded caller correlation ID across relay, listener, lifecycle

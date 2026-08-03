@@ -17,6 +17,7 @@ description: What AgentCall enforces today, and the risks operators still accept
 - Calls, outcomes, and observed tool attempts are recorded locally on the callee's machine.
 - The normal CLI refuses nested AgentCall calls from an answering process.
 - `agentcall verify <address>` validates signed encryption-key records and pins the peer identity locally; changed identities and lower epochs fail closed until an explicit `agentcall trust --reset <address>`.
+- Pre-chain local key files fail closed because they cannot reconstruct an exact safe publication retry. Preserve them for recovery and enroll a new handle with a new invite; setup cannot replace a relay-pinned identity for the old handle.
 
 ## Residual risks
 

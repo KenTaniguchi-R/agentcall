@@ -3,7 +3,7 @@ import {
   ListOrgInvitesResponse, ListRosterJoinKeysResponse, RegisterResponse, RevokeOrgInviteResponse,
   RevokeRosterJoinKeyResponse, RosterBundle,
   EncryptionKeyRecord, IdentityRecord, HPKE_SUITE, MAX_ENCRYPTION_KEY_VALIDITY_MS,
-  encryptionKeyTranscript, fromBase64Url, identityTranscript, keyIdFor, signTranscript,
+  encryptionKeyTranscript, encryptionKeyTranscriptHash, fromBase64Url, identityTranscript, keyIdFor, signTranscript,
   // AgentKind is ours: registerHandle takes it, and it is the shared type that
   // replaced the inline "claude" | "codex" unions.
   type AgentCardType, type AgentKind, type AuditExportPageType, type CardUploadType,
@@ -12,7 +12,11 @@ import {
   type RosterJoinKeyMetadataType,
   type EncryptionKeyRecordType, type IdentityRecordType,
 } from "@benree/agentcall-shared";
-import type { StoredKeys } from "./keys.js";
+import {
+  choosePendingEncryptionPublication, loadKeys, loadPendingEncryptionPublication,
+  rememberPublishedEncryptionKey, type StoredKeys,
+} from "./keys.js";
+import type { LinePaths } from "./paths.js";
 
 export class ApiError extends Error {
   constructor(
@@ -414,30 +418,54 @@ export async function publishIdentityKey(
 }
 
 export async function publishEncryptionKey(
-  relay: string, auth: Auth, keys: StoredKeys, host: string, now: number = Date.now(),
+  relay: string, auth: Auth, paths: LinePaths, host: string, now: number = Date.now(),
 ): Promise<void> {
-  const pub = keys.encryption_pub;
-  const record: EncryptionKeyRecordType = EncryptionKeyRecord.parse({
-    v: 1,
-    address: `${auth.handle}@${host}`,
-    key_id: await keyIdFor(pub),
-    suite: HPKE_SUITE,
-    pub,
-    epoch: keys.epoch,
-    not_before: now,
-    not_after: now + MAX_ENCRYPTION_KEY_VALIDITY_MS,
-    prev: null,
-  });
-  const signature = await signTranscript(
-    await importIdentityPrivateKey(keys.identity_pkcs8),
-    encryptionKeyTranscript(record),
-  );
+  let keys = loadKeys(paths);
+  let publication = loadPendingEncryptionPublication(paths, keys);
+  if (keys.published_encryption_transcript_hash) {
+    if (publication) {
+      const pendingHash = await encryptionKeyTranscriptHash(publication.record);
+      if (pendingHash !== keys.published_encryption_transcript_hash) {
+        throw new Error("The acknowledged encryption key does not match its pending publication.");
+      }
+    }
+    return;
+  }
+
+  if (!publication) {
+    const pub = keys.encryption_pub;
+    const record: EncryptionKeyRecordType = EncryptionKeyRecord.parse({
+      v: 1,
+      address: `${auth.handle}@${host}`,
+      key_id: await keyIdFor(pub),
+      suite: HPKE_SUITE,
+      pub,
+      epoch: keys.epoch,
+      not_before: now,
+      not_after: now + MAX_ENCRYPTION_KEY_VALIDITY_MS,
+      prev: keys.previous_encryption_transcript_hash,
+    });
+    const candidate = {
+      record,
+      signature: await signTranscript(
+        await importIdentityPrivateKey(keys.identity_pkcs8),
+        encryptionKeyTranscript(record),
+      ),
+    };
+    const chosen = choosePendingEncryptionPublication(paths, candidate);
+    keys = chosen.keys;
+    publication = chosen.publication;
+    if (!publication) return;
+  }
+
+  const { record } = publication;
   const res = await relayFetch(
     relay, "/v1/keys/encryption",
-    { method: "PUT", headers: { "content-type": "application/json", ...authHeaders(auth) }, body: JSON.stringify({ record, signature }) },
+    { method: "PUT", headers: { "content-type": "application/json", ...authHeaders(auth) }, body: JSON.stringify(publication) },
     RELAY_TIMEOUT_MS,
   );
   if (!res.ok) throw new ApiError(`Could not publish the encryption key (HTTP ${res.status}).`, "network");
+  rememberPublishedEncryptionKey(paths, keys, await encryptionKeyTranscriptHash(record));
 }
 
 export async function fetchKeys(

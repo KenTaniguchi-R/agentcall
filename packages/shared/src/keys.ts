@@ -48,6 +48,8 @@ export const EncryptionKeyRecord = z.object({
   message: "not_after must be after not_before",
 }).refine((r) => r.not_after - r.not_before <= MAX_ENCRYPTION_KEY_VALIDITY_MS, {
   message: "validity window must not exceed 30 days",
+}).refine((r) => (r.epoch === 1) === (r.prev === null), {
+  path: ["prev"], message: "prev must be null only on epoch 1",
 });
 export type EncryptionKeyRecordType = z.infer<typeof EncryptionKeyRecord>;
 
@@ -62,6 +64,16 @@ export function encryptionKeyTranscript(r: EncryptionKeyRecordType): Uint8Array 
     "agentcall/encryption-key/v1", r.v, r.address, r.key_id, r.suite, r.pub,
     r.epoch, r.not_before, r.not_after, r.prev,
   ]);
+}
+
+/** The `prev` chain link: first 128 bits of SHA-256 over the signed transcript. */
+export async function encryptionKeyTranscriptHash(r: EncryptionKeyRecordType): Promise<string> {
+  const digest = await crypto.subtle.digest(
+    "SHA-256", encryptionKeyTranscript(r) as BufferSource,
+  );
+  return Array.from(new Uint8Array(digest).slice(0, 16))
+    .map((byte) => byte.toString(16).padStart(2, "0"))
+    .join("");
 }
 
 /** Truncated to 128 bits: short enough to read aloud, long enough to pin. */

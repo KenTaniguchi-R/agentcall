@@ -234,6 +234,12 @@ only replacement path is `agentcall trust --reset <address>` followed by a new
 `agentcall verify`. This trust foundation does not encrypt call payloads yet;
 the relay can still read v1 messages and replies.
 
+Local key files created before encryption-key chain continuity are rejected:
+they cannot reconstruct the exact previously published record required for a
+safe retry. Preserve that state for recovery and enroll a new handle with a new
+organization invite. Do not delete it and rerun setup for the same handle—the
+relay pins the old identity key and refuses replacement.
+
 `agentcall call` prints spinner-style status to stderr (`ringing...`) and the
 reply text to stdout. Human-readable output preserves line breaks and tabs but
 neutralizes terminal control characters and Unicode bidirectional formatting

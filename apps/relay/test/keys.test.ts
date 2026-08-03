@@ -55,7 +55,7 @@ async function encRecord(who: Awaited<ReturnType<typeof newIdentity>>, epoch: nu
     epoch,
     not_before: 1_754_000_000_000,
     not_after: 1_754_000_000_000 + 86_400_000,
-    prev: null,
+    prev: epoch === 1 ? null : "a".repeat(32),
   };
   const signature = await signTranscript(who.idKp.privateKey, encryptionKeyTranscript(record));
   return { record, signature };
@@ -152,6 +152,32 @@ describe("key publication endpoints", () => {
     expect(json.identity).toEqual(who.identity);
     expect(json.encryption.record.epoch).toBe(1);
     expect(json.encryption.signature).toBe(signature);
+  });
+
+  it("accepts an exact equal-epoch retry after the original response is lost", async () => {
+    const who = await newIdentity("kp-retry");
+    await putIdentity(who);
+    const publication = await encRecord(who, 1);
+    const put = () => SELF.fetch(`https://${HOST}/v1/keys/encryption`, {
+      method: "PUT", headers: auth(who.handle, who.token), body: JSON.stringify(publication),
+    });
+    expect((await put()).status).toBe(200);
+    // Treat the first response as lost: the client sends the exact signed body
+    // again and must receive success rather than becoming permanently wedged.
+    expect((await put()).status).toBe(200);
+
+    const secondBase = await encRecord(who, 2);
+    const secondRecord = { ...secondBase.record, prev: "a".repeat(32) };
+    const second = {
+      record: secondRecord,
+      signature: await signTranscript(who.idKp.privateKey, encryptionKeyTranscript(secondRecord)),
+    };
+    expect((await SELF.fetch(`https://${HOST}/v1/keys/encryption`, {
+      method: "PUT", headers: auth(who.handle, who.token), body: JSON.stringify(second),
+    })).status).toBe(200);
+    // Idempotency applies only to the latest committed epoch. A rolled-back
+    // client cannot treat an exact old record as current after the chain moved.
+    expect((await put()).status).toBe(409);
   });
 
   it("serves the exact address that was signed", async () => {

@@ -485,7 +485,7 @@ keys
       const auth = { org: cfg.org, handle: cfg.handle, token: cfg.token };
       const relayHost = addressHost(cfg);
       await publishIdentityKey(relayUrl(cfg), auth, stored, relayHost);
-      await publishEncryptionKey(relayUrl(cfg), auth, stored, relayHost);
+      await publishEncryptionKey(relayUrl(cfg), auth, ctx.paths, relayHost);
       console.log(`Published identity and encryption key for ${cfg.handle}@${relayHost}.`);
     } catch (error) {
       console.error(error instanceof Error ? error.message : String(error));
