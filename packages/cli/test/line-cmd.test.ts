@@ -71,9 +71,10 @@ describe("addLine", () => {
     await publishStoredKeys(
       { org: "acme", handle: "ken", token: "t", relay: "https://agentcall.benree.tech" },
       keys,
+      paths,
       {
         identity: async (_relay, _auth, _keys, relayHost) => { hosts.push(relayHost); },
-        encryption: async (_relay, _auth, _keys, relayHost) => { hosts.push(relayHost); },
+        encryption: async (_relay, _auth, _paths, relayHost) => { hosts.push(relayHost); },
       },
     );
     expect(hosts).toEqual(["acme.agentcall.benree.tech", "acme.agentcall.benree.tech"]);

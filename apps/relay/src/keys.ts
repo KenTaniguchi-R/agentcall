@@ -134,7 +134,30 @@ export function mountKeys(app: Hono<{ Bindings: Env }>): void {
       r.not_before, r.not_after, r.prev, body.signature, Date.now(),
       identity.org, identity.handle, r.epoch,
     ).run();
-    if ((inserted.meta.changes ?? 0) !== 1) return c.json({ error: "epoch must advance" }, 409);
+    if ((inserted.meta.changes ?? 0) !== 1) {
+      // A client can lose the HTTP response after D1 committed. Permit only a
+      // byte-identical retry of that signed epoch; a different key/record at
+      // the same or an older epoch remains a conflict.
+      const existing = await c.env.DB.prepare(
+        "SELECT key_id, suite, pub, epoch, not_before, not_after, prev, signature " +
+          "FROM encryption_keys WHERE org = ? AND handle = ? AND epoch = ? " +
+          "AND epoch = (SELECT MAX(epoch) FROM encryption_keys WHERE org = ? AND handle = ?)",
+      ).bind(
+        identity.org, identity.handle, r.epoch, identity.org, identity.handle,
+      ).first<{
+        key_id: string; suite: string; pub: string; epoch: number;
+        not_before: number; not_after: number; prev: string | null; signature: string;
+      }>();
+      if (
+        existing && existing.key_id === r.key_id && existing.suite === r.suite &&
+        existing.pub === r.pub && existing.epoch === r.epoch &&
+        existing.not_before === r.not_before && existing.not_after === r.not_after &&
+        existing.prev === r.prev && existing.signature === body.signature
+      ) {
+        return c.json({ ok: true });
+      }
+      return c.json({ error: "epoch must advance" }, 409);
+    }
     return c.json({ ok: true });
   });
 

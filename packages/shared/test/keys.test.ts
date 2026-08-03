@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
   EncryptionKeyRecord, HPKE_SUITE, IdentityRecord,
-  encryptionKeyTranscript, fingerprint, identityTranscript,
+  encryptionKeyTranscript, encryptionKeyTranscriptHash, fingerprint, identityTranscript,
 } from "../src/keys.js";
 
 const identity = {
@@ -72,6 +72,11 @@ describe("EncryptionKeyRecord", () => {
     expect(EncryptionKeyRecord.safeParse(chained).success).toBe(true);
   });
 
+  it("requires null prev exactly for the genesis epoch", () => {
+    expect(EncryptionKeyRecord.safeParse({ ...encKey, prev: "a".repeat(32) }).success).toBe(false);
+    expect(EncryptionKeyRecord.safeParse({ ...encKey, epoch: 2, prev: null }).success).toBe(false);
+  });
+
   it("rejects a prev that is not 32 lowercase hex characters", () => {
     // A full untruncated SHA-256 (64 hex) is the most likely wrong value, since
     // that is what an implementer reading "SHA-256 of the previous record"
@@ -91,8 +96,17 @@ describe("transcripts", () => {
 
   it("changes when the encryption epoch changes", () => {
     const a = encryptionKeyTranscript(encKey);
-    const b = encryptionKeyTranscript({ ...encKey, epoch: 2 });
+    const b = encryptionKeyTranscript({ ...encKey, epoch: 2, prev: "a".repeat(32) });
     expect(Array.from(a)).not.toEqual(Array.from(b));
+  });
+
+  it("derives a stable truncated SHA-256 chain link from the canonical encryption transcript", async () => {
+    const link = await encryptionKeyTranscriptHash(encKey);
+    expect(link).toMatch(/^[0-9a-f]{32}$/);
+    expect(await encryptionKeyTranscriptHash(encKey)).toBe(link);
+    expect(await encryptionKeyTranscriptHash({
+      ...encKey, epoch: 2, prev: "a".repeat(32),
+    })).not.toBe(link);
   });
 });
 
