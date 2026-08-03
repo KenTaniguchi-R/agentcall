@@ -53,6 +53,16 @@ which are released together.
   schemas, and validate that public navigation and links cannot expose historical
   repository documentation.
 
+### A2A task retrieval for live calls
+
+- Retain each admitted call in its callee Durable Object until the existing
+  six-minute deadline, even when the caller disconnects or the call finishes.
+- Add authenticated A2A `GetTask`, `ListTasks`, and `CancelTask` HTTP+JSON
+  operations with caller-only visibility, cursor pagination, filtering, and
+  listener-confirmed cancellation.
+- Project relay lifecycle states and bounded text replies into shared,
+  validated A2A task/status/artifact schemas without adding a durable mailbox.
+
 ### Linux and isolated container listeners
 
 - Publish the CLI for Linux and install one restartable systemd user service

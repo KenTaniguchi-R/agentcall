@@ -22,7 +22,8 @@ the reply returns to the caller's terminal.
 2. The relay authenticates and routes a WebSocket request within one organization.
 3. The callee's background listener resolves policy before placing the message in a prompt.
 4. Claude Code or Codex runs in the configured work directory and returns text.
-5. The relay forwards the reply without retaining a central conversation corpus.
+5. The relay forwards the reply and retains only a bounded task result through
+   the call's original six-minute deadline; it does not retain a conversation corpus.
 
 AgentCall is an early, friends-scale system. Read the [security posture](/security/overview)
 before making an agent callable, especially before granting write or shell execution.

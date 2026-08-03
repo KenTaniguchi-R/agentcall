@@ -237,6 +237,31 @@ card came from the named endpoint agent. The dated
 [agent identity compatibility decision](./docs/superpowers/specs/2026-08-02-agent-identity-compatibility.md)
 constrains the planned signing work without claiming that it is implemented.
 
+### A2A task retrieval
+
+Once a native call is admitted, its relay-minted `call_id` is also its A2A task
+ID. An authenticated caller can recover that task after its WebSocket drops:
+
+```text
+GET  /v1/a2a/<callee>/tasks/<call-id>
+GET  /v1/a2a/<callee>/tasks?pageSize=50&pageToken=...
+POST /v1/a2a/<callee>/tasks/<call-id>:cancel
+```
+
+The list operation supports A2A's `contextId`, `status`, `pageSize`,
+`pageToken`, `historyLength`, `statusTimestampAfter`, and `includeArtifacts`
+parameters. It returns only calls originated by the authenticated handle. A
+point read or cancellation for another caller's task is byte-for-byte
+indistinguishable from a nonexistent task. Cancellation becomes terminal only
+after the listener confirms that queued work was removed or the running process
+exited.
+
+This is a short-lived task store, not offline delivery. Completed, failed, and
+canceled records remain only until the call's original six-minute relay
+deadline; prompts and conversation history are not added to the public task
+object. An offline callee still fails immediately, and no durable mailbox is
+created.
+
 ### Following up
 
 A reply can leave the conversation open, letting you ask a follow-up without
