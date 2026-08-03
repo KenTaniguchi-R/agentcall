@@ -6,7 +6,7 @@ import { addressHost, assertCallableLine, relayUrl, resolveLineWorkdir, type Lin
 import { callAgent, callStatusMessage, CallError } from "./callClient.js";
 // No rotateToken here: `rotate` goes through commands/rotate.ts's rotateLine,
 // which owns the per-line config write and calls the api helper itself.
-import { getStatus, fetchCard, createInvite, listInvites, revokeInvite, createRoster, joinRoster, leaveRoster,
+import { getStatus, fetchCard, fetchKeys, publishEncryptionKey, publishIdentityKey, createInvite, listInvites, revokeInvite, createRoster, joinRoster, leaveRoster,
   expelRosterMember, issueRosterJoinKey, listRosterJoinKeys, revokeRosterJoinKey, deleteRoster,
   fetchAuditExportPage, ApiError } from "./api.js";
 import { startAllListeners } from "./listenAll.js";
@@ -36,6 +36,8 @@ import { renderPolicyReport } from "./policy-report.js";
 import { loadLocalHistory, renderLocalHistory } from "./history.js";
 import { sanitizeTerminalOutput, stringifyTerminalSafeJson } from "@benree/agentcall-shared";
 import { getTelemetry, shutdownTelemetry, telemetrySafely } from "./telemetry.js";
+import { loadKeys } from "./keys.js";
+import { resetPeerTrust, verifyAndPinPeer } from "./known-peers.js";
 
 export function createProgram(): Command {
 const program = new Command();
@@ -423,6 +425,70 @@ program
       process.exitCode = online ? 0 : 2;
     } catch (e) {
       console.error(e instanceof ApiError ? e.message : String(e));
+      process.exitCode = 1;
+    }
+  });
+
+program
+  .command("verify")
+  .description("fetch and verify a peer's pinned identity fingerprint")
+  .argument("<address>", "contact name or handle@host to verify")
+  .option("--as <line>", "line whose relay credentials to use")
+  .action(async (address: string, o: { as?: string }) => {
+    const machine = getMachinePaths();
+    try {
+      const first = resolveAddress(machine, address);
+      if (!first.ok) throw new Error(first.error);
+      const ctx = pickOutboundLine(machine, `https://${first.host}`, { as: o.as });
+      const cfg = ctx.config;
+      const resolved = resolveAddress(machine, address, relayUrl(cfg), cfg.org);
+      if (!resolved.ok) throw new Error(resolved.error);
+      const bundle = await fetchKeys(
+        relayUrl(cfg), { org: cfg.org, handle: cfg.handle, token: cfg.token }, resolved.handle,
+      );
+      const peer = await verifyAndPinPeer(machine, `${resolved.handle}@${resolved.host}`, bundle);
+      console.log(`${peer.address}\nPinned fingerprint: ${peer.fingerprint}\nServed fingerprint: ${peer.fingerprint}`);
+    } catch (error) {
+      console.error(error instanceof Error ? error.message : String(error));
+      process.exitCode = 1;
+    }
+  });
+
+program
+  .command("trust")
+  .description("manage explicitly pinned peer identities")
+  .requiredOption("--reset <address>", "remove one pin after verifying a key change out of band")
+  .action(async (o: { reset: string }) => {
+    try {
+      const machine = getMachinePaths();
+      const resolved = resolveAddress(machine, o.reset);
+      if (!resolved.ok) throw new Error(resolved.error);
+      const address = `${resolved.handle}@${resolved.host}`;
+      await resetPeerTrust(machine, address);
+      console.log(`Removed the identity pin for ${address}. The next verified contact will establish a new pin.`);
+    } catch (error) {
+      console.error(error instanceof Error ? error.message : String(error));
+      process.exitCode = 1;
+    }
+  });
+
+const keys = program.command("keys").description("manage this line's end-to-end encryption keys");
+keys
+  .command("publish")
+  .description("publish the identity and current encryption key already stored on disk")
+  .option("--line <name>", "line whose persisted keys to publish")
+  .action(async (o: { line?: string }) => {
+    try {
+      const ctx = resolveLine(getMachinePaths(), o);
+      const cfg = ctx.config;
+      const stored = loadKeys(ctx.paths);
+      const auth = { org: cfg.org, handle: cfg.handle, token: cfg.token };
+      const relayHost = addressHost(cfg);
+      await publishIdentityKey(relayUrl(cfg), auth, stored, relayHost);
+      await publishEncryptionKey(relayUrl(cfg), auth, stored, relayHost);
+      console.log(`Published identity and encryption key for ${cfg.handle}@${relayHost}.`);
+    } catch (error) {
+      console.error(error instanceof Error ? error.message : String(error));
       process.exitCode = 1;
     }
   });

@@ -8,6 +8,7 @@ describe("getMachinePaths", () => {
     expect(m.dir).toBe("/state/.agentcall");
     expect(m.personFile).toBe("/state/.agentcall/person.json");
     expect(m.contactsFile).toBe("/state/.agentcall/contacts.json");
+    expect(m.knownPeersFile).toBe("/state/.agentcall/known_peers.json");
     expect(m.linesDir).toBe("/state/.agentcall/lines");
     expect(m.removedDir).toBe("/state/.agentcall/removed");
     expect(m.listenerLog).toBe("/state/.agentcall/listener.log");

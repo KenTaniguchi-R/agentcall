@@ -46,7 +46,7 @@ const base: LineConfig = { org: "acme", handle: "ken", token: "t", relay: R, age
 // one of addLine's own callbacks (publishCardFn, installListenerServiceFn) —
 // those pass their own wrapper built the same way.
 const fakeAddLine = (m: MachinePaths, opts: AddLineOpts) =>
-  addLine(m, { ...opts, register: stubRegister, publishCardFn: opts.publishCardFn ?? (async () => undefined) });
+  addLine(m, { ...opts, register: stubRegister, publishKeysFn: async () => {}, publishCardFn: opts.publishCardFn ?? (async () => undefined) });
 
 // addLine derives extraPathDirs (listenerPathDirs, see listenerPath.ts) eagerly
 // as an argument expression, so it runs even when installListenerServiceFn is a
@@ -312,7 +312,7 @@ describe("runSetup", () => {
     await run({
       handle: "ken", agent: "claude", relay: R, snippet: false, verify: false, skipService: true,
       addLineFn: (m2, opts) =>
-        addLine(m2, { ...opts, register: stubRegister, publishCardFn: async (cfg) => { cardCalls.push(cfg); } }),
+        addLine(m2, { ...opts, register: stubRegister, publishKeysFn: async () => {}, publishCardFn: async (cfg) => { cardCalls.push(cfg); } }),
     });
     const lp = getLinePaths(m, "claude");
     expect(existsSync(lp.tasksDir)).toBe(true);

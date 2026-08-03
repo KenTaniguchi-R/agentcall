@@ -197,7 +197,18 @@ agentcall call ken@acme.agentcall.benree.tech "what's the weather doing over the
 
 # Machine-readable reply (for your own agent to parse)
 agentcall call ken@acme.agentcall.benree.tech "..." --json
+
+# Pin the peer's identity and compare this fingerprint out of band
+agentcall verify ken@acme.agentcall.benree.tech
 ```
+
+`agentcall verify` validates the peer's signed encryption-key record and pins
+the identity key in `~/.agentcall/known_peers.json` (directory `0700`, file
+`0600`). A later identity change or lower encryption-key epoch fails closed.
+After confirming a legitimate identity change through another channel, the
+only replacement path is `agentcall trust --reset <address>` followed by a new
+`agentcall verify`. This trust foundation does not encrypt call payloads yet;
+the relay can still read v1 messages and replies.
 
 `agentcall call` prints spinner-style status to stderr (`ringing...`) and the
 reply text to stdout. Human-readable output preserves line breaks and tabs but
