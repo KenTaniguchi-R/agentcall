@@ -52,6 +52,9 @@ which are released together.
   if retention removes a checkpointed row mid-export.
 - Preserve the granted role as structured audit evidence on invite issue,
   redemption, and revocation events.
+- Retain tenant-scoped call submission and terminal lifecycle evidence without
+  prompt/reply bodies, using an idempotent Durable Object outbox so call truth
+  and retryable audit intent commit atomically across temporary D1 failures.
 
 ### Experimental customer-owned Cloudflare relay
 

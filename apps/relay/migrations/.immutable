@@ -11,3 +11,4 @@
 0011_telemetry_health.sql
 0012_key_publication.sql
 0013_org_roles.sql
+0014_call_audit_events.sql

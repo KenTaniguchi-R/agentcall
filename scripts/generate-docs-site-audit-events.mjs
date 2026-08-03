@@ -15,13 +15,13 @@ const lines = [
   "",
   "The availability date is when the event contract entered the repository migration history. A particular self-hosted deployment may lag until it applies that migration.",
   "",
-  "| Event | Ledger | Action | Actor types | Target | Source IP | Available since | Migration |",
-  "| --- | --- | --- | --- | --- | --- | --- | --- |",
+  "| Event | Ledger | Action | Actor types | Target | Collection | Source IP | Available since | Migration |",
+  "| --- | --- | --- | --- | --- | --- | --- | --- | --- |",
 ];
 
 for (const entry of AUDIT_EVENT_CATALOG) {
   lines.push(
-    `| \`${entry.event}\` | ${entry.ledger} | \`${entry.action}\` | ${entry.actors.map((actor) => `\`${actor}\``).join(", ")} | \`${entry.target}\` | nullable request metadata | ${entry.available_since} | \`${entry.migration}\` |`,
+    `| \`${entry.event}\` | ${entry.ledger} | \`${entry.action}\` | ${entry.actors.map((actor) => `\`${actor}\``).join(", ")} | \`${entry.target}\` | ${entry.collection === "synchronous_d1_batch" ? "synchronous D1 batch" : "durable outbox"} | nullable request metadata | ${entry.available_since} | \`${entry.migration}\` |`,
   );
 }
 
@@ -29,9 +29,11 @@ lines.push(
   "",
   "## Collection and export lag",
   "",
-  "There is no asynchronous application ingestion queue. Each listed event is inserted in the same awaited D1 batch as its successful security mutation. Once the relay returns that mutation's success response, the event is committed and eligible for a newly started audit export.",
+  "Organization-invite and roster events are inserted in the same awaited D1 batch as their successful security mutation. Once the relay returns that mutation's success response, those events are committed and eligible for a newly started audit export.",
   "",
-  "That is a read-after-success eligibility contract, not a wall-clock response-time or delivery SLA. Network latency, D1 availability, export rate limits, and client retries can still delay when an administrator receives the bytes. Failed or no-op mutations do not create success evidence.",
+  "Call events cross the Durable Object/D1 boundary through an idempotent transactional outbox. The call-state update and outbox intent commit atomically in the callee's Durable Object; the relay awaits a D1 delivery attempt before publishing the transition to the caller. If D1 is unavailable, call truth still progresses and the durable intent retries by alarm. Consequently, call evidence is normally export-eligible before the caller observes the transition, but the contract during D1 failure is eventual delivery rather than a wall-clock maximum.",
+  "",
+  "These are eligibility contracts, not response-time or delivery SLAs. Network latency, D1 availability, export rate limits, and client retries can delay when an administrator receives bytes. Failed/no-op administration mutations and duplicate/out-of-order call frames do not create success evidence.",
   "",
   "Source IP and country are captured from Cloudflare request metadata when available; both fields are nullable. Actor type records the credential class that authorized the mutation and does not imply that every handle is a stable human principal.",
   "",
@@ -46,7 +48,7 @@ lines.push(
   "",
   "## Evidence boundary",
   "",
-  "The catalog is exhaustive for the two currently exported durable ledgers. It does **not** claim durable call, task execution, tool use, presence/access, delegation-chain, secret-scan, policy-decision, or administrator-login evidence. Endpoint `calls.log` and `tools.log` remain local files and are not part of this tenant export.",
+  "The catalog is exhaustive for the two currently exported durable ledgers. Call evidence covers submission plus accepted/completed/failed/canceled/timed-out lifecycle outcomes and deliberately excludes prompt and response bodies. It does **not** claim durable task execution detail, tool use, presence/access, delegation-chain, secret-scan, policy-decision, or administrator-login evidence. Endpoint `calls.log` and `tools.log` remain local files and are not part of this tenant export.",
   "",
   "Sampled traces, metrics, Workers logs, and the identity-unlinked `agentcall_status_reads` Analytics Engine dataset are observability, not a complete audit ledger. They cannot prove that an individual action occurred or did not occur and are not merged into this export.",
   "",

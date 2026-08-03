@@ -11,7 +11,7 @@ certification or a promise that deletion is available.
 | Ledger | Current application retention | Deletion and export |
 |---|---|---|
 | `roster_events` | Indefinite, including after roster deletion. The 10,000-event audit budget suppresses member-driven join/leave churn after exhaustion; administrator and system security events remain appendable, so it is not a row-count ceiling. | No customer or application deletion path. Included in the supported administrator export. |
-| `org_events` | Newest 10,000 events per organization. Every audited organization-invite mutation atomically trims older rows, but there is no time-based window. | No customer deletion path. Included in the supported administrator export; rows removed by the rolling cap are not archived by the application. |
+| `org_events` | Newest 10,000 events per organization. Audited invite mutations trim in their D1 batch; call-lifecycle events trim when their idempotent Durable Object outbox reaches D1. There is no time-based window. | No customer deletion path. Included in the supported administrator export; rows removed by the rolling cap are not archived by the application. |
 
 Both tables contain actor and target identifiers, source IP/country, event
 descriptions, and timestamps. They can therefore contain personal data and

@@ -1,4 +1,5 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
+import { env, SELF } from "cloudflare:test";
 import { MAX_DETAIL_LENGTH, RELAY_CALL_TIMEOUT_MS, RATE_LIMIT_PER_HOUR } from "@benree/agentcall-shared";
 import { registerHandle, wsAuth, openWs, nextFrame, closed } from "./helpers.js";
 import { clampTimeoutMs, truncateUtf8Bytes } from "../src/do.js";
@@ -50,6 +51,142 @@ describe("call flow", () => {
     expect((await closed(caller)).code).toBe(1000);
   });
 
+  it("exports tenant-scoped call lifecycle evidence without call content", async () => {
+    const org = "call-audit-org";
+    const calleeToken = await registerHandle("audit-callee", "claude", org);
+    const callerToken = await registerHandle("audit-caller", "claude", org);
+    const listener = await openWs("/v1/ws?role=listen", {
+      ...wsAuth("audit-callee", calleeToken, org),
+      "cf-connecting-ip": "203.0.113.20",
+    });
+    const caller = await openWs("/v1/ws?role=call&to=audit-callee", {
+      ...wsAuth("audit-caller", callerToken, org),
+      "cf-connecting-ip": "203.0.113.10",
+    });
+    caller.send(JSON.stringify({
+      type: "call_request", to: "audit-callee", message: "TOP-SECRET-PROMPT",
+    }));
+    const ringing = await nextFrame(caller);
+    const incoming = await nextFrame(listener);
+    listener.send(JSON.stringify({ type: "call_accepted", call_id: incoming.call_id }));
+    await nextFrame(caller);
+    listener.send(JSON.stringify({
+      type: "call_result", call_id: incoming.call_id, text: "TOP-SECRET-RESPONSE",
+    }));
+    await nextFrame(caller);
+
+    const { results } = await env.DB.prepare(
+      "SELECT event, actor, actor_type, target_type, target_id, actor_ip, actor_country, description " +
+        "FROM org_events WHERE org = ? AND target_id = ? ORDER BY id",
+    ).bind(org, ringing.call_id).all();
+    expect(results).toEqual([
+      expect.objectContaining({
+        event: "call.submit", actor: "audit-caller", actor_type: "handle",
+        target_type: "call", target_id: ringing.call_id, actor_ip: "203.0.113.10",
+      }),
+      expect.objectContaining({
+        event: "call.accept", actor: "audit-callee", actor_type: "handle",
+        target_type: "call", target_id: ringing.call_id, actor_ip: "203.0.113.20",
+      }),
+      expect.objectContaining({
+        event: "call.complete", actor: "audit-callee", actor_type: "handle",
+        target_type: "call", target_id: ringing.call_id, actor_ip: "203.0.113.20",
+      }),
+    ]);
+    expect(JSON.stringify(results)).not.toContain("TOP-SECRET-PROMPT");
+    expect(JSON.stringify(results)).not.toContain("TOP-SECRET-RESPONSE");
+
+    const otherOrg = "call-audit-other";
+    const otherToken = await registerHandle("other-admin", "claude", otherOrg);
+    const exported = await SELF.fetch("https://relay.test/v1/audit/events?event=call.submit", {
+      headers: wsAuth("other-admin", otherToken, otherOrg),
+    });
+    expect(exported.status).toBe(200);
+    expect((await exported.json<{ events: unknown[] }>()).events).toEqual([]);
+  });
+
+  it("keeps call truth live and retries its durable outbox after D1 recovers", async () => {
+    const org = "call-audit-retry";
+    const calleeToken = await registerHandle("retry-callee", "claude", org);
+    const callerToken = await registerHandle("retry-caller", "claude", org);
+    const listener = await openWs("/v1/ws?role=listen", wsAuth("retry-callee", calleeToken, org));
+    await env.DB.exec(
+      "CREATE TRIGGER fail_retry_call_audit BEFORE INSERT ON org_events " +
+        "WHEN NEW.org = 'call-audit-retry' BEGIN SELECT RAISE(FAIL, 'forced audit outage'); END",
+    );
+    const error = vi.spyOn(console, "error").mockImplementation(() => undefined);
+    try {
+      const caller = await openWs(
+        "/v1/ws?role=call&to=retry-callee",
+        wsAuth("retry-caller", callerToken, org),
+      );
+      caller.send(JSON.stringify({ type: "call_request", to: "retry-callee", message: "retry" }));
+      const ringing = await nextFrame(caller);
+      const incoming = await nextFrame(listener);
+      expect(ringing).toMatchObject({ type: "call_status", state: "ringing" });
+      expect(error).toHaveBeenCalledWith("call audit delivery failure", expect.any(Object));
+
+      await env.DB.exec("DROP TRIGGER fail_retry_call_audit");
+      let delivered: { event: string } | null = null;
+      for (let attempt = 0; attempt < 40 && !delivered; attempt++) {
+        await new Promise((resolve) => setTimeout(resolve, 50));
+        delivered = await env.DB.prepare(
+          "SELECT event FROM org_events WHERE target_id = ? AND event = 'call.submit'",
+        ).bind(ringing.call_id).first<{ event: string }>();
+      }
+      expect(delivered).toEqual({ event: "call.submit" });
+
+      listener.send(JSON.stringify({ type: "call_result", call_id: incoming.call_id, text: "done" }));
+      expect(await nextFrame(caller)).toMatchObject({ type: "call_reply", text: "done" });
+    } finally {
+      error.mockRestore();
+      await env.DB.exec("DROP TRIGGER IF EXISTS fail_retry_call_audit");
+    }
+  }, 10_000);
+
+  it("drains an audit backlog across D1-budget-safe alarm batches", async () => {
+    const org = "call-audit-backlog";
+    const callee = "backlog-callee";
+    const callerHandle = "backlog-caller";
+    const calleeToken = await registerHandle(callee, "claude", org);
+    const callerToken = await registerHandle(callerHandle, "claude", org);
+    const listener = await openWs("/v1/ws?role=listen", wsAuth(callee, calleeToken, org));
+    await env.DB.exec(
+      "CREATE TRIGGER fail_backlog_call_audit BEFORE INSERT ON org_events " +
+        "WHEN NEW.org = 'call-audit-backlog' BEGIN SELECT RAISE(FAIL, 'forced audit backlog'); END",
+    );
+    const error = vi.spyOn(console, "error").mockImplementation(() => undefined);
+    try {
+      for (let index = 0; index < 13; index++) {
+        const caller = await openWs(
+          `/v1/ws?role=call&to=${callee}`,
+          wsAuth(callerHandle, callerToken, org),
+        );
+        caller.send(JSON.stringify({ type: "call_request", to: callee, message: `call ${index}` }));
+        await nextFrame(caller);
+        const incoming = await nextFrame(listener);
+        listener.send(JSON.stringify({ type: "call_result", call_id: incoming.call_id, text: "done" }));
+        await nextFrame(caller);
+      }
+      await env.DB.exec("DROP TRIGGER fail_backlog_call_audit");
+
+      let count = 0;
+      for (let attempt = 0; attempt < 80 && count < 26; attempt++) {
+        await new Promise((resolve) => setTimeout(resolve, 50));
+        count = Number((await env.DB.prepare(
+          "SELECT COUNT(*) AS n FROM org_events WHERE org = ? AND event LIKE 'call.%'",
+        ).bind(org).first<{ n: number }>())?.n ?? 0);
+      }
+      expect(count).toBe(26);
+      expect(await env.DB.prepare(
+        "SELECT COUNT(DISTINCT event_key) AS n FROM org_events WHERE org = ? AND event LIKE 'call.%'",
+      ).bind(org).first()).toEqual({ n: 26 });
+    } finally {
+      error.mockRestore();
+      await env.DB.exec("DROP TRIGGER IF EXISTS fail_backlog_call_audit");
+    }
+  }, 10_000);
+
   it("ignores invalid optional trace context and still delivers the call", async () => {
     const { callerToken, listener } = await setupPair("trace-callee", "trace-caller");
     const caller = await openWs("/v1/ws?role=call&to=trace-callee", wsAuth("trace-caller", callerToken));
@@ -91,6 +228,9 @@ describe("call flow", () => {
     listener.send(JSON.stringify({ type: "call_started", call_id: incoming.call_id }));
     listener.send(JSON.stringify({ type: "call_result", call_id: incoming.call_id, text: "done" }));
     expect(await nextFrame(caller)).toMatchObject({ type: "call_reply", text: "done" });
+    expect(await env.DB.prepare(
+      "SELECT COUNT(*) AS n FROM org_events WHERE target_id = ? AND event = 'call.accept'",
+    ).bind(incoming.call_id).first()).toEqual({ n: 1 });
   });
 
   it("terminates the caller with canceled after the listener confirms cancellation", async () => {
@@ -103,6 +243,9 @@ describe("call flow", () => {
     listener.send(JSON.stringify({ type: "call_cancelled", call_id: incoming.call_id, phase: "running" }));
     expect(await nextFrame(caller)).toMatchObject({ type: "call_error", code: "canceled" });
     expect((await closed(caller)).code).toBe(1000);
+    expect(await env.DB.prepare(
+      "SELECT event, actor FROM org_events WHERE target_id = ? AND event = 'call.cancel'",
+    ).bind(incoming.call_id).first()).toEqual({ event: "call.cancel", actor: "cancel-callee" });
   });
 
   it("keeps the call live when the listener cannot confirm cancellation", async () => {
@@ -133,6 +276,11 @@ describe("call flow", () => {
     const incoming = await nextFrame(listener);
     listener.send(JSON.stringify({ type: "call_failed", call_id: incoming.call_id, code: "busy" }));
     expect(await nextFrame(caller)).toMatchObject({ type: "call_error", code: "busy" });
+    expect(await env.DB.prepare(
+      "SELECT event, actor, target_id FROM org_events WHERE org = ? AND target_id = ? AND event = ?",
+    ).bind("acme", incoming.call_id, "call.fail").first()).toEqual({
+      event: "call.fail", actor: "f-callee", target_id: incoming.call_id,
+    });
   });
 
   // `detail` is peer-controlled free-form text the CLI puts in front of a
@@ -195,8 +343,30 @@ describe("call flow", () => {
     const { callerToken } = await setupPair("to-callee", "to-caller");
     const caller = await openWs("/v1/ws?role=call&to=to-callee&test_timeout_ms=100", wsAuth("to-caller", callerToken));
     caller.send(JSON.stringify({ type: "call_request", to: "to-callee", message: "hello?" }));
-    await nextFrame(caller); // ringing
+    const ringing = await nextFrame(caller);
     expect(await nextFrame(caller, 10_000)).toMatchObject({ type: "call_error", code: "timeout" });
+    expect(await env.DB.prepare(
+      "SELECT event, actor, actor_type FROM org_events WHERE target_id = ? AND event = 'call.timeout'",
+    ).bind(ringing.call_id).first()).toEqual({
+      event: "call.timeout", actor: "relay", actor_type: "system",
+    });
+  });
+
+  it("does not misreport terminal-record retention cleanup as a timeout", async () => {
+    const { callerToken, listener } = await setupPair("done-callee", "done-caller");
+    const caller = await openWs(
+      "/v1/ws?role=call&to=done-callee&test_timeout_ms=100",
+      wsAuth("done-caller", callerToken),
+    );
+    caller.send(JSON.stringify({ type: "call_request", to: "done-callee", message: "finish" }));
+    const ringing = await nextFrame(caller);
+    const incoming = await nextFrame(listener);
+    listener.send(JSON.stringify({ type: "call_result", call_id: incoming.call_id, text: "done" }));
+    await nextFrame(caller);
+    await new Promise((resolve) => setTimeout(resolve, 150));
+    expect(await env.DB.prepare(
+      "SELECT COUNT(*) AS n FROM org_events WHERE target_id = ? AND event = 'call.timeout'",
+    ).bind(ringing.call_id).first()).toEqual({ n: 0 });
   });
 
   it("rejects a second call_request on the same socket", async () => {

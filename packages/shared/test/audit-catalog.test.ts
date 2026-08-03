@@ -2,12 +2,12 @@ import { readFileSync } from "node:fs";
 import { describe, expect, it } from "vitest";
 import { AUDIT_EVENT_CATALOG } from "../src/audit-catalog.js";
 
-const relaySources = ["roster.ts", "invites.ts", "index.ts"].map((file) =>
+const relaySources = ["roster.ts", "invites.ts", "index.ts", "do.ts"].map((file) =>
   readFileSync(new URL(`../../../apps/relay/src/${file}`, import.meta.url), "utf8"));
 
 describe("durable audit event catalog", () => {
   it("exactly matches every durable event literal emitted by relay mutations", () => {
-    const emitted = relaySources.flatMap((source) => [...source.matchAll(/event:\s*"((?:org|roster)\.[a-z_.]+)"/g)]
+    const emitted = relaySources.flatMap((source) => [...source.matchAll(/(?:event:\s*|callAuditIntent\()"((?:org|roster|call)\.[a-z_.]+)"/g)]
       .map((match) => match[1]!));
     expect([...new Set(emitted)].sort()).toEqual(AUDIT_EVENT_CATALOG.map((entry) => entry.event).sort());
   });
@@ -19,6 +19,7 @@ describe("durable audit event catalog", () => {
       expect(entry.migration).toMatch(/^\d{4}_[a-z0-9_]+\.sql$/);
       expect(entry.source_ip).toBe("nullable_request_metadata");
       expect(entry.source_country).toBe("nullable_request_metadata");
+      expect(["synchronous_d1_batch", "durable_object_outbox"]).toContain(entry.collection);
       expect(entry.actors.length).toBeGreaterThan(0);
       expect(entry.description.length).toBeGreaterThan(0);
     }
@@ -39,6 +40,9 @@ describe("durable audit event catalog", () => {
         "org.invite.issue", "org.invite.redeem", "org.invite.revoke",
       ],
       "0010_roster_audit_budget_recovery.sql": ["roster.audit_budget_reset"],
+      "0014_call_audit_events.sql": [
+        "call.accept", "call.cancel", "call.complete", "call.fail", "call.submit", "call.timeout",
+      ],
     });
   });
 });
