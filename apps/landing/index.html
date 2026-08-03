@@ -1,50 +1,1293 @@
-<!doctype html>
+<!DOCTYPE html>
 <html lang="en">
-  <head>
-    <meta charset="UTF-8" />
-    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <meta name="description" content="AgentCall landing page" />
-    <title>AgentCall</title>
-    <style>
-      html {
-        color-scheme: light dark;
-      }
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>AgentCall — a permissioned phone line between coworkers' coding agents</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Playfair+Display:ital,wght@0,500;0,600;0,700;1,500;1,600&family=Inter:wght@300;400;500;600&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
+<style>
+:root{
+  --sky-grad:
+    radial-gradient(58% 42% at 3% 93%, rgba(236,165,168,.80) 0%, rgba(171,93,116,.55) 38%, rgba(120,70,110,0) 72%),
+    radial-gradient(46% 52% at 99% 66%, rgba(244,180,168,.88) 0%, rgba(198,144,170,.60) 40%, rgba(140,110,170,0) 74%),
+    radial-gradient(66% 40% at 1% 44%, rgba(150,120,192,.72) 0%, rgba(113,94,164,.35) 45%, rgba(80,80,150,0) 74%),
+    radial-gradient(58% 48% at 100% 10%, rgba(120,152,214,.55) 0%, rgba(70,100,180,0) 66%),
+    radial-gradient(84% 42% at 46% 102%, rgba(10,28,88,.92) 0%, rgba(18,40,110,.35) 48%, rgba(20,50,130,0) 74%),
+    linear-gradient(158deg, #0D2C75 0%, #123F97 28%, #1254B3 50%, #2C4C9F 72%, #2A2E72 100%);
+  --ink:#0B0B0D;
+  --ink-2:#4A4A52;
+  --ink-3:#8C8C95;
+  --paper:#FAF9F7;
+  --paper-2:#F3F2EF;
+  --white:#FFFFFF;
+  --line:rgba(11,11,13,.11);
+  --line-soft:rgba(11,11,13,.06);
+  --blue:#1B6FE0;
+  --blue-ink:#0F4DA8;
+  --navy:#050C1E;
+  --navy-2:#0A1730;
+  --green:#2E7D5B;
+  --amber:#9A6B14;
+  --red:#A83A32;
+  --display:"Playfair Display","Times New Roman",Times,Georgia,serif;
+  --sans:"Inter",-apple-system,BlinkMacSystemFont,"Segoe UI",Helvetica,Arial,sans-serif;
+  --mono:"JetBrains Mono",ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;
+  --wrap:1180px;
+  --pad:clamp(20px,5vw,56px);
+}
 
-      body {
-        display: grid;
-        min-height: 100vh;
-        margin: 0;
-        place-items: center;
-        font-family: sans-serif;
-      }
+*{box-sizing:border-box}
+html{scroll-behavior:smooth}
+body{
+  margin:0;background:var(--paper);color:var(--ink);
+  font-family:var(--sans);font-size:16px;line-height:1.65;font-weight:400;
+  -webkit-font-smoothing:antialiased;
+}
+a{color:inherit;text-decoration:none}
+:focus-visible{outline:2px solid var(--blue);outline-offset:3px;border-radius:2px}
 
-      main {
-        width: min(90vw, 64rem);
-        padding: 4rem 0;
-        text-align: center;
-      }
+.wrap{max-width:var(--wrap);margin:0 auto;padding:0 var(--pad)}
+.mono{font-family:var(--mono)}
 
-      h1 {
-        font-size: clamp(2rem, 8vw, 5rem);
-      }
+/* ---------- type ---------- */
+h1,h2,h3{font-family:var(--display);font-weight:600;margin:0;letter-spacing:-.015em}
+h1{font-size:clamp(2.6rem,6.4vw,5.2rem);line-height:1.02}
+h2{font-size:clamp(2rem,4.3vw,3.4rem);line-height:1.06}
+h3{font-size:1.06rem;line-height:1.3;letter-spacing:-.005em}
+h1 em,h2 em{font-style:italic;font-weight:500}
+p{margin:0}
 
-      img {
-        display: block;
-        width: 100%;
-        height: auto;
-        margin-top: 2rem;
+.eyebrow{
+  font-family:var(--mono);font-size:.665rem;letter-spacing:.22em;text-transform:uppercase;
+  color:var(--ink-3);display:inline-flex;align-items:center;gap:.6em;margin-bottom:1.1rem;
+}
+.eyebrow::before{content:"";width:5px;height:5px;border-radius:50%;background:var(--blue)}
+.lede{
+  margin-top:1.1rem;max-width:56ch;color:var(--ink-2);font-size:1.02rem;line-height:1.72;font-weight:300;
+}
+.sec-head{margin-bottom:clamp(2.4rem,5vw,3.6rem)}
+
+/* ---------- nav ---------- */
+.nav{
+  position:fixed;inset:0 0 auto 0;z-index:60;height:66px;display:flex;align-items:center;
+  transition:background .35s ease,border-color .35s ease,backdrop-filter .35s ease;
+  border-bottom:1px solid transparent;
+}
+.nav .wrap{display:flex;align-items:center;gap:2rem;width:100%}
+.brand{display:flex;align-items:center;gap:.6rem;font-weight:600;letter-spacing:-.01em;font-size:.95rem}
+.brand-mark{
+  width:22px;height:22px;border-radius:5px;border:1px solid currentColor;display:grid;place-items:center;
+  font-family:var(--mono);font-size:.6rem;opacity:.9;
+}
+.nav-links{display:flex;gap:1.6rem;margin-left:auto;font-size:.85rem;color:inherit;opacity:.78}
+.nav-links a{transition:opacity .2s}
+.nav-links a:hover{opacity:.55}
+.nav-right{display:flex;align-items:center;gap:1.1rem;margin-left:auto}
+.nav-gh{font-family:var(--mono);font-size:.76rem;letter-spacing:.04em;opacity:.8}
+.nav .btn-sm{
+  padding:.44rem 1rem;border-radius:999px;font-size:.8rem;font-weight:500;
+  background:var(--white);color:var(--ink);transition:transform .2s,box-shadow .2s;
+}
+.nav .btn-sm:hover{transform:translateY(-1px);box-shadow:0 6px 18px rgba(0,0,0,.16)}
+.nav.over-hero{color:#fff}
+.nav.pinned{
+  background:rgba(250,249,247,.9);backdrop-filter:saturate(180%) blur(14px);
+  border-bottom-color:var(--line);color:var(--ink);
+}
+.nav.pinned .btn-sm{background:var(--ink);color:var(--paper)}
+@media(max-width:860px){.nav-links{display:none}}
+
+/* ---------- hero ---------- */
+.hero{
+  position:relative;isolation:isolate;overflow:hidden;
+  padding:clamp(8rem,17vw,11.5rem) 0 0;color:#fff;text-align:center;
+}
+.hero-sky{
+  position:absolute;inset:0;z-index:-3;overflow:hidden;
+  background:var(--sky-grad);
+  transform:scale(1.06);
+}
+.hero-sky img{
+  position:absolute;inset:0;width:100%;height:100%;
+  object-fit:cover;object-position:50% 56%;display:block;
+}
+.hero-veil{
+  position:absolute;inset:0;z-index:-2;
+  background:
+    radial-gradient(105% 62% at 50% 26%, rgba(2,8,26,.52) 0%, rgba(2,8,26,.20) 62%, rgba(2,8,26,0) 100%),
+    linear-gradient(180deg, rgba(3,10,30,.46) 0%, rgba(3,12,36,.06) 26%, rgba(3,12,36,.06) 52%, rgba(3,9,26,.72) 88%, rgba(4,10,28,.92) 100%);
+}
+.hero-grain{
+  position:absolute;inset:0;z-index:-1;opacity:.16;pointer-events:none;
+  background-image:radial-gradient(rgba(255,255,255,.5) .5px, transparent .5px);
+  background-size:3px 3px;mix-blend-mode:overlay;
+}
+.hero .eyebrow{
+  color:rgba(255,255,255,.82);border:1px solid rgba(255,255,255,.24);
+  border-radius:999px;padding:.42rem 1rem;background:rgba(255,255,255,.07);
+  backdrop-filter:blur(6px);letter-spacing:.16em;
+}
+.hero .eyebrow::before{background:#8FC0FF;box-shadow:0 0 10px #8FC0FF}
+.hero h1{
+  max-width:15ch;margin:1.4rem auto 0;
+  text-shadow:0 2px 40px rgba(0,10,30,.5);
+}
+.hero-sub{
+  max-width:60ch;margin:1.5rem auto 0;color:rgba(255,255,255,.84);
+  font-weight:300;font-size:1.03rem;line-height:1.72;
+}
+.hero-cta{display:flex;flex-wrap:wrap;gap:.7rem;justify-content:center;margin-top:2.2rem}
+.btn{
+  display:inline-flex;align-items:center;gap:.5rem;padding:.78rem 1.5rem;border-radius:999px;
+  font-size:.9rem;font-weight:500;transition:transform .2s ease,box-shadow .2s ease,background .2s ease;
+}
+.btn-primary{background:#fff;color:var(--ink)}
+.btn-ghost{background:rgba(255,255,255,.13);color:#fff;border:1px solid rgba(255,255,255,.26);backdrop-filter:blur(6px)}
+.btn:hover{transform:translateY(-2px);box-shadow:0 10px 30px rgba(0,0,0,.28)}
+.hero-ticks{
+  display:flex;flex-wrap:wrap;gap:1.4rem;justify-content:center;margin-top:1.7rem;
+  font-family:var(--mono);font-size:.7rem;letter-spacing:.1em;color:rgba(255,255,255,.6);
+}
+.hero-ticks span::before{content:"✓ ";color:#8FC0FF}
+
+/* ---------- terminal ---------- */
+.term-shell{margin:clamp(3rem,7vw,4.5rem) auto 0;max-width:1050px;padding:0 var(--pad)}
+.term{
+  border-radius:12px;overflow:hidden;text-align:left;
+  background:#0A0C11;border:1px solid rgba(255,255,255,.13);
+  box-shadow:0 40px 90px -28px rgba(0,6,25,.9);
+}
+.term-bar{
+  display:flex;align-items:center;gap:.5rem;padding:.6rem .9rem;
+  border-bottom:1px solid rgba(255,255,255,.08);background:#12141A;
+}
+.dot{width:9px;height:9px;border-radius:50%;background:rgba(255,255,255,.2)}
+.term-title{
+  flex:1;text-align:center;font-family:var(--mono);font-size:.63rem;letter-spacing:.2em;
+  color:rgba(255,255,255,.38);
+}
+.term-replay{
+  font-family:var(--mono);font-size:.63rem;letter-spacing:.1em;color:rgba(255,255,255,.5);
+  background:none;border:1px solid rgba(255,255,255,.16);border-radius:5px;padding:.24rem .6rem;
+  cursor:pointer;transition:all .2s;
+}
+.term-replay:hover{color:#fff;border-color:rgba(255,255,255,.4)}
+.term-body{display:grid;grid-template-columns:1fr 372px}
+
+.pane{min-width:0;display:flex;flex-direction:column}
+.pane-listener{border-left:1px solid rgba(255,255,255,.08);background:#07090D}
+.pane-listener .pane-out{font-size:.685rem;letter-spacing:-.01em}
+.pane-h{
+  display:flex;justify-content:space-between;align-items:center;gap:.6rem;
+  padding:.55rem .95rem;border-bottom:1px solid rgba(255,255,255,.07);
+  font-family:var(--mono);font-size:.6rem;letter-spacing:.13em;color:rgba(255,255,255,.42);
+  text-transform:uppercase;
+}
+.pane-tag{
+  font-size:.55rem;letter-spacing:.12em;padding:.14rem .42rem;border-radius:3px;
+  background:rgba(255,255,255,.07);color:rgba(255,255,255,.45);
+}
+.pane-tag.on{background:rgba(76,155,255,.16);color:#8FC0FF}
+.pane-tag.on::before{content:"● "}
+
+.pane-out{
+  height:330px;overflow-y:auto;padding:.9rem 1rem;
+  font-family:var(--mono);font-size:.735rem;line-height:1.7;color:rgba(255,255,255,.72);
+  white-space:pre-wrap;word-break:break-word;scrollbar-width:thin;
+  scrollbar-color:rgba(255,255,255,.18) transparent;
+}
+.pane-out::-webkit-scrollbar{width:8px}
+.pane-out::-webkit-scrollbar-thumb{background:rgba(255,255,255,.14);border-radius:8px}
+.pane-out .ln{display:block}
+.pane-out .cmd{color:#fff}
+.pane-out .ps{color:#4C9BFF}
+.pane-out .dim{color:rgba(255,255,255,.36)}
+.pane-out .ok{color:#6FCF97}
+.pane-out .warn{color:#E4B363}
+.pane-out .bad{color:#E8836B}
+.pane-out .blue{color:#8FC0FF}
+.pane-out .reply{color:rgba(255,255,255,.92)}
+.pane-out .sp{height:.55rem;display:block}
+.caret{
+  display:inline-block;width:7px;height:1em;background:#4C9BFF;vertical-align:-2px;
+  animation:blink 1.05s steps(1) infinite;
+}
+@keyframes blink{0%,50%{opacity:1}50.01%,100%{opacity:0}}
+
+.term-input{
+  display:flex;align-items:center;gap:.55rem;padding:.65rem 1rem;
+  border-top:1px solid rgba(255,255,255,.08);background:rgba(255,255,255,.02);
+}
+.term-input .ps1{font-family:var(--mono);font-size:.8rem;color:#4C9BFF}
+.term-input input{
+  flex:1;background:none;border:none;outline:none;color:#fff;
+  font-family:var(--mono);font-size:.78rem;padding:0;min-width:0;
+}
+.term-input input::placeholder{color:rgba(255,255,255,.28)}
+.term-input input:disabled{color:rgba(255,255,255,.5)}
+
+.term-chips{
+  display:flex;flex-wrap:wrap;gap:.4rem;padding:.75rem 1rem;
+  border-top:1px solid rgba(255,255,255,.08);background:#0D1016;
+}
+.chip{
+  font-family:var(--mono);font-size:.68rem;color:rgba(255,255,255,.6);cursor:pointer;
+  background:rgba(255,255,255,.05);border:1px solid rgba(255,255,255,.11);
+  border-radius:999px;padding:.28rem .7rem;transition:all .18s;
+}
+.chip:hover{background:rgba(76,155,255,.16);border-color:rgba(76,155,255,.4);color:#cfe3ff}
+
+@media(max-width:940px){
+  .term-body{grid-template-columns:1fr}
+  .pane-listener{border-left:none;border-top:1px solid rgba(255,255,255,.08)}
+  .pane-out{height:250px;font-size:.7rem}
+}
+@media(prefers-reduced-motion:reduce){.caret{animation:none}}
+.term-cap{
+  max-width:66ch;margin:1.4rem auto 0;padding:0 var(--pad) clamp(3.5rem,8vw,5.5rem);
+  font-size:.82rem;line-height:1.7;font-weight:300;color:rgba(255,255,255,.5);text-align:center;
+}
+
+/* ---------- spec bar ---------- */
+.specs{
+  background:var(--white);border-top:1px solid var(--line);border-bottom:1px solid var(--line);
+  display:grid;grid-template-columns:repeat(5,1fr);
+}
+.spec{padding:1.35rem var(--pad);border-right:1px solid var(--line-soft)}
+.spec:last-child{border-right:none}
+.spec dt{font-family:var(--mono);font-size:.58rem;letter-spacing:.2em;color:var(--ink-3);text-transform:uppercase}
+.spec dd{margin:.4rem 0 0;font-family:var(--mono);font-size:.82rem;color:var(--ink)}
+@media(max-width:900px){.specs{grid-template-columns:repeat(2,1fr)}.spec{border-bottom:1px solid var(--line-soft)}}
+@media(max-width:520px){.specs{grid-template-columns:1fr}}
+
+/* ---------- sticky section tabs ---------- */
+.tabs{position:sticky;top:0;z-index:40;background:var(--paper);border-bottom:1px solid var(--line)}
+.tabs-in{display:grid;grid-template-columns:repeat(4,1fr);gap:.5rem;padding:.85rem 0}
+.tab{
+  display:flex;gap:.6rem;align-items:center;padding:.55rem .85rem;border-radius:6px;
+  border:1px solid var(--line);font-family:var(--mono);font-size:.63rem;letter-spacing:.18em;
+  color:var(--ink-3);text-transform:uppercase;transition:all .25s ease;
+}
+.tab:hover{border-color:rgba(11,11,13,.3);color:var(--ink)}
+.tab.active{background:var(--ink);border-color:var(--ink);color:var(--paper)}
+.tab i{font-style:normal;opacity:.5}
+@media(max-width:760px){.tabs-in{grid-template-columns:repeat(2,1fr)}}
+
+/* ---------- sections ---------- */
+section{padding:clamp(4.5rem,10vw,8rem) 0}
+.band-white{background:var(--white);border-top:1px solid var(--line);border-bottom:1px solid var(--line)}
+.band-paper{background:var(--paper-2)}
+
+/* cards */
+.grid{display:grid;gap:1px;background:var(--line);border:1px solid var(--line)}
+.g3{grid-template-columns:repeat(3,1fr)}
+.g2{grid-template-columns:repeat(2,1fr)}
+.card{background:var(--white);padding:1.6rem 1.5rem}
+.band-white .card{background:var(--paper)}
+.card h3{margin-bottom:.7rem}
+.card p{font-size:.88rem;color:var(--ink-2);line-height:1.68;font-weight:300}
+.card .k{font-family:var(--mono);font-size:.75rem;color:var(--blue-ink);margin-top:.9rem;display:block;word-break:break-word}
+.card ul{margin:.4rem 0 0;padding:0;list-style:none}
+.card li{
+  font-size:.85rem;color:var(--ink-2);font-weight:300;line-height:1.6;padding-left:1rem;position:relative;margin-bottom:.5rem;
+}
+.card li::before{content:"";position:absolute;left:0;top:.62em;width:4px;height:4px;background:var(--blue);opacity:.6}
+.card code,li code,p code{font-family:var(--mono);font-size:.8em;background:rgba(27,111,224,.08);color:var(--blue-ink);padding:.1em .3em;border-radius:3px}
+@media(max-width:880px){.g3{grid-template-columns:1fr}.g2{grid-template-columns:1fr}}
+
+/* address anatomy */
+.addr{border:1px solid var(--line);background:var(--white);padding:clamp(1.6rem,4vw,2.4rem)}
+.addr-str{font-family:var(--mono);font-size:clamp(1.05rem,3.2vw,1.7rem);letter-spacing:-.02em;margin-bottom:1.8rem}
+.addr-str .h{color:var(--blue);border-bottom:2px solid var(--blue);padding-bottom:2px}
+.addr-str .o{color:var(--amber);border-bottom:2px solid var(--amber);padding-bottom:2px}
+.addr-str .r{color:var(--ink-3)}
+.addr-defs{display:grid;grid-template-columns:repeat(3,1fr);gap:1.6rem}
+.addr-defs dt{font-family:var(--mono);font-size:.6rem;letter-spacing:.2em;color:var(--ink);margin-bottom:.5rem}
+.addr-defs dd{margin:0;font-size:.85rem;color:var(--ink-2);font-weight:300;line-height:1.65}
+@media(max-width:760px){.addr-defs{grid-template-columns:1fr}}
+
+/* callout */
+.callout{border-left:2px solid var(--amber);padding:1.1rem 1.3rem;background:rgba(154,107,20,.05);margin-top:1.6rem;max-width:74ch}
+.callout.blue{border-left-color:var(--blue);background:rgba(27,111,224,.05)}
+.callout h4{
+  margin:0 0 .5rem;font-family:var(--mono);font-size:.63rem;letter-spacing:.18em;text-transform:uppercase;color:var(--amber);font-weight:500;
+}
+.callout.blue h4{color:var(--blue-ink);font-family:var(--display);font-size:1rem;letter-spacing:-.01em;text-transform:none;font-weight:600}
+.callout p{font-size:.87rem;color:var(--ink-2);font-weight:300;line-height:1.7}
+
+/* wire sequence */
+.wire{border:1px solid var(--line);background:var(--white)}
+.wire-row{display:grid;grid-template-columns:44px 148px 1fr;gap:1rem;padding:1rem 1.3rem;border-bottom:1px solid var(--line-soft)}
+.wire-row:last-child{border-bottom:none}
+.wire-row .n{font-family:var(--mono);font-size:.68rem;color:var(--ink-3)}
+.wire-row .lane{font-family:var(--mono);font-size:.63rem;letter-spacing:.11em;color:var(--ink-3);line-height:1.5}
+.wire-row .f{font-family:var(--mono);font-size:.82rem;color:var(--ink);display:block;margin-bottom:.25rem}
+.wire-row .d{font-size:.85rem;color:var(--ink-2);font-weight:300;line-height:1.6}
+@media(max-width:760px){.wire-row{grid-template-columns:36px 1fr;gap:.6rem}.wire-row .lane{grid-column:2}}
+
+/* limits strip */
+.limits{display:grid;grid-template-columns:repeat(5,1fr);border:1px solid var(--line);background:var(--white);margin-top:1.6rem}
+.limit{padding:1.3rem 1.2rem;border-right:1px solid var(--line-soft)}
+.limit:last-child{border-right:none}
+.limit dt{font-family:var(--mono);font-size:.56rem;letter-spacing:.2em;color:var(--ink-3);text-transform:uppercase}
+.limit dd{margin:.45rem 0 0;font-family:var(--mono);font-size:.85rem}
+@media(max-width:900px){.limits{grid-template-columns:repeat(2,1fr)}.limit{border-bottom:1px solid var(--line-soft)}}
+@media(max-width:480px){.limits{grid-template-columns:1fr}}
+
+/* lens layout */
+.lens{display:grid;grid-template-columns:300px 1fr;gap:clamp(2rem,5vw,4rem);margin-bottom:clamp(3.5rem,8vw,6rem)}
+.lens:last-child{margin-bottom:0}
+.lens-tag{
+  display:inline-block;font-family:var(--mono);font-size:.6rem;letter-spacing:.18em;text-transform:uppercase;
+  border:1px solid var(--line);padding:.35rem .7rem;margin-bottom:1.1rem;color:var(--ink-2);
+}
+.lens-aside h3{font-family:var(--display);font-size:clamp(1.5rem,2.6vw,2rem);line-height:1.12;margin-bottom:1rem}
+.lens-aside p{font-size:.9rem;color:var(--ink-2);font-weight:300;line-height:1.72;margin-bottom:.9rem}
+@media(max-width:900px){.lens{grid-template-columns:1fr}}
+
+/* layers */
+.layer{
+  display:grid;grid-template-columns:250px 1fr;gap:1.4rem;padding:1.4rem 1.5rem;
+  border:1px solid var(--line);border-left-width:3px;background:var(--white);margin-bottom:.55rem;
+}
+.layer:nth-child(1){border-left-color:var(--amber)}
+.layer:nth-child(2){border-left-color:var(--blue)}
+.layer:nth-child(3){border-left-color:var(--green)}
+.layer:nth-child(4){border-left-color:var(--red)}
+.layer h3{font-size:1.02rem;margin-bottom:.45rem}
+.layer .path{font-family:var(--mono);font-size:.7rem;color:var(--ink-3);word-break:break-all;line-height:1.5}
+.layer p{font-size:.87rem;color:var(--ink-2);font-weight:300;line-height:1.7}
+@media(max-width:760px){.layer{grid-template-columns:1fr;gap:.7rem}}
+
+/* security table */
+.tbl{width:100%;border-collapse:collapse;border:1px solid var(--line);background:var(--white);text-align:left}
+.tbl th{
+  font-family:var(--mono);font-size:.58rem;letter-spacing:.18em;text-transform:uppercase;color:var(--ink-3);
+  font-weight:400;padding:.9rem 1.1rem;border-bottom:1px solid var(--line);vertical-align:bottom;
+}
+.tbl td{padding:1rem 1.1rem;border-bottom:1px solid var(--line-soft);vertical-align:top;font-size:.84rem;color:var(--ink-2);font-weight:300;line-height:1.6}
+.tbl tr:last-child td{border-bottom:none}
+.tbl .surf b{display:block;color:var(--ink);font-weight:500;font-size:.88rem;margin-bottom:.2rem}
+.tbl .surf span{font-family:var(--mono);font-size:.7rem;color:var(--ink-3)}
+.tag{
+  display:block;width:max-content;font-family:var(--mono);font-size:.58rem;letter-spacing:.11em;padding:.18rem .45rem;
+  border-radius:3px;margin-bottom:.5rem;
+}
+.tag.ok{background:rgba(46,125,91,.12);color:var(--green)}
+.tag.warn{background:rgba(154,107,20,.13);color:var(--amber)}
+.tag.bad{background:rgba(168,58,50,.11);color:var(--red)}
+.tbl-scroll{overflow-x:auto;-webkit-overflow-scrolling:touch}
+@media(max-width:820px){.tbl{min-width:720px}}
+
+/* status */
+.status{display:grid;grid-template-columns:repeat(3,1fr);gap:clamp(1.6rem,4vw,3rem)}
+.status h3{font-family:var(--display);font-size:1.15rem;padding-bottom:.6rem;border-bottom:2px solid;margin-bottom:1.1rem}
+.status .ok h3{color:var(--green);border-color:var(--green)}
+.status .mid h3{color:var(--amber);border-color:var(--amber)}
+.status .no h3{color:var(--red);border-color:var(--red)}
+.status ul{list-style:none;margin:0;padding:0}
+.status li{position:relative;padding-left:1rem;margin-bottom:.75rem;font-size:.86rem;color:var(--ink-2);font-weight:300;line-height:1.6}
+.status li::before{content:"";position:absolute;left:0;top:.58em;width:5px;height:5px}
+.status .ok li::before{background:var(--green)}
+.status .mid li::before{background:var(--amber)}
+.status .no li::before{background:var(--red)}
+.status li b{color:var(--ink);font-weight:500}
+.status li .iss{font-family:var(--mono);font-size:.7rem;color:var(--ink-3)}
+@media(max-width:880px){.status{grid-template-columns:1fr}}
+
+.note{margin-top:3rem;font-size:.82rem;color:var(--ink-3);font-weight:300;max-width:62ch;line-height:1.7}
+
+/* ---------- closing CTA ---------- */
+.close{
+  position:relative;isolation:isolate;overflow:hidden;color:#fff;text-align:center;
+  padding:clamp(5.5rem,12vw,9rem) 0;
+}
+.close-sky{
+  position:absolute;inset:0;z-index:-3;background:var(--sky-grad);
+  transform:scale(1.14) rotate(180deg);filter:saturate(.8);
+}
+.close-veil{
+  position:absolute;inset:0;z-index:-2;
+  background:
+    radial-gradient(90% 70% at 50% 40%, rgba(10,35,90,.55) 0%, rgba(4,10,28,.94) 62%, #030711 100%);
+}
+.ghost{
+  position:absolute;left:50%;top:50%;transform:translate(-50%,-50%);z-index:-1;
+  font-family:var(--display);font-size:clamp(7rem,21vw,17rem);color:rgba(255,255,255,.045);
+  white-space:nowrap;letter-spacing:-.04em;pointer-events:none;user-select:none;
+}
+.close .eyebrow{color:rgba(255,255,255,.6)}
+.close .eyebrow::before{background:#8FC0FF}
+.close h2{max-width:16ch;margin:0 auto}
+.close p{margin-top:1.2rem;color:rgba(255,255,255,.72);font-weight:300}
+.close .hero-cta{margin-top:2.2rem}
+
+/* ---------- footer ---------- */
+footer{background:var(--paper);padding:clamp(3rem,6vw,4.5rem) 0 2rem;border-top:1px solid var(--line)}
+.foot{display:grid;grid-template-columns:1.6fr repeat(3,1fr);gap:2rem}
+.foot p{font-size:.84rem;color:var(--ink-2);font-weight:300;max-width:34ch;margin-top:1rem;line-height:1.7}
+.foot h4{font-family:var(--mono);font-size:.58rem;letter-spacing:.2em;text-transform:uppercase;color:var(--ink-3);margin:0 0 1rem;font-weight:400}
+.foot ul{list-style:none;margin:0;padding:0}
+.foot li{margin-bottom:.55rem}
+.foot li a{font-size:.86rem;color:var(--ink-2);transition:color .2s}
+.foot li a:hover{color:var(--ink)}
+.foot-base{
+  display:flex;justify-content:space-between;gap:1rem;flex-wrap:wrap;margin-top:3rem;padding-top:1.4rem;
+  border-top:1px solid var(--line);font-family:var(--mono);font-size:.63rem;letter-spacing:.06em;color:var(--ink-3);
+}
+@media(max-width:880px){.foot{grid-template-columns:1fr 1fr}}
+@media(max-width:520px){.foot{grid-template-columns:1fr}}
+
+/* ---------- motion ---------- */
+.rise{opacity:0;transform:translateY(18px);transition:opacity .7s cubic-bezier(.2,.7,.3,1),transform .7s cubic-bezier(.2,.7,.3,1)}
+.rise.in{opacity:1;transform:none}
+@media(prefers-reduced-motion:reduce){
+  html{scroll-behavior:auto}
+  .rise{opacity:1;transform:none;transition:none}
+  .btn:hover{transform:none}
+}
+</style>
+</head>
+<body>
+
+<nav class="nav over-hero" id="nav">
+  <div class="wrap">
+    <a class="brand" href="#top"><span class="brand-mark">⌁</span> agentcall</a>
+    <div class="nav-links">
+      <a href="#identity">Product</a>
+      <a href="#callpath">Architecture</a>
+      <a href="#security">Security</a>
+      <a href="#status">Status</a>
+      <a href="#repo">Docs</a>
+    </div>
+    <div class="nav-right">
+      <a class="nav-gh" href="#">GitHub ↗</a>
+      <a class="btn-sm" href="#close">Get started</a>
+    </div>
+  </div>
+</nav>
+
+<header class="hero" id="top">
+  <div class="hero-sky" aria-hidden="true"><img alt="" src="assets/hero-sky.webp" width="1000" height="666" decoding="async" fetchpriority="high"></div>
+  <div class="hero-veil"></div>
+  <div class="hero-grain"></div>
+  <div class="wrap">
+    <span class="eyebrow mono">Architecture brief v0.4.0 · monorepo overview</span>
+    <h1>Your agents should know who to <em>call</em>.</h1>
+    <p class="hero-sub">AgentCall turns coworkers' coding agents into a connected team. Ask for context, recover decisions, and resolve blockers directly — under permissions you and IT control.</p>
+    <div class="hero-cta">
+      <a class="btn btn-primary" href="#close">Get started</a>
+      <a class="btn btn-ghost" href="#">View on GitHub</a>
+      <a class="btn btn-ghost" href="#callpath">Read the architecture</a>
+    </div>
+    <div class="hero-ticks">
+      <span>Works with Claude Code</span><span>Codex</span><span>Invite-only enrollment</span>
+    </div>
+  </div>
+
+  <div class="term-shell">
+    <div class="term" id="term">
+      <div class="term-bar">
+        <span class="dot"></span><span class="dot"></span><span class="dot"></span>
+        <span class="term-title">AGENTCALL — TRY A CALL</span>
+        <button class="term-replay" id="replay" type="button">↻ replay</button>
+      </div>
+      <div class="term-body">
+        <div class="pane">
+          <div class="pane-h"><span>alex's Mac — the CLI</span><span class="pane-tag">caller</span></div>
+          <div class="pane-out" id="out" tabindex="0" role="log" aria-label="Caller terminal output"></div>
+          <div class="term-input">
+            <span class="ps1">$</span>
+            <label for="cmd" class="sr-only" style="position:absolute;width:1px;height:1px;overflow:hidden;clip:rect(0 0 0 0)">Terminal command</label>
+            <input id="cmd" autocomplete="off" autocapitalize="off" spellcheck="false" placeholder="type a command — or pick one below">
+          </div>
+        </div>
+        <div class="pane pane-listener">
+          <div class="pane-h"><span>ken's Mac — agentcall listen</span><span class="pane-tag on">connected</span></div>
+          <div class="pane-out" id="log" role="log" aria-label="Listener log"></div>
+        </div>
+      </div>
+      <div class="term-chips" id="chips"></div>
+    </div>
+  </div>
+  <p class="term-cap">Left is the whole product surface — a CLI. Right is what your call does on the other person's machine: the task is resolved from the verified caller handle before their message enters any prompt, then every tool call is checked as it runs.</p>
+</header>
+
+<dl class="specs">
+  <div class="spec"><dt>Caller</dt><dd>Any enrolled handle</dd></div>
+  <div class="spec"><dt>Transport</dt><dd>Cloudflare Worker + DO</dd></div>
+  <div class="spec"><dt>Callee</dt><dd>macOS LaunchAgent</dd></div>
+  <div class="spec"><dt>Answers with</dt><dd>claude -p / codex exec</dd></div>
+  <div class="spec"><dt>Enrollment</dt><dd>Invite only</dd></div>
+</dl>
+
+<div class="tabs">
+  <div class="wrap">
+    <div class="tabs-in">
+      <a class="tab" href="#identity" data-tab="identity"><i>01</i> Identity</a>
+      <a class="tab" href="#callpath" data-tab="callpath"><i>02</i> Call path</a>
+      <a class="tab" href="#control" data-tab="control"><i>03</i> Control</a>
+      <a class="tab" href="#security" data-tab="security"><i>04</i> Security</a>
+    </div>
+  </div>
+</div>
+
+<!-- 01 IDENTITY -->
+<section id="identity">
+  <div class="wrap">
+    <div class="sec-head rise">
+      <span class="eyebrow">Identity</span>
+      <h2>An address is a routing label, not a secret.</h2>
+      <p class="lede">Handles are unique inside an organization, not globally. Acme and Beta can both have a <code>ken</code>. Everything the relay stores — auth, cards, presence, calls, rosters, Durable Object state — is keyed by organization plus handle.</p>
+    </div>
+
+    <div class="addr rise">
+      <div class="addr-str"><span class="h">ken</span>@<span class="o">acme</span>.<span class="r">agentcall.benree.tech</span></div>
+      <dl class="addr-defs">
+        <div><dt>Handle</dt><dd>The person. Chosen at setup, unique within the org, and currently permanent — there's no release or reclaim yet.</dd></div>
+        <div><dt>Organization</dt><dd>The reachability boundary. Any authenticated member can call any registered member; cross-org routing is rejected.</dd></div>
+        <div><dt>Relay host</dt><dd>Which relay serves that org. A self-hosted relay uses its own hostname instead.</dd></div>
+      </dl>
+    </div>
+
+    <div class="callout rise">
+      <h4>Read this as a limit, not a feature</h4>
+      <p>Because the org is the boundary, treat every colleague as able to reach your agent, and grant tasks accordingly. Rosters scope discovery, presence, and policy — they do not gate whether a call gets delivered.</p>
+    </div>
+  </div>
+</section>
+
+<!-- 02 CALL PATH -->
+<section id="callpath" class="band-white">
+  <div class="wrap">
+    <div class="sec-head rise">
+      <span class="eyebrow">The call path</span>
+      <h2>Three machines. One socket each.</h2>
+      <p class="lede">Nothing is polled. The callee holds an open socket to the relay, so a call arrives the instant it's placed and six minutes is the hard ceiling on an answer.</p>
+    </div>
+
+    <div class="grid g3 rise">
+      <div class="card">
+        <span class="eyebrow" style="margin-bottom:.6rem">Caller's Mac</span>
+        <h3>Your agent, or you</h3>
+        <ul>
+          <li><code>agentcall call ken "…"</code></li>
+          <li>Resolves saved contacts</li>
+          <li>Prints the reply to stdout, status to stderr</li>
+          <li>Neutralizes terminal escapes from the remote agent</li>
+        </ul>
+      </div>
+      <div class="card">
+        <span class="eyebrow" style="margin-bottom:.6rem">Cloudflare</span>
+        <h3>The relay</h3>
+        <ul>
+          <li>Hono Worker — auth, register, cards, rosters</li>
+          <li><code>HandleDO</code> — one Durable Object per handle, holds both sockets</li>
+          <li>D1 — handles, invites, cards, rosters, audit events</li>
+          <li>Attests shared rosters; the caller can't claim them</li>
+        </ul>
+      </div>
+      <div class="card">
+        <span class="eyebrow" style="margin-bottom:.6rem">Callee's Mac</span>
+        <h3>The listener</h3>
+        <ul>
+          <li><code>agentcall listen</code> as a LaunchAgent</li>
+          <li>Resolves policy → task → capability envelope</li>
+          <li>Spawns a fresh one-shot agent in the task's workdir</li>
+          <li>Appends every call to <code>~/.agentcall/calls.log</code></li>
+        </ul>
+      </div>
+    </div>
+
+    <h3 class="rise" style="margin:3rem 0 1.2rem;font-size:1.4rem">Wire sequence</h3>
+    <div class="wire rise">
+      <div class="wire-row"><span class="n">01</span><span class="lane">CALLER →<br>RELAY</span><span><b class="f">call_request</b><span class="d">Handle, message, and optionally a task id or a conversation id to continue.</span></span></div>
+      <div class="wire-row"><span class="n">02</span><span class="lane">RELAY →<br>CALLER</span><span><b class="f">call_status ringing</b><span class="d">Rate limit and 64 KB size check pass; a call record is written with a deadline.</span></span></div>
+      <div class="wire-row"><span class="n">03</span><span class="lane">RELAY →<br>LISTENER</span><span><b class="f">incoming_call</b><span class="d">Carries the verified caller handle plus the roster ids the relay itself observed both sides sharing.</span></span></div>
+      <div class="wire-row"><span class="n">04</span><span class="lane">LISTENER →<br>RELAY</span><span><b class="f">call_accepted</b><span class="d">Policy resolved, task chosen, the job is owned. Refusals stop here and never spawn anything.</span></span></div>
+      <div class="wire-row"><span class="n">05</span><span class="lane">LISTENER →<br>RELAY</span><span><b class="f">call_started</b><span class="d">The agent process is up, scoped to the task's tools and working directory.</span></span></div>
+      <div class="wire-row"><span class="n">06</span><span class="lane">LISTENER →<br>RELAY</span><span><b class="f">call_result</b><span class="d">Reply text, truncated at 256 KB, plus a conversation id if the task allows a follow-up.</span></span></div>
+      <div class="wire-row"><span class="n">07</span><span class="lane">RELAY →<br>CALLER</span><span><b class="f">call_reply</b><span class="d">Printed to stdout. The socket closes; the relay deletes the call record.</span></span></div>
+    </div>
+
+    <div class="callout rise">
+      <h4>Known gap in this diagram</h4>
+      <p>The listener already sends <code>call_accepted</code> then <code>call_started</code>, but the relay still only understands the older single <code>call_answer</code> frame. So the caller-facing "answered" status is dark today — you see <code>ringing</code>, then the reply. Switching the relay over is outstanding work, not a mystery.</p>
+    </div>
+
+    <dl class="limits rise">
+      <div class="limit"><dt>Agent kill timer</dt><dd>5 min</dd></div>
+      <div class="limit"><dt>Relay hard deadline</dt><dd>6 min</dd></div>
+      <div class="limit"><dt>Concurrency</dt><dd>1 running · 0 queued</dd></div>
+      <div class="limit"><dt>Rate limit</dt><dd>30 / hour</dd></div>
+      <div class="limit"><dt>Payload</dt><dd>64 KB in · 256 KB out</dd></div>
+    </dl>
+  </div>
+</section>
+
+<!-- REPOSITORY -->
+<section id="repo">
+  <div class="wrap">
+    <div class="sec-head rise">
+      <span class="eyebrow">Repository</span>
+      <h2>Three packages. One source of truth.</h2>
+      <p class="lede">A pnpm workspace in TypeScript and ESM. Both sides of every call agree on shapes defined once in Zod, in <code>packages/shared</code> — the relay and the CLI import them rather than redeclaring them.</p>
+    </div>
+    <div class="grid g3 rise">
+      <div class="card">
+        <h3 class="mono">packages/shared</h3>
+        <p>Every wire frame, every limit, every regex for a handle or task id. Changing a frame shape starts here or it doesn't happen. Also holds the A2A card mapping and the terminal-sanitizing helpers.</p>
+        <span class="k">@benree/agentcall-shared</span>
+      </div>
+      <div class="card">
+        <h3 class="mono">apps/relay</h3>
+        <p>Cloudflare Worker (Hono) plus two Durable Object classes — <code>HandleDO</code> for call routing and presence, <code>RateLimiterDO</code> for IP-keyed limits — over a D1 database of handles, invites, cards, rosters, and audit events.</p>
+        <span class="k">wrangler deploy</span>
+      </div>
+      <div class="card">
+        <h3 class="mono">packages/cli</h3>
+        <p>The whole product surface for a human: setup, call, listen, doctor, policy, card, roster, search, contacts, tasks. Also the tool guard that a spawned agent's tool calls are checked against.</p>
+        <span class="k">npm install -g @benree/agentcall</span>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- 03 LENSES -->
+<section id="control" class="band-white">
+  <div class="wrap">
+    <div class="sec-head rise">
+      <span class="eyebrow">Three lenses</span>
+      <h2>Useful to employees. Controllable by IT. Built to ship.</h2>
+    </div>
+
+    <div class="lens rise">
+      <div class="lens-aside">
+        <span class="lens-tag">Lens 1 — the employee</span>
+        <h3>What a person actually does with it</h3>
+        <p>One install, one address, then the vocabulary of a phone: call, check if they're in, look at what they offer, save a number, follow up.</p>
+        <p>Answering costs the callee's own model subscription, and their agent answers with their real context — that's the entire point, and also the reason the permission model below exists.</p>
+      </div>
+      <div class="grid g3">
+        <div class="card"><h3>Ask someone's agent</h3><p>Sends the message, waits, prints the reply. Add <code>--json</code> when your own agent is the one parsing it.</p><span class="k">agentcall call ken "why did CI fail on main?"</span></div>
+        <div class="card"><h3>Follow up without repeating yourself</h3><p>Resumes the last open conversation with that address. Expires 30 minutes after the last turn, capped at 10 turns, and tied to you and the task it started on.</p><span class="k">agentcall call ken "which commit?" --continue</span></div>
+        <div class="card"><h3>Find who to ask</h3><p>Search by what you need instead of who you know. The relay hands you a pre-filtered index and the ranking runs on your machine — your query text never leaves it.</p><span class="k">agentcall search "why did we pick this auth migration"</span></div>
+        <div class="card"><h3>Decide what you'll answer</h3><p>Each task is one <code>SKILL.md</code>: a description, keywords, and the tools it may use. Offer it to everyone, grant it to one person, or refuse someone outright.</p><span class="k">agentcall offer schedule-meeting · agentcall block spammer</span></div>
+        <div class="card"><h3>See your own menu the way callers see it</h3><p>Renders the effective policy after any IT ceiling, plus each runnable task's capabilities and the concrete directory it answers from.</p><span class="k">agentcall policy · agentcall card</span></div>
+        <div class="card"><h3>Fix it when calls stop arriving</h3><p>Checks the binary, auth, agent spawn, tool-guard telemetry, the listener, and a round-trip call to yourself. <code>!</code> means unproven this run, not broken.</p><span class="k">agentcall doctor</span></div>
+      </div>
+    </div>
+
+    <div class="lens rise">
+      <div class="lens-aside">
+        <span class="lens-tag">Lens 2 — IT</span>
+        <h3>What the department controls</h3>
+        <p>The design assumption is that an employee's agent is a company endpoint. So enrollment is gated, the ceiling on permissions is root-owned, and the policy file can carry assertions that fail the build when someone edits around them.</p>
+        <p>Some of what IT will eventually want — SSO, an admin console, org-wide audit export — is still open work. It's listed honestly at the bottom.</p>
+      </div>
+      <div class="grid g3">
+        <div class="card"><h3>Nobody enrolls themselves</h3><p>There's no public installer. A member mints a one-time invite that enrolls exactly one identity and expires in seven days by default; outstanding ones can be listed and revoked.</p><span class="k">agentcall invite create --description contractor</span></div>
+        <div class="card"><h3>A ceiling users cannot raise</h3><p>A root-owned file at <code>/Library/Application Support/agentcall/policy.json</code> caps which tasks may ever be offered and adds blocks that can't be undone locally. Unreadable or malformed means no agent spawns at all.</p><span class="k">allowed_tasks · blocked_callers</span></div>
+        <div class="card"><h3>Policy you can prove, not just write</h3><p>Both the user's file and the managed file can carry assertions — this caller gets these tasks, that one gets nothing. A failed assertion fails lint, blocks the CLI from saving, and stops the listener from starting.</p><span class="k">agentcall lint</span></div>
+        <div class="card"><h3>Group grants the caller can't fake</h3><p>Roster names are local labels. On every connection the relay attests which rosters caller and callee actually share; an unknown or removed membership grants nothing, and an individual block always wins.</p><span class="k">agentcall roster expel acme &lt;handle&gt;</span></div>
+        <div class="card"><h3>Two audit trails</h3><p>Locally, every call — accepted or refused — is a JSONL line with caller, task, status, and duration. On the relay, org and roster events plus an access trail of who checked whose presence.</p><span class="k">~/.agentcall/calls.log · ~/.agentcall/tools.log</span></div>
+        <div class="card"><h3>A version you can pin</h3><p>In-product self-update stays disabled so a managed deployment can't be bypassed. Releases publish through npm's OIDC trusted publisher with provenance, checksums, and a CycloneDX SBOM.</p><span class="k">release.yml · environment: npm</span></div>
+      </div>
+    </div>
+
+    <div class="lens rise">
+      <div class="lens-aside">
+        <span class="lens-tag">Lens 3 — us</span>
+        <h3>How the work is run</h3>
+        <p>Built test-first and kept that way: schema round-trips in shared, Durable Object relay logic against fake sockets, CLI tests with mocked <code>ws</code> and <code>fs</code>. No live agent spawns in CI.</p>
+        <p>Open work lives in GitHub Issues, never in a markdown TODO. The assignee is the claim. Everything under <code>docs/superpowers/</code> is a dated historical record — right about why a decision was made, wrong about what the code does now.</p>
+      </div>
+      <div class="grid g2">
+        <div class="card"><h3>The gate before anything ships</h3><p>Build first, deliberately — the CLI typechecks against shared's built output, so running build last would check the previous run's types. CI runs exactly this order.</p><span class="k">pnpm -r build &amp;&amp; pnpm -r typecheck &amp;&amp; pnpm -r test</span></div>
+        <div class="card"><h3>Protocol changes start in shared</h3><p>New field, new frame, new limit — the Zod schema moves first, then the relay and CLI are updated to match. No local redeclaration on either side.</p><span class="k">packages/shared/src/protocol.ts</span></div>
+        <div class="card"><h3>Typecheck covers tests too</h3><p>Each package's typecheck includes <code>test/</code>. Without it, a signature change leaves typecheck green while every stale call site fails at runtime — vitest strips types without checking them.</p><span class="k">tsconfig.test.json</span></div>
+        <div class="card"><h3>Relay deploys are not reversible</h3><p>Durable Object lifecycle changes are atomic and can't be rolled back, and a dry run doesn't compare state with Cloudflare. Compare the exports map against the intended live classes first.</p><span class="k">wrangler deploy --dry-run</span></div>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- PERMISSION MODEL -->
+<section id="permissions" class="band-paper">
+  <div class="wrap">
+    <div class="sec-head rise">
+      <span class="eyebrow">The permission model</span>
+      <h2>Four layers. One direction.</h2>
+      <p class="lede">They compose one way only: IT sets the ceiling, the owner grants under it, the task declares an envelope, and the guard checks each tool call at the moment it runs.</p>
+    </div>
+
+    <div class="rise">
+      <div class="layer">
+        <div><h3>1 · Administrator ceiling</h3><div class="path">/Library/Application Support/agentcall/policy.json</div></div>
+        <p>Filters every default, per-caller, and per-group grant down to <code>allowed_tasks</code>, and unions its <code>blocked_callers</code> into the owner's blocks. Absent means unmanaged; broken means fail closed.</p>
+      </div>
+      <div class="layer">
+        <div><h3>2 · Owner policy</h3><div class="path">~/.agentcall/policy.json</div></div>
+        <p>A default offer, per-caller grants and blocks, and roster-group grants keyed by opaque roster id. Individual blocks beat group and default offers — group membership can widen a menu, never resurrect a blocked caller.</p>
+      </div>
+      <div class="layer">
+        <div><h3>3 · Task envelope</h3><div class="path">~/AgentCall/tasks/&lt;id&gt;/SKILL.md</div></div>
+        <p>Frontmatter declares <code>tools</code> from read / write / fetch / exec, an optional absolute <code>workdir</code>, a timeout, and whether follow-ups are allowed. Claude maps this to <code>--allowedTools</code>; Codex maps it to a <code>--sandbox</code> level.</p>
+      </div>
+      <div class="layer">
+        <div><h3>4 · Tool guard</h3><div class="path">runs in-process on every tool call</div></div>
+        <p>For a Claude answering agent, file-shaped tools are refused outside the resolved workdir and at credential paths — <code>~/.ssh</code>, <code>~/.aws</code>, <code>.env</code>, Keychains, <code>~/.agentcall</code>, <code>~/.claude</code>, <code>~/.codex</code>, the guard's own code, the tasks directory, LaunchAgents, and shell startup files. Every attempt is logged.</p>
+      </div>
+    </div>
+
+    <div class="callout blue rise">
+      <h4>The invariant worth understanding</h4>
+      <p>Which task a caller may invoke is decided from the relay-verified caller handle and local files <em>before</em> their message is placed into any prompt. A caller's text therefore cannot influence what that text is allowed to do. If a caller supplies a conversation id, it's consulted only afterwards, and only to confirm the conversation was opened under the same task — it can narrow a call, never select one.</p>
+    </div>
+  </div>
+</section>
+
+<!-- 04 SECURITY -->
+<section id="security" class="band-white">
+  <div class="wrap">
+    <div class="sec-head rise">
+      <span class="eyebrow">Security model, stated plainly</span>
+      <h2>What is a boundary — and what only looks like one.</h2>
+      <p class="lede">There is no OS-level sandbox — that was removed on purpose, because the answering agent is meant to be the owner's real agent with the owner's real context. Enforcement is capability scoping plus the guard. Here is where that holds and where it doesn't.</p>
+    </div>
+
+    <div class="tbl-scroll rise">
+      <table class="tbl">
+        <thead><tr><th>Surface</th><th>Claude answering agent</th><th>Codex answering agent</th></tr></thead>
+        <tbody>
+          <tr>
+            <td class="surf"><b>File reads via tools</b><span>Read / Grep / Glob / LS</span></td>
+            <td><span class="tag ok">BOUNDED</span>Confined to the resolved task workdir, canonicalized paths and symlinks included.</td>
+            <td><span class="tag bad">NO FLOOR</span>Codex has no such tools; it reads through the shell, and <code>--sandbox read-only</code> still reads <code>~/.ssh</code>.</td>
+          </tr>
+          <tr>
+            <td class="surf"><b>Writes to executable config</b><span>~/.claude, LaunchAgents, shell rc</span></td>
+            <td><span class="tag ok">REFUSED</span>Including the guard's own package root, so a write can't neuter the next call's guard.</td>
+            <td><span class="tag bad">NOT ENFORCED</span>The guard runs in observe-only mode.</td>
+          </tr>
+          <tr>
+            <td class="surf"><b>Shell execution</b><span>a task granting exec</span></td>
+            <td><span class="tag warn">RECORDED ONLY</span>Commands are logged, not blocked. Pattern-matching a command string is too weak to be a boundary.</td>
+            <td><span class="tag warn">RECORDED ONLY</span>Same, on the pinned release where the session hook is trusted.</td>
+          </tr>
+          <tr>
+            <td class="surf"><b>Tool telemetry</b><span>~/.agentcall/tools.log</span></td>
+            <td><span class="tag ok">COMPLETE</span>Every tool call reaching the guard is written.</td>
+            <td><span class="tag warn">PARTIAL</span>Only what emits <code>PreToolUse</code>. <code>view_image</code> and <code>apply_patch</code> read files and appear in no log at all.</td>
+          </tr>
+          <tr>
+            <td class="surf"><b>Outbound data</b><span>bundled connectors</span></td>
+            <td><span class="tag ok">SCOPED BY TOOLS</span><code>fetch</code> is a declared capability a task either has or doesn't.</td>
+            <td><span class="tag bad">REACHABLE</span>Codex's own <code>codex_apps</code> connector works in this spawn shape and can publish a site — that traffic isn't the shell's, so <code>--sandbox</code> doesn't touch it.</td>
+          </tr>
+          <tr>
+            <td class="surf"><b>Message confidentiality</b><span>caller → callee</span></td>
+            <td colspan="2"><span class="tag bad">RELAY READS PLAINTEXT</span>There is no end-to-end encryption yet. Treat call content as visible to whoever operates the relay. Signed identity keys and pinning are the in-flight fix.</td>
+          </tr>
+        </tbody>
+      </table>
+    </div>
+
+    <div class="callout rise">
+      <h4>How to read the table</h4>
+      <p>Capability scoping bounds <em>what kind</em> of action is possible, not <em>where</em>. The real control on a task that grants <code>exec</code> is which tasks you choose to write. Codex support is implemented and unit-tested but has not been verified against a live call — the Claude path is the one that has.</p>
+    </div>
+  </div>
+</section>
+
+<!-- STATUS -->
+<section id="status">
+  <div class="wrap">
+    <div class="sec-head rise">
+      <span class="eyebrow">Status</span>
+      <h2>Where the project actually stands.</h2>
+      <p class="lede">Public or enterprise deployment is blocked on the security track. A passing conformance suite says nothing about safe prompt execution.</p>
+    </div>
+
+    <div class="status rise">
+      <div class="ok">
+        <h3>Working today</h3>
+        <ul>
+          <li><b>Calls end to end</b> on the Claude path, live-tested</li>
+          <li><b>Invite-only enrollment</b> with listing and revocation</li>
+          <li><b>Task, policy, and managed-ceiling model</b> with assertions enforced at lint, save, and call time</li>
+          <li><b>Rosters, join keys, and local-ranked search</b></li>
+          <li><b>Multi-turn conversations</b> with TTL, turn cap, and task binding</li>
+          <li><b>Tool guard and telemetry</b> for Claude, observe-only for pinned Codex</li>
+          <li><b>Signed npm releases</b> with provenance and SBOM</li>
+        </ul>
+      </div>
+      <div class="mid">
+        <h3>Open, being worked</h3>
+        <ul>
+          <li><b>Bound the exec gap</b> <span class="iss">#1</span></li>
+          <li><b>Codex read floor</b> via its own <code>deny_read</code> <span class="iss">#2</span></li>
+          <li><b>End-to-end encryption</b> — publish signed identity keys, then pin and fail closed <span class="iss">#170 · #171</span></li>
+          <li><b>Move the relay token to the OS keychain</b> <span class="iss">#108</span></li>
+          <li><b>Sign the agent card</b> (JWS + JWKS) <span class="iss">#101</span></li>
+          <li><b>Traces and metrics</b> via OTel GenAI conventions <span class="iss">#114</span></li>
+          <li><b>Cost metering</b> — a caller spends the callee's quota with no cap or ledger <span class="iss">#111</span></li>
+        </ul>
+      </div>
+      <div class="no">
+        <h3>Not there yet</h3>
+        <ul>
+          <li><b>macOS only.</b> The LaunchAgent listener has no Linux or Windows equivalent <span class="iss">#14</span></li>
+          <li><b>No self-hostable relay</b>, so the operator still sees plaintext <span class="iss">#12 · #13</span></li>
+          <li><b>Handles can't be released.</b> A re-registered handle would inherit the previous owner's relay state <span class="iss">#16 · #154</span></li>
+          <li><b>No SSO, SCIM, or admin console</b> <span class="iss">#15 · #17 · #27</span></li>
+          <li><b>Audit events have no expiry or erasure workflow</b></li>
+          <li><b>One caller can monopolize your agent</b> — 30 long calls exceed an hour of listener time; the remedy is <code>block</code></li>
+        </ul>
+      </div>
+    </div>
+
+    <p class="note rise">Generated from the repository at v0.4.0 — README, protocol schemas, relay and listener source, and the open issue list. The README stays the authority on current behavior; where this page and the code disagree, the code wins.</p>
+  </div>
+</section>
+
+<!-- CLOSE -->
+<section class="close" id="close">
+  <div class="close-sky"></div>
+  <div class="close-veil"></div>
+  <div class="ghost">agentcall</div>
+  <div class="wrap">
+    <span class="eyebrow">Start a call</span>
+    <h2>Give your agents each other's number.</h2>
+    <p>Install the CLI, enroll your handle, and make the first call.</p>
+    <div class="hero-cta">
+      <a class="btn btn-primary" href="#">View on GitHub ↗</a>
+      <a class="btn btn-ghost" href="#callpath">Read the architecture brief</a>
+    </div>
+  </div>
+</section>
+
+<footer>
+  <div class="wrap">
+    <div class="foot">
+      <div>
+        <a class="brand" href="#top"><span class="brand-mark">⌁</span> agentcall</a>
+        <p>A permissioned phone line between coworkers' coding agents. Built for real context, explicit control, and honest boundaries.</p>
+      </div>
+      <div>
+        <h4>Product</h4>
+        <ul>
+          <li><a href="#callpath">How it works</a></li>
+          <li><a href="#control">Use cases</a></li>
+          <li><a href="#security">Security</a></li>
+          <li><a href="#status">Status</a></li>
+        </ul>
+      </div>
+      <div>
+        <h4>Developers</h4>
+        <ul>
+          <li><a href="#callpath">Architecture</a></li>
+          <li><a href="#repo">CLI reference</a></li>
+          <li><a href="#callpath">Protocol</a></li>
+          <li><a href="#">GitHub</a></li>
+        </ul>
+      </div>
+      <div>
+        <h4>Project</h4>
+        <ul>
+          <li><a href="#status">Changelog</a></li>
+          <li><a href="#status">Open issues</a></li>
+          <li><a href="#repo">npm package</a></li>
+          <li><a href="#close">Contact</a></li>
+        </ul>
+      </div>
+    </div>
+    <div class="foot-base">
+      <span>© 2026 AgentCall · Architecture brief v0.4.0</span>
+      <span>Generated from repository state · code wins when docs disagree</span>
+    </div>
+  </div>
+</footer>
+
+<script>
+(function(){
+  var nav=document.getElementById('nav');
+  var hero=document.getElementById('top');
+
+  function onScroll(){
+    var over = window.scrollY < hero.offsetHeight - 90;
+    nav.classList.toggle('over-hero', over);
+    nav.classList.toggle('pinned', !over);
+  }
+  onScroll();
+  window.addEventListener('scroll', onScroll, {passive:true});
+
+  // subtle parallax on the hero sky
+  var sky=document.querySelector('.hero-sky');
+  var reduce=window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+  if(sky && !reduce){
+    window.addEventListener('scroll', function(){
+      var y=Math.min(window.scrollY, 900);
+      sky.style.transform='scale(1.06) translateY('+(y*0.16)+'px)';
+    }, {passive:true});
+  }
+
+  // reveal on scroll
+  var io=new IntersectionObserver(function(entries){
+    entries.forEach(function(e){ if(e.isIntersecting){ e.target.classList.add('in'); io.unobserve(e.target);} });
+  },{rootMargin:'0px 0px -8% 0px', threshold:0.06});
+  document.querySelectorAll('.rise').forEach(function(el){ io.observe(el); });
+
+  // active section tab
+  var tabs=document.querySelectorAll('.tab');
+  var ids=['identity','callpath','control','security'];
+  var so=new IntersectionObserver(function(entries){
+    entries.forEach(function(e){
+      if(e.isIntersecting){
+        tabs.forEach(function(t){ t.classList.toggle('active', t.dataset.tab===e.target.id); });
       }
-    </style>
-  </head>
-  <body>
-    <main>
-      <h1>AgentCall</h1>
-      <img
-        src="./assets/hero-placeholder.svg"
-        alt="Placeholder for the AgentCall landing-page hero artwork"
-        width="1600"
-        height="1000"
-      />
-    </main>
-  </body>
+    });
+  },{rootMargin:'-45% 0px -45% 0px'});
+  ids.forEach(function(id){ var el=document.getElementById(id); if(el) so.observe(el); });
+})();
+</script>
+<script>
+(function(){
+  var out=document.getElementById('out'), log=document.getElementById('log');
+  var cmd=document.getElementById('cmd'), chips=document.getElementById('chips');
+  var term=document.getElementById('term'), replay=document.getElementById('replay');
+  if(!out) return;
+
+  var reduce=window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+  var busy=false, clock=0, convo=0;
+
+  function sleep(ms){ return new Promise(function(r){ setTimeout(r, reduce?0:ms); }); }
+  function scroll(t){ t.scrollTop=t.scrollHeight; }
+
+  function w(target, text, cls){
+    var s=document.createElement('span');
+    s.className='ln'+(cls?' '+cls:'');
+    s.textContent=text;
+    target.appendChild(s); scroll(target); return s;
+  }
+  function gap(target){
+    var s=document.createElement('span'); s.className='sp';
+    target.appendChild(s); scroll(target);
+  }
+  function stamp(){
+    var base=10*3600+42*60+6+clock; clock+=1+Math.floor(Math.random()*3);
+    var h=Math.floor(base/3600), m=Math.floor(base%3600/60), s=base%60;
+    return String(h).padStart(2,'0')+':'+String(m).padStart(2,'0')+':'+String(s).padStart(2,'0')+' ';
+  }
+  function pad(s,n){ return (s+'                    ').slice(0,n); }
+  function lg(kind, rest, cls){
+    w(log, stamp()+pad(kind,14)+rest, cls||'dim');
+  }
+
+  async function typeCmd(text){
+    var line=document.createElement('span'); line.className='ln';
+    var ps=document.createElement('span'); ps.className='ps'; ps.textContent='$ ';
+    var body=document.createElement('span'); body.className='cmd';
+    var caret=document.createElement('span'); caret.className='caret';
+    line.appendChild(ps); line.appendChild(body); line.appendChild(caret);
+    out.appendChild(line); scroll(out);
+    if(reduce){ body.textContent=text; }
+    else {
+      for(var i=0;i<text.length;i++){
+        body.textContent+=text.charAt(i); scroll(out);
+        await sleep(14+Math.random()*20);
+      }
+      await sleep(160);
+    }
+    caret.remove();
+  }
+
+  function echoCmd(text){
+    var line=document.createElement('span'); line.className='ln';
+    var ps=document.createElement('span'); ps.className='ps'; ps.textContent='$ ';
+    var body=document.createElement('span'); body.className='cmd'; body.textContent=text;
+    line.appendChild(ps); line.appendChild(body);
+    out.appendChild(line); scroll(out);
+  }
+
+  /* ---------- the people you can reach in this demo org ---------- */
+  var PEOPLE={
+    ken:{
+      task:'repo-context', workdir:'~/work/api', tools:'read,grep,glob',
+      reply:['The migration renamed session_token, but the integration',
+             'fixture still writes the old field.',
+             'Update test/auth.fixture.ts:64 — context is in ADR-017.'],
+      cont:['9c41f0a — "auth: rename session_token to session_id", Jul 28.',
+            'The fixture was not touched in that commit.'],
+      guard:[['ALLOW','Grep','src/auth/**'],
+             ['ALLOW','Read','auth.fixture.ts'],
+             ['DENY','Read','~/.ssh/id_ed25519']]
+    },
+    mei:{
+      task:'repo-context', workdir:'~/work/api', tools:'read,grep',
+      reply:['I reviewed that PR. We took the rename over a compat shim',
+             'because the shim would have shipped into the public SDK.',
+             'Reasoning is in ADR-017, section 3.'],
+      cont:['Same thread — nothing new since the review.'],
+      guard:[['ALLOW','Grep','docs/adr/**'],
+             ['ALLOW','Read','adr/017.md']]
+    }
+  };
+
+  /* ---------- a call, end to end ---------- */
+  async function doCall(handle, msg, cont){
+    var who=PEOPLE[handle];
+
+    if(handle==='spammer'){
+      w(out,'  ringing   spammer@acme.agentcall','dim');
+      await sleep(500);
+      lg('incoming_call','from spammer@acme');
+      await sleep(420);
+      lg('policy','blocked_callers → refuse','warn');
+      await sleep(380);
+      lg('call_refused','→ relay · no agent spawned','bad');
+      w(out,'  refused   no task is granted to this caller','bad');
+      w(out,'  nothing was spawned on the callee\'s machine','dim');
+      gap(out);
+      return;
+    }
+    if(!who){
+      w(out,'  error     no handle "'+handle+'" in acme','bad');
+      w(out,'  try ken or mei — cross-org routing is rejected','dim');
+      gap(out);
+      return;
+    }
+    if(cont && convo===0){
+      w(out,'  error     no open conversation with '+handle,'bad');
+      w(out,'  place a call first, then follow up with --continue','dim');
+      gap(out);
+      return;
+    }
+
+    convo = cont ? convo+1 : 1;
+
+    w(out,'  ringing   '+handle+'@acme.agentcall','dim');
+    await sleep(430);
+    lg('incoming_call','from alex@acme');
+    await sleep(340);
+
+    if(cont){
+      lg('conversation',who.task+' · turn '+convo+'/10','blue');
+      await sleep(320);
+    } else {
+      lg('policy','alex → '+who.task,'blue');
+      await sleep(320);
+      lg('envelope',who.tools+' · '+who.workdir);
+      await sleep(300);
+    }
+    lg('call_accepted','→ relay','ok');
+    await sleep(280);
+    lg('spawn','claude -p (Read,Grep,Glob)');
+    w(out,'  answered  agent running on '+handle+'\'s machine','dim');
+    await sleep(420);
+
+    var g = cont ? [['ALLOW','Grep','.git/log']] : who.guard;
+    for(var i=0;i<g.length;i++){
+      var deny = g[i][0]==='DENY';
+      lg('tool.guard', pad(g[i][0],7)+pad(g[i][1],6)+g[i][2], deny?'bad':'ok');
+      await sleep(330);
+    }
+    if(!cont && handle==='ken'){
+      w(out,'  guard     1 tool call refused — see the listener log','warn');
+      await sleep(300);
+    }
+
+    lg('call_result','13.2s · 412 B · turn '+convo+'/10','ok');
+    await sleep(260);
+
+    gap(out);
+    var body = cont ? who.cont : who.reply;
+    for(var j=0;j<body.length;j++){ w(out, body[j], 'reply'); await sleep(reduce?0:70); }
+    gap(out);
+    w(out,'  conversation '+convo+'/10 · follow up with --continue','dim');
+    gap(out);
+  }
+
+  /* ---------- everything else the CLI does ---------- */
+  var STATIC={
+    doctor:[
+      ['  binary            v0.4.0','ok'],
+      ['  auth              token ok · org acme','ok'],
+      ['  listener          running (LaunchAgent)','ok'],
+      ['  agent spawn       claude -p reachable','ok'],
+      ['  tool guard        active · 1 denial this run','ok'],
+      ['! round-trip call   unproven this run','warn'],
+      ['','dim'],
+      ['  "!" means unproven this run, not broken','dim']
+    ],
+    policy:[
+      ['  effective policy for alex@acme — after the IT ceiling','dim'],
+      ['',''],
+      ['  default offer     repo-context, schedule-meeting',''],
+      ['  ken               + release-notes',''],
+      ['  contractor-*      capped by the managed ceiling','warn'],
+      ['  blocked           spammer','bad'],
+      ['',''],
+      ['  ceiling  /Library/Application Support/agentcall/policy.json','dim'],
+      ['  yours    ~/.agentcall/policy.json','dim']
+    ],
+    card:[
+      ['  alex@acme.agentcall','blue'],
+      ['',''],
+      ['  repo-context      read,grep,glob   ~/work/api     5 min',''],
+      ['  schedule-meeting  read,fetch       ~/notes        2 min',''],
+      ['  release-notes     read,grep        ~/work/api     5 min  · ken only',''],
+      ['',''],
+      ['  this is exactly what a caller sees before they call you','dim']
+    ],
+    listen:[
+      ['  listener installed as a LaunchAgent','ok'],
+      ['  socket open to the relay · presence available','ok'],
+      ['  waiting for calls — nothing is polled','dim']
+    ],
+    lint:[
+      ['  ~/.agentcall/policy.json','dim'],
+      ['  assert  ken gets release-notes            pass','ok'],
+      ['  assert  contractor-* gets nothing         pass','ok'],
+      ['  assert  spammer is blocked                pass','ok'],
+      ['',''],
+      ['  a failing assertion blocks the save and stops the listener','dim']
+    ],
+    contacts:[
+      ['  ken   ken@acme.agentcall     repo-context, schedule-meeting',''],
+      ['  mei   mei@acme.agentcall     repo-context',''],
+      ['  raj   raj@acme.agentcall     release-notes','']
+    ],
+    tasks:[
+      ['  ~/AgentCall/tasks/','dim'],
+      ['  repo-context/SKILL.md       read,grep,glob   workdir ~/work/api',''],
+      ['  schedule-meeting/SKILL.md   read,fetch       workdir ~/notes',''],
+      ['',''],
+      ['  one task is one SKILL.md — description, keywords, tools','dim']
+    ],
+    search:[
+      ['  the relay returns a pre-filtered index; ranking runs here','dim'],
+      ['  your query text never leaves this machine','dim'],
+      ['',''],
+      ['  1  ken@acme    repo-context     owns auth/, wrote ADR-017',''],
+      ['  2  mei@acme    repo-context     reviewed the migration PR',''],
+      ['  3  raj@acme    release-notes    shipped v3.1','']
+    ],
+    invite:[
+      ['  invite  ac_inv_7f3c9b21','blue'],
+      ['  enrolls exactly one identity · expires in 7 days','dim'],
+      ['',''],
+      ['  agentcall setup --invite ac_inv_7f3c9b21',''],
+      ['',''],
+      ['  there is no public installer — enrollment is always gated','dim']
+    ],
+    help:[
+      ['  call <handle> "<message>"     ask someone\'s agent  [--continue] [--json]',''],
+      ['  search "<what you need>"      find who to ask',''],
+      ['  policy                        your effective menu, after the IT ceiling',''],
+      ['  card                          what callers see',''],
+      ['  tasks · contacts · lint       tasks, saved handles, policy assertions',''],
+      ['  listen · doctor               run the listener, check the install',''],
+      ['  invite create                 mint a one-time enrollment invite',''],
+      ['',''],
+      ['  in this demo you can reach: ken, mei, spammer','dim'],
+      ['  clear wipes both panes','dim']
+    ]
+  };
+
+  async function printStatic(key){
+    var rows=STATIC[key];
+    for(var i=0;i<rows.length;i++){
+      if(rows[i][0]===''){ gap(out); } else { w(out, rows[i][0], rows[i][1]); }
+      await sleep(reduce?0:45);
+    }
+    gap(out);
+  }
+
+  /* ---------- dispatch ---------- */
+  async function run(raw){
+    var line=raw.trim();
+    if(!line) return;
+    var input=line.replace(/^\$\s*/,'').replace(/^agentcall\s+/,'').trim();
+
+    if(input==='clear'){ out.innerHTML=''; log.innerHTML=''; clock=0; convo=0; return; }
+
+    if(/^call\b/.test(input)){
+      var m=input.match(/^call\s+([a-z0-9_-]+)\s*(.*)$/i);
+      if(!m){ w(out,'  usage: agentcall call <handle> "<message>"','bad'); gap(out); return; }
+      await doCall(m[1].toLowerCase(), m[2], /--continue|-c\b/.test(input));
+      return;
+    }
+    if(/^search\b/.test(input)) return printStatic('search');
+    if(/^invite\b/.test(input)) return printStatic('invite');
+    if(/^(doctor|policy|card|listen|lint|contacts|tasks|help)$/.test(input)) return printStatic(input);
+    if(/^(offer|block|roster)\b/.test(input)){
+      w(out,'  saved to ~/.agentcall/policy.json','ok');
+      w(out,'  run agentcall lint to prove the assertions still hold','dim');
+      gap(out); return;
+    }
+    w(out,'  unknown command: '+input,'bad');
+    w(out,'  type help to see what this CLI does','dim');
+    gap(out);
+  }
+
+  async function submit(text, typeIt){
+    if(busy) return;
+    busy=true; cmd.disabled=true;
+    if(typeIt) await typeCmd(text); else echoCmd(text);
+    await run(text);
+    busy=false; cmd.disabled=false;
+  }
+
+  cmd.addEventListener('keydown', function(e){
+    if(e.key==='Enter'){
+      var v=cmd.value; cmd.value='';
+      submit(v, false).then(function(){ cmd.focus(); });
+    }
+  });
+
+  var CHIPS=[
+    'agentcall call ken "why did CI fail on main after the auth migration?"',
+    'agentcall call ken "which commit introduced it?" --continue',
+    'agentcall call spammer "hey"',
+    'agentcall policy',
+    'agentcall card',
+    'agentcall doctor',
+    'help'
+  ];
+  CHIPS.forEach(function(c){
+    var b=document.createElement('button');
+    b.type='button'; b.className='chip'; b.textContent=c;
+    b.addEventListener('click', function(){ submit(c, false).then(function(){ cmd.focus(); }); });
+    chips.appendChild(b);
+  });
+
+  document.querySelector('.term-input').addEventListener('click', function(){ cmd.focus(); });
+
+  async function intro(){
+    out.innerHTML=''; log.innerHTML=''; clock=0; convo=0; busy=true; cmd.disabled=true;
+    w(out,'  agentcall v0.4.0 · alex@acme.agentcall','dim');
+    w(out,'  type help, or run one of the commands below','dim');
+    gap(out);
+    w(log,'  listener up · socket open to the relay','dim');
+    w(log,'  nothing is polled — a call arrives the instant it is placed','dim');
+    gap(log);
+    await sleep(700);
+    await typeCmd('agentcall call ken "why did CI fail on main after the auth migration?"');
+    await run('call ken "why did CI fail on main after the auth migration?"');
+    busy=false; cmd.disabled=false;
+  }
+
+  replay.addEventListener('click', function(){ if(!busy) intro(); });
+
+  var started=false;
+  var io=new IntersectionObserver(function(en){
+    en.forEach(function(e){ if(e.isIntersecting && !started){ started=true; intro(); io.disconnect(); } });
+  },{threshold:.25});
+  io.observe(term);
+})();
+</script>
+</body>
 </html>
