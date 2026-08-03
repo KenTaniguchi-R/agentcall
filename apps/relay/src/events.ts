@@ -1,15 +1,10 @@
 import type { Context } from "hono";
-import type { OrgRoleType } from "@benree/agentcall-shared";
+import type { OrgAuditEvent, OrgRoleType, RosterAuditEvent } from "@benree/agentcall-shared";
 import type { Env } from "./index.js";
 
-export type RosterAuditEvent =
-  | "roster.create" | "roster.join" | "roster.leave" | "roster.expel"
-  | "roster.join_key.issue" | "roster.join_key.revoke" | "roster.join_key.evict" | "roster.delete"
-  | "roster.audit_budget_exhausted" | "roster.audit_budget_reset";
 export type AuditAction = "C" | "R" | "U" | "D";
 export type AuditActor = "handle" | "admin_secret" | "system";
 export type AuditTarget = "handle" | "roster" | "join_key";
-export type OrgAuditEvent = "org.invite.issue" | "org.invite.redeem" | "org.invite.revoke";
 export type OrgAuditActor = "handle" | "bootstrap" | "invite";
 export type OrgAuditTarget = "invite" | "handle";
 

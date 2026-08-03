@@ -20,7 +20,7 @@
       },
       {
         "group": "Reference",
-        "pages": ["reference/cli", "reference/protocol"]
+        "pages": ["reference/cli", "reference/protocol", "reference/audit-events"]
       },
       {
         "group": "Security",

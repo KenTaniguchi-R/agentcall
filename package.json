@@ -7,7 +7,7 @@
     "test": "pnpm -r test",
     "build": "pnpm -r build",
     "typecheck": "pnpm -r typecheck",
-    "docs:generate": "node scripts/generate-docs-site-cli.mjs && node scripts/generate-docs-site-protocol.mjs",
+    "docs:generate": "node scripts/generate-docs-site-cli.mjs && node scripts/generate-docs-site-protocol.mjs && node scripts/generate-docs-site-audit-events.mjs",
     "docs:check": "node scripts/check-docs-site.mjs"
   },
   "packageManager": "pnpm@11.5.2"
