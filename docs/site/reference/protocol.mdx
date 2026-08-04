@@ -3,7 +3,7 @@ title: Protocol frames
 description: Generated WebSocket frame shapes exchanged by callers, the relay, and listeners.
 ---
 
-This page is generated from the built Zod schemas in `packages/shared/src/protocol.ts` and `packages/shared/src/e2ee.ts`. The [repository README](https://github.com/KenTaniguchi-R/agentcall#how-a-call-works) remains the authority on current runtime behavior.
+This page is generated from the built Zod schemas in `packages/shared/src/protocol.ts`, `packages/shared/src/e2ee.ts`, and `packages/shared/src/room.ts`. The [repository README](https://github.com/KenTaniguchi-R/agentcall#how-a-call-works) remains the authority on current runtime behavior.
 
 ## Caller to relay
 
@@ -139,6 +139,75 @@ Explain why cancellation did not complete.
 | `type` | `call_not_cancelled` | yes |
 | `call_id` | string | yes |
 | `reason` | `already_terminal` / `unknown` / `too_late` | yes |
+
+## Accountless Room HTTP protocol
+
+### Create request
+
+Create a bounded 2–6-person accountless Room.
+
+| Field | Type | Required |
+| --- | --- | --- |
+| `display_name` | string | yes |
+| `signing_public_key` | string | yes |
+| `encryption_public_key` | string | yes |
+| `agent_adapter` | string | yes |
+| `expected_participants` | `2` / `3` / `4` / `5` / `6` | yes |
+
+### Create response
+
+Return the host capability and independent single-use invitations exactly once.
+
+| Field | Type | Required |
+| --- | --- | --- |
+| `room` | object | yes |
+| `participants` | object[] | yes |
+| `participant` | object | no |
+| `credential` | string | yes |
+| `invites` | object[] | yes |
+
+### Join request
+
+Redeem one invitation with a participant secret and signing-key possession proof.
+
+| Field | Type | Required |
+| --- | --- | --- |
+| `display_name` | string | yes |
+| `signing_public_key` | string | yes |
+| `encryption_public_key` | string | yes |
+| `agent_adapter` | string | yes |
+| `invite` | string | yes |
+| `participant_secret` | string | yes |
+| `signing_proof` | string | yes |
+
+### Join response
+
+Return session-local membership; the capability appears only on first issuance.
+
+| Field | Type | Required |
+| --- | --- | --- |
+| `room` | object | yes |
+| `participants` | object[] | yes |
+| `participant` | object | yes |
+| `credential` | string | no |
+
+### Room action request
+
+Perform a capability-authenticated lifecycle action; only moderation actions use the optional target.
+
+| Field | Type | Required |
+| --- | --- | --- |
+| `participant_id` | string | no |
+
+### Room action response
+
+Return the current bounded Room membership view without credential hashes.
+
+| Field | Type | Required |
+| --- | --- | --- |
+| `room` | object | yes |
+| `participants` | object[] | yes |
+| `participant` | object | no |
 
 ## Important bounds
 
