@@ -14,7 +14,7 @@ const ReplayReservationSchema = z.object({
   request_id: z.string().regex(/^[0-9a-f]{32}$/),
   expires_at: z.number().int().nonnegative().max(Number.MAX_SAFE_INTEGER - REPLAY_RETENTION_SKEW_MS),
 }).strict();
-export type ReplayReservation = z.infer<typeof ReplayReservationSchema>;
+type ReplayReservation = z.infer<typeof ReplayReservationSchema>;
 
 const ReplayStoreSchema = z.object({
   v: z.literal(1),

@@ -64,7 +64,7 @@ export interface LinePaths {
   recoveryPendingFile: string;
 }
 
-export function managedPolicyPath(platform: NodeJS.Platform = process.platform): string {
+function managedPolicyPath(platform: NodeJS.Platform = process.platform): string {
   if (platform === "darwin") return "/Library/Application Support/agentcall/policy.json";
   if (platform === "linux") return "/etc/agentcall/policy.json";
   throw new Error(`Managed policy is not supported on ${platform}`);

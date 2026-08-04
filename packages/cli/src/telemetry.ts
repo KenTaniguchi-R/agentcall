@@ -27,7 +27,7 @@ const INSTRUMENTATION = "@benree/agentcall";
 export const INVOCATION_DURATION_BUCKETS = [
   0.01, 0.02, 0.05, 0.1, 0.2, 0.5, 1, 2, 5, 10, 30, 60, 120, 300, 600,
 ] as const;
-export const TOOL_DURATION_BUCKETS = [
+const TOOL_DURATION_BUCKETS = [
   0.001, 0.005, 0.01, 0.02, 0.05, 0.1, 0.2, 0.5, 1, 2, 5, 10, 30, 60, 120, 300,
 ] as const;
 const METRIC_ATTRIBUTES = ["agentcall.runtime.name", "agentcall.call.outcome", "error.type"];
@@ -257,7 +257,7 @@ export class BoundedRemoteSampler implements Sampler {
   }
 }
 
-export interface CallerSpanHandle {
+interface CallerSpanHandle {
   correlationId: string;
   traceparent: string;
   setCallId(callId: string | undefined): void;
@@ -265,12 +265,12 @@ export interface CallerSpanHandle {
   endError(errorType: string, callId?: string): void;
 }
 
-export interface InvocationSpanHandle {
+interface InvocationSpanHandle {
   recordTool(input: ToolLifecycle & { contextId?: string }): void;
   end(outcome: InvocationOutcome, contextId?: string): void;
 }
 
-export interface InboundSpanHandle {
+interface InboundSpanHandle {
   context: Context;
   endAdmission(outcome: string): void;
   startInvocation(input: {

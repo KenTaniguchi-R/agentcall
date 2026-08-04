@@ -41,7 +41,7 @@ export function systemdServiceFile(machine: MachinePaths): string {
   return join(machine.userHome, ".config", "systemd", "user", SYSTEMD_UNIT);
 }
 
-export function systemdUnitContent(
+function systemdUnitContent(
   nodeBin: string,
   cliScript: string,
   machine: MachinePaths,

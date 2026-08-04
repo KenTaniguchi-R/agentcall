@@ -30,7 +30,7 @@ export function assertCallableLine(cfg: LineConfig): asserts cfg is CallableLine
   }
 }
 
-export const DEFAULT_RELAY = "https://agentcall.benree.tech";
+const DEFAULT_RELAY = "https://agentcall.benree.tech";
 
 export interface Workdir {
   /** Absolute directory the agent is spawned in. */

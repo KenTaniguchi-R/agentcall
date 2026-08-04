@@ -4,7 +4,7 @@ import type { AgentKind } from "@benree/agentcall-shared";
 import { resolveAgentBin } from "./bin.js";
 import { runAgent, type AgentOutput } from "./runner.js";
 
-export interface RoomSafetyTuple {
+interface RoomSafetyTuple {
   agent: AgentKind;
   cliVersion: string;
   platform: NodeJS.Platform;
@@ -13,7 +13,7 @@ export interface RoomSafetyTuple {
 
 export const ROOM_SAFETY_CONTRACT_VERSION = 1 as const;
 
-export const ROOM_SAFETY_SURFACES = [
+const ROOM_SAFETY_SURFACES = [
   "empty_workdir",
   "repository_instructions",
   "outside_workdir_read",
@@ -34,7 +34,7 @@ export const ROOM_SAFETY_SURFACES = [
   "process_tree_cancellation",
 ] as const;
 
-export type RoomSafetySurface = (typeof ROOM_SAFETY_SURFACES)[number];
+type RoomSafetySurface = (typeof ROOM_SAFETY_SURFACES)[number];
 export type RoomSafetySurfaceResults = Readonly<
   Record<Exclude<RoomSafetySurface, "apps">, boolean> &
   { apps: boolean | "not_applicable" }
@@ -60,11 +60,11 @@ export interface RoomSafetyEvidence extends RoomSafetyTuple {
   surfaces: RoomSafetySurfaceResults;
 }
 
-export type RoomSafetySupport =
+type RoomSafetySupport =
   | { supported: true; evidence: RoomSafetyEvidence }
   | { supported: false; reason: string };
 
-export const ROOM_SAFETY_EVIDENCE: readonly RoomSafetyEvidence[] = [{
+const ROOM_SAFETY_EVIDENCE: readonly RoomSafetyEvidence[] = [{
   contractVersion: ROOM_SAFETY_CONTRACT_VERSION,
   agent: "claude",
   cliVersion: "2.1.220",
@@ -93,13 +93,13 @@ const ROOM_SAFE_ENV_KEYS = [
   "ANTHROPIC_AUTH_TOKEN",
 ] as const;
 
-export interface RoomSafeSpawnContract {
+interface RoomSafeSpawnContract {
   spawn: { cmd: string; args: string[]; cwd: string; env: NodeJS.ProcessEnv };
   cancellation: typeof ROOM_SAFE_CANCELLATION;
   evidence: RoomSafetyEvidence;
 }
 
-export interface BuildRoomSafeSpawnContractOptions {
+interface BuildRoomSafeSpawnContractOptions {
   agent: AgentKind;
   platform?: NodeJS.Platform;
   arch?: string;
@@ -111,7 +111,7 @@ export interface BuildRoomSafeSpawnContractOptions {
   env: NodeJS.ProcessEnv;
 }
 
-export interface BuildRoomSafetyProbeSpawnOptions {
+interface BuildRoomSafetyProbeSpawnOptions {
   agent: AgentKind;
   prompt: string;
   workdir: string;
@@ -119,7 +119,7 @@ export interface BuildRoomSafetyProbeSpawnOptions {
   env: NodeJS.ProcessEnv;
 }
 
-export interface RunRoomSafeAgentOptions {
+interface RunRoomSafeAgentOptions {
   agent: AgentKind;
   prompt: string;
   workdir: string;

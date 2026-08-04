@@ -25,8 +25,8 @@ import {
 // a cancel targets a call that (if pending) never opened an envelope at all.
 // ---------------------------------------------------------------------------
 
-export interface CancelCallFrame { call_id: string }
-export interface CancelHandle { cancel(callId: string): "pending" | "running" | "unknown" }
+interface CancelCallFrame { call_id: string }
+interface CancelHandle { cancel(callId: string): "pending" | "running" | "unknown" }
 
 export function handleCancel(
   frame: CancelCallFrame, queue: CancelHandle, send: (obj: unknown) => void,
@@ -50,9 +50,9 @@ export function handleCancel(
 // against replay. All four must succeed before anything else runs.
 // ---------------------------------------------------------------------------
 
-export type CallerKeyBundle = Awaited<ReturnType<typeof fetchKeys>>;
+type CallerKeyBundle = Awaited<ReturnType<typeof fetchKeys>>;
 
-export interface OpenedEnvelope {
+interface OpenedEnvelope {
   request: E2EERequestPayloadType;
   callerBundle: CallerKeyBundle;
   callerPeer: KnownPeer;
@@ -62,11 +62,11 @@ export interface OpenedEnvelope {
   toAddress: string;
 }
 
-export type OpenEnvelopeResult =
+type OpenEnvelopeResult =
   | { ok: true; envelope: OpenedEnvelope }
   | { ok: false; error: unknown };
 
-export interface OpenEnvelopeIo {
+interface OpenEnvelopeIo {
   fetchKeys: typeof fetchKeys;
   verifyAndPinPeer: typeof verifyAndPinPeer;
   loadKeys: typeof loadKeys;
@@ -117,7 +117,7 @@ export async function openInboundEnvelope(
 // reuses the same sender.
 // ---------------------------------------------------------------------------
 
-export interface OutcomeSenderInput {
+interface OutcomeSenderInput {
   callId: string;
   relayOrigin: string;
   fromAddress: string;
@@ -178,7 +178,7 @@ export function makeOutcomeSender(
 // are burned by blocked callers or menu probing.
 // ---------------------------------------------------------------------------
 
-export type AdmissionDecision =
+type AdmissionDecision =
   | { ok: true; task: Task; taskWorkdir: Workdir }
   | { ok: false; code: "policy_error"; error: unknown }
   | { ok: false; code: "blocked" | "task_not_offered" | "task_unknown"; offered: string[] };
@@ -221,7 +221,7 @@ export function resolveAdmission(
 // order reopens the hole the design exists to close.
 // ---------------------------------------------------------------------------
 
-export type BindingDecision =
+type BindingDecision =
   | { ok: true; now: number; threadingAvailable: boolean; contexts: ContextBinding[]; binding: ContextBinding | undefined }
   | { ok: false; now: number; threadingAvailable: boolean; contexts: ContextBinding[] };
 

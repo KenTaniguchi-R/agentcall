@@ -7,7 +7,7 @@ import type { LinePaths } from "./paths.js";
 // holds only opaque tokens the callee issued us, so losing it costs one
 // retyped question. contexts.ts holds real agent session ids and gates a
 // security property. Different blast radius, different file.
-export const OutboundContextSchema = z.object({
+const OutboundContextSchema = z.object({
   relay: z.string().min(1),
   from: z.string().min(1),
   to: z.string().min(1),
@@ -20,7 +20,7 @@ export const OutboundContextSchema = z.object({
 });
 export type OutboundContext = z.infer<typeof OutboundContextSchema>;
 
-export type OutboundKey = { relay: string; from: string; to: string };
+type OutboundKey = { relay: string; from: string; to: string };
 
 const sameTarget = (a: OutboundContext, k: OutboundKey) =>
   a.relay === k.relay && a.from === k.from && a.to === k.to;

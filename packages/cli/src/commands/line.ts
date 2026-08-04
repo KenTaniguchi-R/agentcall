@@ -294,7 +294,7 @@ export function setPrimary(m: MachinePaths, name: string): void {
   savePerson(m, { primary_line: name });
 }
 
-export interface LineRow {
+interface LineRow {
   name: string;
   address: string;
   relay: string;

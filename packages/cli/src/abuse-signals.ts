@@ -1,7 +1,7 @@
-export const ABUSE_SEVERITIES = ["low", "medium", "high"] as const;
+const ABUSE_SEVERITIES = ["low", "medium", "high"] as const;
 export type AbuseSeverity = typeof ABUSE_SEVERITIES[number];
 
-export const ABUSE_FLAGS = [
+const ABUSE_FLAGS = [
   "blocked_caller_attempt",
   "unoffered_task_request",
   "unknown_task_request",
@@ -9,7 +9,7 @@ export const ABUSE_FLAGS = [
 ] as const;
 export type AbuseFlag = typeof ABUSE_FLAGS[number];
 
-export interface AbuseSignal {
+interface AbuseSignal {
   flags: AbuseFlag[];
   severity?: AbuseSeverity;
 }

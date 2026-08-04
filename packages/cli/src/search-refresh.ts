@@ -3,13 +3,13 @@ import { ApiError, fetchRosterBundle, type Auth } from "./api.js";
 import { CACHE_TTL_MS, deleteCached, readCached, writeCached } from "./rosters.js";
 import type { LinePaths } from "./paths.js";
 
-export interface RefreshOptions {
+interface RefreshOptions {
   fetcher?: typeof fetchRosterBundle;
   now?: number;
   offline?: boolean;
 }
 
-export interface RefreshResult {
+interface RefreshResult {
   entries: BundleEntryType[];
   ageSeconds: number;
   stale: boolean;

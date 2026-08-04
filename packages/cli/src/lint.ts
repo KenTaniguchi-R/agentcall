@@ -5,7 +5,7 @@ import type { LinePaths } from "./paths.js";
 import { loadPolicy, stripPlus, type Policy } from "./policy.js";
 import { ASK_TASK, loadTasks } from "./tasks.js";
 
-export interface CardReport {
+interface CardReport {
   menu: string[];     // the owner's card as callers see it
   problems: string[]; // ✗ — broken manifests, dangling policy refs, unreadable policy; CLI exits 1
   notices: string[];  // ! — staleness / never-pushed; informational, exit 0

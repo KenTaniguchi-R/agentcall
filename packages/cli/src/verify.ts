@@ -69,7 +69,7 @@ export function checkAgentBinary(kind: AgentKind, resolveBin: (kind: AgentKind) 
   }
 }
 
-export type ExecFn = (cmd: string, args: string[]) => void;
+type ExecFn = (cmd: string, args: string[]) => void;
 
 const defaultExec: ExecFn = (cmd, args) => {
   execFileSync(cmd, args, { encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] });
@@ -90,7 +90,7 @@ export function checkCodexAuth(execFn: ExecFn = defaultExec): VerifyCheck {
 
 export type CodexGuardProbeFn = (args: string[], input: string, cwd: string) => Promise<string>;
 
-export interface CodexGuardTransportOptions {
+interface CodexGuardTransportOptions {
   timeoutMs?: number;
   killGraceMs?: number;
   maxOutputBytes?: number;
@@ -443,10 +443,10 @@ export async function checkRelaySelfCall(
   }
 }
 
-export const GUARD_CANARY = "AGENTCALL-GUARD-CANARY";
+const GUARD_CANARY = "AGENTCALL-GUARD-CANARY";
 // The probe returns the temp home as well as the output, because the absence
 // of the canary is not evidence — see below.
-export interface GuardProbeResult { output: string; home: string }
+interface GuardProbeResult { output: string; home: string }
 export type GuardProbeFn = (settings: string) => Promise<GuardProbeResult>;
 
 // The guard did not stop something it is supposed to stop. Both reinstall

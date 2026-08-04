@@ -3,7 +3,7 @@ import { z } from "zod";
 import { writeJsonAtomic } from "./json-store.js";
 
 const FailureKind = z.enum(["trace_export", "metric_export", "span_queue"]);
-export type TelemetryFailureKind = z.infer<typeof FailureKind>;
+type TelemetryFailureKind = z.infer<typeof FailureKind>;
 
 const TelemetryHealthSchema = z.object({
   version: z.literal(1),
@@ -22,7 +22,7 @@ const TelemetryHealthSchema = z.object({
     span_queue: z.boolean(),
   }),
 });
-export type TelemetryHealth = z.infer<typeof TelemetryHealthSchema>;
+type TelemetryHealth = z.infer<typeof TelemetryHealthSchema>;
 
 const initialState = (now: number): TelemetryHealth => ({
   version: 1,

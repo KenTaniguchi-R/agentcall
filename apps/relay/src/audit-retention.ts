@@ -69,7 +69,7 @@ function retentionCutoffPredicate(
  * DELETE must embed this clause inside its own D1 transaction rather than
  * treating a prior readiness response as authorization.
  */
-export function auditRetentionEligibilityPredicate(
+function auditRetentionEligibilityPredicate(
   ledger: AuditRetentionLedger,
   org: string,
   evaluatedAt: number,

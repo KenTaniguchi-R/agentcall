@@ -16,21 +16,21 @@ const suite = new CipherSuite({
   aead: new Aes128Gcm(),
 });
 
-export interface SealIdentity {
+interface SealIdentity {
   identity_pub: string;
   identity_pkcs8: string;
 }
 
-export interface RecipientEncryptionKey {
+interface RecipientEncryptionKey {
   pub: string;
   key_id: string;
   epoch: number;
 }
 
-export type ExpectedEnvelope = Pick<
+type ExpectedEnvelope = Pick<
   HpkeEnvelopeHeaderType, "relay_origin" | "from" | "to" | "key_id" | "epoch"
 >;
-export interface ExpectedResponseBinding {
+interface ExpectedResponseBinding {
   request_id: string;
   request_transcript_hash: string;
 }

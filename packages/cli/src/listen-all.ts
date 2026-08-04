@@ -4,7 +4,7 @@ import { startListener, type ListenerDeps } from "./listener.js";
 import type { MachinePaths } from "./paths.js";
 import { assertCallableLine, relayUrl } from "./config.js";
 
-export interface ListenAllDeps {
+interface ListenAllDeps {
   start?: (deps: ListenerDeps) => { stop(): void | Promise<void> };
   log?: (line: string) => void;
 }

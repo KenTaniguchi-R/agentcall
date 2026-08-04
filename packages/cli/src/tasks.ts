@@ -54,7 +54,7 @@ export const SkillFrontmatter = z.object({
   // has decided, and their decision wins.
   threadable: z.boolean().optional(),
 });
-export type SkillFrontmatterType = z.infer<typeof SkillFrontmatter>;
+type SkillFrontmatterType = z.infer<typeof SkillFrontmatter>;
 
 export interface Task {
   id: string;
@@ -157,7 +157,7 @@ export function loadTasks(p: LinePaths, warn: (msg: string) => void = console.er
 // description shows up verbatim on the owner's card review, which is its
 // own nudge to edit before offering. Commented lines document every
 // optional frontmatter field with its default.
-export const SKILL_TEMPLATE = `---
+const SKILL_TEMPLATE = `---
 description: TODO — one line callers will see on your card
 # name: defaults to the directory name
 # tools: [read]           # read | write | fetch | exec

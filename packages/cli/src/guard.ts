@@ -13,7 +13,7 @@ export type GuardInput = {
 // resolved path, and MUST NOT reach permissionDecisionReason — the caller-facing
 // reason is DENY_REASON, a fixed string with no per-denial content. See the
 // reason contract in the design spec.
-export type GuardVerdict =
+type GuardVerdict =
   | { allow: true; flag?: { rule: string; detail: string } }
   | { allow: false; rule: string; detail: string };
 
@@ -31,7 +31,7 @@ export const FAIL_CLOSED_REASON =
 
 // `enforce` blocks; `observe` records and always allows. Codex uses observe
 // because command-string inspection cannot provide its filesystem read floor.
-export type GuardMode = "enforce" | "observe";
+type GuardMode = "enforce" | "observe";
 
 // Home-relative directories. Everything beneath them is denied.
 const DENIED_DIRS = [
@@ -289,7 +289,7 @@ export interface GuardDeps {
   allowedRoot?: string;
 }
 
-export type GuardOutput = { exitCode: number; stdout: string; stderr: string };
+type GuardOutput = { exitCode: number; stdout: string; stderr: string };
 
 const ALLOW: GuardOutput = { exitCode: 0, stdout: "", stderr: "" };
 const FAIL_CLOSED: GuardOutput = { exitCode: 2, stdout: "", stderr: FAIL_CLOSED_REASON };

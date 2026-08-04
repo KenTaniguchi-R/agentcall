@@ -9,7 +9,7 @@ import { writeJsonAtomic } from "./json-store.js";
 // only field that ever travels; `agent_session_id` is the capability it stands
 // in for and must never be serialized onto the wire, into an audit log, or into
 // an error message.
-export const ContextBindingSchema = z.object({
+const ContextBindingSchema = z.object({
   context_id: z.string().regex(CONTEXT_ID_RE),
   agent_session_id: z.string().min(1),
   caller: z.string().min(1),
@@ -29,7 +29,7 @@ export function mintContextId(): string {
   return "ctx_" + randomBytes(16).toString("base64url");
 }
 
-export interface AdmitInput {
+interface AdmitInput {
   context_id: string;
   caller: string;
   task: string;

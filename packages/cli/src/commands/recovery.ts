@@ -24,7 +24,7 @@ const PendingRecovery = z.object({
 }).strict();
 type PendingRecoveryType = z.infer<typeof PendingRecovery>;
 
-export type RecoveryTarget = {
+type RecoveryTarget = {
   name: string; paths: LinePaths; config?: LineConfig;
   org?: string; handle?: string; relay?: string; generation?: number; resume?: boolean;
 };
@@ -36,11 +36,11 @@ type CommonDeps = {
   log?: (line: string) => void;
 };
 
-export type RecoveryIssueDeps = CommonDeps & {
+type RecoveryIssueDeps = CommonDeps & {
   issue?: typeof issueRecovery;
   status?: typeof getRecoveryStatus;
 };
-export type RecoveryRedeemDeps = CommonDeps & { redeem?: typeof redeemRecovery };
+type RecoveryRedeemDeps = CommonDeps & { redeem?: typeof redeemRecovery };
 
 const digest = (value: string) => createHash("sha256").update(value).digest("hex");
 const generatedSecret = () => randomBytes(32).toString("base64url");

@@ -23,7 +23,7 @@ import {
   type VerifyCheck, type VerifyFns,
 } from "./verify.js";
 
-export interface DoctorDeps {
+interface DoctorDeps {
   machine: MachinePaths;
   // Test seams — production callers should leave these as the defaults.
   verifyFns?: VerifyFns;
@@ -73,7 +73,7 @@ function whichAll(bin: string): string[] {
   }).split(/\r?\n/).filter(Boolean);
 }
 
-export function checkCliInstall(
+function checkCliInstall(
   deps: Pick<DoctorDeps, "pkgFn" | "selfPathFn" | "whichFn"> = {},
 ): VerifyCheck {
   let manifest: CliPackageManifest;

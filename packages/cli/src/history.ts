@@ -9,7 +9,7 @@ import {
 const HISTORY_SCAN_BYTES = 4 * 1024 * 1024;
 const GUARD_EVENT_TYPES = new Set(["tool_denied", "tool_flagged", "tool_attempt_flagged"]);
 
-export interface LocalHistoryEntry {
+interface LocalHistoryEntry {
   ts: string;
   call_id: string;
   from: string;
@@ -134,7 +134,7 @@ function validToolEvent(row: Record<string, unknown>): boolean {
     );
 }
 
-export interface LocalHistory {
+interface LocalHistory {
   entries: LocalHistoryEntry[];
   malformed: number;
   truncatedFiles: string[];

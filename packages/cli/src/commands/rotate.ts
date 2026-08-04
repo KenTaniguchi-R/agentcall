@@ -17,7 +17,7 @@ export function register(program: { command(name: string): any }): void {
     });
 }
 
-export interface RotateDeps {
+interface RotateDeps {
   rotate?: typeof rotateToken;
   log?: (line: string) => void;
   platform?: NodeJS.Platform;
