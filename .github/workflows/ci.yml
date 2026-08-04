@@ -1,12 +1,12 @@
 name: CI
 
+# Automatic runs are temporarily paused to avoid consuming GitHub Actions
+# minutes. Keep the workflow runnable by hand so the CI definition remains easy
+# to verify and restore.
 on:
-  push:
-    branches: [main]
-  pull_request:
   workflow_dispatch:
 
-# A new push to the same branch supersedes the run in flight.
+# A new manual run for the same ref supersedes the run in flight.
 concurrency:
   group: ci-${{ github.ref }}
   cancel-in-progress: true
