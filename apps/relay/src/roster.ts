@@ -10,8 +10,8 @@ import {
   MAX_BUNDLE_TASKS_PER_CARD, MAX_CALLER_GROUPS, MAX_LISTED_ROSTER_JOIN_KEYS, MAX_ROSTER_MEMBERS,
   RevokeRosterJoinKeyRequest, ROSTER_ID_RE, visibleTasks,
 } from "@benree/agentcall-shared";
-import { authenticateRequest } from "./tenant.js";
-import { checkLimit, NATIVE_ROSTER_READ, REGISTER, ROSTER_WRITE } from "./ratelimit/index.js";
+import { rateLimit, type RelayAppEnv } from "./middleware.js";
+import { NATIVE_ROSTER_READ, REGISTER, ROSTER_WRITE } from "./ratelimit/index.js";
 import { parseStoredCard } from "./stored-card.js";
 import { MAX_ROSTER_AUDIT_EVENTS, rosterAuditStatement } from "./events.js";
 
@@ -57,16 +57,12 @@ function publicJoinKey(row: JoinKeyRow) {
   };
 }
 
-export function mountRoster(app: Hono<{ Bindings: Env }>): void {
-  app.post("/v1/roster", async (c) => {
-    const identity = await authenticateRequest(c.env, c.req);
-    if (!identity) return c.json({ error: "unauthorized" }, 401);
+export function mountRoster(app: Hono<RelayAppEnv>): void {
+  app.post("/v1/roster", rateLimit(REGISTER, "identity", "roster:"), async (c) => {
+    const identity = (c as any).get("identity");
     const { org, handle } = identity;
     // Creating rosters uses the tighter registration policy so it cannot be
     // used to cheaply fill D1 with rows.
-    if (!(await checkLimit(c.env, `roster:${org}:${handle}`, REGISTER))) {
-      return c.json({ error: "rate limited" }, 429);
-    }
     const roster_id = generateRosterId();
     const { joinKey, prefix, secret } = generateJoinKey();
     const admin_secret = generateToken();
@@ -103,9 +99,10 @@ export function mountRoster(app: Hono<{ Bindings: Env }>): void {
   // an enumerable namespace. Declared once so the two call sites cannot drift.
   const NOT_FOUND = { error: "not found" } as const;
 
-  app.post("/v1/roster/:id/join", async (c) => {
-    const identity = await authenticateRequest(c.env, c.req);
-    if (!identity) return c.json({ error: "unauthorized" }, 401);
+  app.post("/v1/roster/:id/join", rateLimit(ROSTER_WRITE, (c) => {
+    const i = (c as any).get("identity"); return `${i.org}:${c.req.param("id")}`;
+  }), async (c) => {
+    const identity = (c as any).get("identity");
     const { org, handle } = identity;
 
     const id = c.req.param("id");
@@ -113,9 +110,6 @@ export function mountRoster(app: Hono<{ Bindings: Env }>): void {
     // and rejecting it here keeps junk out of the query path.
     if (!ROSTER_ID_RE.test(id)) return c.json({ error: "invalid roster id" }, 400);
 
-    if (!(await checkLimit(c.env, `${org}:${id}`, ROSTER_WRITE))) {
-      return c.json({ error: "rate limited" }, 429);
-    }
 
     const body = JoinRosterRequest.safeParse(await c.req.json().catch(() => null));
     if (!body.success) return c.json(NOT_FOUND, 404);
@@ -209,12 +203,10 @@ export function mountRoster(app: Hono<{ Bindings: Env }>): void {
     return row;
   }
 
-  app.post("/v1/roster/:id/leave", async (c) => {
-    const identity = await authenticateRequest(c.env, c.req);
-    if (!identity) return c.json({ error: "unauthorized" }, 401);
+  app.post("/v1/roster/:id/leave", rateLimit(ROSTER_WRITE, (c) => `${(c as any).get("identity").org}:${c.req.param("id")}`), async (c) => {
+    const identity = (c as any).get("identity");
     const id = c.req.param("id");
     if (!ROSTER_ID_RE.test(id)) return c.json({ error: "invalid roster id" }, 400);
-    if (!(await checkLimit(c.env, `${identity.org}:${id}`, ROSTER_WRITE))) return c.json({ error: "rate limited" }, 429);
     const member = await c.env.DB.prepare(
       "SELECT 1 FROM roster_members WHERE roster_id = ? AND org = ? AND handle = ?",
     ).bind(id, identity.org, identity.handle).first();
@@ -234,14 +226,10 @@ export function mountRoster(app: Hono<{ Bindings: Env }>): void {
     return c.json({ ok: true });
   });
 
-  app.post("/v1/roster/:id/audit-budget/reset", async (c) => {
-    const identity = await authenticateRequest(c.env, c.req);
-    if (!identity) return c.json({ error: "unauthorized" }, 401);
+  app.post("/v1/roster/:id/audit-budget/reset", rateLimit(ROSTER_WRITE, (c) => `${(c as any).get("identity").org}:${c.req.param("id")}`), async (c) => {
+    const identity = (c as any).get("identity");
     const id = c.req.param("id");
     if (!ROSTER_ID_RE.test(id)) return c.json({ error: "invalid roster id" }, 400);
-    if (!(await checkLimit(c.env, `${identity.org}:${id}`, ROSTER_WRITE))) {
-      return c.json({ error: "rate limited" }, 429);
-    }
     const body = AdminSecretRequest.safeParse(await c.req.json().catch(() => null));
     if (!body.success) return c.json(NOT_FOUND, 404);
     const roster = await adminRoster(c, id, body.data.admin_secret);
@@ -267,12 +255,10 @@ export function mountRoster(app: Hono<{ Bindings: Env }>): void {
     return c.json({ ok: true, reset, audit_budget_used: state?.audit_budget_used ?? 0 });
   });
 
-  app.post("/v1/roster/:id/expel", async (c) => {
-    const identity = await authenticateRequest(c.env, c.req);
-    if (!identity) return c.json({ error: "unauthorized" }, 401);
+  app.post("/v1/roster/:id/expel", rateLimit(ROSTER_WRITE, (c) => `${(c as any).get("identity").org}:${c.req.param("id")}`), async (c) => {
+    const identity = (c as any).get("identity");
     const id = c.req.param("id");
     if (!ROSTER_ID_RE.test(id)) return c.json({ error: "invalid roster id" }, 400);
-    if (!(await checkLimit(c.env, `${identity.org}:${id}`, ROSTER_WRITE))) return c.json({ error: "rate limited" }, 429);
     const body = ExpelRosterRequest.safeParse(await c.req.json().catch(() => null));
     if (!body.success) return c.json(NOT_FOUND, 404);
     const roster = await adminRoster(c, id, body.data.admin_secret);
@@ -295,12 +281,10 @@ export function mountRoster(app: Hono<{ Bindings: Env }>): void {
     return c.json({ ok: true });
   });
 
-  app.post("/v1/roster/:id/keys", async (c) => {
-    const identity = await authenticateRequest(c.env, c.req);
-    if (!identity) return c.json({ error: "unauthorized" }, 401);
+  app.post("/v1/roster/:id/keys", rateLimit(ROSTER_WRITE, (c) => `${(c as any).get("identity").org}:${c.req.param("id")}`), async (c) => {
+    const identity = (c as any).get("identity");
     const id = c.req.param("id");
     if (!ROSTER_ID_RE.test(id)) return c.json({ error: "invalid roster id" }, 400);
-    if (!(await checkLimit(c.env, `${identity.org}:${id}`, ROSTER_WRITE))) return c.json({ error: "rate limited" }, 429);
     const body = IssueRosterJoinKeyRequest.safeParse(await c.req.json().catch(() => null));
     if (!body.success) return c.json(NOT_FOUND, 404);
     const roster = await adminRoster(c, id, body.data.admin_secret);
@@ -339,12 +323,10 @@ export function mountRoster(app: Hono<{ Bindings: Env }>): void {
     }) });
   });
 
-  app.post("/v1/roster/:id/keys/list", async (c) => {
-    const identity = await authenticateRequest(c.env, c.req);
-    if (!identity) return c.json({ error: "unauthorized" }, 401);
+  app.post("/v1/roster/:id/keys/list", rateLimit(ROSTER_WRITE, (c) => `${(c as any).get("identity").org}:${c.req.param("id")}`), async (c) => {
+    const identity = (c as any).get("identity");
     const id = c.req.param("id");
     if (!ROSTER_ID_RE.test(id)) return c.json({ error: "invalid roster id" }, 400);
-    if (!(await checkLimit(c.env, `${identity.org}:${id}`, ROSTER_WRITE))) return c.json({ error: "rate limited" }, 429);
     const body = AdminSecretRequest.safeParse(await c.req.json().catch(() => null));
     if (!body.success) return c.json(NOT_FOUND, 404);
     const roster = await adminRoster(c, id, body.data.admin_secret);
@@ -356,12 +338,10 @@ export function mountRoster(app: Hono<{ Bindings: Env }>): void {
     return c.json({ keys: (results ?? []).map(publicJoinKey) });
   });
 
-  app.post("/v1/roster/:id/keys/:prefix/revoke", async (c) => {
-    const identity = await authenticateRequest(c.env, c.req);
-    if (!identity) return c.json({ error: "unauthorized" }, 401);
+  app.post("/v1/roster/:id/keys/:prefix/revoke", rateLimit(ROSTER_WRITE, (c) => `${(c as any).get("identity").org}:${c.req.param("id")}`), async (c) => {
+    const identity = (c as any).get("identity");
     const id = c.req.param("id");
     if (!ROSTER_ID_RE.test(id)) return c.json({ error: "invalid roster id" }, 400);
-    if (!(await checkLimit(c.env, `${identity.org}:${id}`, ROSTER_WRITE))) return c.json({ error: "rate limited" }, 429);
     const raw = await c.req.json().catch(() => null);
     const body = RevokeRosterJoinKeyRequest.safeParse({ ...(typeof raw === "object" && raw ? raw : {}), prefix: c.req.param("prefix") });
     if (!body.success) return c.json(NOT_FOUND, 404);
@@ -401,12 +381,10 @@ export function mountRoster(app: Hono<{ Bindings: Env }>): void {
     return c.json({ prefix: body.data.prefix, revoked_at: persisted.revoked_at, evicted });
   });
 
-  app.post("/v1/roster/:id/delete", async (c) => {
-    const identity = await authenticateRequest(c.env, c.req);
-    if (!identity) return c.json({ error: "unauthorized" }, 401);
+  app.post("/v1/roster/:id/delete", rateLimit(ROSTER_WRITE, (c) => `${(c as any).get("identity").org}:${c.req.param("id")}`), async (c) => {
+    const identity = (c as any).get("identity");
     const id = c.req.param("id");
     if (!ROSTER_ID_RE.test(id)) return c.json({ error: "invalid roster id" }, 400);
-    if (!(await checkLimit(c.env, `${identity.org}:${id}`, ROSTER_WRITE))) return c.json({ error: "rate limited" }, 429);
     const body = AdminSecretRequest.safeParse(await c.req.json().catch(() => null));
     if (!body.success) return c.json(NOT_FOUND, 404);
     const roster = await adminRoster(c, id, body.data.admin_secret);
@@ -426,18 +404,13 @@ export function mountRoster(app: Hono<{ Bindings: Env }>): void {
     return c.json({ ok: true });
   });
 
-  app.get("/v1/roster/:id/bundle", async (c) => {
-    const identity = await authenticateRequest(c.env, c.req);
-    if (!identity) return c.json({ error: "unauthorized" }, 401);
+  app.get("/v1/roster/:id/bundle", rateLimit(NATIVE_ROSTER_READ, (c) => `${c.req.header("cf-connecting-ip") ?? "unknown"}:${c.req.param("id")}`), async (c) => {
+    const identity = (c as any).get("identity");
     const { org, handle: viewer } = identity;
 
     const id = c.req.param("id");
     if (!ROSTER_ID_RE.test(id)) return c.json({ error: "invalid roster id" }, 400);
 
-    const ip = c.req.header("cf-connecting-ip") ?? "unknown";
-    if (!(await checkLimit(c.env, `${ip}:${id}`, NATIVE_ROSTER_READ))) {
-      return c.json({ error: "rate limited" }, 429);
-    }
 
     // Membership is the real authorization. Possession of a handle token is
     // not a gate: registration is open. Checked BEFORE anything reveals that

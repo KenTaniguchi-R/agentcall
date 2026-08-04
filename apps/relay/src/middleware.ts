@@ -31,9 +31,9 @@ export const requireIdentity = createMiddleware<RelayAppEnv>(async (c, next) => 
   await next();
 });
 
-export function rateLimit(policy: RateLimitPolicy, keyBy: "ip" | "identity", prefix = "") {
+export function rateLimit(policy: RateLimitPolicy, keyBy: "ip" | "identity" | ((c: any) => string), prefix = "") {
   return createMiddleware<RelayAppEnv>(async (c, next) => {
-    const key = keyBy === "ip"
+    const key = typeof keyBy === "function" ? keyBy(c) : keyBy === "ip"
       ? c.req.header("cf-connecting-ip") ?? "unknown"
       : (() => {
           const identity = (c as any).get("identity") as Identity;
