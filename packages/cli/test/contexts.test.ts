@@ -1,5 +1,4 @@
-import { lstatSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, symlinkSync, writeFileSync, statSync } from "node:fs";
-import { tmpdir } from "node:os";
+import { lstatSync, mkdirSync, readFileSync, readdirSync, symlinkSync, writeFileSync, statSync } from "node:fs";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 import { CONTEXT_ID_RE, CONTEXT_TTL_MS, MAX_CONTEXTS, MAX_CONTEXT_TURNS } from "@benree/agentcall-shared";
@@ -7,7 +6,7 @@ import {
   admitContext, loadContexts, mintContextId, pruneContexts, saveContexts, upsertContext,
   type ContextBinding,
 } from "../src/contexts.js";
-import { getLinePaths, getMachinePaths } from "../src/paths.js";
+import { tempLine } from "./helpers.js";
 
 const NOW = 1_800_000_000_000;
 
@@ -129,10 +128,7 @@ describe("upsertContext", () => {
 });
 
 describe("load/save", () => {
-  const paths = () => {
-    const root = mkdtempSync(join(tmpdir(), "agentcall-ctx-"));
-    return getLinePaths(getMachinePaths(root, root), "claude");
-  };
+  const paths = () => tempLine("claude", "agentcall-ctx-");
 
   it("round-trips", () => {
     const p = paths();

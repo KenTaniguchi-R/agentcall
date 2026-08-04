@@ -1,6 +1,5 @@
 import { describe, expect, it, beforeEach, vi } from "vitest";
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, writeFileSync } from "node:fs";
-import { tmpdir } from "node:os";
+import { existsSync, mkdirSync, readFileSync, readdirSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { getLinePaths, getMachinePaths, type MachinePaths } from "../src/paths.js";
 import { saveLineConfig } from "../src/lines.js";
@@ -11,6 +10,7 @@ import {
   removeLine as removeLineImpl, setPrimary,
   type AddLineOpts, type RemoveLineOpts,
 } from "../src/commands/line.js";
+import { tempDir } from "./helpers.js";
 
 // addLine/removeLine fall back to the real installListenerService/
 // uninstallListenerService whenever a test omits its opts seam
@@ -34,7 +34,7 @@ vi.mock("../src/listener-service.js", () => ({
 
 let m: MachinePaths;
 beforeEach(() => {
-  const root = mkdtempSync(join(tmpdir(), "agentcall-linecmd-"));
+  const root = tempDir("agentcall-linecmd-");
   m = getMachinePaths(root, root);
   mkdirSync(m.linesDir, { recursive: true });
 });

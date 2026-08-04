@@ -1,8 +1,7 @@
 import { execFileSync } from "node:child_process";
 import { generateKeyPairSync } from "node:crypto";
 import { createServer, type Server } from "node:http";
-import { mkdirSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
-import { tmpdir } from "node:os";
+import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { WebSocketServer } from "ws";
@@ -20,6 +19,7 @@ import {
 } from "@benree/agentcall-shared";
 import { openE2EERequest, sealE2EEResponse } from "../src/e2ee.js";
 import type { StoredKeys } from "../src/keys.js";
+import { tempDir } from "./helpers.js";
 
 // The "local-sota" contact stands in for an address on whichever relay the
 // current test spun up. pickOutboundLine (src/outbound.ts) now matches the
@@ -85,7 +85,7 @@ async function runCommand(home: string, argv: string[]): Promise<Run> {
 }
 
 function home(): string {
-  return mkdtempSync(join(tmpdir(), "agentcall-cli-"));
+  return tempDir("agentcall-cli-");
 }
 
 describe("cross-platform listener CLI", () => {

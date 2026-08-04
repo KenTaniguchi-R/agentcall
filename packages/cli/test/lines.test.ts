@@ -1,13 +1,13 @@
 import { describe, expect, it, beforeEach } from "vitest";
-import { mkdtempSync, mkdirSync, readFileSync, symlinkSync, writeFileSync, statSync } from "node:fs";
-import { tmpdir } from "node:os";
+import { mkdirSync, readFileSync, symlinkSync, writeFileSync, statSync } from "node:fs";
 import { join } from "node:path";
 import { getLinePaths, getMachinePaths, type MachinePaths } from "../src/paths.js";
 import { assertValidLineName, listLines, loadLineConfig, saveLineConfig } from "../src/lines.js";
+import { tempDir } from "./helpers.js";
 
 let m: MachinePaths;
 beforeEach(() => {
-  const root = mkdtempSync(join(tmpdir(), "agentcall-lines-"));
+  const root = tempDir("agentcall-lines-");
   m = getMachinePaths(root, root);
   mkdirSync(m.linesDir, { recursive: true });
 });
@@ -137,7 +137,7 @@ describe("saveLineConfig / loadLineConfig", () => {
 
 describe("listLines", () => {
   it("returns nothing when linesDir does not exist", () => {
-    const empty = getMachinePaths(mkdtempSync(join(tmpdir(), "agentcall-none-")));
+    const empty = getMachinePaths(tempDir("agentcall-none-"));
     expect(listLines(empty)).toEqual([]);
   });
 

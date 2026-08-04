@@ -40,6 +40,10 @@ describe("resolveAgentBin", () => {
       dirname(fileURLToPath(import.meta.url)), "..", ".tmp", `bin-${process.pid}-durable`,
     );
     const ephemeralDir = join(tmpdir(), "cmux-cli-shims", `${process.pid}-ephemeral`);
+    // mkdirSync's `recursive: true` above also creates the "cmux-cli-shims"
+    // parent; removing only the per-pid leaf left that parent behind as a
+    // permanent empty directory under the OS tmp root.
+    const cleanupEphemeral = () => rmSync(join(tmpdir(), "cmux-cli-shims"), { recursive: true, force: true });
 
     it("skips an ephemeral shim earlier on PATH for a durable install later on PATH", () => {
       try {
@@ -50,7 +54,7 @@ describe("resolveAgentBin", () => {
         expect(resolveAgentBin("claude", { PATH: pathEnv }, [resolvedEphemeralRoot])).toBe(realpathSync(durableBin));
       } finally {
         rmSync(durableDir, { recursive: true, force: true });
-        rmSync(ephemeralDir, { recursive: true, force: true });
+        cleanupEphemeral();
       }
     });
 
@@ -59,7 +63,7 @@ describe("resolveAgentBin", () => {
         const ephemeralBin = makeFakeBin(ephemeralDir, "claude");
         expect(resolveAgentBin("claude", { PATH: ephemeralDir })).toBe(realpathSync(ephemeralBin));
       } finally {
-        rmSync(ephemeralDir, { recursive: true, force: true });
+        cleanupEphemeral();
       }
     });
   });

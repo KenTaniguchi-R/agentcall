@@ -1,6 +1,6 @@
 import { createMiddleware } from "hono/factory";
 import type { Env } from "./index.js";
-import { authenticateRequest, type Identity } from "./tenant.js";
+import { authenticateRequest, requireOrgAdmin, type Identity } from "./tenant.js";
 import { checkLimit, type RateLimitPolicy } from "./ratelimit/index.js";
 
 export type RelayAppEnv = { Bindings: Env; Variables: { identity: Identity } };
@@ -38,6 +38,20 @@ export const requireIdentity = createMiddleware<RelayAppEnv>(async (c, next) => 
   const identity = await authenticateRequest(c.env, c.req);
   if (!identity) return c.json({ error: "unauthorized" }, 401);
   c.set("identity", identity);
+  await next();
+});
+
+// Admin-gating an endpoint used to mean pasting this check into the handler
+// by hand — every audit and invite route did, 12 times, byte-identical. That
+// makes "admin-only" a property of whoever wrote the handler remembering to
+// paste it, not a property of the route. A new route that forgets the line
+// ships unguarded and nothing catches it. Routing it through middleware
+// instead makes admin-gating a property of the route table: a route either
+// lists requireAdmin in its chain or it doesn't, and that's visible at the
+// call site rather than buried in handler logic. Depends on requireIdentity
+// having already set c.var.identity.
+export const requireAdmin = createMiddleware<RelayAppEnv>(async (c, next) => {
+  if (!requireOrgAdmin(c.var.identity)) return c.json({ error: "administrator role required" }, 403);
   await next();
 });
 

@@ -1,10 +1,10 @@
-import { mkdtempSync, readFileSync, writeFileSync } from "node:fs";
-import { tmpdir } from "node:os";
+import { readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 import { appendSnippet, SNIPPET } from "../src/snippet.js";
+import { tempDir } from "./helpers.js";
 
-function tempFile() { return join(mkdtempSync(join(tmpdir(), "agentcall-sn-")), "CLAUDE.md"); }
+function tempFile() { return join(tempDir("agentcall-sn-"), "CLAUDE.md"); }
 
 describe("appendSnippet", () => {
   it("creates the file and appends once", () => {

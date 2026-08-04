@@ -1,11 +1,10 @@
-import { mkdtempSync, statSync, writeFileSync, mkdirSync, readFileSync } from "node:fs";
-import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { statSync, writeFileSync, mkdirSync, readFileSync } from "node:fs";
 import { describe, expect, it } from "vitest";
 import { getMachinePaths } from "../src/paths.js";
 import { loadContacts, saveContacts, addContact, removeContact, NAME_RE, resolveAddress } from "../src/contacts.js";
+import { tempDir } from "./helpers.js";
 
-function tempHome() { return mkdtempSync(join(tmpdir(), "agentcall-ct-")); }
+function tempHome() { return tempDir("agentcall-ct-"); }
 
 describe("contacts store", () => {
   it("paths derives contactsFile from home", () => {

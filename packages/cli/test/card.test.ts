@@ -1,12 +1,10 @@
-import { mkdirSync, mkdtempSync, readFileSync } from "node:fs";
-import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { mkdirSync, readFileSync } from "node:fs";
 import { describe, expect, it } from "vitest";
 import { buildCardUpload, publishCard } from "../src/card.js";
-import { getLinePaths, getMachinePaths } from "../src/paths.js";
 import { ASK_TASK, type Task } from "../src/tasks.js";
 import type { Policy } from "../src/policy.js";
 import type { LineConfig } from "../src/config.js";
+import { tempLine } from "./helpers.js";
 
 const cfg: LineConfig = { org: "acme", handle: "ken", token: "t", agent_kind: "claude", relay: "https://r" };
 const intro: Task = {
@@ -69,8 +67,7 @@ describe("buildCardUpload", () => {
 
 describe("publishCard", () => {
   function tempPaths() {
-    const root = mkdtempSync(join(tmpdir(), "agentcall-pub-"));
-    const p = getLinePaths(getMachinePaths(root, root), "claude");
+    const p = tempLine("claude", "agentcall-pub-");
     mkdirSync(p.dir, { recursive: true });
     return p;
   }

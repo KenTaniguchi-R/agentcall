@@ -1,5 +1,4 @@
-import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, statSync, writeFileSync } from "node:fs";
-import { tmpdir } from "node:os";
+import { chmodSync, existsSync, mkdirSync, readFileSync, statSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 import {
@@ -7,10 +6,11 @@ import {
   listenerServiceFile,
 } from "../src/listener-service.js";
 import { getMachinePaths } from "../src/paths.js";
+import { tempDir } from "./helpers.js";
 
 describe("background listener service", () => {
   it("installs and starts one user-level systemd service on Linux", () => {
-    const home = mkdtempSync(join(tmpdir(), "agentcall-systemd-"));
+    const home = tempDir("agentcall-systemd-");
     const machine = getMachinePaths(home, home, "linux");
     const calls: string[][] = [];
 
@@ -38,7 +38,7 @@ describe("background listener service", () => {
   });
 
   it("repairs an existing systemd unit to owner-only permissions", () => {
-    const home = mkdtempSync(join(tmpdir(), "agentcall-systemd-"));
+    const home = tempDir("agentcall-systemd-");
     const machine = getMachinePaths(home, home, "linux");
     const unitFile = listenerServiceFile(machine, "linux");
     mkdirSync(join(home, ".config/systemd/user"), { recursive: true });

@@ -9,8 +9,6 @@ import {
   AlwaysOnSampler, BasicTracerProvider, InMemorySpanExporter, SamplingDecision,
   SimpleSpanProcessor, type ReadableSpan, type SpanExporter,
 } from "@opentelemetry/sdk-trace-base";
-import { mkdtempSync } from "node:fs";
-import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, it, vi } from "vitest";
 import {
@@ -20,6 +18,7 @@ import {
   telemetrySafely,
 } from "../src/telemetry.js";
 import { TelemetryHealthReporter } from "../src/telemetry-health.js";
+import { tempDir } from "./helpers.js";
 
 const encryptedRequest = {
   v: 1 as const, direction: "request" as const, relay_origin: "relay.example",
@@ -105,7 +104,7 @@ describe("AgentCallTelemetry", () => {
   it("persists trace-export and queue degradation without exposing exporter errors", async () => {
     const warnings: string[] = [];
     const health = new TelemetryHealthReporter(
-      join(mkdtempSync(join(tmpdir(), "agentcall-otel-health-")), "health.json"),
+      join(tempDir("agentcall-otel-health-"), "health.json"),
       (warning) => warnings.push(warning),
     );
     const exporter: SpanExporter = {
@@ -128,7 +127,7 @@ describe("AgentCallTelemetry", () => {
       shutdown: async () => {},
     };
     const queueHealth = new TelemetryHealthReporter(
-      join(mkdtempSync(join(tmpdir(), "agentcall-otel-queue-")), "health.json"),
+      join(tempDir("agentcall-otel-queue-"), "health.json"),
       (warning) => warnings.push(warning),
     );
     const queueProcessor = new HealthBatchSpanProcessor(blockedExporter, queueHealth, 1, {
@@ -147,7 +146,7 @@ describe("AgentCallTelemetry", () => {
 
   it("persists metric exporter failure and recovery independently", () => {
     const health = new TelemetryHealthReporter(
-      join(mkdtempSync(join(tmpdir(), "agentcall-otel-metric-")), "health.json"),
+      join(tempDir("agentcall-otel-metric-"), "health.json"),
       () => {},
     );
     let fail = true;

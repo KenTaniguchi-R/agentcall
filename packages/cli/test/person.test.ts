@@ -1,13 +1,12 @@
 import { describe, expect, it, beforeEach } from "vitest";
-import { existsSync, mkdtempSync, mkdirSync, writeFileSync, readFileSync, readdirSync, statSync } from "node:fs";
-import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { existsSync, mkdirSync, writeFileSync, readFileSync, readdirSync, statSync } from "node:fs";
 import { getMachinePaths, type MachinePaths } from "../src/paths.js";
 import { loadPerson, savePerson, resolvePrimary } from "../src/person.js";
+import { tempDir } from "./helpers.js";
 
 let m: MachinePaths;
 beforeEach(() => {
-  const root = mkdtempSync(join(tmpdir(), "agentcall-person-"));
+  const root = tempDir("agentcall-person-");
   m = getMachinePaths(root, root);
   mkdirSync(m.dir, { recursive: true });
 });

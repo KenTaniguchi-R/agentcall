@@ -1,11 +1,11 @@
-import { mkdirSync, mkdtempSync, writeFileSync } from "node:fs";
-import { tmpdir } from "node:os";
+import { mkdirSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 import { buildCardReport } from "../src/lint.js";
 import { publishCard } from "../src/card.js";
 import { getLinePaths, getMachinePaths } from "../src/paths.js";
 import type { LineConfig } from "../src/config.js";
+import { tempDir } from "./helpers.js";
 
 const cfg: LineConfig = { org: "acme", handle: "ken", token: "t", agent_kind: "claude", relay: "https://r" };
 
@@ -19,7 +19,7 @@ function managedLinePaths(h: string) {
   return getLinePaths({ ...m, managedPolicyFile: join(h, "managed-policy.json") }, "line");
 }
 function home() {
-  const h = mkdtempSync(join(tmpdir(), "agentcall-lint-"));
+  const h = tempDir("agentcall-lint-");
   mkdirSync(linePaths(h).dir, { recursive: true });
   return h;
 }

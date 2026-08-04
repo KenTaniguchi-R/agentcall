@@ -1,13 +1,12 @@
-import { mkdirSync, mkdtempSync, writeFileSync } from "node:fs";
-import { tmpdir } from "node:os";
+import { mkdirSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
-import { getLinePaths, getMachinePaths, type MachinePaths } from "../src/paths.js";
+import { getLinePaths, type MachinePaths } from "../src/paths.js";
 import { lineTaskDirs } from "../src/lineTaskDirs.js";
+import { tempMachine } from "./helpers.js";
 
 function freshMachine(): MachinePaths {
-  const root = mkdtempSync(join(tmpdir(), "agentcall-linetasks-"));
-  return getMachinePaths(root, root);
+  return tempMachine("agentcall-linetasks-");
 }
 
 describe("lineTaskDirs", () => {

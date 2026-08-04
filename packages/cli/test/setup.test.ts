@@ -1,6 +1,4 @@
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
-import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { runSetup, warnIfEphemeralServiceBin, type SetupOpts } from "../src/setup.js";
 import { getLinePaths, getMachinePaths, type MachinePaths } from "../src/paths.js";
@@ -9,6 +7,7 @@ import { loadPerson, savePerson } from "../src/person.js";
 import { addLine, type AddLineOpts } from "../src/commands/line.js";
 import type { LineConfig } from "../src/config.js";
 import { AgentRunError } from "../src/runner.js";
+import { tempDir } from "./helpers.js";
 
 // addLine/removeLine (and so runSetup, which delegates to addLine) fall back
 // to the real installListenerService/uninstallListenerService whenever a seam is
@@ -69,7 +68,7 @@ function run(opts: SetupOpts): Promise<{ ready: boolean }> {
 let home: string;
 let m: MachinePaths;
 beforeEach(() => {
-  home = mkdtempSync(join(tmpdir(), "agentcall-setup-"));
+  home = tempDir("agentcall-setup-");
   process.env.AGENTCALL_HOME = home;
   m = getMachinePaths(home, home);
 });
@@ -246,7 +245,7 @@ describe("runSetup", () => {
   });
 
   it("requires an invite for a fresh enrollment", async () => {
-    const home = mkdtempSync(join(tmpdir(), "agentcall-setup-"));
+    const home = tempDir("agentcall-setup-");
     process.env.AGENTCALL_HOME = home;
     try {
       await expect(runSetup({
