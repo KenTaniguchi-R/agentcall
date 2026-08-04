@@ -14,7 +14,8 @@ import type { LineContext } from "./lineContext.js";
 import { register as registerCall } from "./commands/call.js";
 import { rotateLine } from "./commands/rotate.js";
 import { runRecoveryIssue, runRecoveryRedeem } from "./commands/recovery.js";
-import { addLine, listLinesReport, removeLine, setPrimary } from "./commands/line.js";
+import { addLine, listLinesReport } from "./commands/line.js";
+import { register as registerLineAdmin } from "./commands/line-admin.js";
 import { ask as ttyAsk } from "./tty.js";
 import { deleteCached, forgetMembership, loadMemberships, saveMembership } from "./rosters.js";
 import { ask } from "./tty.js";
@@ -459,35 +460,7 @@ line
     }
   });
 
-line
-  .command("remove")
-  .description("remove a line (archives calls.log; the handle can never be reused, see README)")
-  .argument("<name>", "line to remove")
-  .option("--yes", "confirm removal — required, since the handle can never be reclaimed")
-  .option("--purge", "delete outright instead of archiving calls.log")
-  .action((name: string, o: { yes?: boolean; purge?: boolean }) => {
-    try {
-      removeLine(getMachinePaths(), name, { confirm: o.yes, purge: o.purge });
-      console.log(`Removed line "${name}".`);
-    } catch (e) {
-      console.error(String(e instanceof Error ? e.message : e));
-      process.exitCode = 1;
-    }
-  });
-
-line
-  .command("primary")
-  .description("set which line places an outbound call when several could answer it")
-  .argument("<name>", "line to make primary")
-  .action((name: string) => {
-    try {
-      setPrimary(getMachinePaths(), name);
-      console.log(`Primary line is now "${name}".`);
-    } catch (e) {
-      console.error(String(e instanceof Error ? e.message : e));
-      process.exitCode = 1;
-    }
-  });
+registerLineAdmin(line);
 
 registerListen(program);
 
