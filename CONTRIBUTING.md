@@ -75,6 +75,40 @@ git worktree add .claude/worktrees/<topic> -b <branch>
 Claiming stops two people taking the same *issue*. This stops two sessions
 trampling the same *files* — you need both.
 
+## Verification runs on your machine
+
+Automatic GitHub Actions runs are paused while billing is unavailable, so
+nothing enforces the build, the tests, or any invariant on the way to `main`
+except a local hook. Set it up once per clone:
+
+```bash
+git config core.hooksPath "$(git rev-parse --show-toplevel)/scripts/hooks"
+```
+
+Use the absolute path. Git resolves a relative `core.hooksPath` against the
+current directory, so the relative form silently stops firing the moment you
+push from a subdirectory — and a gate that quietly stops running is worse than
+no gate.
+
+That setting lives in `.git/config`, which every worktree shares, so one
+invocation covers all of them. Each push runs the *pushing worktree's* copy of
+the script, against the tree being pushed. A worktree branched before the gate
+landed has no copy and will refuse to push until you merge `main` into it.
+
+```bash
+scripts/ci-local.sh fast       # what the hook runs: build, typecheck, test, invariants
+scripts/ci-local.sh packaged   # the Node 20/22/24 packed-CLI job — slow, run before a release
+```
+
+`--no-verify` exists and there are honest uses for it, like pushing a WIP branch
+for another pair of eyes. It should not become the habit; nothing else is
+checking right now.
+
+Changing a check in `.github/workflows/` means changing `scripts/ci-local.sh`
+too. A drifted mirror reports green for a rule CI would fail, which is the one
+failure mode worse than a missing check — so confirm a new check actually fails
+on a planted violation, not just that it passes.
+
 ## Labels
 
 `area:*` groups by track. `status:*` carries readiness — `next`, `gated`,

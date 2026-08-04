@@ -29,4 +29,21 @@ done
 
 [ "$pushing" -eq 1 ] || exit 0
 
-INVARIANTS_BASE=$base exec "$(git rev-parse --show-toplevel)/scripts/ci-local.sh" fast
+# core.hooksPath lives in .git/config, which every worktree shares, so this hook
+# fires from worktrees too. Run the pushing worktree's OWN copy of the script,
+# not this checkout's: the script must match the tree it is verifying.
+toplevel=$(git rev-parse --show-toplevel)
+gate="$toplevel/scripts/ci-local.sh"
+
+if [ ! -x "$gate" ]; then
+  # A worktree branched before the local gate landed. Say so — a bare
+  # "no such file or directory" from exec reads like a broken hook, and the
+  # reflex is to disable it rather than update the branch.
+  echo "pre-push: no scripts/ci-local.sh in $toplevel" >&2
+  echo "  This worktree predates the local verification gate. Merge or rebase" >&2
+  echo "  main into this branch to pick it up, or push with --no-verify if you" >&2
+  echo "  are deliberately pushing an old branch untested." >&2
+  exit 1
+fi
+
+INVARIANTS_BASE=$base exec "$gate" fast
