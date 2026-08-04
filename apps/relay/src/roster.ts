@@ -59,7 +59,7 @@ function publicJoinKey(row: JoinKeyRow) {
 
 export function mountRoster(app: Hono<RelayAppEnv>): void {
   app.post("/v1/roster", rateLimit(REGISTER, "identity", "roster:"), async (c) => {
-    const identity = (c as any).get("identity");
+    const identity = c.var.identity;
     const { org, handle } = identity;
     // Creating rosters uses the tighter registration policy so it cannot be
     // used to cheaply fill D1 with rows.
@@ -100,9 +100,9 @@ export function mountRoster(app: Hono<RelayAppEnv>): void {
   const NOT_FOUND = { error: "not found" } as const;
 
   app.post("/v1/roster/:id/join", rateLimit(ROSTER_WRITE, (c) => {
-    const i = (c as any).get("identity"); return `${i.org}:${c.req.param("id")}`;
+    const i = c.var.identity; return `${i.org}:${c.req.param("id")}`;
   }), async (c) => {
-    const identity = (c as any).get("identity");
+    const identity = c.var.identity;
     const { org, handle } = identity;
 
     const id = c.req.param("id");
@@ -174,7 +174,7 @@ export function mountRoster(app: Hono<RelayAppEnv>): void {
   });
 
   async function recordAuditBudgetExhaustion(
-    c: Context<{ Bindings: Env }>, id: string, org: string, actor: string,
+    c: Context<RelayAppEnv>, id: string, org: string, actor: string,
     actorType: "handle" | "admin_secret",
   ) {
     const now = Date.now();
@@ -191,7 +191,7 @@ export function mountRoster(app: Hono<RelayAppEnv>): void {
     ]);
   }
 
-  async function adminRoster(c: Context<{ Bindings: Env }>, id: string, supplied: string) {
+  async function adminRoster(c: Context<RelayAppEnv>, id: string, supplied: string) {
     const row = await c.env.DB.prepare(
       "SELECT org, admin_secret_hash FROM rosters WHERE id = ?",
     ).bind(id).first<{ org: string; admin_secret_hash: string }>();
@@ -203,8 +203,8 @@ export function mountRoster(app: Hono<RelayAppEnv>): void {
     return row;
   }
 
-  app.post("/v1/roster/:id/leave", rateLimit(ROSTER_WRITE, (c) => `${(c as any).get("identity").org}:${c.req.param("id")}`), async (c) => {
-    const identity = (c as any).get("identity");
+  app.post("/v1/roster/:id/leave", rateLimit(ROSTER_WRITE, (c) => `${c.var.identity.org}:${c.req.param("id")}`), async (c) => {
+    const identity = c.var.identity;
     const id = c.req.param("id");
     if (!ROSTER_ID_RE.test(id)) return c.json({ error: "invalid roster id" }, 400);
     const member = await c.env.DB.prepare(
@@ -226,8 +226,8 @@ export function mountRoster(app: Hono<RelayAppEnv>): void {
     return c.json({ ok: true });
   });
 
-  app.post("/v1/roster/:id/audit-budget/reset", rateLimit(ROSTER_WRITE, (c) => `${(c as any).get("identity").org}:${c.req.param("id")}`), async (c) => {
-    const identity = (c as any).get("identity");
+  app.post("/v1/roster/:id/audit-budget/reset", rateLimit(ROSTER_WRITE, (c) => `${c.var.identity.org}:${c.req.param("id")}`), async (c) => {
+    const identity = c.var.identity;
     const id = c.req.param("id");
     if (!ROSTER_ID_RE.test(id)) return c.json({ error: "invalid roster id" }, 400);
     const body = AdminSecretRequest.safeParse(await c.req.json().catch(() => null));
@@ -255,8 +255,8 @@ export function mountRoster(app: Hono<RelayAppEnv>): void {
     return c.json({ ok: true, reset, audit_budget_used: state?.audit_budget_used ?? 0 });
   });
 
-  app.post("/v1/roster/:id/expel", rateLimit(ROSTER_WRITE, (c) => `${(c as any).get("identity").org}:${c.req.param("id")}`), async (c) => {
-    const identity = (c as any).get("identity");
+  app.post("/v1/roster/:id/expel", rateLimit(ROSTER_WRITE, (c) => `${c.var.identity.org}:${c.req.param("id")}`), async (c) => {
+    const identity = c.var.identity;
     const id = c.req.param("id");
     if (!ROSTER_ID_RE.test(id)) return c.json({ error: "invalid roster id" }, 400);
     const body = ExpelRosterRequest.safeParse(await c.req.json().catch(() => null));
@@ -281,8 +281,8 @@ export function mountRoster(app: Hono<RelayAppEnv>): void {
     return c.json({ ok: true });
   });
 
-  app.post("/v1/roster/:id/keys", rateLimit(ROSTER_WRITE, (c) => `${(c as any).get("identity").org}:${c.req.param("id")}`), async (c) => {
-    const identity = (c as any).get("identity");
+  app.post("/v1/roster/:id/keys", rateLimit(ROSTER_WRITE, (c) => `${c.var.identity.org}:${c.req.param("id")}`), async (c) => {
+    const identity = c.var.identity;
     const id = c.req.param("id");
     if (!ROSTER_ID_RE.test(id)) return c.json({ error: "invalid roster id" }, 400);
     const body = IssueRosterJoinKeyRequest.safeParse(await c.req.json().catch(() => null));
@@ -323,8 +323,8 @@ export function mountRoster(app: Hono<RelayAppEnv>): void {
     }) });
   });
 
-  app.post("/v1/roster/:id/keys/list", rateLimit(ROSTER_WRITE, (c) => `${(c as any).get("identity").org}:${c.req.param("id")}`), async (c) => {
-    const identity = (c as any).get("identity");
+  app.post("/v1/roster/:id/keys/list", rateLimit(ROSTER_WRITE, (c) => `${c.var.identity.org}:${c.req.param("id")}`), async (c) => {
+    const identity = c.var.identity;
     const id = c.req.param("id");
     if (!ROSTER_ID_RE.test(id)) return c.json({ error: "invalid roster id" }, 400);
     const body = AdminSecretRequest.safeParse(await c.req.json().catch(() => null));
@@ -338,8 +338,8 @@ export function mountRoster(app: Hono<RelayAppEnv>): void {
     return c.json({ keys: (results ?? []).map(publicJoinKey) });
   });
 
-  app.post("/v1/roster/:id/keys/:prefix/revoke", rateLimit(ROSTER_WRITE, (c) => `${(c as any).get("identity").org}:${c.req.param("id")}`), async (c) => {
-    const identity = (c as any).get("identity");
+  app.post("/v1/roster/:id/keys/:prefix/revoke", rateLimit(ROSTER_WRITE, (c) => `${c.var.identity.org}:${c.req.param("id")}`), async (c) => {
+    const identity = c.var.identity;
     const id = c.req.param("id");
     if (!ROSTER_ID_RE.test(id)) return c.json({ error: "invalid roster id" }, 400);
     const raw = await c.req.json().catch(() => null);
@@ -381,8 +381,8 @@ export function mountRoster(app: Hono<RelayAppEnv>): void {
     return c.json({ prefix: body.data.prefix, revoked_at: persisted.revoked_at, evicted });
   });
 
-  app.post("/v1/roster/:id/delete", rateLimit(ROSTER_WRITE, (c) => `${(c as any).get("identity").org}:${c.req.param("id")}`), async (c) => {
-    const identity = (c as any).get("identity");
+  app.post("/v1/roster/:id/delete", rateLimit(ROSTER_WRITE, (c) => `${c.var.identity.org}:${c.req.param("id")}`), async (c) => {
+    const identity = c.var.identity;
     const id = c.req.param("id");
     if (!ROSTER_ID_RE.test(id)) return c.json({ error: "invalid roster id" }, 400);
     const body = AdminSecretRequest.safeParse(await c.req.json().catch(() => null));
@@ -405,7 +405,7 @@ export function mountRoster(app: Hono<RelayAppEnv>): void {
   });
 
   app.get("/v1/roster/:id/bundle", rateLimit(NATIVE_ROSTER_READ, (c) => `${c.req.header("cf-connecting-ip") ?? "unknown"}:${c.req.param("id")}`), async (c) => {
-    const identity = (c as any).get("identity");
+    const identity = c.var.identity;
     const { org, handle: viewer } = identity;
 
     const id = c.req.param("id");

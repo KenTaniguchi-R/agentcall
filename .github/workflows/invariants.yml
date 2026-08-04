@@ -104,6 +104,11 @@ jobs:
           test "$(grep -F 'PUBLIC_V1_PATHS' apps/relay/src/middleware.ts)" || {
             echo "::error file=apps/relay/src/middleware.ts::Missing the explicit public route allowlist."; exit 1;
           }
+          if grep -Fq 'startsWith("/v1/room/")' apps/relay/src/middleware.ts ||
+             grep -Fq 'startsWith("/v1/a2a/")' apps/relay/src/middleware.ts ||
+             ! grep -Fq 'requireA2AIdentity' apps/relay/src/a2a.ts; then
+            echo "::error file=apps/relay/src/middleware.ts::Identity exceptions must be explicit and A2A must use its route-local seam."; exit 1;
+          fi
           unexpected=$(grep -rl 'authenticateRequest' apps/relay/src --include='*.ts' | grep -vE '/(tenant|middleware|a2a)\.ts$' || true)
           if [ -n "$unexpected" ]; then
             echo "$unexpected" | while IFS= read -r file; do

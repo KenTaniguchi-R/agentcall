@@ -9,6 +9,7 @@ import {
 } from "@benree/agentcall-shared";
 import { sha256Hex } from "../auth.js";
 import type { Env } from "../index.js";
+import type { RelayAppEnv } from "../middleware.js";
 import {
   formatRoomCapability, formatRoomInvite, newInviteId, newParticipantId, newRoomId,
   newRoomSecret, parseRoomCapability, parseRoomInvite,
@@ -19,7 +20,7 @@ function bearer(header: string | undefined): string {
   return match?.[1] ?? "";
 }
 
-export function mountRooms(app: Hono<{ Bindings: Env }>): void {
+export function mountRooms(app: Hono<RelayAppEnv>): void {
   app.post("/v1/rooms", async (c) => {
     const parsed = RoomCreateRequest.safeParse(await c.req.json().catch(() => null));
     if (!parsed.success) return c.json({ error: "invalid Room request" }, 400);
@@ -152,7 +153,7 @@ export function mountRooms(app: Hono<{ Bindings: Env }>): void {
 }
 
 async function forwardRoom(
-  c: Context<{ Bindings: Env }>,
+  c: Context<RelayAppEnv>,
   action: RoomActionType | "state",
   method: "GET" | "POST",
   body: object,

@@ -13,7 +13,7 @@ type PresenceOutcome = "allowed" | "denied";
 // three-month window cannot strand a stable subject or network identifier:
 //   index[0]  allowed | denied (sampling and grouping boundary)
 //   double[0] event timestamp in epoch milliseconds
-async function recordStatusRead(c: Context<{ Bindings: Env }>, outcome: PresenceOutcome): Promise<void> {
+async function recordStatusRead(c: Context<RelayAppEnv>, outcome: PresenceOutcome): Promise<void> {
   try {
     c.env.STATUS_READS.writeDataPoint({
       indexes: [outcome],
@@ -54,7 +54,7 @@ export function mountPresence(app: Hono<RelayAppEnv>): void {
   // shared-roster check then prevents one freely registered peer from polling
   // every other handle's working pattern.
   app.get("/v1/status/:handle", rateLimit(NATIVE_READ, "ip"), async (c) => {
-    const identity = (c as any).get("identity") as import("./tenant.js").Identity;
+    const identity = c.var.identity as import("./tenant.js").Identity;
     const { org, handle: viewer } = identity;
 
     const target = c.req.param("handle");
