@@ -15,6 +15,7 @@ import { checkLimit, NATIVE_CARD, NATIVE_READ, REGISTER, type RateLimitEnv } fro
 import { parseStoredCard } from "./stored-card.js";
 import { drainRecoveryEvictions, mountRecovery } from "./recovery.js";
 import { mountRooms } from "./room/routes.js";
+import { requireIdentity, type RelayAppEnv } from "./middleware.js";
 
 export { HandleDO } from "./do.js";
 export { RateLimiterDO } from "./ratelimit/do.js";
@@ -32,6 +33,7 @@ export type Env = RateLimitEnv & {
   SELF_HOSTED_ORG?: string;
 };
 const app = new Hono<{ Bindings: Env }>();
+app.use("/v1/*", requireIdentity);
 mountA2A(app);
 mountAudit(app);
 mountInvites(app);

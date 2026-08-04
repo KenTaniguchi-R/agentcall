@@ -2,8 +2,9 @@ import type { Context, Hono } from "hono";
 import { HANDLE_RE } from "@benree/agentcall-shared";
 import type { Env } from "./index.js";
 import { sharedRosterIds } from "./groups.js";
-import { checkLimit, NATIVE_READ } from "./ratelimit/index.js";
-import { authenticateRequest, identityKey } from "./tenant.js";
+import { NATIVE_READ } from "./ratelimit/index.js";
+import { identityKey } from "./tenant.js";
+import { rateLimit, type RelayAppEnv } from "./middleware.js";
 
 type PresenceOutcome = "allowed" | "denied";
 
@@ -47,17 +48,14 @@ async function recordStatusRead(c: Context<{ Bindings: Env }>, outcome: Presence
   }
 }
 
-export function mountPresence(app: Hono<{ Bindings: Env }>): void {
+export function mountPresence(app: Hono<RelayAppEnv>): void {
   // Presence is relationship-scoped metadata, not public card content. Auth
   // runs before any lookup so anonymous probes cannot enumerate handles; the
   // shared-roster check then prevents one freely registered peer from polling
   // every other handle's working pattern.
-  app.get("/v1/status/:handle", async (c) => {
-    const identity = await authenticateRequest(c.env, c.req);
-    if (!identity) return c.json({ error: "unauthorized" }, 401);
+  app.get("/v1/status/:handle", rateLimit(NATIVE_READ, "ip"), async (c) => {
+    const identity = (c as any).get("identity") as import("./tenant.js").Identity;
     const { org, handle: viewer } = identity;
-    const ip = c.req.header("cf-connecting-ip") ?? "unknown";
-    if (!(await checkLimit(c.env, ip, NATIVE_READ))) return c.json({ error: "rate limited" }, 429);
 
     const target = c.req.param("handle");
     // Authentication proves a self-target exists. For peers, the relay-owned
