@@ -1,8 +1,11 @@
 name: CI
 
-# Automatic runs are temporarily paused to avoid consuming GitHub Actions
-# minutes. Keep the workflow runnable by hand so the CI definition remains easy
-# to verify and restore.
+# Automatic runs are temporarily paused while GitHub Actions billing is
+# unavailable. Keep the workflow runnable by hand so the CI definition remains
+# easy to verify and restore. `scripts/ci-local.sh fast` is the local mirror of
+# the `verify` job and runs from a pre-push hook in the meantime; keep the two
+# in step, because a local gate that has drifted reports green for a rule this
+# workflow would fail.
 on:
   workflow_dispatch:
 

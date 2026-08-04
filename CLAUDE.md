@@ -113,8 +113,25 @@ Before calling any task done: `pnpm -r build && pnpm -r typecheck && pnpm -r tes
 must all pass at the repo root. **Build first** — `packages/cli` typechecks against
 `packages/shared`'s built `dist`, so running build last checks the *previous* run's
 types. `.github/workflows/ci.yml` runs exactly this order when manually dispatched;
-automatic push and PR runs are temporarily paused to avoid consuming GitHub Actions
-minutes.
+automatic push and PR runs are temporarily paused while GitHub Actions billing is
+unavailable.
+
+While they are paused, `scripts/ci-local.sh` is the gate. It ports both workflows:
+
+```bash
+scripts/ci-local.sh fast       # verify job + every invariants check (the pre-push default)
+scripts/ci-local.sh packaged   # packed-cli-consumer job on Node 20/22/24 — slow, run before a release
+```
+
+A pre-push hook runs `fast` automatically once per clone — `git config core.hooksPath
+"$(git rev-parse --show-toplevel)/scripts/hooks"`. Use an absolute path: git resolves a
+relative `core.hooksPath` against the current directory, so the relative form silently
+stops firing when you push from a subdirectory.
+
+**Keep the script in step with the workflows.** A local gate that has drifted is worse
+than none, because it reports green for a rule CI would fail. When you add a check to
+`invariants.yml`, add it to `ci-local.sh` and confirm it actually fails on a planted
+violation — not just that it passes.
 
 `typecheck` covers `src` *and* `test`. `shared` and `cli` each carry a
 `tsconfig.test.json` (`include: ["src", "test"]`, `noEmit`) that their `typecheck`

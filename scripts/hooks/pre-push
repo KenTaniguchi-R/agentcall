@@ -1,0 +1,32 @@
+#!/usr/bin/env bash
+# Runs the local port of CI before anything leaves the machine.
+#
+# Automatic GitHub Actions runs are paused (billing), so this hook is the gate.
+# It mirrors the `verify` and `invariants` jobs; the packed-CLI matrix is too
+# slow for a push and runs separately (`scripts/ci-local.sh packaged`) before a
+# release.
+#
+# Bypass with `git push --no-verify` when you genuinely need to (pushing a WIP
+# branch for a second pair of eyes). Do not make that the habit — nothing else
+# is checking right now.
+set -uo pipefail
+
+ZERO=0000000000000000000000000000000000000000
+base=""
+pushing=0
+
+# stdin: <local ref> <local sha> <remote ref> <remote sha>
+while read -r _local_ref local_sha _remote_ref remote_sha; do
+  [ "$local_sha" = "$ZERO" ] && continue   # branch deletion — nothing to check
+  pushing=1
+  # The remote sha is the exact analogue of GitHub's `github.event.before`,
+  # so the invariants diff covers precisely what is being pushed.
+  if [ -z "$base" ] && [ "$remote_sha" != "$ZERO" ] &&
+     git rev-parse --verify "${remote_sha}^{commit}" >/dev/null 2>&1; then
+    base=$remote_sha
+  fi
+done
+
+[ "$pushing" -eq 1 ] || exit 0
+
+INVARIANTS_BASE=$base exec "$(git rev-parse --show-toplevel)/scripts/ci-local.sh" fast
