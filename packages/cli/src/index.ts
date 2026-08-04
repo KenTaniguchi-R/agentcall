@@ -5,12 +5,10 @@ import { addressHost, assertCallableLine, relayUrl, type LineConfig } from "./co
 import { callAgent, callStatusMessage, CallError } from "./callClient.js";
 // No rotateToken here: `rotate` goes through commands/rotate.ts's rotateLine,
 // which owns the per-line config write and calls the api helper itself.
-import { getStatus, fetchCard, createRoster, joinRoster, leaveRoster,
+import { ApiError, getStatus, createRoster, joinRoster, leaveRoster,
   expelRosterMember, issueRosterJoinKey, listRosterJoinKeys, revokeRosterJoinKey, deleteRoster,
-  ApiError } from "./api.js";
-import { publishCard } from "./card.js";
+  } from "./api.js";
 import { assertValidLineName, readyLines } from "./lines.js";
-import { buildCardReport } from "./lint.js";
 import { resolveAddress } from "./contacts.js";
 import { resolveLine } from "./lineContext.js";
 import type { LineContext } from "./lineContext.js";
@@ -41,6 +39,7 @@ import { register as registerPolicy } from "./commands/policy.js";
 import { register as registerListen } from "./commands/listen.js";
 import { register as registerTask } from "./commands/task.js";
 import { register as registerGrants } from "./commands/grants.js";
+import { registerCard, registerLint } from "./commands/card.js";
 
 export function createProgram(): Command {
 const program = new Command();
@@ -194,103 +193,9 @@ registerKeys(program);
 registerDoctor(program);
 registerHistory(program, lineFor);
 
-// Shared by `lint` and a bare `card`. Per-line, like everything else that
-// reads a policy or a card: `--line` picks which one, defaulting to primary.
-const reviewOwnCard = (o: { line?: string }) => {
-  let ctx: LineContext;
-  try {
-    ctx = resolveLine(getMachinePaths(), { line: o.line });
-    assertCallableLine(ctx.config);
-  } catch (e) {
-    console.error(String(e instanceof Error ? e.message : e));
-    process.exitCode = 1;
-    return;
-  }
-  const report = buildCardReport(ctx.config, ctx.paths);
-  for (const line of report.menu) console.log(line);
-  if (report.problems.length > 0) {
-    console.log("\nProblems:");
-    for (const p of report.problems) console.log(`  ✗ ${p}`);
-  }
-  if (report.notices.length > 0) {
-    console.log("\nNotes:");
-    for (const n of report.notices) console.log(`  ! ${n}`);
-  }
-  if (report.problems.length > 0) process.exitCode = 1;
-};
-
-program
-  .command("lint")
-  .description("validate tasks, effective policy assertions, and the published card")
-  .option("--line <name>", "line to lint (defaults to the primary line)")
-  .action(reviewOwnCard);
-
+registerLint(program);
 registerPolicy(program);
-
-program
-  .command("card")
-  .description("show your own card with problems, another agent's menu, or publish yours (push)")
-  .argument("[target]", "contact name or handle@host to fetch, 'push' to publish, or omit to review your own card")
-  .option("--line <name>", "line to use (defaults to the primary line)")
-  .action(async (target: string | undefined, o: { line?: string }) => {
-    const machine = getMachinePaths();
-    if (target === undefined) {
-      reviewOwnCard(o);
-      return;
-    }
-    if (target === "push") {
-      let ctx: LineContext;
-      try {
-        ctx = resolveLine(machine, { line: o.line });
-        assertCallableLine(ctx.config);
-      } catch (e) {
-        console.error(String(e instanceof Error ? e.message : e));
-        process.exitCode = 1;
-        return;
-      }
-      await publishCard(ctx.config, ctx.paths);
-      console.log("Card published.");
-      return;
-    }
-    // A resolvable line is now REQUIRED to fetch someone else's card: card
-    // reads are authenticated on the relay (fetchCard takes a non-optional
-    // Auth), so the old "resolve if you can, fetch anonymously otherwise"
-    // fallback would only ever produce a 401. Failing here names the actual
-    // problem instead.
-    let ctx: LineContext;
-    try {
-      ctx = resolveLine(machine, { line: o.line });
-    } catch (e) {
-      console.error(String(e instanceof Error ? e.message : e));
-      process.exitCode = 1;
-      return;
-    }
-    const cfg = ctx.config;
-    const parsed = resolveAddress(machine, target, relayUrl(cfg), cfg.org);
-    if (!parsed.ok) {
-      console.error(`${parsed.error} (or 'push')`);
-      process.exitCode = 1;
-      return;
-    }
-    if (parsed.warning) console.error(parsed.warning);
-    try {
-      const card = await fetchCard(
-        relayUrl(cfg),
-        parsed.handle,
-        { org: cfg.org, handle: cfg.handle, token: cfg.token },
-      );
-      const description = sanitizeTerminalOutput(card.description);
-      console.log(`${card.handle} (${card.agent_kind})${description ? ` — ${description}` : ""}`);
-      for (const t of card.tasks) {
-        console.log(`  ${t.id} — ${sanitizeTerminalOutput(t.description)}`);
-        for (const ex of t.examples) console.log(`      e.g. ${sanitizeTerminalOutput(ex)}`);
-      }
-      console.log(`\nCall with: agentcall call ${target} --task <id> "<message>"`);
-    } catch (e) {
-      console.error(e instanceof ApiError ? e.message : String(e));
-      process.exitCode = 1;
-    }
-  });
+registerCard(program);
 
 registerContacts(program);
 
