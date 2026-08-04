@@ -8,7 +8,7 @@ import { mountKeys } from "./keys.js";
 import { mountPresence } from "./presence.js";
 import { mountRoster } from "./roster.js";
 import { generateToken, sha256Hex } from "./auth.js";
-import { authenticateRequest, deploymentOrgAllows, identityKey, registrationAddressHost,
+import { deploymentOrgAllows, identityKey, registrationAddressHost,
   type DeploymentMode } from "./tenant.js";
 import { sharedRosterIds } from "./groups.js";
 import { checkLimit, NATIVE_CARD, NATIVE_READ, REGISTER, type RateLimitEnv } from "./ratelimit/index.js";
@@ -181,8 +181,7 @@ app.get("/v1/card/:handle", rateLimit(NATIVE_READ, "ip"), async (c) => {
 app.get("/v1/ws", async (c) => {
   if (c.req.header("Upgrade")?.toLowerCase() !== "websocket") return c.json({ error: "expected websocket" }, 426);
   const role = c.req.query("role");
-  const identity = await authenticateRequest(c.env, c.req);
-  if (!identity) return c.json({ error: "unauthorized" }, 401);
+  const identity = (c as any).get("identity");
   const { org, handle } = identity;
 
   let target: string;
