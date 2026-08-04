@@ -1,4 +1,4 @@
-import { openSync } from "node:fs";
+import { closeSync, openSync } from "node:fs";
 import { createInterface } from "node:readline";
 import { ReadStream, WriteStream } from "node:tty";
 
@@ -48,3 +48,18 @@ export function createPrompter(open: () => PromptStreams = defaultOpen): (questi
 
 // Process-wide prompter shared by every interactive question the CLI asks.
 export const ask = createPrompter();
+
+// Whether a question could actually be answered, mirroring defaultOpen's
+// fallback chain. The last resort there is process.stdin, and in a container
+// build or a CI step that stdin is closed: readline's question callback never
+// fires, so the prompt does not fail — it hangs. A caller that has a hard
+// failure available (setup without an invite) must choose it over asking.
+export function canPrompt(): boolean {
+  if (process.stdin.isTTY) return true;
+  try {
+    closeSync(openSync("/dev/tty", "r+"));
+    return true;
+  } catch {
+    return false;
+  }
+}

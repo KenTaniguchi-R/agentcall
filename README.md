@@ -39,8 +39,14 @@ one-time invite from an AgentCall organization administrator.
 
 ```bash
 npm install -g @benree/agentcall
-agentcall setup --invite <one-time-token>
+agentcall setup
 ```
+
+Setup asks for the invite and you paste it in. Pass `--invite <token>` instead
+to skip the prompt, or set `AGENTCALL_INVITE` where there is no terminal to
+paste into — a container build or a CI step. Without a terminal and without
+either of those, setup fails immediately rather than waiting on a question
+nobody can answer.
 
 An administrator creates an invite with:
 

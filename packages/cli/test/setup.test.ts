@@ -250,10 +250,127 @@ describe("runSetup", () => {
     try {
       await expect(runSetup({
         verify: false, handle: "ken", callerOnly: true, relay: "http://127.0.0.1:1", snippet: false,
+        yes: true, // --yes means "don't ask me anything", so this must throw rather than prompt
       })).rejects.toThrow(/setup --invite/);
     } finally {
       delete process.env.AGENTCALL_HOME;
     }
+  });
+
+  // #302. The invite check used to sit below decideCallable and
+  // detectAgentKind, so a run that could never register still walked the
+  // owner through a consent decision about unapproved task execution first.
+  // Asserting the throw alone does not catch that — only the ask count does.
+  it("asks nothing before failing a run that has no invite", async () => {
+    const asked: string[] = [];
+    await expect(runSetup({
+      relay: R, snippet: false, verify: false, skipService: true, addLineFn: fakeAddLine,
+      yes: true,
+      hasBin: () => true, // both agents present: decideCallable/detectAgentKind would both prompt
+      io: { ask: async (q) => { asked.push(q); return "y"; } },
+    })).rejects.toThrow(/setup --invite/);
+    expect(asked).toEqual([]);
+  });
+
+  // #303. The invite was the only required input with no interactive path —
+  // it threw instead of asking, which is what a first-time owner hits when
+  // they type the natural `agentcall setup` after `npm install -g`.
+  it("prompts for a missing invite and registers with the pasted value", async () => {
+    const asked: string[] = [];
+    let used: string | undefined;
+    await runSetup({
+      resolveBin: noNetworkResolveBin,
+      agent: "claude", handle: "ken", relay: R, snippet: false, verify: false, skipService: true,
+      addLineFn: (mp, o) => { used = o.invite; return fakeAddLine(mp, o); },
+      io: { ask: async (q) => { asked.push(q); return "pasted-invite"; } },
+    });
+    expect(asked[0]).toMatch(/invite/i);
+    expect(used).toBe("pasted-invite");
+  });
+
+  it("asks for the invite before anything else", async () => {
+    const asked: string[] = [];
+    await runSetup({
+      resolveBin: noNetworkResolveBin,
+      relay: R, snippet: false, verify: false, skipService: true, addLineFn: fakeAddLine,
+      hasBin: () => true,
+      io: { ask: async (q) => { asked.push(q); return asked.length === 1 ? "an-invite" : "claude"; } },
+    });
+    expect(asked[0]).toMatch(/invite/i);
+  });
+
+  // Containers and CI have no terminal to paste into, and putting a bearer
+  // credential on argv leaks it into shell history and `ps`.
+  it("accepts the invite from AGENTCALL_INVITE without prompting", async () => {
+    const asked: string[] = [];
+    let used: string | undefined;
+    process.env.AGENTCALL_INVITE = "env-invite";
+    try {
+      await runSetup({
+        resolveBin: noNetworkResolveBin,
+        agent: "claude", handle: "ken", relay: R, snippet: false, verify: false, skipService: true,
+        addLineFn: (mp, o) => { used = o.invite; return fakeAddLine(mp, o); },
+        io: { ask: async (q) => { asked.push(q); return "should-not-be-asked"; } },
+      });
+    } finally {
+      delete process.env.AGENTCALL_INVITE;
+    }
+    expect(used).toBe("env-invite");
+    expect(asked.some((q) => /invite/i.test(q))).toBe(false);
+  });
+
+  it("prefers an explicit --invite over AGENTCALL_INVITE", async () => {
+    let used: string | undefined;
+    process.env.AGENTCALL_INVITE = "env-invite";
+    try {
+      await run({
+        agent: "claude", handle: "ken", relay: R, snippet: false, verify: false, skipService: true,
+        addLineFn: (mp, o) => { used = o.invite; return fakeAddLine(mp, o); },
+      });
+    } finally {
+      delete process.env.AGENTCALL_INVITE;
+    }
+    expect(used).toBe("test-invite");
+  });
+
+  // A token copied out of a chat message or a quoted command brings the
+  // quotes and whitespace along. Unnormalized, both come back from the relay
+  // as "This invite is invalid, expired, or already used." — sending the
+  // owner to their administrator for a replacement they did not need.
+  it.each([
+    ["  spaced-invite\n", "spaced-invite"],
+    ["\"quoted-invite\"", "quoted-invite"],
+    ["'quoted-invite'", "quoted-invite"],
+  ])("normalizes a pasted invite (%j)", async (pasted, expected) => {
+    let used: string | undefined;
+    await runSetup({
+      resolveBin: noNetworkResolveBin,
+      agent: "claude", handle: "ken", relay: R, snippet: false, verify: false, skipService: true,
+      addLineFn: (mp, o) => { used = o.invite; return fakeAddLine(mp, o); },
+      io: { ask: async () => pasted },
+    });
+    expect(used).toBe(expected);
+  });
+
+  // An unanswerable readline hangs rather than failing, so a container build
+  // or CI step with no terminal must keep the pre-prompt hard failure. `io`
+  // omitted here stands in for "no injected asker", which is what production
+  // looks like; vitest runs with no tty, so canPrompt() reports false.
+  it("fails instead of prompting when there is no terminal to answer with", async () => {
+    await expect(runSetup({
+      resolveBin: noNetworkResolveBin,
+      agent: "claude", handle: "ken", relay: R, snippet: false, verify: false, skipService: true,
+      addLineFn: fakeAddLine,
+    })).rejects.toThrow(/setup --invite/);
+  });
+
+  it("rejects an empty answer to the invite prompt", async () => {
+    await expect(runSetup({
+      resolveBin: noNetworkResolveBin,
+      agent: "claude", handle: "ken", relay: R, snippet: false, verify: false, skipService: true,
+      addLineFn: fakeAddLine,
+      io: { ask: async () => "   " },
+    })).rejects.toThrow(/setup --invite/);
   });
 
   it("detects the agent kind via injectable hasBin when --agent is omitted", async () => {
