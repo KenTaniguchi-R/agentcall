@@ -30,6 +30,17 @@ export async function registerHandle(
   return (await res.json<{ token: string }>()).token;
 }
 
+// Cards, and later roster membership and policy, are keyed by the stable
+// identity rather than the address (#154). Tests that seed those rows
+// directly need the id the relay minted at registration.
+export async function agentIdFor(handle: string, org = "acme"): Promise<string> {
+  const row = await env.DB.prepare(
+    "SELECT agent_id FROM handles WHERE org = ? AND handle = ?",
+  ).bind(org, handle).first<{ agent_id: string }>();
+  if (!row) throw new Error(`no identity for ${handle}@${org} - register it first`);
+  return row.agent_id;
+}
+
 export function wsAuth(handle: string, token: string, org = "acme"): Record<string, string> {
   return { Authorization: `Bearer ${token}`, "X-AgentCall-Org": org, "X-AgentCall-Handle": handle };
 }

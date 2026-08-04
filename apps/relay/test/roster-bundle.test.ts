@@ -1,7 +1,7 @@
 import { SELF } from "cloudflare:test";
 import { MAX_CALLER_GROUPS } from "@benree/agentcall-shared";
 import { describe, expect, it, vi } from "vitest";
-import { registerHandle, wsAuth } from "./helpers.js";
+import { registerHandle, wsAuth, agentIdFor} from "./helpers.js";
 
 const card = (tasks: unknown[], defaultOffer: string[], grants: Record<string, string[]> = {}) => ({
   description: "d", agent_kind: "claude", tasks, default_offer: defaultOffer, grants,
@@ -158,8 +158,8 @@ describe("GET /v1/roster/:id/bundle", () => {
     await joinAs(r.roster_id, "b8bad", r.join_key);
     await putCard("b8good", good, card([task("adr")], ["adr"]));
     const db = (await import("cloudflare:test")).env.DB;
-    await db.prepare("INSERT INTO cards (org, handle, card_json, updated_at) VALUES (?, ?, ?, ?)")
-      .bind("acme", "b8bad", "{not json", Date.now()).run();
+    await db.prepare("INSERT INTO cards (org, agent_id, card_json, updated_at) VALUES (?, ?, ?, ?)")
+      .bind("acme", await agentIdFor("b8bad"), "{not json", Date.now()).run();
     const log = vi.spyOn(console, "error").mockImplementation(() => {});
     try {
       const res = await getBundle(r.roster_id, "b8own", r.ownerToken);

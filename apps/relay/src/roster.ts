@@ -439,11 +439,16 @@ export function mountRoster(app: Hono<RelayAppEnv>): void {
         "SELECT handle, GROUP_CONCAT(roster_id) AS shared_rosters FROM ranked_shared " +
         "WHERE group_rank <= ? GROUP BY handle" +
       ") " +
-      "SELECT c.handle, c.card_json, c.updated_at, capped_shared.shared_rosters " +
+      // Two hops via handles, temporarily: roster membership is still keyed by
+      // address while cards have moved to the identity (#154 slice 5). The
+      // middle join disappears when membership moves in slice 6 and this
+      // becomes members.agent_id -> cards.agent_id directly.
+      "SELECT target.handle AS handle, c.card_json, c.updated_at, capped_shared.shared_rosters " +
         "FROM target_handles target " +
-        "JOIN cards c ON c.org = target.org AND c.handle = target.handle " +
+        "JOIN handles h ON h.org = target.org AND h.handle = target.handle " +
+        "JOIN cards c ON c.org = h.org AND c.agent_id = h.agent_id " +
         "LEFT JOIN capped_shared ON capped_shared.handle = target.handle " +
-        "ORDER BY c.handle",
+        "ORDER BY target.handle",
     ).bind(id, org, viewer, MAX_CALLER_GROUPS).all<{
       handle: string; card_json: string; updated_at: number; shared_rosters: string | null;
     }>();

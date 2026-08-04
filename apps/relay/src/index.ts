@@ -157,10 +157,12 @@ app.put("/v1/card", rateLimit(NATIVE_CARD, "identity"), async (c) => {
   const { org, handle } = identity;
   const body = CardUpload.safeParse(await c.req.json().catch(() => null));
   if (!body.success) return c.json({ error: "invalid card" }, 400);
+  // The publisher's own identity, taken from the authenticated request rather
+  // than resolved from its address (#154 slice 5).
   await c.env.DB.prepare(
-    "INSERT INTO cards (org, handle, card_json, updated_at) VALUES (?, ?, ?, ?) " +
-      "ON CONFLICT(org, handle) DO UPDATE SET card_json = excluded.card_json, updated_at = excluded.updated_at",
-  ).bind(org, handle, JSON.stringify(body.data), Date.now()).run();
+    "INSERT INTO cards (org, agent_id, card_json, updated_at) VALUES (?, ?, ?, ?) " +
+      "ON CONFLICT(org, agent_id) DO UPDATE SET card_json = excluded.card_json, updated_at = excluded.updated_at",
+  ).bind(org, identity.agentId, JSON.stringify(body.data), Date.now()).run();
   return c.json({ ok: true });
 });
 
@@ -168,8 +170,12 @@ app.get("/v1/card/:handle", rateLimit(NATIVE_READ, "ip"), async (c) => {
   const identity = c.var.identity;
   const { org, handle: viewer } = identity;
   const handle = c.req.param("handle");
-  const row = await c.env.DB.prepare("SELECT card_json, updated_at FROM cards WHERE org = ? AND handle = ?")
-    .bind(org, handle).first<{ card_json: string; updated_at: number }>();
+  // A missing identity and a missing card are the same 404: the address is
+  // how a caller asks, but the card belongs to whoever holds that address now.
+  const targetAgentId = await resolveAgentId(c.env.DB, org, handle);
+  if (!targetAgentId) return c.json({ error: "no card" }, 404);
+  const row = await c.env.DB.prepare("SELECT card_json, updated_at FROM cards WHERE org = ? AND agent_id = ?")
+    .bind(org, targetAgentId).first<{ card_json: string; updated_at: number }>();
   if (!row) return c.json({ error: "no card" }, 404);
 
   const upload = parseStoredCard(row.card_json, org, handle);
