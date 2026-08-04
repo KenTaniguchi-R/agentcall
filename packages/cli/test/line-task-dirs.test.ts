@@ -1,8 +1,8 @@
 import { mkdirSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
-import { getLinePaths, type MachinePaths } from "../src/paths.js";
-import { lineTaskDirs } from "../src/lineTaskDirs.js";
+import { getLinePaths, getMachinePaths, type MachinePaths } from "../src/paths.js";
+import { lineTaskDirs } from "../src/line-task-dirs.js";
 import { tempMachine } from "./helpers.js";
 
 function freshMachine(): MachinePaths {

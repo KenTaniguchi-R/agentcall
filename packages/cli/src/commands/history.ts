@@ -1,5 +1,5 @@
 import { loadLocalHistory, renderLocalHistory } from "../history.js";
-import type { LineContext } from "../lineContext.js";
+import type { LineContext } from "../line-context.js";
 import { sanitizeTerminalOutput, stringifyTerminalSafeJson } from "@benree/agentcall-shared";
 
 type LineFor = (line: string | undefined) => LineContext | undefined;

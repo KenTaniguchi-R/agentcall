@@ -2,7 +2,7 @@ import { execFileSync, spawn } from "node:child_process";
 import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { callAgent } from "./callClient.js";
+import { callAgent } from "./call-client.js";
 import { relayUrl, type LineConfig } from "./config.js";
 import { getLinePaths, getMachinePaths, type LinePaths } from "./paths.js";
 import {

@@ -1,7 +1,7 @@
 import type { Command } from "commander";
 import { assertCallableLine } from "../config.js";
 import { getMachinePaths } from "../paths.js";
-import { resolveLine, type LineContext } from "../lineContext.js";
+import { resolveLine, type LineContext } from "../line-context.js";
 import { loadTasks } from "../tasks.js";
 import { execVerb, type Verb } from "../verbs.js";
 import { loadUserPolicy, savePolicy, validatePolicy } from "../policy.js";

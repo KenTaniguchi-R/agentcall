@@ -9,7 +9,7 @@ import { createProgram, runCli } from "../src/index.js";
 import { getLinePaths, getMachinePaths, type LinePaths } from "../src/paths.js";
 import { saveLineConfig } from "../src/lines.js";
 import { loadMemberships, readCached, saveMembership, writeCached } from "../src/rosters.js";
-import { loadOutbound, rememberOutbound } from "../src/contextsOut.js";
+import { loadOutbound, rememberOutbound } from "../src/contexts-out.js";
 import { loadKnownPeers } from "../src/known-peers.js";
 import { writeJsonAtomic } from "../src/json-store.js";
 import {

@@ -1,9 +1,9 @@
 import type { Command } from "commander";
 import { addressHost, relayUrl } from "../config.js";
 import { loadMemberships } from "../rosters.js";
-import { refreshRoster } from "../searchRefresh.js";
+import { refreshRoster } from "../search-refresh.js";
 import { allRostersFailed, DEFAULT_SEARCH_LIMIT, rank, renderResults, sanitize, toEntries, type RosterStatus, type SearchEntry } from "../search.js";
-import type { LineContext } from "../lineContext.js";
+import type { LineContext } from "../line-context.js";
 
 type LineResolver = (line: string | undefined) => LineContext | undefined;
 

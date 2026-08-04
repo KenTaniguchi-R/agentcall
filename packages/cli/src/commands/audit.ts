@@ -1,7 +1,7 @@
 import type { AuditCheckpointType } from "@benree/agentcall-shared";
 import { fetchAuditExportPage, ApiError } from "../api.js";
 import { relayUrl } from "../config.js";
-import type { LineContext } from "../lineContext.js";
+import type { LineContext } from "../line-context.js";
 import { AUDIT_CSV_COLUMNS, auditCsvRow, parseAuditFilter, parseAuditTime } from "./audit-export.js";
 
 type LineFor = (line: string | undefined) => LineContext | undefined;

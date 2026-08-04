@@ -1,7 +1,7 @@
 import { describe, expect, it, vi } from "vitest";
 import { readCached, saveMembership, writeCached } from "../src/rosters.js";
 import { ApiError } from "../src/api.js";
-import { refreshRoster } from "../src/searchRefresh.js";
+import { refreshRoster } from "../src/search-refresh.js";
 import { tempLine } from "./helpers.js";
 
 const setup = () => {

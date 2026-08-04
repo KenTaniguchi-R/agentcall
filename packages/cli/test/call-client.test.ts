@@ -9,7 +9,7 @@ import {
   keyIdFor, requestTranscript, signTranscript, transcriptHash,
   type E2EEOutcomeType, type E2EEResponsePayloadType, type EncryptionKeyRecordType,
 } from "@benree/agentcall-shared";
-import { callAgent, callStatusMessage, CallError, type CallOpts } from "../src/callClient.js";
+import { callAgent, callStatusMessage, CallError, type CallOpts } from "../src/call-client.js";
 import { ApiError } from "../src/api.js";
 import { openE2EERequest, sealE2EEResponse } from "../src/e2ee.js";
 import { generateIdentityKeys, type StoredKeys } from "../src/keys.js";

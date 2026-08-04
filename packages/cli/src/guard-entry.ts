@@ -5,12 +5,12 @@
 import { appendFileSync, mkdirSync, realpathSync } from "node:fs";
 import { dirname } from "node:path";
 import { FAIL_CLOSED_REASON, runGuard } from "./guard.js";
-// From lineName.js, not lines.js: lines.js imports zod at module scope (for
+// From line-name.js, not lines.js: lines.js imports zod at module scope (for
 // LineConfigSchema), and this file is a standalone process entry that runs
 // once per tool call — see the header comment above for why it stays a
 // minimal import graph. Pulling zod in here to validate one env var would be
 // exactly the cost that comment exists to avoid.
-import { LINE_NAME_RE } from "./lineName.js";
+import { LINE_NAME_RE } from "./line-name.js";
 import { getLinePaths, getMachinePaths } from "./paths.js";
 import { appendPrivateLogLine } from "./audit-log.js";
 import { writeToolHookEvent } from "./tool-telemetry-hook.js";

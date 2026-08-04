@@ -1,13 +1,13 @@
 import type { Command } from "commander";
 import { sanitizeTerminalOutput, stringifyTerminalSafeJson } from "@benree/agentcall-shared";
-import { callAgent, callStatusMessage, CallError } from "../callClient.js";
+import { callAgent, callStatusMessage, CallError } from "../call-client.js";
 import { getMachinePaths } from "../paths.js";
 import { relayUrl } from "../config.js";
 import { resolveAddress } from "../contacts.js";
 import { pickOutboundLine } from "../outbound.js";
-import { findOutbound, loadOutbound, rememberOutbound } from "../contextsOut.js";
+import { findOutbound, loadOutbound, rememberOutbound } from "../contexts-out.js";
 import { getTelemetry, shutdownTelemetry, telemetrySafely } from "../telemetry.js";
-import type { LineContext } from "../lineContext.js";
+import type { LineContext } from "../line-context.js";
 
 export function register(program: Command): void {
   program

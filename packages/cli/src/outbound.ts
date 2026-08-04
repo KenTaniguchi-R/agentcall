@@ -1,5 +1,5 @@
 import { readyLines } from "./lines.js";
-import type { LineContext } from "./lineContext.js";
+import type { LineContext } from "./line-context.js";
 import type { MachinePaths } from "./paths.js";
 import { resolvePrimary } from "./person.js";
 

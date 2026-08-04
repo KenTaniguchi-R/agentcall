@@ -5,7 +5,7 @@ import { publishEncryptionKey, publishIdentityKey, registerHandle } from "../api
 import { publishCard } from "../card.js";
 import { addressHost, resolveLineWorkdir, type LineConfig } from "../config.js";
 import { assertValidLineName, listLines, readyLines, saveLineConfig } from "../lines.js";
-import { listenerPathDirs } from "../listenerPath.js";
+import { listenerPathDirs } from "../listener-path.js";
 import { host } from "../outbound.js";
 import { getLinePaths, type LinePaths, type MachinePaths } from "../paths.js";
 import { generateIdentityKeys, type StoredKeys } from "../keys.js";

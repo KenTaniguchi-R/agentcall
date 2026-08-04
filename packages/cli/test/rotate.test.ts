@@ -2,7 +2,7 @@ import { describe, expect, it, beforeEach } from "vitest";
 import { mkdirSync, readFileSync } from "node:fs";
 import { getLinePaths, getMachinePaths, type MachinePaths } from "../src/paths.js";
 import { saveLineConfig } from "../src/lines.js";
-import { resolveLine } from "../src/lineContext.js";
+import { resolveLine } from "../src/line-context.js";
 import { rotateLine } from "../src/commands/rotate.js";
 import { tempDir } from "./helpers.js";
 

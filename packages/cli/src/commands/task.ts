@@ -1,6 +1,6 @@
 import type { Command } from "commander";
 import { getMachinePaths } from "../paths.js";
-import { resolveLine } from "../lineContext.js";
+import { resolveLine } from "../line-context.js";
 import { scaffoldTask } from "../tasks.js";
 
 export function register(program: Command): void {

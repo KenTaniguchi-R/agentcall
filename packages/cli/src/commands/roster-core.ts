@@ -1,7 +1,7 @@
 import type { Command } from "commander";
 import { createRoster, joinRoster, leaveRoster } from "../api.js";
 import { relayUrl } from "../config.js";
-import type { LineContext } from "../lineContext.js";
+import type { LineContext } from "../line-context.js";
 import { deleteCached, forgetMembership, loadMemberships, saveMembership } from "../rosters.js";
 
 type ResolveLine = (line: string | undefined) => LineContext | undefined;
