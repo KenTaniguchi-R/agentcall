@@ -480,7 +480,7 @@ export function mountRoster(app: Hono<{ Bindings: Env }>): void {
     for (const row of results ?? []) {
       const upload = parseStoredCard(row.card_json, org, row.handle);
       if (!upload) {
-        // One bad legacy card must not 500 the bundle for everyone else.
+        // One invalid stored card must not 500 the bundle for everyone else.
         skipped++;
         continue;
       }

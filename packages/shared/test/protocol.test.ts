@@ -91,7 +91,7 @@ describe("parseAddress", () => {
 
 describe("frames", () => {
   it("round-trips an encrypted call_request", () => {
-    const f = { type: "call_request", envelope: requestEnvelope };
+    const f = { type: "call_request", envelope: requestEnvelope, correlation_id: "a".repeat(32) };
     expect(safeParseFrame(E2EECallerFrame, JSON.stringify(f))).toEqual(f);
   });
   it("rejects unknown type via safeParseFrame", () => {

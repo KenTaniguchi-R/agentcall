@@ -91,8 +91,8 @@ export const BundleTask = z.object({
   id: z.string().regex(TASK_ID_RE),
   name: z.string().max(100),
   description: z.string().max(1000),
-  keywords: z.array(z.string().max(MAX_KEYWORD_LENGTH)).max(MAX_TASK_KEYWORDS).default([]),
-});
+  keywords: z.array(z.string().max(MAX_KEYWORD_LENGTH)).max(MAX_TASK_KEYWORDS),
+}).strict();
 
 export const BundleEntry = z.object({
   handle: z.string().regex(HANDLE_RE),
@@ -101,16 +101,15 @@ export const BundleEntry = z.object({
   updated_at: z.number(),
   // True when the member had more tasks than MAX_BUNDLE_TASKS_PER_CARD. The
   // bundle never truncates silently: search surfaces this to the user.
-  truncated: z.boolean().default(false),
-});
+  truncated: z.boolean(),
+}).strict();
 
 export const RosterBundle = z.object({
   roster_id: z.string().regex(ROSTER_ID_RE),
   entries: z.array(BundleEntry).max(MAX_ROSTER_MEMBERS),
-  // Count of member cards that failed to parse and were skipped. One bad
-  // legacy card must never 500 the bundle for the other 199 members.
-  skipped: z.number().int().nonnegative().default(0),
-});
+  // Count of member cards that failed to parse and were skipped.
+  skipped: z.number().int().nonnegative(),
+}).strict();
 
 export type BundleTaskType = z.infer<typeof BundleTask>;
 export type BundleEntryType = z.infer<typeof BundleEntry>;

@@ -195,6 +195,7 @@ describe("api client", () => {
     const metadata = {
       id: "a".repeat(64), description: "vendor", created_by: "ken", created_at: 1,
       expires_at: 2, used_at: null, used_by: null, revoked_at: null,
+      role: "member" as const,
     };
     const relay = await startServer((req, res, body) => {
         seen = { path: req.url, headers: req.headers, body };
@@ -215,6 +216,7 @@ describe("api client", () => {
     const metadata = {
       id: "b".repeat(64), description: "", created_by: "ken", created_at: 1,
       expires_at: 2, used_at: null, used_by: null, revoked_at: null,
+      role: "member" as const,
     };
     let requests: string[] = [];
     const relay = await startServer((req, res) => {

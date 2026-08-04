@@ -12,14 +12,9 @@ const ContactSchema = z.object({
   address: z.string(),
   note: z.string().optional(),
 });
-// .loose() (zod 4's passthrough mode) preserves unknown top-level keys across
-// a load+save round-trip, so future fields survive being written back by a
-// version of the CLI that doesn't know about them yet.
-const ContactsFileSchema = z
-  .object({
-    contacts: z.array(ContactSchema).default([]),
-  })
-  .loose();
+const ContactsFileSchema = z.object({
+  contacts: z.array(ContactSchema).default([]),
+});
 export type Contact = z.infer<typeof ContactSchema>;
 export type ContactsFile = z.infer<typeof ContactsFileSchema>;
 

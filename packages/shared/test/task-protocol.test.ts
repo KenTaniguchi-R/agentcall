@@ -69,32 +69,27 @@ describe("TASK_ID_RE", () => {
 });
 
 describe("card schemas", () => {
-  const task = { id: "ask", name: "Ask", description: "Answer questions." };
-  it("round-trips a CardUpload and applies defaults", () => {
-    const parsed = CardUpload.parse({ agent_kind: "claude", tasks: [task], default_offer: ["ask"] });
-    expect(parsed.description).toBe("");
-    expect(parsed.grants).toEqual({});
-    expect(parsed.tasks[0]).toMatchObject({ id: "ask", examples: [] });
+  const task = { id: "ask", name: "Ask", description: "Answer questions.", examples: [], keywords: [] };
+  const upload = {
+    description: "", agent_kind: "claude" as const, tasks: [task], default_offer: ["ask"],
+    grants: {}, group_grants: {}, blocked: [],
+  };
+  it("round-trips a current CardUpload", () => {
+    expect(CardUpload.parse(upload)).toEqual(upload);
   });
   it("rejects a grant keyed by an invalid handle", () => {
     const bad = CardUpload.safeParse({
-      agent_kind: "claude", tasks: [task], default_offer: ["ask"], grants: { "Bad Handle": ["ask"] },
+      ...upload, grants: { "Bad Handle": ["ask"] },
     });
     expect(bad.success).toBe(false);
   });
-  // `tier` was removed; cards already stored on the relay still carry it, so
-  // parsing must strip it rather than reject the whole card.
-  it("strips a legacy tier field instead of rejecting the card", () => {
-    const parsed = CardUpload.parse({
-      agent_kind: "claude", tasks: [{ ...task, tier: "T2" }], default_offer: ["ask"],
-    });
-    expect(parsed.tasks[0]).not.toHaveProperty("tier");
-    expect(parsed.tasks[0].id).toBe("ask");
+  it("rejects the removed tier field", () => {
+    expect(CardUpload.safeParse({ ...upload, tasks: [{ ...task, tier: "T2" }] }).success).toBe(false);
   });
   it("round-trips an AgentCard (the relay's GET response shape)", () => {
     const card = AgentCard.parse({
       handle: "ken", description: "", agent_kind: "claude",
-      tasks: [{ ...task, examples: [] }], updated_at: 1752600000000,
+      tasks: [task], updated_at: 1752600000000,
     });
     expect(card.tasks).toHaveLength(1);
   });

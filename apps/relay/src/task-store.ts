@@ -2,7 +2,6 @@ import {
   A2AListTasksResponse,
   A2ATask,
   A2ATaskState,
-  RELAY_CALL_TIMEOUT_MS,
   type A2AListTasksResponseType,
   type A2ATaskStateType,
   type A2ATaskType,
@@ -12,21 +11,15 @@ import {
 
 export type PersistedTask = {
   call_id: string;
-  // Optional for in-flight records written by a pre-correlation deployment.
-  correlation_id?: string;
+  correlation_id: string;
   from: string;
-  // Tenant and callee address are audit-routing metadata. Optional only for
-  // in-flight records created before central call evidence shipped.
-  org?: string;
-  to?: string;
+  org: string;
+  to: string;
   deadline: number;
-  // Optional only for in-flight records written by a pre-#89 deployment.
-  state?: CallStatusType["state"];
-  // Everything below is optional for a mixed-version record created before
-  // the A2A task store shipped. Projection supplies safe compatibility values.
-  task_state?: A2ATaskStateType;
-  created_at?: number;
-  updated_at?: number;
+  state: CallStatusType["state"];
+  task_state: A2ATaskStateType;
+  created_at: number;
+  updated_at: number;
   outcome_envelope?: HpkeEnvelopeType;
 };
 
@@ -49,8 +42,7 @@ export function taskBelongsToCaller(task: PersistedTask, caller: string): boolea
 }
 
 export function taskState(task: PersistedTask): A2ATaskStateType {
-  if (task.task_state) return task.task_state;
-  return task.state === "working" ? "TASK_STATE_WORKING" : "TASK_STATE_SUBMITTED";
+  return task.task_state;
 }
 
 export function taskIsTerminal(task: PersistedTask): boolean {
@@ -58,11 +50,11 @@ export function taskIsTerminal(task: PersistedTask): boolean {
 }
 
 export function taskCreatedAt(task: PersistedTask): number {
-  return task.created_at ?? task.deadline - RELAY_CALL_TIMEOUT_MS;
+  return task.created_at;
 }
 
 export function taskUpdatedAt(task: PersistedTask): number {
-  return task.updated_at ?? taskCreatedAt(task);
+  return task.updated_at;
 }
 
 export function toA2ATask(task: PersistedTask): A2ATaskType {

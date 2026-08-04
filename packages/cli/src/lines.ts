@@ -17,10 +17,6 @@ import { writeJsonAtomic } from "./json-store.js";
 import { assertValidLineName, LINE_NAME_RE } from "./lineName.js";
 export { assertValidLineName, LINE_NAME_RE };
 
-// Keep unknown top-level keys (`.loose()`) so an older CLI does not discard
-// fields added by a newer release when a command loads, updates, and saves
-// this credential store (main's #131, re-homed onto the per-line store).
-//
 // `relay` is a REQUIRED non-empty string but deliberately NOT parsed as a URL
 // here, unlike main's flat ConfigSchema. Requiring it is what stops a silent
 // fall-through to the public default; validating its syntax at load would make
@@ -35,7 +31,7 @@ export const LineConfigSchema = z.object({
   relay: z.string().min(1),
   agent_kind: AgentKindSchema.optional(),
   workdir: z.string().optional(),
-}).loose();
+});
 
 export function loadLineConfig(l: LinePaths): LineConfig {
   if (!existsSync(l.configFile)) {
@@ -57,16 +53,6 @@ export function loadLineConfig(l: LinePaths): LineConfig {
     raw = JSON.parse(readFileSync(l.configFile, "utf8"));
   } catch (e) {
     throw new Error(`Corrupt config.json for line "${l.name}" at ${l.configFile}: invalid JSON (${e instanceof Error ? e.message : String(e)}). Fix or remove this file, then re-run \`agentcall line add ${l.name} --invite <token>\`.`);
-  }
-  // Checked ahead of the schema so a line written before tenancy existed gets
-  // the actionable re-enroll instruction rather than a zod "required" error
-  // reported as generic corruption. `org` is not recoverable locally — only
-  // the relay can issue one against an invite.
-  if (raw !== null && typeof raw === "object" && !(raw as { org?: unknown }).org) {
-    throw new Error(
-      `Line "${l.name}" at ${l.configFile} has no organization. ` +
-        `Re-enroll it with \`agentcall line add ${l.name} --invite <token>\`.`,
-    );
   }
   try {
     return LineConfigSchema.parse(raw);

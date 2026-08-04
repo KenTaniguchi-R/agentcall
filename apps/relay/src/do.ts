@@ -13,12 +13,12 @@ import { MAX_RETAINED_ORG_AUDIT_EVENTS } from "./events.js";
 type CallerAttachment = {
   kind: "caller";
   from: string;
-  org?: string;
-  to?: string;
+  org: string;
+  to: string;
   actorIp?: string;
   actorCountry?: string;
   groups: string[];
-  relayOrigin?: string;
+  relayOrigin: string;
   call_id?: string;
   correlation_id?: string;
   timeoutMs?: number;
@@ -306,6 +306,9 @@ export class HandleDO extends DurableObject {
           credentialGeneration,
         } satisfies ListenerAttachment);
       } else {
+        if (!org || !target || !relayOrigin) {
+          return new Response("missing verified caller metadata", { status: 400 });
+        }
         this.ctx.acceptWebSocket(server, ["caller"]);
         server.serializeAttachment({
           kind: "caller", from, org, to: target, actorIp, actorCountry,
@@ -506,21 +509,21 @@ export class HandleDO extends DurableObject {
     caller: WebSocket | undefined,
     listener: ListenerAttachment,
   ): Promise<void> {
-    const current = record.state ?? "ringing";
+    const current = record.state;
     if (STATUS_RANK[state] <= STATUS_RANK[current]) return;
     // Persist before fan-out so a DO restart or duplicate/out-of-order frame
     // cannot move the caller backward after it has observed a later state.
     const next = {
       ...record,
       state,
-      task_state: state === "working" ? "TASK_STATE_WORKING" : (record.task_state ?? "TASK_STATE_SUBMITTED"),
+      task_state: state === "working" ? "TASK_STATE_WORKING" : record.task_state,
       updated_at: Date.now(),
     } satisfies PersistedTask;
     // Starting work from ringing is an implicit acceptance, so it must not
     // leave a lifecycle gap. A later
     // explicit acceptance is rank-rejected and cannot duplicate the event.
     const accepted = state === "answered" || (state === "working" && current === "ringing")
-      ? callAuditIntent("call.accept", next, record.to ?? listener.handle ?? "", "handle", listener, next.updated_at!)
+      ? callAuditIntent("call.accept", next, record.to, "handle", listener, next.updated_at)
       : undefined;
     if (accepted) await this.persistTaskWithAudit(next, accepted);
     else await this.ctx.storage.put<PersistedTask>(`call:${record.call_id}`, next);
@@ -563,10 +566,7 @@ export class HandleDO extends DurableObject {
         frame.envelope.from !== `${att.from}@${att.relayOrigin}` ||
         frame.envelope.to !== `${att.to}@${att.relayOrigin}`
       ) return this.fail(ws, "protocol_error");
-      // New callers always mint this. During mixed-version overlap, minting at
-      // the first new relay preserves delivery and gives the new listener a
-      // bounded application join key even when the old caller omitted it.
-      const correlation_id = frame.correlation_id ?? crypto.randomUUID().replaceAll("-", "");
+      const correlation_id = frame.correlation_id!;
 
       const listener = this.ctx.getWebSockets("listener")[0];
       if (!listener) return this.fail(ws, "offline", true, { correlation_id });
@@ -619,7 +619,7 @@ export class HandleDO extends DurableObject {
       // terminal response, a concurrent GetTask must never move backward.
       await this.persistTaskWithAudit(
         canceled,
-        callAuditIntent("call.cancel", canceled, record.to ?? att.handle ?? "", "handle", att, canceled.updated_at!),
+        callAuditIntent("call.cancel", canceled, record.to, "handle", att, canceled.updated_at),
       );
       if (caller) {
         this.fail(caller, "canceled", true, {
@@ -641,7 +641,7 @@ export class HandleDO extends DurableObject {
       const failed = updateTask(record, { task_state: "TASK_STATE_FAILED" });
       await this.persistTaskWithAudit(
         failed,
-        callAuditIntent("call.fail", failed, record.to ?? att.handle ?? "", "handle", att, failed.updated_at!),
+        callAuditIntent("call.fail", failed, record.to, "handle", att, failed.updated_at),
       );
       if (caller) this.fail(caller, "protocol_error", true, {
         call_id: frame.call_id, correlation_id: record.correlation_id,
@@ -664,8 +664,8 @@ export class HandleDO extends DurableObject {
         outcome_envelope: frame.envelope,
       });
       const intent = frame.terminal === "completed"
-        ? callAuditIntent("call.complete", finished, record.to ?? att.handle, "handle", att, finished.updated_at!)
-        : callAuditIntent("call.fail", finished, record.to ?? att.handle, "handle", att, finished.updated_at!);
+        ? callAuditIntent("call.complete", finished, record.to, "handle", att, finished.updated_at)
+        : callAuditIntent("call.fail", finished, record.to, "handle", att, finished.updated_at);
       await this.persistTaskWithAudit(
         finished,
         intent,

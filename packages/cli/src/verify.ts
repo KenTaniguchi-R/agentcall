@@ -534,8 +534,7 @@ const defaultGuardBinaryProbe: GuardBinaryProbeFn = async () => {
 };
 
 // Per-line layout: the guard writes calls.log under
-// <stateRoot>/.agentcall/lines/<line>/calls.log, not the flat legacy
-// <stateRoot>/.agentcall/calls.log — `home` here is always the temp
+// <stateRoot>/.agentcall/lines/<line>/calls.log — `home` here is always the temp
 // AGENTCALL_HOME defaultGuardProbe redirected to, and GUARD_PROBE_LINE is the
 // line name it ran the probe under, so this must resolve the same path
 // getLinePaths would.

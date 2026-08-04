@@ -15,7 +15,7 @@ Send an encrypted call payload.
 | --- | --- | --- |
 | `type` | `call_request` | yes |
 | `envelope` | object | yes |
-| `correlation_id` | string | no |
+| `correlation_id` | string | yes |
 | `traceparent` | string | no |
 
 ## Relay to caller
@@ -66,7 +66,7 @@ Deliver an encrypted call with relay-attested routing metadata.
 | `call_id` | string | yes |
 | `from` | string | yes |
 | `envelope` | object | yes |
-| `correlation_id` | string | no |
+| `correlation_id` | string | yes |
 | `traceparent` | string | no |
 | `groups` | string[] | no |
 

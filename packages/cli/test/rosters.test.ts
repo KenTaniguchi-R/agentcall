@@ -52,6 +52,15 @@ describe("memberships (user data)", () => {
     expect(statSync(p.rostersFile).mode & 0o777).toBe(0o600);
   });
 
+  it("writes only fields owned by the current membership schema", () => {
+    const p = paths();
+    saveMembership(p, { name: "first", relay: "https://r.test", roster_id: "b".repeat(22) });
+    const existing = JSON.parse(readFileSync(p.rostersFile, "utf8"));
+    writeFileSync(p.rostersFile, JSON.stringify({ ...existing, future_field: "x" }));
+    saveMembership(p, { name: "acme", relay: "https://r.test", roster_id: "a".repeat(22) });
+    expect(JSON.parse(readFileSync(p.rostersFile, "utf8"))).not.toHaveProperty("future_field");
+  });
+
   // Mirrors addContact's own NAME_RE check in contacts.ts: UX and
   // consistency (typo-catching, unambiguous CLI arguments), not a security
   // boundary — readCached's relay/caller check is what actually gates access.
