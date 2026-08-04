@@ -2,7 +2,7 @@ import { describe, expect, it } from "vitest";
 import {
   RATE_LIMIT_PRUNE_MAX_PAGES, RATE_LIMIT_WINDOW_MS, continueRateLimitMaintenance,
   readLiveRateLimitStamps, readRateLimitMaintenance, recordRateLimitHit,
-} from "../src/do.js";
+} from "../src/call-rate-limit.js";
 
 class MemoryRateLimitStorage {
   readonly data = new Map<string, unknown>();
