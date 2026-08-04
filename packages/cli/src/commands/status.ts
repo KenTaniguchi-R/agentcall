@@ -1,7 +1,7 @@
 import { ApiError, getStatus } from "../api.js";
 import { relayUrl } from "../config.js";
 import { resolveAddress } from "../contacts.js";
-import type { LineContext } from "../lineContext.js";
+import type { LineContext } from "../line-context.js";
 import { pickOutboundLine } from "../outbound.js";
 import { getMachinePaths } from "../paths.js";
 

@@ -1,6 +1,6 @@
 import { basename, dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
 import { fileURLToPath } from "node:url";
-import { lineTaskDirs } from "./lineTaskDirs.js";
+import { lineTaskDirs } from "./line-task-dirs.js";
 import { getMachinePaths, type LinePaths } from "./paths.js";
 
 export type GuardInput = {

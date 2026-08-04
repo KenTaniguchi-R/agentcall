@@ -14,7 +14,7 @@ const read = (rel: string) => readFileSync(fileURLToPath(new URL(rel, import.met
 // not a side effect of another change.
 describe("search scope", () => {
   it("registers no SessionStart or UserPromptSubmit behavior", () => {
-    for (const f of ["../src/search.ts", "../src/searchRefresh.ts", "../src/rosters.ts"]) {
+    for (const f of ["../src/search.ts", "../src/search-refresh.ts", "../src/rosters.ts"]) {
       const src = read(f);
       expect(src).not.toContain("SessionStart");
       expect(src).not.toContain("UserPromptSubmit");

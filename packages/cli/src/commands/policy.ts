@@ -2,7 +2,7 @@ import { existsSync } from "node:fs";
 import { loadPolicy } from "../policy.js";
 import { loadTasks } from "../tasks.js";
 import { renderPolicyReport } from "../policy-report.js";
-import { resolveLine, type LineContext } from "../lineContext.js";
+import { resolveLine, type LineContext } from "../line-context.js";
 import { assertCallableLine, resolveLineWorkdir } from "../config.js";
 import { getMachinePaths } from "../paths.js";
 

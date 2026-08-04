@@ -2,7 +2,7 @@ import { describe, expect, it, beforeEach, vi } from "vitest";
 import { mkdirSync } from "node:fs";
 import { getLinePaths, getMachinePaths, type MachinePaths } from "../src/paths.js";
 import { saveLineConfig } from "../src/lines.js";
-import { startAllListeners } from "../src/listenAll.js";
+import { startAllListeners } from "../src/listen-all.js";
 import { tempDir } from "./helpers.js";
 
 let m: MachinePaths;

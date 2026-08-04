@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
-import { findOutbound, loadOutbound, rememberOutbound, type OutboundContext } from "../src/contextsOut.js";
+import { findOutbound, loadOutbound, rememberOutbound, type OutboundContext } from "../src/contexts-out.js";
+import { getLinePaths, getMachinePaths } from "../src/paths.js";
 import { tempLine } from "./helpers.js";
 
 const paths = () => tempLine("claude", "agentcall-out-");

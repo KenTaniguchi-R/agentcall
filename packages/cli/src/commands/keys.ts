@@ -1,7 +1,7 @@
 import { publishEncryptionKey, publishIdentityKey } from "../api.js";
 import { addressHost, relayUrl } from "../config.js";
 import { getMachinePaths } from "../paths.js";
-import { resolveLine } from "../lineContext.js";
+import { resolveLine } from "../line-context.js";
 import { loadKeys } from "../keys.js";
 
 export function register(program: { command(name: string): any }): void {

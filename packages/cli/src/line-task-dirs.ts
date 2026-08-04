@@ -1,5 +1,5 @@
 import { existsSync, readdirSync } from "node:fs";
-import { LINE_NAME_RE } from "./lineName.js";
+import { LINE_NAME_RE } from "./line-name.js";
 import { getLinePaths, type MachinePaths } from "./paths.js";
 
 // Every line's tasksDir, derived from the directory NAME alone — no

@@ -1,12 +1,12 @@
 import { rotateToken } from "../api.js";
 import { relayUrl } from "../config.js";
-import type { LineContext } from "../lineContext.js";
+import type { LineContext } from "../line-context.js";
 import { listenerServiceRestartCommand } from "../listener-service.js";
 import { loadLineConfig, saveLineConfig } from "../lines.js";
 import { withFileLock } from "../file-lock.js";
 import { ApiError } from "../api.js";
 import { getMachinePaths } from "../paths.js";
-import { resolveLine } from "../lineContext.js";
+import { resolveLine } from "../line-context.js";
 
 export function register(program: { command(name: string): any }): void {
   program.command("rotate").description("replace a line's relay token (use if it may have leaked)")

@@ -2,8 +2,8 @@ import type { Command } from "commander";
 import { assertCallableLine, relayUrl } from "../config.js";
 import { getMachinePaths } from "../paths.js";
 import { loadLineConfig } from "../lines.js";
-import { resolveLine, type LineContext } from "../lineContext.js";
-import { startAllListeners } from "../listenAll.js";
+import { resolveLine, type LineContext } from "../line-context.js";
+import { startAllListeners } from "../listen-all.js";
 import { startListener } from "../listener.js";
 
 export function register(program: Command): void {

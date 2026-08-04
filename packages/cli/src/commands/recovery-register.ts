@@ -2,7 +2,7 @@ import { existsSync } from "node:fs";
 import { ApiError } from "../api.js";
 import { assertValidLineName, loadLineConfig } from "../lines.js";
 import { getLinePaths, getMachinePaths } from "../paths.js";
-import { resolveLine } from "../lineContext.js";
+import { resolveLine } from "../line-context.js";
 import { runRecoveryIssue, runRecoveryRedeem } from "./recovery.js";
 
 export function register(program: { command(name: string): any }): void {

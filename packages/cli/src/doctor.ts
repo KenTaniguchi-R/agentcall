@@ -2,7 +2,7 @@ import { fetchKeys, getRecoveryStatus, getStatus } from "./api.js";
 import { lstatSync, readFileSync, realpathSync } from "node:fs";
 import { execFileSync } from "node:child_process";
 import { encryptionKeyTranscript, importIdentityPublicKey, keyIdFor, verifyTranscript } from "@benree/agentcall-shared";
-import { callAgent } from "./callClient.js";
+import { callAgent } from "./call-client.js";
 import { addressHost, relayUrl, resolveLineWorkdir, type LineConfig, type Workdir } from "./config.js";
 import {
   inspectListenerService,

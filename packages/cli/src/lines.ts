@@ -14,7 +14,7 @@ import { writeJsonAtomic } from "./json-store.js";
 // without pulling zod into its once-per-tool-call import graph. The
 // re-export keeps every existing `from "./lines.js"` caller working
 // unchanged.
-import { assertValidLineName, LINE_NAME_RE } from "./lineName.js";
+import { assertValidLineName, LINE_NAME_RE } from "./line-name.js";
 export { assertValidLineName, LINE_NAME_RE };
 
 // `relay` is a REQUIRED non-empty string but deliberately NOT parsed as a URL

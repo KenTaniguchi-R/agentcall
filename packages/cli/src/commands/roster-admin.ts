@@ -1,7 +1,7 @@
 import type { Command } from "commander";
 import { deleteRoster, expelRosterMember, issueRosterJoinKey, listRosterJoinKeys, revokeRosterJoinKey } from "../api.js";
 import { relayUrl } from "../config.js";
-import type { LineContext } from "../lineContext.js";
+import type { LineContext } from "../line-context.js";
 import { deleteCached, forgetMembership, loadMemberships } from "../rosters.js";
 import { ask } from "../tty.js";
 

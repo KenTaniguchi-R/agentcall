@@ -4,7 +4,7 @@ import { join } from "node:path";
 import { getLinePaths, getMachinePaths, type MachinePaths } from "../src/paths.js";
 import { saveLineConfig } from "../src/lines.js";
 import { savePerson } from "../src/person.js";
-import { resolveLine } from "../src/lineContext.js";
+import { resolveLine } from "../src/line-context.js";
 import { tempDir } from "./helpers.js";
 
 let m: MachinePaths;

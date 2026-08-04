@@ -4,7 +4,7 @@ import { assertCallableLine, relayUrl } from "../config.js";
 import { buildCardReport } from "../lint.js";
 import { getMachinePaths } from "../paths.js";
 import { resolveAddress } from "../contacts.js";
-import { resolveLine, type LineContext } from "../lineContext.js";
+import { resolveLine, type LineContext } from "../line-context.js";
 import { publishCard } from "../card.js";
 import { sanitizeTerminalOutput } from "@benree/agentcall-shared";
 
