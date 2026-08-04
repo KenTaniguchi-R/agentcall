@@ -97,6 +97,17 @@ describe("api client", () => {
     await expect(registerHandle(relay, "invalid-invite", "ken", "claude"))
       .rejects.toMatchObject({ code: "invite_invalid", message: expect.stringMatching(/expired|already used/) });
   });
+  // The relay deliberately collapses four distinct conditions (typo, already
+  // redeemed, revoked, expired) into one opaque 404 so that an unauthenticated
+  // /v1/register cannot be used to probe which invites exist. That is correct
+  // server-side, but it means the CLI is the only place that can tell the user
+  // what to do next, and "invalid, expired, or already used" on its own does
+  // not: every branch ends at "ask whoever sent this for another one".
+  it("tells the user how to recover from a rejected invite", async () => {
+    const relay = await serve(404, { error: "invalid invite" });
+    await expect(registerHandle(relay, "invalid-invite", "ken", "claude"))
+      .rejects.toMatchObject({ message: expect.stringMatching(/administrator.*new one/is) });
+  });
   it("register times out with a clear error when the relay never responds", async () => {
     const relay = await serveNever();
     await expect(registerHandle(relay, "valid-invite", "ken", "claude", { timeoutMs: 100 })).rejects.toMatchObject({
