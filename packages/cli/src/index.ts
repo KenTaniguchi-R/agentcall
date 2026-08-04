@@ -31,7 +31,6 @@ import { allRostersFailed, DEFAULT_SEARCH_LIMIT, rank, renderResults, sanitize, 
 import { refreshRoster } from "./searchRefresh.js";
 import { ask } from "./tty.js";
 import { renderPolicyReport } from "./policy-report.js";
-import { loadLocalHistory, renderLocalHistory } from "./history.js";
 import { sanitizeTerminalOutput, stringifyTerminalSafeJson } from "@benree/agentcall-shared";
 import { getTelemetry, shutdownTelemetry, telemetrySafely } from "./telemetry.js";
 import { register as registerAudit } from "./commands/audit.js";
@@ -44,6 +43,7 @@ import { register as registerStatus } from "./commands/status.js";
 import { register as registerKeys } from "./commands/keys.js";
 import { register as registerPeer } from "./commands/peer.js";
 import { register as registerDoctor } from "./commands/doctor.js";
+import { register as registerHistory } from "./commands/history.js";
 
 export function createProgram(): Command {
 const program = new Command();
@@ -195,39 +195,7 @@ registerPeer(program);
 
 registerKeys(program);
 registerDoctor(program);
-
-program
-  .command("history")
-  .description("show call activity stored locally on this machine")
-  .option("--limit <count>", "maximum newest calls to show (1-100)", "20")
-  .option("--flagged", "show only calls with objective local abuse signals")
-  .option("--json", "print machine-readable local history")
-  // calls.log/tools.log are per line, so history is too.
-  .option("--line <name>", "line whose history to show (defaults to the primary line)")
-  .action((o: { limit: string; flagged?: boolean; json?: boolean; line?: string }) => {
-    const limit = Number(o.limit);
-    if (!Number.isInteger(limit) || limit < 1 || limit > 100) {
-      console.error("History limit must be an integer from 1 to 100.");
-      process.exitCode = 1;
-      return;
-    }
-    const ctx = lineFor(o.line);
-    if (!ctx) return;
-    const history = loadLocalHistory(ctx.paths, limit, { flaggedOnly: o.flagged });
-    if (history.malformed > 0) {
-      console.error(`Skipped ${history.malformed} malformed local history record${history.malformed === 1 ? "" : "s"}.`);
-    }
-    if (history.truncatedFiles.length > 0) {
-      console.error(
-        `History scan was limited to the newest 4 MiB of: ${history.truncatedFiles.join(", ")}. ` +
-          "Tool counts may be partial.",
-      );
-    }
-    const entries = history.entries;
-    console.log(o.json
-      ? stringifyTerminalSafeJson(entries)
-      : sanitizeTerminalOutput(renderLocalHistory(entries)));
-  });
+registerHistory(program, lineFor);
 
 // Shared by `lint` and a bare `card`. Per-line, like everything else that
 // reads a policy or a card: `--line` picks which one, defaulting to primary.
