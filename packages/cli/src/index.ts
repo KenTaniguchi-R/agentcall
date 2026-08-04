@@ -43,6 +43,7 @@ import { register as registerContacts } from "./commands/contacts.js";
 import { register as registerSetup } from "./commands/setup.js";
 import { register as registerRecovery } from "./commands/recovery-register.js";
 import { register as registerInvite } from "./commands/invite.js";
+import { register as registerStatus } from "./commands/status.js";
 
 export function createProgram(): Command {
 const program = new Command();
@@ -189,52 +190,7 @@ program
     }
   });
 
-program
-  .command("status")
-  .description("check whether a handle's agent is currently online")
-  .argument("<address>", "contact name or handle@host to check")
-  .option("--as <line>", "line to check from (defaults to the primary line on the destination's relay)")
-  .action(async (address: string, o: { as?: string }) => {
-    const machine = getMachinePaths();
-    // Presence is self-or-shared-roster on the relay (#116), so status needs
-    // the viewer's credentials — and WHICH line's credentials matters twice
-    // over: it decides both which relay is asked and whether the viewer shares
-    // a roster with the target. Same reasoning as `call` above for resolving
-    // the address before the line: which line has credentials for this relay
-    // depends on the destination's host. The second pass below re-checks the
-    // address against the chosen line's tenant, exactly as `call` does.
-    const firstPass = resolveAddress(machine, address);
-    if (!firstPass.ok) {
-      console.error(firstPass.error);
-      process.exitCode = 1;
-      return;
-    }
-    let ctx: LineContext;
-    try {
-      ctx = pickOutboundLine(machine, `https://${firstPass.host}`, { as: o.as });
-    } catch (e) {
-      console.error(String(e instanceof Error ? e.message : e));
-      process.exitCode = 1;
-      return;
-    }
-    const cfg = ctx.config;
-    const cfgRelay = relayUrl(cfg);
-    const parsed = resolveAddress(machine, address, cfgRelay, cfg.org);
-    if (!parsed.ok) {
-      console.error(parsed.error);
-      process.exitCode = 1;
-      return;
-    }
-    if (parsed.warning) console.error(parsed.warning);
-    try {
-      const { online } = await getStatus(cfgRelay, parsed.handle, { org: cfg.org, handle: cfg.handle, token: cfg.token });
-      console.log(online ? "online" : "offline");
-      process.exitCode = online ? 0 : 2;
-    } catch (e) {
-      console.error(e instanceof ApiError ? e.message : String(e));
-      process.exitCode = 1;
-    }
-  });
+registerStatus(program);
 
 program
   .command("verify")
