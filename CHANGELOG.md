@@ -6,6 +6,18 @@ which are released together.
 
 ## Unreleased
 
+### Native Windows compatibility evidence
+
+- Add a native `windows-2025` CI matrix for Node 20, 22, and 24 that exercises
+  the packed CLI from a clean path containing spaces while preserving the
+  public unsupported-platform install boundary.
+- Run build, typecheck, shared tests, and an explicitly platform-neutral CLI
+  suite on Windows; classify every remaining setup, supervision, ACL, process,
+  executable-resolution, and path blocker under #251.
+- Document the Daytona/manual setup, foreground listener, inbound call,
+  cancellation, timeout, status, and uninstall probe required before Windows
+  can be claimed as a supported callee platform.
+
 ### Generation-bound handle recovery
 
 - Add an org-scoped, generation-versioned recovery proof that is issued only
