@@ -9,10 +9,7 @@ import { getStatus, fetchCard, createRoster, joinRoster, leaveRoster,
   expelRosterMember, issueRosterJoinKey, listRosterJoinKeys, revokeRosterJoinKey, deleteRoster,
   ApiError } from "./api.js";
 import { publishCard } from "./card.js";
-import { loadPolicy, loadUserPolicy, savePolicy, validatePolicy } from "./policy.js";
 import { assertValidLineName, readyLines } from "./lines.js";
-import { loadTasks } from "./tasks.js";
-import { execVerb, type Verb } from "./verbs.js";
 import { buildCardReport } from "./lint.js";
 import { resolveAddress } from "./contacts.js";
 import { resolveLine } from "./lineContext.js";
@@ -43,6 +40,7 @@ import { register as registerHistory } from "./commands/history.js";
 import { register as registerPolicy } from "./commands/policy.js";
 import { register as registerListen } from "./commands/listen.js";
 import { register as registerTask } from "./commands/task.js";
+import { register as registerGrants } from "./commands/grants.js";
 
 export function createProgram(): Command {
 const program = new Command();
@@ -645,62 +643,8 @@ program
     console.log(renderResults(results, statuses));
   });
 
-// Shared by allow/revoke/block/unblock/offer/unoffer: resolve exactly once
-// (never once for policy and once for credentials — see LineContext), then
-// require the line be callable before touching its policy or card.
-async function runPolicyVerb(verb: Verb, a: string, b: string | undefined, opts: { line?: string }): Promise<void> {
-  const machine = getMachinePaths();
-  let ctx: LineContext;
-  try {
-    ctx = resolveLine(machine, { line: opts.line });
-    assertCallableLine(ctx.config);
-  } catch (e) {
-    console.error(String(e instanceof Error ? e.message : e));
-    process.exitCode = 1;
-    return;
-  }
-  try {
-    // Mutations edit user intent, never the administrator-filtered view.
-    // Enforcement and card publication apply the machine's managed ceiling
-    // separately. validatePolicy runs BEFORE the write so a change that would
-    // break an assertion leaves the last known-good file (and the listener)
-    // intact.
-    const { policy, lines } = execVerb(loadUserPolicy(ctx.paths), loadTasks(ctx.paths), verb, a, b);
-    validatePolicy(ctx.paths, policy);
-    savePolicy(ctx.paths, policy);
-    for (const line of lines) console.log(line);
-    try {
-      await publishCard(ctx.config, ctx.paths);
-      console.log("Card updated.");
-    } catch (e) {
-      console.error(`Warning: policy saved locally, but the card push failed (${String(e)}). Run \`agentcall card push\` later.`);
-    }
-  } catch (e) {
-    console.error(String(e instanceof Error ? e.message : e));
-    process.exitCode = 1;
-  }
-}
-
 registerTask(program);
-
-program.command("allow").description("grant a caller an extra task (and republish your card)")
-  .argument("<handle>").argument("<task-id>").option("--line <name>", "line to use (defaults to the primary line)")
-  .action((handle: string, taskId: string, o: { line?: string }) => runPolicyVerb("allow", handle, taskId, o));
-program.command("revoke").description("remove a caller's task grant")
-  .argument("<handle>").argument("<task-id>").option("--line <name>", "line to use (defaults to the primary line)")
-  .action((handle: string, taskId: string, o: { line?: string }) => runPolicyVerb("revoke", handle, taskId, o));
-program.command("block").description("refuse all calls from a handle")
-  .argument("<handle>").option("--line <name>", "line to use (defaults to the primary line)")
-  .action((handle: string, o: { line?: string }) => runPolicyVerb("block", handle, undefined, o));
-program.command("unblock").description("lift a block")
-  .argument("<handle>").option("--line <name>", "line to use (defaults to the primary line)")
-  .action((handle: string, o: { line?: string }) => runPolicyVerb("unblock", handle, undefined, o));
-program.command("offer").description("offer a task to any registered caller")
-  .argument("<task-id>").option("--line <name>", "line to use (defaults to the primary line)")
-  .action((taskId: string, o: { line?: string }) => runPolicyVerb("offer", taskId, undefined, o));
-program.command("unoffer").description("stop offering a task publicly")
-  .argument("<task-id>").option("--line <name>", "line to use (defaults to the primary line)")
-  .action((taskId: string, o: { line?: string }) => runPolicyVerb("unoffer", taskId, undefined, o));
+registerGrants(program);
 
 const line = program.command("line").description("manage the addresses (lines) this machine answers on and calls from");
 
