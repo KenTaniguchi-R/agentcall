@@ -20,6 +20,7 @@ import { ReplayDetectedError } from "../src/replay-store.js";
 import {
   admitBinding, handleCancel, makeOutcomeSender, openInboundEnvelope, resolveAdmission,
 } from "../src/listener-stages.js";
+import { tempLine, tempMachine } from "./helpers.js";
 
 let cryptoRoot: string;
 let callerKeys: StoredKeys;
@@ -33,12 +34,15 @@ beforeAll(async () => {
 });
 afterAll(() => rmSync(cryptoRoot, { recursive: true, force: true }));
 
+// Mirrors tempMachine/tempLine in helpers.ts, which were modeled on this file
+// and listener.test.ts's own freshMachine/seededPaths; using them directly
+// here (rather than keeping a local copy) is what gives every temp dir this
+// file creates its auto-teardown.
 function freshMachine(): MachinePaths {
-  const root = mkdtempSync(join(tmpdir(), "agentcall-stages-"));
-  return getMachinePaths(root, root);
+  return tempMachine("agentcall-stages-");
 }
 function seededPaths(): LinePaths {
-  return getLinePaths(freshMachine(), "claude");
+  return tempLine("claude", "agentcall-stages-");
 }
 function seedPolicy(paths: LinePaths, policy: object) {
   mkdirSync(paths.dir, { recursive: true });

@@ -252,6 +252,34 @@ describe("checkAgentSpawn", () => {
     expect(seen).toEqual(["claude"]);
     expect(c.ok).toBe(true);
   });
+
+  // Issue #293: checkAgentSpawn mkdtemp's a throwaway AGENTCALL_HOME (above)
+  // but never removed it on any path, leaking a directory on every real
+  // `agentcall doctor`/`agentcall setup` run — not just a test artifact,
+  // since this sits on the shared binary -> codex-auth -> agent-spawn ladder
+  // behind both commands. Both the success and the throwing-runFn paths must
+  // clean up: a `finally` is the only place that covers both.
+  it("removes the throwaway AGENTCALL_HOME after a successful probe", async () => {
+    let seenHome: string | undefined;
+    const c = await checkAgentSpawn("claude", fakeWorkdir, async (_kind, _prompt, _workdir, _timeoutMs, specOverride) => {
+      seenHome = specOverride?.env?.AGENTCALL_HOME;
+      return { text: "OK" };
+    }, fakeResolveBin);
+    expect(c.ok).toBe(true);
+    expect(seenHome).toBeTruthy();
+    expect(existsSync(seenHome!)).toBe(false);
+  });
+
+  it("removes the throwaway AGENTCALL_HOME even when runFn throws", async () => {
+    let seenHome: string | undefined;
+    const c = await checkAgentSpawn("claude", fakeWorkdir, async (_kind, _prompt, _workdir, _timeoutMs, specOverride) => {
+      seenHome = specOverride?.env?.AGENTCALL_HOME;
+      throw new AgentRunError("boom", "agent_error");
+    }, fakeResolveBin);
+    expect(c.ok).toBe(false);
+    expect(seenHome).toBeTruthy();
+    expect(existsSync(seenHome!)).toBe(false);
+  });
 });
 
 describe("checkCodexGuard", () => {

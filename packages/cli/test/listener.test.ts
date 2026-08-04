@@ -16,6 +16,7 @@ import { loadContexts, mintContextId, saveContexts, type ContextBinding } from "
 import type { CallableLineConfig } from "../src/config.js";
 import { openE2EEResponse, sealE2EERequest } from "../src/e2ee.js";
 import { generateIdentityKeys, type StoredKeys } from "../src/keys.js";
+import { tempLine, tempMachine } from "./helpers.js";
 
 let httpServer: Server;
 let stopper: { stop(): Promise<void> } | undefined;
@@ -134,17 +135,18 @@ async function sendIncoming(
 }
 
 // Fresh ~/.agentcall-shaped tmp root, isolated as both stateRoot and userHome
-// so nothing in these tests can accidentally touch the real machine.
+// so nothing in these tests can accidentally touch the real machine. Delegates
+// to helpers.ts's tempMachine (modeled on this function) so every temp dir
+// this file creates gets auto-teardown instead of leaking.
 function freshMachine(): MachinePaths {
-  const root = mkdtempSync(join(tmpdir(), "agentcall-l-"));
-  return getMachinePaths(root, root);
+  return tempMachine("agentcall-l-");
 }
 
 // No policy/task seeded — loadPolicy and loadTasks both fall back to their
 // built-in defaults (default_offer: ["ask"], the built-in "ask" task), which
 // is enough for a plain message to resolve.
 function seededPaths(): LinePaths {
-  return getLinePaths(freshMachine(), "claude");
+  return tempLine("claude", "agentcall-l-");
 }
 
 // The one way call-flow tests assemble listener deps: default config wired to
