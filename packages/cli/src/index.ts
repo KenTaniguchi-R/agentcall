@@ -2,7 +2,6 @@ import { Command, CommanderError } from "commander";
 import type { AgentKind } from "@benree/agentcall-shared";
 import { getLinePaths, getMachinePaths, type LinePaths } from "./paths.js";
 import { assertCallableLine, relayUrl, type LineConfig } from "./config.js";
-import { callAgent, callStatusMessage, CallError } from "./callClient.js";
 // No rotateToken here: `rotate` goes through commands/rotate.ts's rotateLine,
 // which owns the per-line config write and calls the api helper itself.
 import { ApiError, getStatus, createRoster, joinRoster, leaveRoster,
@@ -12,16 +11,13 @@ import { assertValidLineName, readyLines } from "./lines.js";
 import { resolveAddress } from "./contacts.js";
 import { resolveLine } from "./lineContext.js";
 import type { LineContext } from "./lineContext.js";
-import { pickOutboundLine } from "./outbound.js";
+import { register as registerCall } from "./commands/call.js";
 import { rotateLine } from "./commands/rotate.js";
 import { runRecoveryIssue, runRecoveryRedeem } from "./commands/recovery.js";
 import { addLine, listLinesReport, removeLine, setPrimary } from "./commands/line.js";
 import { ask as ttyAsk } from "./tty.js";
-import { findOutbound, loadOutbound, rememberOutbound } from "./contextsOut.js";
 import { deleteCached, forgetMembership, loadMemberships, saveMembership } from "./rosters.js";
 import { ask } from "./tty.js";
-import { sanitizeTerminalOutput, stringifyTerminalSafeJson } from "@benree/agentcall-shared";
-import { getTelemetry, shutdownTelemetry, telemetrySafely } from "./telemetry.js";
 import { register as registerAudit } from "./commands/audit.js";
 import { register as registerUninstall } from "./commands/uninstall.js";
 import { register as registerContacts } from "./commands/contacts.js";
@@ -49,141 +45,8 @@ registerSetup(program);
 // Invite actions are isolated so the command tree remains declarative here.
 registerInvite(program, lineFor);
 registerAudit(program, lineFor);
+registerCall(program);
 
-program
-  .command("call")
-  .description("call another handle's agent with a message and print its reply")
-  .argument("<address>", "contact name or handle@host to call")
-  .argument("<message...>", "message to send")
-  .option("--json", "print the full reply envelope instead of just the text")
-  .option("--task <id>", "task from the callee's card to perform (see: agentcall card <address>)")
-  .option("--as <line>", "line to call from (defaults to the primary line on the destination's relay)")
-  .option("--continue", "continue the last conversation with this address")
-  .option("--context <id>", "continue a specific conversation by id")
-  .action(async (address: string, messageParts: string[], o: { json?: boolean; task?: string; as?: string; continue?: boolean; context?: string }) => {
-    // Answering agents do not yet receive a relay-minted run credential or an
-    // attested delegation chain. Letting the ordinary CLI silently reuse the
-    // owner's line token here would erase the original caller and permit
-    // accidental A -> B -> A loops. This environment check prevents the
-    // supported CLI path, not a hostile process: an agent with shell/read
-    // access can remove the variable and reuse config credentials. Structural
-    // enforcement requires the brokered design recorded by issue #112.
-    if (process.env.AGENTCALL_CALL_ID !== undefined) {
-      console.error(
-        "Nested agentcall calls are disabled until relay-attested chains and secret-isolated per-run credentials exist.",
-      );
-      process.exitCode = 1;
-      return;
-    }
-    const machine = getMachinePaths();
-    // The address is resolved BEFORE line selection now: which line places
-    // this call depends on the destination's host (pickOutboundLine matches
-    // it against each line's own relay), so the destination has to be known
-    // first. No relay or org is passed on THIS pass — with several lines
-    // possibly on several relays and in several tenants, "the configured
-    // relay" isn't a single thing to compare against anymore; pickOutboundLine's
-    // own error already names which relays this machine actually holds lines on
-    // when none fit.
-    const firstPass = resolveAddress(machine, address);
-    if (!firstPass.ok) {
-      console.error(firstPass.error);
-      process.exitCode = 1;
-      return;
-    }
-    let ctx: LineContext;
-    try {
-      ctx = pickOutboundLine(machine, `https://${firstPass.host}`, { as: o.as });
-    } catch (e) {
-      console.error(String(e instanceof Error ? e.message : e));
-      process.exitCode = 1;
-      return;
-    }
-    const cfg = ctx.config;
-    // Second pass, now that the calling line — and therefore the tenant — is
-    // known. This is what carries #66's cross-tenant refusal into the per-line
-    // model: resolveAddress stays the single resolution path (see contacts.ts)
-    // rather than growing a second, drifting copy of the org comparison here.
-    const parsed = resolveAddress(machine, address, relayUrl(cfg), cfg.org);
-    if (!parsed.ok) {
-      console.error(parsed.error);
-      process.exitCode = 1;
-      return;
-    }
-    if (parsed.warning) console.error(parsed.warning);
-    const message = messageParts.join(" ");
-
-    // --continue resolves against what the callee told us last time. The task
-    // is re-sent explicitly: without it turn 2 would re-run policy resolution
-    // and could land on a different task than the context was minted under,
-    // which admission would then reject -- a self-inflicted context_unknown.
-    let contextId = o.context;
-    let task = o.task;
-    if (o.continue) {
-      if (contextId) {
-        console.error("Use --continue or --context, not both.");
-        process.exitCode = 1;
-        return;
-      }
-      const prev = findOutbound(loadOutbound(ctx.paths), {
-        relay: relayUrl(cfg), from: cfg.handle, to: parsed.handle,
-      });
-      if (!prev) {
-        console.error(`No open conversation with ${address}. Call without --continue to start one.`);
-        process.exitCode = 1;
-        return;
-      }
-      if (task !== undefined && task !== prev.task) {
-        console.error(`That conversation is on task "${prev.task}", not "${task}".`);
-        process.exitCode = 1;
-        return;
-      }
-      contextId = prev.context_id;
-      task = prev.task;
-    }
-
-    const telemetry = getTelemetry();
-    const callerSpan = telemetrySafely(() => telemetry?.startCaller({ task, relay: relayUrl(cfg) }));
-    try {
-      const reply = await callAgent({
-        relay: relayUrl(cfg),
-        org: cfg.org,
-        from: cfg.handle,
-        token: cfg.token,
-        to: parsed.handle,
-        message,
-        paths: ctx.paths,
-        task,
-        contextId,
-        correlationId: callerSpan?.correlationId,
-        traceparent: callerSpan?.traceparent,
-        onStatus: (s, frame) => {
-          telemetrySafely(() => callerSpan?.setCallId(frame.call_id));
-          console.error(callStatusMessage(s));
-        },
-      });
-      telemetrySafely(() => callerSpan?.endSuccess(reply.call_id));
-      if (reply.context_id && reply.task) {
-        rememberOutbound(ctx.paths, {
-          relay: relayUrl(cfg), from: cfg.handle, to: parsed.handle,
-          task: reply.task, context_id: reply.context_id, at: Date.now(),
-        });
-        // stderr, never stdout: reply.text must stay pipeable, and this matches
-        // the existing "ringing..." / "answered" convention.
-        console.error("conversation open — add --continue to follow up");
-      }
-      console.log(o.json ? stringifyTerminalSafeJson(reply) : sanitizeTerminalOutput(reply.text));
-    } catch (e) {
-      telemetrySafely(() => callerSpan?.endError(
-        e instanceof CallError ? e.code : "agent_error",
-        e instanceof CallError ? e.callId : undefined,
-      ));
-      console.error(e instanceof CallError ? `Call failed (${e.code}): ${e.message}` : String(e));
-      process.exitCode = 1;
-      return;
-    } finally {
-      await shutdownTelemetry();
-    }
-  });
 
 registerStatus(program);
 registerPeer(program);
