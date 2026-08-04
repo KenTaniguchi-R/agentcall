@@ -4,6 +4,18 @@ import type { LineContext } from "../lineContext.js";
 import { listenerServiceRestartCommand } from "../listener-service.js";
 import { loadLineConfig, saveLineConfig } from "../lines.js";
 import { withFileLock } from "../file-lock.js";
+import { ApiError } from "../api.js";
+import { getMachinePaths } from "../paths.js";
+import { resolveLine } from "../lineContext.js";
+
+export function register(program: { command(name: string): any }): void {
+  program.command("rotate").description("replace a line's relay token (use if it may have leaked)")
+    .option("--line <name>", "line to rotate (defaults to the primary line)")
+    .action(async (o: { line?: string }) => {
+      try { await rotateLine(resolveLine(getMachinePaths(), { line: o.line })); }
+      catch (e) { console.error(e instanceof ApiError ? e.message : String(e instanceof Error ? e.message : e)); process.exitCode = 1; }
+    });
+}
 
 export interface RotateDeps {
   rotate?: typeof rotateToken;
