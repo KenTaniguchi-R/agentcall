@@ -11,7 +11,6 @@ import { getStatus, fetchCard, fetchKeys, publishEncryptionKey, publishIdentityK
   fetchAuditExportPage, ApiError } from "./api.js";
 import { startAllListeners } from "./listenAll.js";
 import { startListener } from "./listener.js";
-import { runSetup } from "./setup.js";
 import { publishCard } from "./card.js";
 import { loadPolicy, loadUserPolicy, savePolicy, validatePolicy } from "./policy.js";
 import { assertValidLineName, loadLineConfig, readyLines } from "./lines.js";
@@ -41,46 +40,13 @@ import { resetPeerTrust, verifyAndPinPeer } from "./known-peers.js";
 import { AUDIT_CSV_COLUMNS, auditCsvRow, parseAuditFilter, parseAuditTime } from "./commands/audit-export.js";
 import { register as registerUninstall } from "./commands/uninstall.js";
 import { register as registerContacts } from "./commands/contacts.js";
+import { register as registerSetup } from "./commands/setup.js";
 
 export function createProgram(): Command {
 const program = new Command();
 program.name("agentcall").description("Call other people's coding agents").version("0.4.0");
 
-program
-  .command("setup")
-  .description("enroll with an organization invite, configure your agent, and install the background listener")
-  .option("--invite <token>", "one-time organization invite (required for first enrollment)")
-  .option("--handle <handle>", "handle to register (prompted if omitted)")
-  .option("--agent <agent>", "agent kind: claude or codex (auto-detected if omitted)")
-  .option("--relay <url>", "relay URL to register against")
-  .option("--no-snippet", "skip appending the agentcall usage snippet to CLAUDE.md/AGENTS.md")
-  .option("--skip-service", "skip installing the background listener service")
-  .option("--caller-only", "register a handle to call others without making your own agent callable")
-  .option("--no-verify", "skip verifying the agent can answer a test call")
-  .action(
-    async (o: {
-      handle?: string;
-      invite?: string;
-      agent?: string;
-      relay?: string;
-      snippet?: boolean;
-      skipService?: boolean;
-      callerOnly?: boolean;
-      verify?: boolean;
-    }) => {
-      const result = await runSetup({
-        invite: o.invite,
-        handle: o.handle,
-        agent: o.agent as AgentKind | undefined,
-        relay: o.relay,
-        snippet: o.snippet,
-        skipService: o.skipService,
-        callerOnly: o.callerOnly,
-        verify: o.verify,
-      });
-      if (!result.ready) process.exitCode = 1;
-    },
-  );
+registerSetup(program);
 
 // An invite enrolls someone into ONE tenant, and the tenant is a property of
 // the line (see config.ts) — so every subcommand here takes `--line`. A machine
