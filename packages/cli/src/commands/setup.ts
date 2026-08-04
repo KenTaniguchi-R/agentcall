@@ -4,7 +4,7 @@ import { runSetup } from "../setup.js";
 export function register(program: { command(name: string): any }): void {
   program.command("setup")
     .description("enroll with an organization invite, configure your agent, and install the background listener")
-    .option("--invite <token>", "one-time organization invite (required for first enrollment)")
+    .option("--invite <token>", "one-time organization invite (prompted if omitted; also read from AGENTCALL_INVITE)")
     .option("--handle <handle>", "handle to register (prompted if omitted)")
     .option("--agent <agent>", "agent kind: claude or codex (auto-detected if omitted)")
     .option("--relay <url>", "relay URL to register against")

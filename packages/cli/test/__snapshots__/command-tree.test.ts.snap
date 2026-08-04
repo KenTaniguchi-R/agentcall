@@ -11,7 +11,7 @@ exports[`CLI command tree > pins command paths, aliases, descriptions, and optio
       "name": "setup",
       "options": [
         {
-          "description": "one-time organization invite (required for first enrollment)",
+          "description": "one-time organization invite (prompted if omitted; also read from AGENTCALL_INVITE)",
           "flags": "--invite <token>",
         },
         {

@@ -5,7 +5,7 @@ import { addLine, listLinesReport } from "./commands/line.js";
 import { listLines } from "./lines.js";
 import { resolveLine } from "./line-context.js";
 import { getMachinePaths } from "./paths.js";
-import { ask as ttyAsk } from "./tty.js";
+import { canPrompt, ask as ttyAsk } from "./tty.js";
 import { addressHost, relayUrl, resolveLineWorkdir, type LineConfig } from "./config.js";
 import { defaultResolveBin, listenerPathDirs } from "./listener-path.js";
 import { isEphemeralDir } from "./bin.js";
@@ -33,6 +33,42 @@ export interface SetupOpts {
   verifyFns?: VerifyFns;
   addLineFn?: typeof addLine;
   log?: (s: string) => void;
+}
+
+// A value pasted out of a chat message, or copied from a quoted command,
+// arrives with stray whitespace or wrapping quotes. Unnormalized it reaches
+// the relay, misses on `token_hash = ?`, and comes back as "This invite is
+// invalid, expired, or already used." — sending the owner to their
+// administrator for a replacement they did not need.
+function normalizeInvite(raw: string | undefined): string {
+  const trimmed = (raw ?? "").trim();
+  const quoted = /^(["'])([\s\S]*)\1$/.exec(trimmed);
+  return (quoted?.[2] ?? trimmed).trim();
+}
+
+// Precedence: explicit flag > environment > prompt.
+//
+// The prompt is the point (#303). The invite was the only required input with
+// no interactive path, so `agentcall setup` — the natural command after
+// `npm install -g` — died on a flag the owner was never asked for. The env var
+// covers containers and CI, which have no terminal to paste into and would
+// otherwise have to put a bearer credential on argv, where it lands in shell
+// history and is visible in `ps`.
+//
+// Two cases keep the original hard failure instead of asking: `--yes`, which
+// means "ask me nothing", and an environment with no terminal to answer with.
+// The second matters more than it looks — an unanswerable readline does not
+// fail, it hangs (see canPrompt), so a container build that used to exit with
+// a clear error would otherwise sit there forever. An injected `io` is itself
+// proof that asking works, which is what the tests rely on.
+async function resolveInvite(opts: SetupOpts, ask: (q: string) => Promise<string>): Promise<string> {
+  const supplied = opts.invite ?? process.env.AGENTCALL_INVITE;
+  const answerable = !opts.yes && (opts.io !== undefined || canPrompt());
+  const invite = normalizeInvite(
+    supplied !== undefined ? supplied : answerable ? await ask("Paste your invite: ") : "",
+  );
+  if (!invite) throw new Error("An organization invite is required. Run `agentcall setup --invite <token>`.");
+  return invite;
 }
 
 async function detectAgentKind(
@@ -160,6 +196,13 @@ export async function runSetup(opts: SetupOpts): Promise<{ ready: boolean }> {
     return { ready: true };
   }
 
+  // Resolved before any other question (#302). This used to sit below
+  // decideCallable and detectAgentKind despite a comment claiming otherwise,
+  // so a run that could never register still walked the owner through a
+  // consent decision about unapproved task execution, and possibly an agent
+  // choice, before admitting it needed an invite. It depends on neither.
+  const invite = await resolveInvite(opts, ask);
+
   const callable = await decideCallable(opts, hasBinFn, ask, undefined);
   if (callable) {
     log(
@@ -176,10 +219,6 @@ export async function runSetup(opts: SetupOpts): Promise<{ ready: boolean }> {
     warnIfEphemeralServiceBin("npx", resolveBinFn);
   }
 
-  // Checked before the handle prompt so a run that cannot possibly register
-  // fails immediately instead of after an interactive question.
-  const invite = opts.invite?.trim();
-  if (!invite) throw new Error("An organization invite is required. Run `agentcall setup --invite <token>`.");
   const handle = opts.handle ?? (await ask("Choose a handle (e.g. ken): ")).trim();
   if (!handle) throw new Error("A handle is required.");
   const relay = requestedRelay ?? relayUrl();
