@@ -1,98 +1,22 @@
 import { env, runDurableObjectAlarm, runInDurableObject, SELF } from "cloudflare:test";
 import { describe, expect, it } from "vitest";
 import {
-  canonicalRoomJoinProofTranscript,
   ROOM_ABSOLUTE_TTL_MS, ROOM_IDLE_TTL_MS, ROOM_INVITE_TTL_MS,
-  toBase64Url,
-  type RoomCreateResponseType, type RoomJoinResponseType,
-  type RoomMutationResponseType, type RoomParticipantRecordType,
-  type RoomPublicParticipantType, type RoomRecordType,
+  type RoomParticipantRecordType, type RoomRecordType,
 } from "@benree/agentcall-shared";
 import type { RoomDO } from "../src/room/do.js";
 import { registerHandle, wsAuth } from "./helpers.js";
-
-const key = (letter: string) => letter.repeat(42) + "A";
-const adapter = "claude@2.1.220:darwin/arm64";
-const base64urlAlphabet = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_";
-const signingKeys = new Map<string, Promise<CryptoKeyPair>>();
-
-function signingKeyPair(label: string): Promise<CryptoKeyPair> {
-  let pair = signingKeys.get(label);
-  if (!pair) {
-    pair = crypto.subtle.generateKey({ name: "Ed25519" }, true, ["sign", "verify"]) as Promise<CryptoKeyPair>;
-    signingKeys.set(label, pair);
-  }
-  return pair;
-}
-
-async function joinBody(
-  invite: string,
-  name: string,
-  letter = "C",
-  encryptionKey = key(base64urlAlphabet[(base64urlAlphabet.indexOf(letter) + 17) % base64urlAlphabet.length]!),
-  participantSecret = key(letter),
-) {
-  const pair = await signingKeyPair(letter);
-  const signingPublicKey = toBase64Url(new Uint8Array(await crypto.subtle.exportKey("raw", pair.publicKey)));
-  const unsigned = {
-    invite,
-    participant_secret: participantSecret,
-    display_name: name,
-    signing_public_key: signingPublicKey,
-    encryption_public_key: encryptionKey,
-    agent_adapter: adapter,
-  };
-  const signature = await crypto.subtle.sign(
-    { name: "Ed25519" }, pair.privateKey, canonicalRoomJoinProofTranscript(unsigned) as BufferSource,
-  );
-  return { ...unsigned, signing_proof: toBase64Url(new Uint8Array(signature)) };
-}
-
-type Created = RoomCreateResponseType;
-type ErrorBody = { error?: string };
-type JoinBody = Omit<RoomJoinResponseType, "credential"> & { credential: string } & ErrorBody;
-type MutationBody = Omit<RoomMutationResponseType, "participant"> & {
-  participant: RoomPublicParticipantType;
-} & ErrorBody;
-
-async function json<T>(res: Response) {
-  return { status: res.status, body: await res.json<T>() };
-}
-
-async function createRoom(seats = 2, name = "Host"): Promise<Created> {
-  const res = await SELF.fetch("https://relay.test/v1/rooms", {
-    method: "POST",
-    headers: { "content-type": "application/json" },
-    body: JSON.stringify({
-      expected_participants: seats,
-      display_name: name,
-      signing_public_key: key("A"),
-      encryption_public_key: key("B"),
-      agent_adapter: adapter,
-    }),
-  });
-  expect(res.status).toBe(201);
-  return res.json<Created>();
-}
-
-async function join(invite: string, name: string, letter = "C") {
-  const res = await SELF.fetch("https://relay.test/v1/rooms/join", {
-    method: "POST",
-    headers: { "content-type": "application/json" },
-    body: JSON.stringify(await joinBody(invite, name, letter)),
-  });
-  return json<JoinBody>(res);
-}
-
-function roomAuth(credential: string) {
-  return { Authorization: `Bearer ${credential}`, "content-type": "application/json" };
-}
-
-async function mutate(credential: string, action: string, body: object = {}) {
-  return json<MutationBody>(await SELF.fetch(`https://relay.test/v1/room/${action}`, {
-    method: "POST", headers: roomAuth(credential), body: JSON.stringify(body),
-  }));
-}
+import {
+  createTestRoom as createRoom,
+  joinTestRoom as join,
+  mutateTestRoom as mutate,
+  roomAuth,
+  roomJoinBody as joinBody,
+  roomJson as json,
+  roomTestKey as key,
+  type RoomTestErrorBody as ErrorBody,
+  type RoomTestJoinBody as JoinBody,
+} from "./room-helpers.js";
 
 describe("accountless Room capability boundary", () => {
   it.each([2, 3, 6])("creates a %i-seat Room without a durable identity", async (seats) => {

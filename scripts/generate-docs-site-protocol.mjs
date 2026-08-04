@@ -81,6 +81,35 @@ for (const [heading, wireSchema, purpose] of [
   }
 }
 
+for (const [heading, schemas] of [
+  ["Room participant to relay WebSocket", [
+    [room.RoomCallSubmit, "Submit one opaque call to an exact Room participant."],
+    [room.RoomCallAccepted, "Confirm ownership of delivered Room work."],
+    [room.RoomCallStarted, "Confirm the Room answering process started."],
+    [room.RoomCallOutcome, "Return an opaque terminal Room outcome."],
+    [room.RoomCallCancel, "Cancel a previously submitted Room call."],
+    [room.RoomCallCanceled, "Confirm local cancellation completed."],
+  ]],
+  ["Relay to Room participant WebSocket", [
+    [room.RoomIncomingCall, "Deliver an opaque call with relay-attested Room membership metadata."],
+    [room.RoomRelayCallStatus, "Report Room call progress to its caller."],
+    [room.RoomRelayCallResult, "Report a terminal Room result; duplicate submissions may omit erased outcome bytes."],
+    [room.RoomRelayCallError, "Return a bounded Room routing or lifecycle error."],
+    [room.RoomRelayCancelCall, "Request cancellation of exact inbound Room work."],
+  ]],
+]) {
+  lines.push("", `## ${heading}`);
+  for (const [wireSchema, purpose] of schemas) {
+    const schema = toJSONSchema(wireSchema, { io: "input" });
+    const frame = schema.properties.type.const;
+    const required = new Set(schema.required ?? []);
+    lines.push("", `### \`${frame}\``, "", purpose, "", "| Field | Type | Required |", "| --- | --- | --- |");
+    for (const [field, fieldSchema] of Object.entries(schema.properties)) {
+      lines.push(`| \`${field}\` | ${renderType(fieldSchema)} | ${required.has(field) ? "yes" : "no"} |`);
+    }
+  }
+}
+
 lines.push(
   "",
   "## Important bounds",

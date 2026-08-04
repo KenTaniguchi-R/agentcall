@@ -8,6 +8,7 @@ import {
   type CallStatusType,
   type HpkeEnvelopeType,
 } from "@benree/agentcall-shared";
+import type { TeamCallPrincipal } from "./call-lifecycle.js";
 
 export type PersistedTask = {
   call_id: string;
@@ -20,6 +21,7 @@ export type PersistedTask = {
   task_state: A2ATaskStateType;
   created_at: number;
   updated_at: number;
+  principal?: TeamCallPrincipal;
   outcome_envelope?: HpkeEnvelopeType;
 };
 
