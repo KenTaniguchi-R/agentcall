@@ -1,6 +1,6 @@
 import { existsSync, rmSync } from "node:fs";
 import { Command, CommanderError } from "commander";
-import type { AgentKind, AuditCheckpointType, AuditExportEventType } from "@benree/agentcall-shared";
+import type { AgentKind, AuditCheckpointType } from "@benree/agentcall-shared";
 import { getLinePaths, getMachinePaths, type LinePaths } from "./paths.js";
 import { addressHost, assertCallableLine, relayUrl, resolveLineWorkdir, type LineConfig } from "./config.js";
 import { callAgent, callStatusMessage, CallError } from "./callClient.js";
@@ -39,41 +39,11 @@ import { sanitizeTerminalOutput, stringifyTerminalSafeJson } from "@benree/agent
 import { getTelemetry, shutdownTelemetry, telemetrySafely } from "./telemetry.js";
 import { loadKeys } from "./keys.js";
 import { resetPeerTrust, verifyAndPinPeer } from "./known-peers.js";
+import { AUDIT_CSV_COLUMNS, auditCsvRow, parseAuditFilter, parseAuditTime } from "./commands/audit-export.js";
 
 export function createProgram(): Command {
 const program = new Command();
 program.name("agentcall").description("Call other people's coding agents").version("0.4.0");
-
-const parseAuditTime = (value: string | undefined, flag: string): number | undefined => {
-  if (value === undefined) return undefined;
-  const parsed = /^\d+$/.test(value) ? Number(value) : Date.parse(value);
-  if (!Number.isSafeInteger(parsed) || parsed < 0) throw new Error(`${flag} must be an epoch-millisecond or ISO timestamp`);
-  return parsed;
-};
-
-const parseAuditFilter = (value: string | undefined, flag: string): string | undefined => {
-  if (value === undefined) return undefined;
-  const bytes = new TextEncoder().encode(value).length;
-  if (bytes < 1 || bytes > 256) throw new Error(`${flag} must contain 1 to 256 UTF-8 bytes`);
-  return value;
-};
-
-const AUDIT_CSV_COLUMNS = [
-  "ledger", "id", "event", "action_type", "roster_id", "actor", "actor_type",
-  "target_type", "target_id", "target_role", "actor_ip", "actor_country", "description", "at",
-] as const satisfies readonly (keyof AuditExportEventType)[];
-
-const csvCell = (value: unknown): string => {
-  if (value === null || value === undefined) return "";
-  const raw = String(value);
-  // Audit fields include peer-controlled handles and descriptions. Quoting is
-  // not enough to stop spreadsheet software from evaluating formula prefixes.
-  const text = /^\s*[=+\-@]/.test(raw) ? `'${raw}` : raw;
-  return /[",\r\n]/.test(text) ? `"${text.replaceAll('"', '""')}"` : text;
-};
-
-const auditCsvRow = (event: AuditExportEventType): string =>
-  AUDIT_CSV_COLUMNS.map((column) => csvCell(event[column])).join(",");
 
 program
   .command("setup")

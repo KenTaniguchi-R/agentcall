@@ -1,0 +1,830 @@
+// Vitest Snapshot v1, https://vitest.dev/guide/snapshot.html
+
+exports[`CLI command tree > pins command paths, aliases, descriptions, and options 1`] = `
+{
+  "alias": undefined,
+  "commands": [
+    {
+      "alias": undefined,
+      "commands": [],
+      "description": "enroll with an organization invite, configure your agent, and install the background listener",
+      "name": "setup",
+      "options": [
+        {
+          "description": "one-time organization invite (required for first enrollment)",
+          "flags": "--invite <token>",
+        },
+        {
+          "description": "handle to register (prompted if omitted)",
+          "flags": "--handle <handle>",
+        },
+        {
+          "description": "agent kind: claude or codex (auto-detected if omitted)",
+          "flags": "--agent <agent>",
+        },
+        {
+          "description": "relay URL to register against",
+          "flags": "--relay <url>",
+        },
+        {
+          "description": "skip appending the agentcall usage snippet to CLAUDE.md/AGENTS.md",
+          "flags": "--no-snippet",
+        },
+        {
+          "description": "skip installing the background listener service",
+          "flags": "--skip-service",
+        },
+        {
+          "description": "register a handle to call others without making your own agent callable",
+          "flags": "--caller-only",
+        },
+        {
+          "description": "skip verifying the agent can answer a test call",
+          "flags": "--no-verify",
+        },
+      ],
+    },
+    {
+      "alias": undefined,
+      "commands": [
+        {
+          "alias": undefined,
+          "commands": [],
+          "description": "create a one-time invite",
+          "name": "create",
+          "options": [
+            {
+              "description": "purpose shown in the organization invite inventory",
+              "flags": "--description <text>",
+            },
+            {
+              "description": "expiry from 1 to 90 days",
+              "flags": "--expires-in-days <days>",
+            },
+            {
+              "description": "enrolled organization role: member or admin",
+              "flags": "--role <role>",
+            },
+            {
+              "description": "line whose organization to invite into (defaults to the primary line)",
+              "flags": "--line <name>",
+            },
+          ],
+        },
+        {
+          "alias": undefined,
+          "commands": [],
+          "description": "list organization invite lifecycle metadata",
+          "name": "list",
+          "options": [
+            {
+              "description": "line whose organization to list (defaults to the primary line)",
+              "flags": "--line <name>",
+            },
+          ],
+        },
+        {
+          "alias": undefined,
+          "commands": [],
+          "description": "revoke an unused organization invite",
+          "name": "revoke",
+          "options": [
+            {
+              "description": "line whose organization the invite belongs to (defaults to the primary line)",
+              "flags": "--line <name>",
+            },
+          ],
+        },
+      ],
+      "description": "manage one-time organization invites",
+      "name": "invite",
+      "options": [],
+    },
+    {
+      "alias": undefined,
+      "commands": [
+        {
+          "alias": undefined,
+          "commands": [],
+          "description": "stream an administrator-only snapshot as NDJSON or CSV",
+          "name": "export",
+          "options": [
+            {
+              "description": "include events at or after this epoch-millisecond or ISO timestamp",
+              "flags": "--after <time>",
+            },
+            {
+              "description": "include events before this epoch-millisecond or ISO timestamp",
+              "flags": "--before <time>",
+            },
+            {
+              "description": "include events whose actor field exactly matches",
+              "flags": "--actor <actor>",
+            },
+            {
+              "description": "include events whose event type exactly matches",
+              "flags": "--event <event>",
+            },
+            {
+              "description": "include events whose source IP exactly matches",
+              "flags": "--ip <address>",
+            },
+            {
+              "description": "output format: ndjson or csv",
+              "flags": "--format <format>",
+            },
+            {
+              "description": "events fetched per relay page, from 1 to 500",
+              "flags": "--page-size <count>",
+            },
+            {
+              "description": "line whose organization to export (defaults to the primary line)",
+              "flags": "--line <name>",
+            },
+          ],
+        },
+      ],
+      "description": "export organization audit evidence",
+      "name": "audit",
+      "options": [],
+    },
+    {
+      "alias": undefined,
+      "commands": [],
+      "description": "call another handle's agent with a message and print its reply",
+      "name": "call",
+      "options": [
+        {
+          "description": "print the full reply envelope instead of just the text",
+          "flags": "--json",
+        },
+        {
+          "description": "task from the callee's card to perform (see: agentcall card <address>)",
+          "flags": "--task <id>",
+        },
+        {
+          "description": "line to call from (defaults to the primary line on the destination's relay)",
+          "flags": "--as <line>",
+        },
+        {
+          "description": "continue the last conversation with this address",
+          "flags": "--continue",
+        },
+        {
+          "description": "continue a specific conversation by id",
+          "flags": "--context <id>",
+        },
+      ],
+    },
+    {
+      "alias": undefined,
+      "commands": [],
+      "description": "check whether a handle's agent is currently online",
+      "name": "status",
+      "options": [
+        {
+          "description": "line to check from (defaults to the primary line on the destination's relay)",
+          "flags": "--as <line>",
+        },
+      ],
+    },
+    {
+      "alias": undefined,
+      "commands": [],
+      "description": "fetch and verify a peer's pinned identity fingerprint",
+      "name": "verify",
+      "options": [
+        {
+          "description": "line whose relay credentials to use",
+          "flags": "--as <line>",
+        },
+      ],
+    },
+    {
+      "alias": undefined,
+      "commands": [],
+      "description": "manage explicitly pinned peer identities",
+      "name": "trust",
+      "options": [
+        {
+          "description": "remove one pin after verifying a key change out of band",
+          "flags": "--reset <address>",
+        },
+      ],
+    },
+    {
+      "alias": undefined,
+      "commands": [
+        {
+          "alias": undefined,
+          "commands": [],
+          "description": "publish the identity and current encryption key already stored on disk",
+          "name": "publish",
+          "options": [
+            {
+              "description": "line whose persisted keys to publish",
+              "flags": "--line <name>",
+            },
+          ],
+        },
+      ],
+      "description": "manage this line's end-to-end encryption keys",
+      "name": "keys",
+      "options": [],
+    },
+    {
+      "alias": undefined,
+      "commands": [],
+      "description": "verify this install can answer calls: binary, auth, agent spawn, tool telemetry, listener, relay self-call",
+      "name": "doctor",
+      "options": [],
+    },
+    {
+      "alias": undefined,
+      "commands": [],
+      "description": "show call activity stored locally on this machine",
+      "name": "history",
+      "options": [
+        {
+          "description": "maximum newest calls to show (1-100)",
+          "flags": "--limit <count>",
+        },
+        {
+          "description": "show only calls with objective local abuse signals",
+          "flags": "--flagged",
+        },
+        {
+          "description": "print machine-readable local history",
+          "flags": "--json",
+        },
+        {
+          "description": "line whose history to show (defaults to the primary line)",
+          "flags": "--line <name>",
+        },
+      ],
+    },
+    {
+      "alias": undefined,
+      "commands": [],
+      "description": "validate tasks, effective policy assertions, and the published card",
+      "name": "lint",
+      "options": [
+        {
+          "description": "line to lint (defaults to the primary line)",
+          "flags": "--line <name>",
+        },
+      ],
+    },
+    {
+      "alias": undefined,
+      "commands": [],
+      "description": "show the effective per-caller and per-task capability policy",
+      "name": "policy",
+      "options": [
+        {
+          "description": "line to report on (defaults to the primary line)",
+          "flags": "--line <name>",
+        },
+      ],
+    },
+    {
+      "alias": undefined,
+      "commands": [],
+      "description": "show your own card with problems, another agent's menu, or publish yours (push)",
+      "name": "card",
+      "options": [
+        {
+          "description": "line to use (defaults to the primary line)",
+          "flags": "--line <name>",
+        },
+      ],
+    },
+    {
+      "alias": undefined,
+      "commands": [
+        {
+          "alias": undefined,
+          "commands": [],
+          "description": "save (or update) a contact so you can call them by name",
+          "name": "add",
+          "options": [
+            {
+              "description": "who they are and what to ask them about",
+              "flags": "--note <note>",
+            },
+          ],
+        },
+        {
+          "alias": undefined,
+          "commands": [],
+          "description": "list saved contacts (name, address, who they are)",
+          "name": "list",
+          "options": [
+            {
+              "description": "print the raw contacts array",
+              "flags": "--json",
+            },
+          ],
+        },
+        {
+          "alias": undefined,
+          "commands": [],
+          "description": "delete a contact",
+          "name": "remove",
+          "options": [],
+        },
+      ],
+      "description": "manage your local address book of callable agents",
+      "name": "contacts",
+      "options": [],
+    },
+    {
+      "alias": undefined,
+      "commands": [
+        {
+          "alias": undefined,
+          "commands": [],
+          "description": "create a roster and print its initial reusable join key",
+          "name": "create",
+          "options": [
+            {
+              "description": "local name to record it under",
+              "flags": "--as <name>",
+            },
+            {
+              "description": "line to create it as (defaults to the primary line)",
+              "flags": "--line <name>",
+            },
+          ],
+        },
+        {
+          "alias": undefined,
+          "commands": [],
+          "description": "join a roster so \`agentcall search\` can see its members",
+          "name": "join",
+          "options": [
+            {
+              "description": "a roster join key",
+              "flags": "--key <key>",
+            },
+            {
+              "description": "local name for this roster",
+              "flags": "--as <name>",
+            },
+            {
+              "description": "line to join as (defaults to the primary line)",
+              "flags": "--line <name>",
+            },
+          ],
+        },
+        {
+          "alias": undefined,
+          "commands": [],
+          "description": "list rosters this line has joined",
+          "name": "list",
+          "options": [
+            {
+              "description": "line to list for (defaults to the primary line)",
+              "flags": "--line <name>",
+            },
+          ],
+        },
+        {
+          "alias": undefined,
+          "commands": [],
+          "description": "leave a roster on the relay and remove its local record",
+          "name": "leave",
+          "options": [
+            {
+              "description": "line to leave it for (defaults to the primary line)",
+              "flags": "--line <name>",
+            },
+          ],
+        },
+        {
+          "alias": undefined,
+          "commands": [],
+          "description": "remove a member using the roster admin secret",
+          "name": "expel",
+          "options": [
+            {
+              "description": "admin secret (prefer AGENTCALL_ADMIN_SECRET to avoid shell history)",
+              "flags": "--admin-secret <secret>",
+            },
+            {
+              "description": "line to act as (defaults to the primary line)",
+              "flags": "--line <name>",
+            },
+          ],
+        },
+        {
+          "alias": undefined,
+          "commands": [
+            {
+              "alias": undefined,
+              "commands": [],
+              "description": "issue a one-off join key (use --reusable for a shared key)",
+              "name": "issue",
+              "options": [
+                {
+                  "description": "admin secret (prefer AGENTCALL_ADMIN_SECRET to avoid shell history)",
+                  "flags": "--admin-secret <secret>",
+                },
+                {
+                  "description": "short label shown by \`roster key list\`",
+                  "flags": "--description <text>",
+                },
+                {
+                  "description": "expiry in days (1-90)",
+                  "flags": "--expires-in <days>",
+                },
+                {
+                  "description": "allow more than one member to use this key",
+                  "flags": "--reusable",
+                },
+                {
+                  "description": "line to act as (defaults to the primary line)",
+                  "flags": "--line <name>",
+                },
+              ],
+            },
+            {
+              "alias": undefined,
+              "commands": [],
+              "description": "list join-key metadata without revealing secrets",
+              "name": "list",
+              "options": [
+                {
+                  "description": "admin secret (prefer AGENTCALL_ADMIN_SECRET to avoid shell history)",
+                  "flags": "--admin-secret <secret>",
+                },
+                {
+                  "description": "line to act as (defaults to the primary line)",
+                  "flags": "--line <name>",
+                },
+              ],
+            },
+            {
+              "alias": undefined,
+              "commands": [],
+              "description": "revoke one join key; --evict removes only members admitted by it",
+              "name": "revoke",
+              "options": [
+                {
+                  "description": "admin secret (prefer AGENTCALL_ADMIN_SECRET to avoid shell history)",
+                  "flags": "--admin-secret <secret>",
+                },
+                {
+                  "description": "remove members admitted by this key",
+                  "flags": "--evict",
+                },
+                {
+                  "description": "confirm targeted eviction",
+                  "flags": "--yes",
+                },
+                {
+                  "description": "line to act as (defaults to the primary line)",
+                  "flags": "--line <name>",
+                },
+              ],
+            },
+          ],
+          "description": "issue, list, and revoke scoped roster join keys",
+          "name": "key",
+          "options": [],
+        },
+        {
+          "alias": undefined,
+          "commands": [],
+          "description": "permanently delete a roster while retaining its relay audit events",
+          "name": "delete",
+          "options": [
+            {
+              "description": "admin secret (prefer AGENTCALL_ADMIN_SECRET to avoid shell history)",
+              "flags": "--admin-secret <secret>",
+            },
+            {
+              "description": "confirm deletion",
+              "flags": "--yes",
+            },
+            {
+              "description": "line to act as (defaults to the primary line)",
+              "flags": "--line <name>",
+            },
+          ],
+        },
+        {
+          "alias": undefined,
+          "commands": [],
+          "description": "drop only the local roster record; use \`roster leave\` to remove relay membership",
+          "name": "forget",
+          "options": [
+            {
+              "description": "line to forget it for (defaults to the primary line)",
+              "flags": "--line <name>",
+            },
+          ],
+        },
+      ],
+      "description": "join and manage discovery rosters for \`agentcall search\`",
+      "name": "roster",
+      "options": [],
+    },
+    {
+      "alias": undefined,
+      "commands": [],
+      "description": "find which colleague's agent can answer something",
+      "name": "search",
+      "options": [
+        {
+          "description": "search only this roster (default: all joined rosters)",
+          "flags": "--roster <name>",
+        },
+        {
+          "description": "maximum results",
+          "flags": "--limit <n>",
+        },
+        {
+          "description": "machine-readable output for your own agent",
+          "flags": "--json",
+        },
+        {
+          "description": "never refresh; use whatever is cached",
+          "flags": "--offline",
+        },
+        {
+          "description": "line to search as (defaults to the primary line)",
+          "flags": "--line <name>",
+        },
+      ],
+    },
+    {
+      "alias": undefined,
+      "commands": [
+        {
+          "alias": undefined,
+          "commands": [],
+          "description": "scaffold a new task (does not publish it)",
+          "name": "new",
+          "options": [
+            {
+              "description": "line to use (defaults to the primary line)",
+              "flags": "--line <name>",
+            },
+          ],
+        },
+      ],
+      "description": "manage the tasks your agent offers",
+      "name": "task",
+      "options": [],
+    },
+    {
+      "alias": undefined,
+      "commands": [],
+      "description": "grant a caller an extra task (and republish your card)",
+      "name": "allow",
+      "options": [
+        {
+          "description": "line to use (defaults to the primary line)",
+          "flags": "--line <name>",
+        },
+      ],
+    },
+    {
+      "alias": undefined,
+      "commands": [],
+      "description": "remove a caller's task grant",
+      "name": "revoke",
+      "options": [
+        {
+          "description": "line to use (defaults to the primary line)",
+          "flags": "--line <name>",
+        },
+      ],
+    },
+    {
+      "alias": undefined,
+      "commands": [],
+      "description": "refuse all calls from a handle",
+      "name": "block",
+      "options": [
+        {
+          "description": "line to use (defaults to the primary line)",
+          "flags": "--line <name>",
+        },
+      ],
+    },
+    {
+      "alias": undefined,
+      "commands": [],
+      "description": "lift a block",
+      "name": "unblock",
+      "options": [
+        {
+          "description": "line to use (defaults to the primary line)",
+          "flags": "--line <name>",
+        },
+      ],
+    },
+    {
+      "alias": undefined,
+      "commands": [],
+      "description": "offer a task to any registered caller",
+      "name": "offer",
+      "options": [
+        {
+          "description": "line to use (defaults to the primary line)",
+          "flags": "--line <name>",
+        },
+      ],
+    },
+    {
+      "alias": undefined,
+      "commands": [],
+      "description": "stop offering a task publicly",
+      "name": "unoffer",
+      "options": [
+        {
+          "description": "line to use (defaults to the primary line)",
+          "flags": "--line <name>",
+        },
+      ],
+    },
+    {
+      "alias": undefined,
+      "commands": [
+        {
+          "alias": undefined,
+          "commands": [],
+          "description": "register another address on this machine",
+          "name": "add",
+          "options": [
+            {
+              "description": "handle to register (prompted if omitted)",
+              "flags": "--handle <handle>",
+            },
+            {
+              "description": "one-time organization invite (required — each line enrolls in its own tenant)",
+              "flags": "--invite <token>",
+            },
+            {
+              "description": "agent kind: claude or codex (omit with --caller-only)",
+              "flags": "--agent <agent>",
+            },
+            {
+              "description": "relay URL to register against",
+              "flags": "--relay <url>",
+            },
+            {
+              "description": "register a handle to call others without making this line's agent callable",
+              "flags": "--caller-only",
+            },
+            {
+              "description": "skip reinstalling the background listener service",
+              "flags": "--skip-service",
+            },
+            {
+              "description": "skip verifying the agent can answer a test call",
+              "flags": "--no-verify",
+            },
+          ],
+        },
+        {
+          "alias": undefined,
+          "commands": [],
+          "description": "list the addresses this machine holds, which is primary, and whether each is online",
+          "name": "list",
+          "options": [
+            {
+              "description": "print the full row data (name, address, relay, state, primary) as JSON",
+              "flags": "--json",
+            },
+          ],
+        },
+        {
+          "alias": undefined,
+          "commands": [],
+          "description": "remove a line (archives calls.log; the handle can never be reused, see README)",
+          "name": "remove",
+          "options": [
+            {
+              "description": "confirm removal — required, since the handle can never be reclaimed",
+              "flags": "--yes",
+            },
+            {
+              "description": "delete outright instead of archiving calls.log",
+              "flags": "--purge",
+            },
+          ],
+        },
+        {
+          "alias": undefined,
+          "commands": [],
+          "description": "set which line places an outbound call when several could answer it",
+          "name": "primary",
+          "options": [],
+        },
+      ],
+      "description": "manage the addresses (lines) this machine answers on and calls from",
+      "name": "line",
+      "options": [],
+    },
+    {
+      "alias": undefined,
+      "commands": [],
+      "description": "run the foreground listener (the platform service runs this after setup)",
+      "name": "listen",
+      "options": [
+        {
+          "description": "run only this line instead of every callable line",
+          "flags": "--line <name>",
+        },
+      ],
+    },
+    {
+      "alias": undefined,
+      "commands": [],
+      "description": "replace a line's relay token (use if it may have leaked)",
+      "name": "rotate",
+      "options": [
+        {
+          "description": "line to rotate (defaults to the primary line)",
+          "flags": "--line <name>",
+        },
+      ],
+    },
+    {
+      "alias": undefined,
+      "commands": [
+        {
+          "alias": undefined,
+          "commands": [],
+          "description": "issue or replace a recovery proof while the line token still works",
+          "name": "issue",
+          "options": [
+            {
+              "description": "line to protect (defaults to the primary line)",
+              "flags": "--line <name>",
+            },
+          ],
+        },
+        {
+          "alias": undefined,
+          "commands": [],
+          "description": "recover one line using an out-of-band proof",
+          "name": "redeem",
+          "options": [
+            {
+              "description": "local line name to recover",
+              "flags": "--line <name>",
+            },
+            {
+              "description": "organization (required when local config is missing)",
+              "flags": "--org <org>",
+            },
+            {
+              "description": "handle (required when local config is missing)",
+              "flags": "--handle <handle>",
+            },
+            {
+              "description": "relay URL (required when local config is missing)",
+              "flags": "--relay <url>",
+            },
+            {
+              "description": "generation recorded with the current proof",
+              "flags": "--generation <number>",
+            },
+            {
+              "description": "resume the exact pending recovery after a lost response",
+              "flags": "--resume",
+            },
+          ],
+        },
+      ],
+      "description": "manage the out-of-band identity recovery proof",
+      "name": "recovery",
+      "options": [],
+    },
+    {
+      "alias": undefined,
+      "commands": [],
+      "description": "remove the background listener",
+      "name": "uninstall",
+      "options": [
+        {
+          "description": "also delete ~/.agentcall (config, token, logs)",
+          "flags": "--purge",
+        },
+      ],
+    },
+  ],
+  "description": "Call other people's coding agents",
+  "name": "agentcall",
+  "options": [
+    {
+      "description": "output the version number",
+      "flags": "-V, --version",
+    },
+  ],
+}
+`;
