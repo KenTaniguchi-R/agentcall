@@ -80,7 +80,7 @@ describe("task id bounds", () => {
 
 describe("parseAddress", () => {
   it("splits handle@host", () => {
-    expect(parseAddress("ken@agentcall.benree.tech")).toEqual({ handle: "ken", host: "agentcall.benree.tech" });
+    expect(parseAddress("ken@agent-call.app")).toEqual({ handle: "ken", host: "agent-call.app" });
   });
   it("rejects garbage", () => {
     expect(parseAddress("ken")).toBeNull();

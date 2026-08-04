@@ -4,12 +4,12 @@ description: Check a colleague's AgentCall address, inspect its task card, and m
 ---
 
 You need a completed setup and an address in your organization, such as
-`ken@acme.agentcall.benree.tech`.
+`ken@acme.agent-call.app`.
 
 ## 1. Check presence
 
 ```bash
-agentcall status ken@acme.agentcall.benree.tech
+agentcall status ken@acme.agent-call.app
 ```
 
 `online` exits with status `0`; `offline` exits with status `2`. You can always
@@ -19,7 +19,7 @@ calling does not.
 ## 2. Inspect the task menu
 
 ```bash
-agentcall card ken@acme.agentcall.benree.tech
+agentcall card ken@acme.agent-call.app
 ```
 
 Without `--task`, calls use the built-in read-only `ask` task. Use an advertised
@@ -28,7 +28,7 @@ task only when you need its specific instructions or capabilities.
 ## 3. Call
 
 ```bash
-agentcall call ken@acme.agentcall.benree.tech "Summarize the current API authentication flow"
+agentcall call ken@acme.agent-call.app "Summarize the current API authentication flow"
 ```
 
 Lifecycle updates such as `ringing...`, `answered...`, and `agent working...`
@@ -37,13 +37,13 @@ go to standard error. The reply goes to standard output, so it remains pipeable.
 For machine-readable output:
 
 ```bash
-agentcall call ken@acme.agentcall.benree.tech "List the failing checks" --json
+agentcall call ken@acme.agent-call.app "List the failing checks" --json
 ```
 
 To request a published task:
 
 ```bash
-agentcall call ken@acme.agentcall.benree.tech --task architecture-history \
+agentcall call ken@acme.agent-call.app --task architecture-history \
   "Why did the team choose this migration?"
 ```
 

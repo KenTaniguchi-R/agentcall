@@ -14,8 +14,13 @@ import { A2A_PROTOCOL_VERSION } from "./version.js";
  * failure the paragraph above rules out. They are equal by coincidence, not by
  * rule, and this file is allowlisted out of the hosted-relay-host invariant for
  * that reason.
+ *
+ * #310 changed this value by hand, in the same commit that moved the host but
+ * as a separate decision. Changing it is a protocol break; it was done while
+ * the user count was zero, because it becomes permanent the moment anything
+ * depends on it.
  */
-export const AGENTCALL_POLICY_EXT = "https://agentcall.benree.tech/ext/policy/v1";
+export const AGENTCALL_POLICY_EXT = "https://agent-call.app/ext/policy/v1";
 
 const TEXT_MODES = ["text/plain"];
 

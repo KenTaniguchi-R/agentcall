@@ -35,7 +35,7 @@ describe("single-organization self-host boundary", () => {
   });
 
   it("preserves hosted tenant-subdomain routing when self-host mode is absent", () => {
-    expect(requestOrg(requestLike("acme.agentcall.benree.tech"), "hosted")).toBe("acme");
+    expect(requestOrg(requestLike("acme.agent-call.app"), "hosted")).toBe("acme");
     expect(requestOrg(requestLike("relay.example.com"), "hosted")).toBe("");
   });
 

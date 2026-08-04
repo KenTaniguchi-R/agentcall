@@ -72,8 +72,8 @@ function serveCapturing(status: number, body: unknown, captured: unknown[]): Pro
 
 describe("api client", () => {
   it("registers", async () => {
-    const relay = await serve(200, { org: "acme", token: "tok", address: "ken@acme.agentcall.benree.tech" });
-    expect(await registerHandle(relay, "valid-invite", "ken", "claude")).toEqual({ org: "acme", token: "tok", address: "ken@acme.agentcall.benree.tech" });
+    const relay = await serve(200, { org: "acme", token: "tok", address: "ken@acme.agent-call.app" });
+    expect(await registerHandle(relay, "valid-invite", "ken", "claude")).toEqual({ org: "acme", token: "tok", address: "ken@acme.agent-call.app" });
   });
   it("rejects a malformed handle locally, without hitting the relay", async () => {
     // Point at a port nothing is listening on: if validation didn't run
@@ -197,8 +197,8 @@ describe("api client", () => {
 
   it("registers caller-only: omits agent_kind from the request body entirely", async () => {
     const captured: unknown[] = [];
-    const relay = await serveCapturing(200, { org: "acme", token: "tok", address: "solo@acme.agentcall.benree.tech" }, captured);
-    expect(await registerHandle(relay, "valid-invite", "solo")).toEqual({ org: "acme", token: "tok", address: "solo@acme.agentcall.benree.tech" });
+    const relay = await serveCapturing(200, { org: "acme", token: "tok", address: "solo@acme.agent-call.app" }, captured);
+    expect(await registerHandle(relay, "valid-invite", "solo")).toEqual({ org: "acme", token: "tok", address: "solo@acme.agent-call.app" });
     expect(captured).toEqual([{ invite: "valid-invite", handle: "solo" }]);
   });
   it("creates an invite with tenant credentials", async () => {

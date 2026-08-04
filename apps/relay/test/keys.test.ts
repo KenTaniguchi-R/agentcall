@@ -209,10 +209,10 @@ describe("key publication endpoints", () => {
     // naive `new URL(url).host` reconstruction happen to agree — org and host
     // collapse to the same string, so a reverted fix still passes it. They
     // diverge on the real hosted relay's apex host: registrationAddressHost
-    // prefixes the org (`acme.agentcall.benree.tech`) while `new
-    // URL(url).host` does not (`agentcall.benree.tech`). This is the case the
+    // prefixes the org (`acme.agent-call.app`) while `new
+    // URL(url).host` does not (`agent-call.app`). This is the case the
     // bug actually shipped in.
-    const APEX = "agentcall.benree.tech";
+    const APEX = "agent-call.app";
     const handle = "kp-apex2";
     const address = `${handle}@acme.${APEX}`;
     const token = await registerHandle(handle);
@@ -274,7 +274,7 @@ describe("key publication endpoints", () => {
     // port); the reverted bug used URL.host, which includes a port when one
     // is present. relay.test and the bare-apex test above never carry a port,
     // so neither exercises this half of the divergence.
-    const APEX = "agentcall.benree.tech";
+    const APEX = "agent-call.app";
     const handle = "kp-apex-port";
     const address = `${handle}@acme.${APEX}`;
     const origin = `https://${APEX}:8443`;

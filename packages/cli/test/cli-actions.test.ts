@@ -471,7 +471,7 @@ describe.sequential("CLI command actions", () => {
   });
 
   it("requires setup before fetching another agent's card", async () => {
-    const out = await runCommand(home(), ["card", "ken@acme.agentcall.benree.tech"]);
+    const out = await runCommand(home(), ["card", "ken@acme.agent-call.app"]);
     expect(out.code).toBe(1);
     expect(out.stderr).toMatch(/agentcall setup/);
   });

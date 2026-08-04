@@ -11,7 +11,7 @@ export const ORG_RE = /^[a-z0-9][a-z0-9-]{1,62}$/;
 // own host and never reads this. It lives here because both sides must agree
 // on how a hosted address is spelled. Notably NOT the source of
 // AGENTCALL_POLICY_EXT — see the comment there.
-export const HOSTED_RELAY_HOST = "agentcall.benree.tech";
+export const HOSTED_RELAY_HOST = "agent-call.app";
 export const TASK_ID_RE = /^[a-z0-9][a-z0-9-]{0,63}$/;
 // Bounds derived from TASK_ID_RE: 1 (mandatory first char) + 63 (0-63 range) = 64.
 // Must stay consistent with TASK_ID_RE; drift is caught by test/protocol.test.ts.

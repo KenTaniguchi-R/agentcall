@@ -181,22 +181,22 @@ describe("POST /v1/register", () => {
 
   it("returns the tenant hostname on the hosted relay", async () => {
     const invite = await issueInvite("hosted", "hosted-address");
-    const res = await SELF.fetch("https://agentcall.benree.tech/v1/register", {
+    const res = await SELF.fetch("https://agent-call.app/v1/register", {
       method: "POST",
       headers: { "content-type": "application/json", "cf-connecting-ip": "203.0.113.153" },
       body: JSON.stringify({ invite, handle: "person", agent_kind: "claude" }),
     });
-    expect((await res.json<{ address: string }>()).address).toBe("person@hosted.agentcall.benree.tech");
+    expect((await res.json<{ address: string }>()).address).toBe("person@hosted.agent-call.app");
   });
 
   it("uses the invite tenant rather than a conflicting hosted tenant subdomain", async () => {
     const invite = await issueInvite("bob", "host-mismatch");
-    const res = await SELF.fetch("https://acme.agentcall.benree.tech/v1/register", {
+    const res = await SELF.fetch("https://acme.agent-call.app/v1/register", {
       method: "POST",
       headers: { "content-type": "application/json", "cf-connecting-ip": "203.0.113.213" },
       body: JSON.stringify({ invite, handle: "person" }),
     });
-    expect((await res.json<{ address: string }>()).address).toBe("person@bob.agentcall.benree.tech");
+    expect((await res.json<{ address: string }>()).address).toBe("person@bob.agent-call.app");
   });
 });
 

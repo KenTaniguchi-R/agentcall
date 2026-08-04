@@ -37,7 +37,7 @@ const card = () =>
     handle: "ken",
     description: "Ken's agent",
     tasks: TASKS,
-    baseUrl: "https://agentcall.benree.tech/ken",
+    baseUrl: "https://agent-call.app/ken",
   });
 
 describe("toAgentCard", () => {
@@ -58,7 +58,7 @@ describe("toAgentCard", () => {
   it("declares exactly one HTTP+JSON interface at the handle's base URL", () => {
     expect(card().supportedInterfaces).toEqual([
       {
-        url: "https://agentcall.benree.tech/ken",
+        url: "https://agent-call.app/ken",
         protocolBinding: "HTTP+JSON",
         protocolVersion: "1.0",
       },
@@ -83,7 +83,7 @@ describe("toAgentCard", () => {
 
   it("declares the policy extension with a fixed, host-independent URI, under capabilities.extensions", () => {
     expect(card().capabilities.extensions?.[0]?.uri).toBe(AGENTCALL_POLICY_EXT);
-    expect(AGENTCALL_POLICY_EXT).toBe("https://agentcall.benree.tech/ext/policy/v1");
+    expect(AGENTCALL_POLICY_EXT).toBe("https://agent-call.app/ext/policy/v1");
   });
 
   it("carries the handle in the extension params", () => {
@@ -109,14 +109,14 @@ describe("toAgentCard", () => {
 
 describe("toDirectoryCard", () => {
   it("describes the relay itself, not a person", () => {
-    const d = toDirectoryCard({ origin: "https://agentcall.benree.tech" });
+    const d = toDirectoryCard({ origin: "https://agent-call.app" });
     expect(d.name).toBe("agentcall relay");
-    expect(d.supportedInterfaces[0]!.url).toBe("https://agentcall.benree.tech");
+    expect(d.supportedInterfaces[0]!.url).toBe("https://agent-call.app");
     expect(d.supportedInterfaces[0]!.tenant).toBeUndefined();
   });
 
   it("advertises the handle-resolution skill", () => {
-    const d = toDirectoryCard({ origin: "https://agentcall.benree.tech" });
+    const d = toDirectoryCard({ origin: "https://agent-call.app" });
     expect(d.skills.map((s) => s.id)).toContain("resolve-handle");
   });
 });
@@ -143,17 +143,17 @@ describe("schema conformance (vendored A2A v1.0 'Agent Card' / 'Agent Interface'
   });
 
   it("toDirectoryCard's top level has no keys outside 'Agent Card'", () => {
-    const d = toDirectoryCard({ origin: "https://agentcall.benree.tech" });
+    const d = toDirectoryCard({ origin: "https://agent-call.app" });
     assertOnlyAllowedKeys(d, "Agent Card");
   });
 
   it("toDirectoryCard's capabilities has no keys outside 'Agent Capabilities'", () => {
-    const d = toDirectoryCard({ origin: "https://agentcall.benree.tech" });
+    const d = toDirectoryCard({ origin: "https://agent-call.app" });
     assertOnlyAllowedKeys(d.capabilities, "Agent Capabilities");
   });
 
   it("toDirectoryCard's supportedInterfaces entries have no keys outside 'Agent Interface'", () => {
-    const d = toDirectoryCard({ origin: "https://agentcall.benree.tech" });
+    const d = toDirectoryCard({ origin: "https://agent-call.app" });
     for (const iface of d.supportedInterfaces) {
       assertOnlyAllowedKeys(iface, "Agent Interface");
     }

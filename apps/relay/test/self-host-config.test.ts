@@ -59,6 +59,6 @@ describe("self-host Wrangler distribution", () => {
     const raw = env.SELF_HOST_WRANGLER_CONFIG;
     expect(selfHosted.d1_databases[0].database_id).toBe("00000000-0000-0000-0000-000000000000");
     expect(selfHosted.d1_databases[0].database_id).not.toBe(hosted.d1_databases[0].database_id);
-    expect(raw).not.toContain("agentcall.benree.tech");
+    expect(raw).not.toContain("agent-call.app");
   });
 });

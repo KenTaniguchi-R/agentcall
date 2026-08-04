@@ -17,7 +17,7 @@ describe("contacts store", () => {
 
   it("round-trips and sets 0600/0700 perms", () => {
     const p = getMachinePaths(tempHome());
-    const book = { contacts: [{ name: "ken", address: "ken@agentcall.benree.tech", note: "coworker" }] };
+    const book = { contacts: [{ name: "ken", address: "ken@agent-call.app", note: "coworker" }] };
     saveContacts(p, book);
     expect(loadContacts(p)).toEqual(book);
     expect(statSync(p.contactsFile).mode & 0o777).toBe(0o600);
@@ -33,24 +33,24 @@ describe("contacts store", () => {
 
   it("addContact adds, then upserts case-insensitively", () => {
     const p = getMachinePaths(tempHome());
-    expect(addContact(p, "Ken", "ken@agentcall.benree.tech", "coworker")).toBe("added");
-    expect(addContact(p, "ken", "ken2@agentcall.benree.tech")).toBe("updated");
+    expect(addContact(p, "Ken", "ken@agent-call.app", "coworker")).toBe("added");
+    expect(addContact(p, "ken", "ken2@agent-call.app")).toBe("updated");
     const { contacts } = loadContacts(p);
     expect(contacts).toHaveLength(1);
-    expect(contacts[0].address).toBe("ken2@agentcall.benree.tech");
+    expect(contacts[0].address).toBe("ken2@agent-call.app");
   });
 
   it("upsert without --note preserves the existing note", () => {
     const p = getMachinePaths(tempHome());
-    addContact(p, "ken", "ken@agentcall.benree.tech", "coworker, owns relay infra");
-    addContact(p, "ken", "ken2@agentcall.benree.tech");
+    addContact(p, "ken", "ken@agent-call.app", "coworker, owns relay infra");
+    addContact(p, "ken", "ken2@agent-call.app");
     expect(loadContacts(p).contacts[0].note).toBe("coworker, owns relay infra");
   });
 
   it("rejects invalid names and invalid addresses without writing", () => {
     const p = getMachinePaths(tempHome());
-    expect(() => addContact(p, "ken@home", "ken@agentcall.benree.tech")).toThrow(/Invalid contact name/);
-    expect(() => addContact(p, "-ken", "ken@agentcall.benree.tech")).toThrow(/Invalid contact name/);
+    expect(() => addContact(p, "ken@home", "ken@agent-call.app")).toThrow(/Invalid contact name/);
+    expect(() => addContact(p, "-ken", "ken@agent-call.app")).toThrow(/Invalid contact name/);
     expect(() => addContact(p, "ken", "not-an-address")).toThrow(/handle@host/);
     expect(loadContacts(p)).toEqual({ contacts: [] });
   });
@@ -62,7 +62,7 @@ describe("contacts store", () => {
 
   it("removeContact deletes case-insensitively and rejects unknown names", () => {
     const p = getMachinePaths(tempHome());
-    addContact(p, "ken", "ken@agentcall.benree.tech");
+    addContact(p, "ken", "ken@agent-call.app");
     removeContact(p, "KEN");
     expect(loadContacts(p)).toEqual({ contacts: [] });
     expect(() => removeContact(p, "ken")).toThrow(/No contact named "ken"/);
@@ -74,12 +74,12 @@ describe("contacts store", () => {
     writeFileSync(
       p.contactsFile,
       JSON.stringify({
-        contacts: [{ name: "ken", address: "ken@agentcall.benree.tech" }],
+        contacts: [{ name: "ken", address: "ken@agent-call.app" }],
         future_field: "x",
       }),
     );
     loadContacts(p);
-    addContact(p, "amy", "amy@agentcall.benree.tech");
+    addContact(p, "amy", "amy@agent-call.app");
     const raw = JSON.parse(readFileSync(p.contactsFile, "utf8"));
     expect(raw).not.toHaveProperty("future_field");
   });
@@ -88,8 +88,8 @@ describe("contacts store", () => {
 describe("resolveAddress", () => {
   it("passes a full address through unchanged", () => {
     const p = getMachinePaths(tempHome());
-    expect(resolveAddress(p, "ken@agentcall.benree.tech")).toEqual({
-      ok: true, handle: "ken", host: "agentcall.benree.tech", address: "ken@agentcall.benree.tech",
+    expect(resolveAddress(p, "ken@agent-call.app")).toEqual({
+      ok: true, handle: "ken", host: "agent-call.app", address: "ken@agent-call.app",
     });
   });
 
@@ -101,9 +101,9 @@ describe("resolveAddress", () => {
 
   it("resolves a saved name case-insensitively", () => {
     const p = getMachinePaths(tempHome());
-    addContact(p, "Ken", "ken@agentcall.benree.tech", "coworker");
+    addContact(p, "Ken", "ken@agent-call.app", "coworker");
     expect(resolveAddress(p, "ken")).toEqual({
-      ok: true, handle: "ken", host: "agentcall.benree.tech", address: "ken@agentcall.benree.tech",
+      ok: true, handle: "ken", host: "agent-call.app", address: "ken@agent-call.app",
     });
   });
 
@@ -124,31 +124,31 @@ describe("resolveAddress", () => {
   // of origin/main briefly reinstated the rejection; see relayHostWarning.
   it("warns when the address host is not the relay the call will actually go to", () => {
     const p = getMachinePaths(tempHome());
-    const r = resolveAddress(p, "ken@agentcall.benree.tech", "https://relay.example.com");
+    const r = resolveAddress(p, "ken@agent-call.app", "https://relay.example.com");
     expect(r.ok).toBe(true);
-    if (r.ok) expect(r.warning).toMatch(/agentcall\.benree\.tech.*relay\.example\.com/);
+    if (r.ok) expect(r.warning).toMatch(/agent-call\.app.*relay\.example\.com/);
   });
 
   // From origin/main (#66): on the real relay a tenant's addresses are
-  // <handle>@<org>.agentcall.benree.tech, so the host we compare against has
+  // <handle>@<org>.agent-call.app, so the host we compare against has
   // to carry the calling line's org or the warning names the wrong host.
   it("expects the org-prefixed host when the relay is the real one", () => {
     const p = getMachinePaths(tempHome());
-    const same = resolveAddress(p, "ken@acme.agentcall.benree.tech", "https://agentcall.benree.tech", "acme");
+    const same = resolveAddress(p, "ken@acme.agent-call.app", "https://agent-call.app", "acme");
     expect(same.ok).toBe(true);
     if (same.ok) expect(same.warning).toBeUndefined();
   });
 
   it("does not warn when the address host matches the relay", () => {
     const p = getMachinePaths(tempHome());
-    const r = resolveAddress(p, "ken@agentcall.benree.tech", "https://agentcall.benree.tech");
+    const r = resolveAddress(p, "ken@agent-call.app", "https://agent-call.app");
     expect(r.ok).toBe(true);
     if (r.ok) expect(r.warning).toBeUndefined();
   });
 
   it("does not warn when no relay is supplied", () => {
     const p = getMachinePaths(tempHome());
-    const r = resolveAddress(p, "ken@agentcall.benree.tech");
+    const r = resolveAddress(p, "ken@agent-call.app");
     expect(r.ok).toBe(true);
     if (r.ok) expect(r.warning).toBeUndefined();
   });
@@ -159,15 +159,15 @@ describe("resolveAddress", () => {
   // to another tenant" below; this is the contact-book half.
   it("rejects a contact-book hit belonging to a different organization", () => {
     const p = getMachinePaths(tempHome());
-    addContact(p, "ken", "ken@other.agentcall.benree.tech");
-    const r = resolveAddress(p, "ken", "https://agentcall.benree.tech", "acme");
+    addContact(p, "ken", "ken@other.agent-call.app");
+    const r = resolveAddress(p, "ken", "https://agent-call.app", "acme");
     expect(r.ok).toBe(false);
     if (!r.ok) expect(r.error).toMatch(/organization "other".*"acme"/);
   });
 
   it("warns for a contact-book hit too, naming the contact's address", () => {
     const p = getMachinePaths(tempHome());
-    addContact(p, "ken", "ken@agentcall.benree.tech");
+    addContact(p, "ken", "ken@agent-call.app");
     const r = resolveAddress(p, "ken", "http://127.0.0.1:8787");
     expect(r.ok).toBe(true);
     if (r.ok) expect(r.warning).toMatch(/ken.*127\.0\.0\.1:8787/);
@@ -175,7 +175,7 @@ describe("resolveAddress", () => {
 
   it("an unparseable relay URL is ignored rather than blocking the call", () => {
     const p = getMachinePaths(tempHome());
-    const r = resolveAddress(p, "ken@agentcall.benree.tech", "not a url");
+    const r = resolveAddress(p, "ken@agent-call.app", "not a url");
     expect(r.ok).toBe(true);
   });
 
@@ -191,8 +191,8 @@ describe("resolveAddress", () => {
   it("rejects a hosted address belonging to another tenant", () => {
     const r = resolveAddress(
       getMachinePaths(tempHome()),
-      "ken@beta.agentcall.benree.tech",
-      "https://agentcall.benree.tech",
+      "ken@beta.agent-call.app",
+      "https://agent-call.app",
       "acme",
     );
     expect(r.ok).toBe(false);
@@ -202,8 +202,8 @@ describe("resolveAddress", () => {
   it("accepts a hosted address in the install's tenant", () => {
     const r = resolveAddress(
       getMachinePaths(tempHome()),
-      "ken@acme.agentcall.benree.tech",
-      "https://agentcall.benree.tech",
+      "ken@acme.agent-call.app",
+      "https://agent-call.app",
       "acme",
     );
     expect(r.ok).toBe(true);

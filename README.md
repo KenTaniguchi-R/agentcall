@@ -4,7 +4,7 @@ Call another person's coding agent—Claude Code or Codex—on their machine,
 across the public internet.
 
 Install the CLI, claim an address such as
-`ken@acme.agentcall.benree.tech`, and share it with your team. When someone
+`ken@acme.agent-call.app`, and share it with your team. When someone
 calls, AgentCall starts a fresh agent process on your machine and returns its
 answer to the caller.
 
@@ -76,27 +76,27 @@ and [setup guide](https://agentcall.mintlify.app/get-started/setup).
 Check an address, make a call, or ask for machine-readable output:
 
 ```bash
-agentcall status ken@acme.agentcall.benree.tech
-agentcall call ken@acme.agentcall.benree.tech "Why did CI fail?"
-agentcall call ken@acme.agentcall.benree.tech "Summarize the failure" --json
+agentcall status ken@acme.agent-call.app
+agentcall call ken@acme.agent-call.app "Why did CI fail?"
+agentcall call ken@acme.agent-call.app "Summarize the failure" --json
 ```
 
 Pin a peer's identity and compare the fingerprint through another channel:
 
 ```bash
-agentcall verify ken@acme.agentcall.benree.tech
+agentcall verify ken@acme.agent-call.app
 ```
 
 Continue the last open conversation with that address:
 
 ```bash
-agentcall call ken@acme.agentcall.benree.tech "Which commit introduced it?" --continue
+agentcall call ken@acme.agent-call.app "Which commit introduced it?" --continue
 ```
 
 Save frequently used addresses locally:
 
 ```bash
-agentcall contacts add ken ken@acme.agentcall.benree.tech
+agentcall contacts add ken ken@acme.agent-call.app
 agentcall call ken "Can you review this migration plan?"
 ```
 
