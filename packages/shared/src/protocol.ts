@@ -237,6 +237,18 @@ export function sanitizeTerminalOutput(text: string): string {
   return text.replace(TERMINAL_CONTROLS_AND_BIDI, " ");
 }
 
+// One cell of an aligned listing, where sanitizeTerminalOutput is not enough.
+// It keeps tab and line feed so a multi-line agent reply stays readable, but
+// in a single-line row a line feed forges an entire additional row and a tab
+// shifts every column after it. Either turns caller-supplied text — an invite
+// description, a join-key label — into a way to hide the row above it, which
+// matters most for exactly the rows an operator is scanning for: an admin
+// grant they did not expect. ALL_CONTROLS_AND_BIDI is the same class
+// sanitizeDetail uses, without its length cut.
+export function sanitizeTerminalCell(text: string): string {
+  return text.replace(ALL_CONTROLS_AND_BIDI, " ");
+}
+
 // JSON.stringify already escapes C0 controls such as ESC, but JSON permits
 // C1 controls and bidi formatting as literal characters. Escape those code
 // points in the serialized representation without changing the value a JSON

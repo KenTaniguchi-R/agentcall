@@ -1,4 +1,6 @@
-import type { OrgInviteMetadataType } from "@benree/agentcall-shared";
+import {
+  sanitizeTerminalCell, stringifyTerminalSafeJson, type OrgInviteMetadataType,
+} from "@benree/agentcall-shared";
 import { ApiError, createInvite, listInvites, revokeInvite } from "../api.js";
 import { relayUrl } from "../config.js";
 import type { LineContext } from "../line-context.js";
@@ -57,7 +59,15 @@ function inviteRows(invites: OrgInviteMetadataType[], now: number): string[] {
     new Date(m.expires_at).toISOString().slice(0, 10),
     m.description || "—",
     m.id,
-  ]);
+    // Description is the caller-controlled cell: MAX_ORG_INVITE_DESCRIPTION
+    // bounds its length, nothing bounds its character set, so it arrives able
+    // to carry an erase sequence or a line feed. sanitizeTerminalCell rather
+    // than sanitizeTerminalOutput, because a row is one line and the newline
+    // the latter preserves would forge another. Applied to every cell, not
+    // just that one: the rest are regex- or enum-constrained upstream today,
+    // and running them through the same call means a later schema relaxation
+    // cannot quietly reopen this.
+  ].map(sanitizeTerminalCell));
   // Description is caller-supplied and runs to MAX_ORG_INVITE_DESCRIPTION, so
   // the widths come from the data rather than being fixed — one long purpose
   // string would otherwise shear every following column out of alignment.
@@ -122,7 +132,10 @@ export function register(program: { command(name: string): any }, lineFor: LineF
       const cfg = ctx.config;
       try {
         const invites = await listInvites(relayUrl(cfg), { org: cfg.org, handle: cfg.handle, token: cfg.token });
-        if (o.json) { console.log(JSON.stringify(invites)); return; }
+        // stringifyTerminalSafeJson, not JSON.stringify: JSON escapes C0
+        // controls but passes C1 and bidi through literally, and `--json`
+        // still lands in a terminal often enough to matter.
+        if (o.json) { console.log(stringifyTerminalSafeJson(invites)); return; }
         if (invites.length === 0) {
           console.log("No invites yet. Create one with:\n  agentcall invite create");
           return;

@@ -591,6 +591,44 @@ describe.sequential("CLI command actions", () => {
       expect(out.stdout).toContain("agentcall invite create");
     });
 
+    // A description is caller-supplied free text: MAX_ORG_INVITE_DESCRIPTION
+    // bounds its length and nothing bounds its character set
+    // (packages/shared/src/invite.ts). The pretty-printed JSON this listing
+    // replaced escaped control characters for free; an aligned row does not,
+    // so the row an operator most needs to see - an admin grant - is exactly
+    // the one an erase sequence can hide.
+    it("neutralizes terminal escapes in a caller-supplied description", async () => {
+      const out = await list([invite({
+        id: "f".repeat(64),
+        description: "\u001b[2K\rinnocent",
+      })]);
+      expect(out.stdout).not.toContain("\u001b");
+      expect(out.stdout).not.toContain("\r");
+      expect(out.stdout).toContain("innocent");
+    });
+
+    it("does not let a description forge an extra row", async () => {
+      const out = await list([invite({
+        id: "0".repeat(64),
+        description: "ok\nactive  ADMIN  2099-01-01  forged",
+      })]);
+      expect(out.stdout.trim().split("\n")).toHaveLength(1);
+      expect(out.stdout).toContain("forged");
+    });
+
+    // stringifyTerminalSafeJson, not bare JSON.stringify: JSON escapes C0 but
+    // permits C1 and bidi through as literal characters, so `--json` piped to
+    // a pager is still a terminal write.
+    it("escapes C1 and bidi in --json, which JSON.stringify leaves literal", async () => {
+      const out = await list([invite({
+        id: "9".repeat(64),
+        description: "a\u009b31mb\u202ec",
+      })], ["--json"]);
+      expect(out.stdout).not.toContain("\u009b");
+      expect(out.stdout).not.toContain("\u202e");
+      expect(JSON.parse(out.stdout)[0].description).toContain("31m");
+    });
+
     it("still emits the raw array under --json", async () => {
       const rows = [invite({ id: "e".repeat(64) })];
       const out = await list(rows, ["--json"]);
@@ -949,6 +987,33 @@ describe.sequential("CLI command actions", () => {
       body: JSON.stringify({ admin_secret: "admin-secret", evict: true }),
     });
     expect(out.stdout).toContain("Evicted 2 member(s)");
+  });
+
+  // Same defect class as the invite listing: a join-key description is
+  // caller-supplied free text (MAX_ROSTER_JOIN_KEY_DESCRIPTION bounds length,
+  // not character set) rendered into a row. This row is tab-delimited, so a
+  // tab shifts every following column as well.
+  it("neutralizes terminal escapes and tabs in a join-key description", async () => {
+    const metadata = {
+      prefix: KEY_PREFIX, description: "safe\u001b[2K\r\tspoofed", created_by: "ken",
+      created_at: 1, expires_at: 2_000_000_000_000, reusable: true, used: false, revoked_at: null,
+    };
+    const relay = await startRelay(() => ({ status: 200, body: { keys: [metadata] } }));
+    const testHome = home();
+    seedConfig(testHome, relay);
+    saveMembership(getLinePaths(getMachinePaths(testHome), "claude"), { name: "acme", relay, roster_id: A });
+
+    const out = await runCommand(testHome, [
+      "roster", "key", "list", "acme", "--admin-secret", "admin-secret",
+    ]);
+
+    expect(out.code).toBe(0);
+    expect(out.stdout).not.toContain("\u001b");
+    expect(out.stdout).not.toContain("\r");
+    // The column separators this row legitimately uses are the ones the
+    // renderer writes, not any the description smuggled in.
+    expect(out.stdout.split("\t")).toHaveLength(6);
+    expect(out.stdout).toContain("spoofed");
   });
 
   it("issues a key once and lists metadata without a secret", async () => {
