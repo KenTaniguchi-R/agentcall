@@ -12,3 +12,4 @@ export * from "./canonical.js";
 export * from "./keys.js";
 export * from "./signing.js";
 export * from "./e2ee.js";
+export * from "./room.js";
