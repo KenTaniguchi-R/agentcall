@@ -115,6 +115,23 @@ inv_stored_cards() {
   fi
 }
 
+inv_relay_auth_middleware() {
+  local unexpected
+  if ! grep -Fq 'app.use("/v1/*", requireIdentity)' apps/relay/src/index.ts ||
+     ! grep -Fq 'PUBLIC_V1_PATHS' apps/relay/src/middleware.ts; then
+    fail "relay routes must have the shared identity middleware and explicit public allowlist"
+    return
+  fi
+  unexpected=$(grep -rl 'authenticateRequest' apps/relay/src --include='*.ts' | \
+    grep -vE '/(tenant|middleware|a2a)\.ts$' || true)
+  if [ -n "$unexpected" ]; then
+    fail "inline relay authentication remains outside the approved seams"
+    echo "$unexpected" | sed 's/^/    /'
+  else
+    ok "relay authentication uses the shared middleware seam"
+  fi
+}
+
 inv_historical_docs() {
   local grace=14 today modified stamp doc_date age
   today=$(date -u +%s)
@@ -199,6 +216,7 @@ run_invariants() {
   inv_action_pins
   inv_protocol_frames
   inv_stored_cards
+  inv_relay_auth_middleware
   inv_historical_docs
   inv_migrations
   inv_no_task_board

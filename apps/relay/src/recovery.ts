@@ -8,7 +8,7 @@ import { rateLimit, type RelayAppEnv } from "./middleware.js";
 import type { Env } from "./index.js";
 import { orgAuditStatement, orgAuditTrimStatement } from "./events.js";
 import {
-  authenticateRequest, deploymentOrgAllows, identityKey,
+  deploymentOrgAllows, identityKey,
 } from "./tenant.js";
 
 const RECEIPT_TTL_MS = 7 * 24 * 60 * 60_000;
