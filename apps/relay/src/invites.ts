@@ -7,8 +7,8 @@ import type { Env } from "./index.js";
 import { constantTimeEqual, generateToken, sha256Hex } from "./auth.js";
 import { orgAuditStatement, orgAuditTrimStatement, type OrgAuditActor } from "./events.js";
 import { checkLimit, REGISTER, ROSTER_WRITE } from "./ratelimit/index.js";
-import { deploymentOrgAllows, requireOrgAdmin } from "./tenant.js";
-import { rateLimit, type RelayAppEnv } from "./middleware.js";
+import { deploymentOrgAllows } from "./tenant.js";
+import { rateLimit, requireAdmin, type RelayAppEnv } from "./middleware.js";
 
 const INVITE_RETENTION_MS = 30 * 86_400_000;
 
@@ -102,9 +102,8 @@ export function mountInvites(app: Hono<RelayAppEnv>): void {
     );
   });
 
-  app.post("/v1/invites", rateLimit(REGISTER, "identity", "invite:"), async (c) => {
+  app.post("/v1/invites", rateLimit(REGISTER, "identity", "invite:"), requireAdmin, async (c) => {
     const identity = c.var.identity;
-    if (!requireOrgAdmin(identity)) return c.json({ error: "administrator role required" }, 403);
     const body = CreateOrgInviteRequest.safeParse(await c.req.json().catch(() => null));
     if (!body.success) return c.json({ error: "invalid request" }, 400);
     return createInvite(
@@ -113,9 +112,8 @@ export function mountInvites(app: Hono<RelayAppEnv>): void {
     );
   });
 
-  app.post("/v1/invites/list", rateLimit(ROSTER_WRITE, "identity", "invite-list:"), async (c) => {
+  app.post("/v1/invites/list", rateLimit(ROSTER_WRITE, "identity", "invite-list:"), requireAdmin, async (c) => {
     const identity = c.var.identity;
-    if (!requireOrgAdmin(identity)) return c.json({ error: "administrator role required" }, 403);
     const { results } = await c.env.DB.prepare(
       "SELECT token_hash, description, created_by, created_at, expires_at, used_at, used_by, revoked_at, org_role " +
         "FROM invites WHERE org = ? ORDER BY " +
@@ -125,9 +123,8 @@ export function mountInvites(app: Hono<RelayAppEnv>): void {
     return c.json({ invites: (results ?? []).map(publicInvite) });
   });
 
-  app.post("/v1/invites/:id/revoke", rateLimit(ROSTER_WRITE, "identity", "invite-revoke:"), async (c) => {
+  app.post("/v1/invites/:id/revoke", rateLimit(ROSTER_WRITE, "identity", "invite-revoke:"), requireAdmin, async (c) => {
     const identity = c.var.identity;
-    if (!requireOrgAdmin(identity)) return c.json({ error: "administrator role required" }, 403);
     const id = c.req.param("id");
     if (!ORG_INVITE_ID_RE.test(id)) return c.json({ error: "invalid invite id" }, 400);
     const existing = await c.env.DB.prepare(
