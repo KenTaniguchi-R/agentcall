@@ -17,7 +17,6 @@ import { assertValidLineName, loadLineConfig, readyLines } from "./lines.js";
 import { loadTasks, scaffoldTask } from "./tasks.js";
 import { execVerb, type Verb } from "./verbs.js";
 import { buildCardReport } from "./lint.js";
-import { runDoctor } from "./doctor.js";
 import { resolveAddress } from "./contacts.js";
 import { resolveLine } from "./lineContext.js";
 import type { LineContext } from "./lineContext.js";
@@ -44,6 +43,7 @@ import { register as registerInvite } from "./commands/invite.js";
 import { register as registerStatus } from "./commands/status.js";
 import { register as registerKeys } from "./commands/keys.js";
 import { register as registerPeer } from "./commands/peer.js";
+import { register as registerDoctor } from "./commands/doctor.js";
 
 export function createProgram(): Command {
 const program = new Command();
@@ -194,13 +194,7 @@ registerStatus(program);
 registerPeer(program);
 
 registerKeys(program);
-
-program
-  .command("doctor")
-  .description("verify this install can answer calls: binary, auth, agent spawn, tool telemetry, listener, relay self-call")
-  .action(async () => {
-    process.exitCode = await runDoctor({ machine: getMachinePaths() });
-  });
+registerDoctor(program);
 
 program
   .command("history")
