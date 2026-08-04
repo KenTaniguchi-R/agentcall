@@ -3,14 +3,14 @@ import {
 } from "node:path";
 import {
   closeSync, existsSync, fchmodSync, fsyncSync, mkdirSync, openSync, readFileSync,
-  readdirSync, rmdirSync, statSync, unlinkSync, writeFileSync,
+  readdirSync, rmdirSync, unlinkSync, writeFileSync,
 } from "node:fs";
 import { z } from "zod";
 import {
   EncryptionKeyRecord, exportPublicKey, generateEncryptionKeyPair, generateIdentityKeyPair,
   toBase64Url,
 } from "@benree/agentcall-shared";
-import { writeJsonAtomic } from "./json-store.js";
+import { assertPrivateFile, writeJsonAtomic } from "./json-store.js";
 import type { LinePaths } from "./paths.js";
 
 const HASH = /^[0-9a-f]{32}$/;
@@ -100,13 +100,6 @@ function publishedEpochFile(paths: LinePaths, epoch: number): string {
   return `${paths.identityKeyFile}.epoch-${epoch}.published.json`;
 }
 
-function assertPrivateFileMode(file: string): void {
-  const mode = statSync(file).mode & 0o777;
-  if (mode !== 0o600) {
-    throw new Error(`${file} has permission ${mode.toString(8)}; expected 600. Run: chmod 600 ${file}`);
-  }
-}
-
 function waitForElectionSlot(file: string, waitMs = 5_000): void {
   const lock = `${file}.lock`;
   if (!existsSync(lock)) return;
@@ -127,7 +120,7 @@ function waitForElectionSlot(file: string, waitMs = 5_000): void {
 
 function readJson(file: string): unknown {
   waitForElectionSlot(file);
-  assertPrivateFileMode(file);
+  assertPrivateFile(file, { checkDir: false });
   try {
     return JSON.parse(readFileSync(file, "utf8"));
   } catch {

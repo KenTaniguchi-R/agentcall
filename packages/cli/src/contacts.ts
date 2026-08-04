@@ -1,7 +1,8 @@
-import { existsSync, mkdirSync, readFileSync, writeFileSync, chmodSync } from "node:fs";
+import { mkdirSync, writeFileSync, chmodSync } from "node:fs";
 import { z } from "zod";
 import { parseAddress } from "@benree/agentcall-shared";
 import type { MachinePaths } from "./paths.js";
+import { readJsonStore } from "./json-store.js";
 
 // Never matches anything containing "@", so a contact name can never be
 // mistaken for a handle@host address during resolution.
@@ -22,12 +23,10 @@ export type ContactsFile = z.infer<typeof ContactsFileSchema>;
 // naming the path: the file is user data, silently resetting it would lose
 // every saved contact.
 export function loadContacts(p: MachinePaths): ContactsFile {
-  if (!existsSync(p.contactsFile)) return { contacts: [] };
-  try {
-    return ContactsFileSchema.parse(JSON.parse(readFileSync(p.contactsFile, "utf8")));
-  } catch (e) {
-    throw new Error(`Corrupt contacts file at ${p.contactsFile}: ${e instanceof Error ? e.message : String(e)}`);
-  }
+  return readJsonStore(p.contactsFile, ContactsFileSchema, {
+    missing: () => ({ contacts: [] }),
+    corrupt: (detail) => { throw new Error(`Corrupt contacts file at ${p.contactsFile}: ${detail}`); },
+  });
 }
 
 // 0600/0700 like saveLineConfig: notes are personal data.

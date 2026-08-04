@@ -2,7 +2,7 @@ import { mkdtempSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
-import { writeJsonAtomic } from "../src/json-store.js";
+import { readJsonStore, writeJsonAtomic } from "../src/json-store.js";
 
 describe("writeJsonAtomic", () => {
   it("leaves the previous file intact when serialization fails", () => {
@@ -14,5 +14,27 @@ describe("writeJsonAtomic", () => {
 
     expect(() => writeJsonAtomic(file, circular)).toThrow(/circular/i);
     expect(readFileSync(file, "utf8")).toBe("original\n");
+  });
+});
+
+describe("readJsonStore", () => {
+  it("uses the explicit missing-file policy", () => {
+    const dir = mkdtempSync(join(tmpdir(), "agentcall-json-store-"));
+    const value = readJsonStore(join(dir, "missing.json"), { parse: (raw) => raw as string[] }, {
+      missing: () => ["default"],
+      corrupt: () => { throw new Error("unexpected corruption"); },
+    });
+    expect(value).toEqual(["default"]);
+  });
+
+  it("requires an explicit corruption policy and passes the detail to it", () => {
+    const dir = mkdtempSync(join(tmpdir(), "agentcall-json-store-"));
+    const file = join(dir, "broken.json");
+    writeFileSync(file, "not json\n");
+    const value = readJsonStore(file, { parse: (raw) => raw as string[] }, {
+      missing: () => [],
+      corrupt: (detail) => [`recovered: ${detail.length > 0 ? "json" : "unknown"}`],
+    });
+    expect(value).toEqual(["recovered: json"]);
   });
 });

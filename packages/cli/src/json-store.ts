@@ -1,8 +1,48 @@
 import { randomUUID } from "node:crypto";
 import {
-  chmodSync, closeSync, fsyncSync, mkdirSync, openSync, renameSync, rmSync, writeFileSync,
+  chmodSync, closeSync, existsSync, fsyncSync, mkdirSync, openSync, readFileSync, renameSync, rmSync, statSync, writeFileSync,
 } from "node:fs";
 import { basename, dirname, join } from "node:path";
+
+export function assertPrivateFile(
+  file: string,
+  options: { dir?: string; checkDir?: boolean; checkFile?: boolean } = {},
+): void {
+  const checkDir = options.checkDir ?? options.dir !== undefined;
+  const checkFile = options.checkFile ?? true;
+  if (checkFile && !existsSync(file)) return;
+  if (checkDir) {
+    const dir = options.dir ?? dirname(file);
+    const mode = statSync(dir).mode & 0o777;
+    if (mode !== 0o700) {
+      throw new Error(`${dir} has permission ${mode.toString(8)}; expected 700. Run: chmod 700 ${dir}`);
+    }
+  }
+  if (checkFile) {
+    const mode = statSync(file).mode & 0o777;
+    if (mode !== 0o600) {
+      throw new Error(`${file} has permission ${mode.toString(8)}; expected 600. Run: chmod 600 ${file}`);
+    }
+  }
+}
+
+export function readJsonStore<T>(
+  file: string,
+  schema: { parse(value: unknown): T },
+  options: {
+    missing: () => T;
+    corrupt: (detail: string) => T;
+    requirePrivate?: { dir?: string; checkDir?: boolean; checkFile?: boolean };
+  },
+): T {
+  if (!existsSync(file)) return options.missing();
+  if (options.requirePrivate) assertPrivateFile(file, options.requirePrivate);
+  try {
+    return schema.parse(JSON.parse(readFileSync(file, "utf8")));
+  } catch (error) {
+    return options.corrupt(error instanceof Error ? error.message : String(error));
+  }
+}
 
 // Write beside the destination so rename stays on one filesystem. A unique
 // temp name also lets concurrent CLI processes save without sharing a partial

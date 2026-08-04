@@ -1,8 +1,7 @@
-import { existsSync, readFileSync } from "node:fs";
 import { z } from "zod";
 import { BundleEntry, ROSTER_ID_RE } from "@benree/agentcall-shared";
 import { NAME_RE } from "./contacts.js";
-import { writeJsonAtomic } from "./json-store.js";
+import { readJsonStore, writeJsonAtomic } from "./json-store.js";
 import type { LinePaths } from "./paths.js";
 
 // Two stores with DELIBERATELY OPPOSITE corruption policies, kept in one file
@@ -37,15 +36,15 @@ const CacheFile = z.object({ version: z.literal(1), rosters: z.record(z.string()
 export type CachedBundle = z.infer<typeof CachedBundle>;
 
 export function loadMemberships(p: LinePaths): Membership[] {
-  if (!existsSync(p.rostersFile)) return [];
-  try {
-    return MembershipsFile.parse(JSON.parse(readFileSync(p.rostersFile, "utf8"))).rosters;
-  } catch (e) {
-    throw new Error(
-      `Corrupt rosters.json at ${p.rostersFile}: ${e instanceof Error ? e.message : String(e)}. ` +
-        `This file holds the roster ids you joined; join keys are not recoverable, so it is not reset automatically.`,
-    );
-  }
+  return readJsonStore(p.rostersFile, MembershipsFile, {
+    missing: () => ({ rosters: [] }),
+    corrupt: (detail) => {
+      throw new Error(
+        `Corrupt rosters.json at ${p.rostersFile}: ${detail}. ` +
+          `This file holds the roster ids you joined; join keys are not recoverable, so it is not reset automatically.`,
+      );
+    },
+  }).rosters;
 }
 
 // Mirrors addContact's NAME_RE check in contacts.ts. UX and consistency only
@@ -94,13 +93,11 @@ export function forgetMembership(p: LinePaths, name: string): void {
 }
 
 export function loadCache(p: LinePaths): Record<string, CachedBundle> {
-  if (!existsSync(p.rosterCacheFile)) return {};
-  try {
-    return CacheFile.parse(JSON.parse(readFileSync(p.rosterCacheFile, "utf8"))).rosters;
-  } catch {
+  return readJsonStore(p.rosterCacheFile, CacheFile, {
+    missing: () => ({ version: 1, rosters: {} }),
     // Derived data: a corrupt cache costs a refetch, not user data.
-    return {};
-  }
+    corrupt: () => ({ version: 1, rosters: {} }),
+  }).rosters;
 }
 
 // Identity-validating read. A cached bundle is only ever served back to the

@@ -1,5 +1,5 @@
 import { fetchKeys, getRecoveryStatus, getStatus } from "./api.js";
-import { lstatSync, readFileSync, realpathSync, statSync } from "node:fs";
+import { lstatSync, readFileSync, realpathSync } from "node:fs";
 import { execFileSync } from "node:child_process";
 import { encryptionKeyTranscript, importIdentityPublicKey, keyIdFor, verifyTranscript } from "@benree/agentcall-shared";
 import { callAgent } from "./callClient.js";
@@ -11,6 +11,7 @@ import {
 import { listLines } from "./lines.js";
 import type { LinePaths, MachinePaths } from "./paths.js";
 import { loadKeys } from "./keys.js";
+import { assertPrivateFile } from "./json-store.js";
 import { checkKnownPeersStore } from "./known-peers.js";
 import {
   codexToolTelemetryEnabled, type AgentKind,
@@ -173,10 +174,7 @@ export async function checkLineKeyHealth(
 ): Promise<VerifyCheck[]> {
   let local;
   try {
-    const dirMode = statSync(paths.dir).mode & 0o777;
-    if (dirMode !== 0o700) {
-      throw new Error(`${paths.dir} has permission ${dirMode.toString(8)}; expected 700. Run: chmod 700 ${paths.dir}`);
-    }
+    assertPrivateFile(paths.identityKeyFile, { dir: paths.dir, checkFile: false });
     local = loadKeys(paths);
   } catch (error) {
     return [{ name: "local identity keys", ok: false, detail: short(error), hint: "run `agentcall setup` to create persisted keys" }];

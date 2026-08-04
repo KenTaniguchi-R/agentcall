@@ -1,10 +1,10 @@
-import { chmodSync, existsSync, mkdirSync, readFileSync, statSync } from "node:fs";
+import { chmodSync, existsSync, mkdirSync } from "node:fs";
 import { z } from "zod";
 import {
   encryptionKeyTranscript, fingerprint, identityTranscript, importIdentityPublicKey,
   verifyTranscript, type EncryptionKeyRecordType, type IdentityRecordType,
 } from "@benree/agentcall-shared";
-import { writeJsonAtomic } from "./json-store.js";
+import { assertPrivateFile, readJsonStore, writeJsonAtomic } from "./json-store.js";
 import { withFileLock } from "./file-lock.js";
 import type { MachinePaths } from "./paths.js";
 
@@ -27,26 +27,14 @@ const KnownPeersSchema = z.object({ peers: z.array(KnownPeerSchema).max(MAX_KNOW
 });
 export type KnownPeer = z.infer<typeof KnownPeerSchema>;
 
-function assertStorePermissions(machine: MachinePaths): void {
-  if (!existsSync(machine.knownPeersFile)) return;
-  const dirMode = statSync(machine.dir).mode & 0o777;
-  if (dirMode !== 0o700) {
-    throw new Error(`${machine.dir} has permission ${dirMode.toString(8)}; expected 700. Run: chmod 700 ${machine.dir}`);
-  }
-  const mode = statSync(machine.knownPeersFile).mode & 0o777;
-  if (mode !== 0o600) {
-    throw new Error(`${machine.knownPeersFile} has permission ${mode.toString(8)}; expected 600. Run: chmod 600 ${machine.knownPeersFile}`);
-  }
-}
-
 export function loadKnownPeers(machine: MachinePaths): KnownPeer[] {
-  if (!existsSync(machine.knownPeersFile)) return [];
-  assertStorePermissions(machine);
-  try {
-    return KnownPeersSchema.parse(JSON.parse(readFileSync(machine.knownPeersFile, "utf8"))).peers;
-  } catch (error) {
-    throw new Error(`Corrupt known-peer trust store at ${machine.knownPeersFile}: ${error instanceof Error ? error.message : String(error)}`);
-  }
+  return readJsonStore(machine.knownPeersFile, KnownPeersSchema, {
+    missing: () => ({ peers: [] }),
+    requirePrivate: { dir: machine.dir },
+    corrupt: (detail) => {
+      throw new Error(`Corrupt known-peer trust store at ${machine.knownPeersFile}: ${detail}`);
+    },
+  }).peers;
 }
 
 function saveKnownPeers(machine: MachinePaths, peers: KnownPeer[]): void {
@@ -58,7 +46,7 @@ async function withStoreLock<T>(machine: MachinePaths, operation: () => Promise<
   // Never silently repair permissions around an existing trust root. If it
   // may have been exposed, fail closed and make the owner inspect it first.
   if (existsSync(machine.knownPeersFile)) {
-    assertStorePermissions(machine);
+    assertPrivateFile(machine.knownPeersFile, { dir: machine.dir });
   } else {
     mkdirSync(machine.dir, { recursive: true, mode: 0o700 });
     chmodSync(machine.dir, 0o700);

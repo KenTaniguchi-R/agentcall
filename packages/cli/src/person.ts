@@ -1,22 +1,16 @@
-import { existsSync, readFileSync } from "node:fs";
+import { existsSync } from "node:fs";
 import { z } from "zod";
 import type { MachinePaths } from "./paths.js";
-import { writeJsonAtomic } from "./json-store.js";
+import { readJsonStore, writeJsonAtomic } from "./json-store.js";
 
 export const PersonSchema = z.object({ primary_line: z.string() });
 export type Person = z.infer<typeof PersonSchema>;
 
 export function loadPerson(m: MachinePaths): Person {
-  if (!existsSync(m.personFile)) {
-    throw new Error(`No agentcall install found. Run \`agentcall setup\` first.`);
-  }
-  try {
-    return PersonSchema.parse(JSON.parse(readFileSync(m.personFile, "utf8")));
-  } catch (e) {
-    throw new Error(
-      `Corrupt person.json at ${m.personFile}: ${e instanceof Error ? e.message : String(e)}`,
-    );
-  }
+  return readJsonStore(m.personFile, PersonSchema, {
+    missing: () => { throw new Error("No agentcall install found. Run `agentcall setup` first."); },
+    corrupt: (detail) => { throw new Error(`Corrupt person.json at ${m.personFile}: ${detail}`); },
+  });
 }
 
 // Temp-file-plus-rename: person.json is read by every person-scoped command,

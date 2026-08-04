@@ -1,8 +1,8 @@
-import { chmodSync, existsSync, mkdirSync, readFileSync, statSync } from "node:fs";
+import { chmodSync, existsSync, mkdirSync } from "node:fs";
 import { z } from "zod";
 import { RELAY_CALL_TIMEOUT_MS } from "@benree/agentcall-shared";
 import { withFileLock, type FileLockOptions } from "./file-lock.js";
-import { writeJsonAtomic } from "./json-store.js";
+import { assertPrivateFile, readJsonStore, writeJsonAtomic } from "./json-store.js";
 import type { MachinePaths } from "./paths.js";
 
 export const MAX_REPLAY_RESERVATIONS = 10_000;
@@ -35,29 +35,14 @@ export class ReplayDetectedError extends Error {
   }
 }
 
-function assertStorePermissions(machine: MachinePaths): void {
-  if (!existsSync(machine.replayReservationsFile)) return;
-  const dirMode = statSync(machine.dir).mode & 0o777;
-  if (dirMode !== 0o700) {
-    throw new Error(`${machine.dir} has permission ${dirMode.toString(8)}; expected 700. Run: chmod 700 ${machine.dir}`);
-  }
-  const mode = statSync(machine.replayReservationsFile).mode & 0o777;
-  if (mode !== 0o600) {
-    throw new Error(`${machine.replayReservationsFile} has permission ${mode.toString(8)}; expected 600. Run: chmod 600 ${machine.replayReservationsFile}`);
-  }
-}
-
 export function loadReplayReservations(machine: MachinePaths): ReplayReservation[] {
-  if (!existsSync(machine.replayReservationsFile)) return [];
-  assertStorePermissions(machine);
-  try {
-    return ReplayStoreSchema.parse(JSON.parse(readFileSync(machine.replayReservationsFile, "utf8"))).reservations;
-  } catch (error) {
-    throw new Error(
-      `Corrupt replay-reservation store at ${machine.replayReservationsFile}: ` +
-      `${error instanceof Error ? error.message : String(error)}`,
-    );
-  }
+  return readJsonStore(machine.replayReservationsFile, ReplayStoreSchema, {
+    missing: () => ({ v: 1 as const, reservations: [] }),
+    requirePrivate: { dir: machine.dir },
+    corrupt: (detail) => {
+      throw new Error(`Corrupt replay-reservation store at ${machine.replayReservationsFile}: ${detail}`);
+    },
+  }).reservations;
 }
 
 function saveReplayReservations(machine: MachinePaths, reservations: ReplayReservation[]): void {
@@ -78,7 +63,7 @@ export async function reserveReplay(
   }
 
   if (existsSync(machine.replayReservationsFile)) {
-    assertStorePermissions(machine);
+    assertPrivateFile(machine.replayReservationsFile, { dir: machine.dir });
   } else {
     mkdirSync(machine.dir, { recursive: true, mode: 0o700 });
     chmodSync(machine.dir, 0o700);
