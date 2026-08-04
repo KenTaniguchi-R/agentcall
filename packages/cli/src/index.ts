@@ -1,8 +1,7 @@
-import { existsSync } from "node:fs";
 import { Command, CommanderError } from "commander";
 import type { AgentKind } from "@benree/agentcall-shared";
 import { getLinePaths, getMachinePaths, type LinePaths } from "./paths.js";
-import { addressHost, assertCallableLine, relayUrl, resolveLineWorkdir, type LineConfig } from "./config.js";
+import { addressHost, assertCallableLine, relayUrl, type LineConfig } from "./config.js";
 import { callAgent, callStatusMessage, CallError } from "./callClient.js";
 // No rotateToken here: `rotate` goes through commands/rotate.ts's rotateLine,
 // which owns the per-line config write and calls the api helper itself.
@@ -30,7 +29,6 @@ import { deleteCached, forgetMembership, loadMemberships, saveMembership } from 
 import { allRostersFailed, DEFAULT_SEARCH_LIMIT, rank, renderResults, sanitize, toEntries, type RosterStatus, type SearchEntry } from "./search.js";
 import { refreshRoster } from "./searchRefresh.js";
 import { ask } from "./tty.js";
-import { renderPolicyReport } from "./policy-report.js";
 import { sanitizeTerminalOutput, stringifyTerminalSafeJson } from "@benree/agentcall-shared";
 import { getTelemetry, shutdownTelemetry, telemetrySafely } from "./telemetry.js";
 import { register as registerAudit } from "./commands/audit.js";
@@ -44,6 +42,7 @@ import { register as registerKeys } from "./commands/keys.js";
 import { register as registerPeer } from "./commands/peer.js";
 import { register as registerDoctor } from "./commands/doctor.js";
 import { register as registerHistory } from "./commands/history.js";
+import { register as registerPolicy } from "./commands/policy.js";
 
 export function createProgram(): Command {
 const program = new Command();
@@ -228,35 +227,7 @@ program
   .option("--line <name>", "line to lint (defaults to the primary line)")
   .action(reviewOwnCard);
 
-program
-  .command("policy")
-  .description("show the effective per-caller and per-task capability policy")
-  .option("--line <name>", "line to report on (defaults to the primary line)")
-  .action((o: { line?: string }) => {
-    let ctx: LineContext;
-    try {
-      ctx = resolveLine(getMachinePaths(), { line: o.line });
-      assertCallableLine(ctx.config);
-    } catch (e) {
-      console.error(String(e instanceof Error ? e.message : e));
-      process.exitCode = 1;
-      return;
-    }
-    const cfg = ctx.config;
-    try {
-      const report = renderPolicyReport(loadPolicy(ctx.paths), loadTasks(ctx.paths), {
-        agentKind: cfg.agent_kind,
-        // Machine-scoped, not line-scoped: the administrator ceiling applies
-        // to every line on this machine (see paths.ts).
-        managed: existsSync(ctx.paths.machine.managedPolicyFile),
-        defaultWorkdir: resolveLineWorkdir(cfg, ctx.paths).dir,
-      });
-      console.log(report.trimEnd());
-    } catch (e) {
-      console.error(String(e instanceof Error ? e.message : e));
-      process.exitCode = 1;
-    }
-  });
+registerPolicy(program);
 
 program
   .command("card")
