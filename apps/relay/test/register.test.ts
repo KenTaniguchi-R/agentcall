@@ -3,6 +3,7 @@ import { describe, expect, it, vi } from "vitest";
 import { sha256Hex } from "../src/auth.js";
 import app from "../src/index.js";
 import { issueInvite, registerHandle, wsAuth } from "./helpers.js";
+import { resolveAgentId } from "../src/identity.js";
 
 // Each test uses its own synthetic source IP so the per-IP register rate
 // limit (5/60s, see REGISTER in src/ratelimit) doesn't make unrelated
@@ -18,6 +19,90 @@ async function register(body: unknown, ip = "203.0.113.1") {
 }
 
 describe("POST /v1/register", () => {
+  // #319, first slice of #154. agent_id is the stable principal that later
+  // slices move DO naming, cards, roster membership, policy, and audit
+  // subjects onto. Nothing reads it yet, so these tests pin the properties
+  // the rest of the cutover will depend on before anything relies on them.
+  describe("stable agent identity", () => {
+    async function agentIdOf(org: string, handle: string): Promise<string | null> {
+      const row = await env.DB.prepare("SELECT agent_id FROM handles WHERE org = ? AND handle = ?")
+        .bind(org, handle).first<{ agent_id: string | null }>();
+      return row?.agent_id ?? null;
+    }
+
+    it("mints a distinct opaque agent_id per registration", async () => {
+      await register({ org: "acme", handle: "id-one" }, "203.0.113.60");
+      await register({ org: "acme", handle: "id-two" }, "203.0.113.61");
+      const one = await agentIdOf("acme", "id-one");
+      const two = await agentIdOf("acme", "id-two");
+      expect(one).toMatch(/^agt_[0-9a-f]{32}$/);
+      expect(two).toMatch(/^agt_[0-9a-f]{32}$/);
+      expect(one).not.toBe(two);
+    });
+
+    // The spec forbids deriving the identity from the handle, credential,
+    // device, or signing key, and requires two organizations to be able to
+    // hold the same handle without sharing an identity.
+    it("does not derive the identity from the handle: same handle, two orgs", async () => {
+      await register({ org: "org-alpha", handle: "shared" }, "203.0.113.62");
+      await register({ org: "org-beta", handle: "shared" }, "203.0.113.63");
+      const alpha = await agentIdOf("org-alpha", "shared");
+      const beta = await agentIdOf("org-beta", "shared");
+      expect(alpha).not.toBeNull();
+      expect(alpha).not.toBe(beta);
+    });
+
+    it("never leaves a registered handle without an identity", async () => {
+      await register({ org: "acme", handle: "always-identified" }, "203.0.113.64");
+      const unidentified = await env.DB.prepare(
+        "SELECT COUNT(*) AS n FROM handles WHERE agent_id IS NULL",
+      ).first<{ n: number }>();
+      expect(unidentified?.n).toBe(0);
+    });
+
+    // Storage-level, not call-site-level. The decision's own argument is that
+    // remembering to do this at every write site is not an identity boundary.
+    it("refuses an insert with no agent_id", async () => {
+      await expect(env.DB.prepare(
+        "INSERT INTO handles (org, handle, token_hash, created_at, org_role) VALUES (?, ?, ?, ?, ?)",
+      ).bind("acme", "no-identity", "x".repeat(64), Date.now(), "member").run()).rejects.toThrow();
+    });
+
+    it("refuses to repoint an existing handle at another identity", async () => {
+      await register({ org: "acme", handle: "immutable-id" }, "203.0.113.65");
+      await expect(env.DB.prepare(
+        "UPDATE handles SET agent_id = ? WHERE org = ? AND handle = ?",
+      ).bind("agt_" + "9".repeat(32), "acme", "immutable-id").run()).rejects.toThrow();
+    });
+
+    it("refuses two handles in one org sharing an identity", async () => {
+      await register({ org: "acme", handle: "unique-a" }, "203.0.113.66");
+      const taken = await agentIdOf("acme", "unique-a");
+      await expect(env.DB.prepare(
+        "INSERT INTO handles (org, handle, token_hash, created_at, org_role, agent_id) VALUES (?, ?, ?, ?, ?, ?)",
+      ).bind("acme", "unique-b", "y".repeat(64), Date.now(), "member", taken).run()).rejects.toThrow();
+    });
+
+    // The shim slice 9 deletes. Tested rather than shipped uncalled: slices 4
+    // to 7 route their handle-keyed call sites through it while they move.
+    it("resolveAgentId maps an address to its identity, and misses to null", async () => {
+      await register({ org: "acme", handle: "resolvable" }, "203.0.113.69");
+      const direct = await agentIdOf("acme", "resolvable");
+      expect(await resolveAgentId(env.DB, "acme", "resolvable")).toBe(direct);
+      expect(await resolveAgentId(env.DB, "acme", "no-such-handle")).toBeNull();
+      // Scoped by org: the same handle elsewhere is a different principal.
+      expect(await resolveAgentId(env.DB, "other-org", "resolvable")).toBeNull();
+    });
+
+    it("writes no identity when registration fails", async () => {
+      const invite = await issueInvite("acme", "doomed");
+      await register({ invite, handle: "consumed" }, "203.0.113.67");
+      const replay = await register({ invite, handle: "never-created" }, "203.0.113.68");
+      expect(replay.status).toBe(404);
+      expect(await agentIdOf("acme", "never-created")).toBeNull();
+    });
+  });
+
   it("registers a handle and returns token + address", async () => {
     const invite = await issueInvite("acme", "successful-registration");
     const res = await register({ invite, handle: "ken", agent_kind: "claude" }, "203.0.113.10");
