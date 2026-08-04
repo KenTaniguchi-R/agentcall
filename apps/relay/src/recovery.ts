@@ -4,6 +4,7 @@ import {
 } from "@benree/agentcall-shared";
 import { constantTimeEqual, sha256Hex } from "./auth.js";
 import { checkLimit, REGISTER } from "./ratelimit/index.js";
+import { rateLimit, type RelayAppEnv } from "./middleware.js";
 import type { Env } from "./index.js";
 import { orgAuditStatement, orgAuditTrimStatement } from "./events.js";
 import {
@@ -113,10 +114,9 @@ function exactReceipt(row: StoredReceipt, request: RecoveryRedeemRequestType, cu
     row.successor_recovery_public_id === request.successor_recovery_public_id;
 }
 
-export function mountRecovery(app: Hono<{ Bindings: Env }>): void {
+export function mountRecovery(app: Hono<RelayAppEnv>): void {
   app.get("/v1/recovery/status", async (c) => {
-    const identity = await authenticateRequest(c.env, c.req);
-    if (!identity) return c.json({ error: "unauthorized" }, 401);
+    const identity = (c as any).get("identity");
     const row = await c.env.DB.prepare(
       "SELECT recovery_hash, recovery_generation FROM handles WHERE org = ? AND handle = ?",
     ).bind(identity.org, identity.handle).first<{ recovery_hash: string | null; recovery_generation: number }>();
@@ -128,12 +128,8 @@ export function mountRecovery(app: Hono<{ Bindings: Env }>): void {
     });
   });
 
-  app.post("/v1/recovery/issue", async (c) => {
-    const identity = await authenticateRequest(c.env, c.req);
-    if (!identity) return c.json({ error: "unauthorized" }, 401);
-    if (!(await checkLimit(c.env, `recovery-issue:${identity.org}:${identity.handle}`, REGISTER))) {
-      return c.json({ error: "rate limited" }, 429);
-    }
+  app.post("/v1/recovery/issue", rateLimit(REGISTER, "identity", "recovery-issue:"), async (c) => {
+    const identity = (c as any).get("identity");
     const body = RecoveryIssueRequest.safeParse(await c.req.json().catch(() => null));
     if (!body.success || body.data.successor_recovery_public_id !==
       publicId("agr", body.data.successor_recovery_digest)) {
