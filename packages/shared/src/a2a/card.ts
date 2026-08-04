@@ -6,6 +6,14 @@ import { A2A_PROTOCOL_VERSION } from "./version.js";
  * host and need not resolve. A self-hosted relay declares this same URI —
  * otherwise every deployment would advertise a different extension and no
  * client could recognize any of them.
+ *
+ * Deliberately a literal rather than a template over HOSTED_RELAY_HOST, even
+ * though the two spell the same host today. Deriving it would make a future
+ * host change silently rewrite this URI, and every deployment that had not
+ * upgraded in lockstep would stop recognizing the extension — exactly the
+ * failure the paragraph above rules out. They are equal by coincidence, not by
+ * rule, and this file is allowlisted out of the hosted-relay-host invariant for
+ * that reason.
  */
 export const AGENTCALL_POLICY_EXT = "https://agentcall.benree.tech/ext/policy/v1";
 

@@ -1,6 +1,6 @@
 import { existsSync, statSync } from "node:fs";
 import { isAbsolute } from "node:path";
-import type { AgentKind } from "@benree/agentcall-shared";
+import { HOSTED_RELAY_HOST, type AgentKind } from "@benree/agentcall-shared";
 import type { LinePaths } from "./paths.js";
 
 // Per-line credentials and settings. Config (and the flat Paths it paired
@@ -30,7 +30,7 @@ export function assertCallableLine(cfg: LineConfig): asserts cfg is CallableLine
   }
 }
 
-const DEFAULT_RELAY = "https://agentcall.benree.tech";
+const DEFAULT_RELAY = `https://${HOSTED_RELAY_HOST}`;
 
 export interface Workdir {
   /** Absolute directory the agent is spawned in. */
@@ -83,5 +83,5 @@ export function addressHost(cfg: LineConfig): string {
 
 export function relayAddressHost(relay: string, org: string): string {
   const host = new URL(relay).hostname;
-  return host === "agentcall.benree.tech" ? `${org}.${host}` : host;
+  return host === HOSTED_RELAY_HOST ? `${org}.${host}` : host;
 }

@@ -1,6 +1,6 @@
 import { mkdirSync, writeFileSync, chmodSync } from "node:fs";
 import { z } from "zod";
-import { parseAddress } from "@benree/agentcall-shared";
+import { HOSTED_RELAY_HOST, parseAddress } from "@benree/agentcall-shared";
 import type { MachinePaths } from "./paths.js";
 import { readJsonStore } from "./json-store.js";
 
@@ -77,23 +77,23 @@ export type Resolved =
   | { ok: false; error: string };
 
 // An address names a relay, but a call is dialled on the calling LINE's relay
-// and only the handle travels — so calling "ken@agentcall.benree.tech" from a
-// line registered elsewhere actually reaches whichever "ken" is on that other
+// and only the handle travels — so calling a hosted address from a line
+// registered elsewhere actually reaches whichever "ken" is on that other
 // relay. This surfaces the divergence instead of letting it happen silently.
 //
 // A WARNING rather than a rejection, deliberately. The relay builds every
-// address from a hardcoded RELAY_HOST (apps/relay/src/index.ts), so a
-// self-hosted or `wrangler dev` relay hands out agentcall.benree.tech
-// addresses that can never match its own host; refusing those breaks local
-// development and self-hosting for a mismatch that is currently normal. The
-// merge of origin/main briefly reinstated the rejection — main had never made
-// this change — which would have re-broken both. Note this is distinct from
-// the cross-tenant check below, which stays a hard REJECTION: that one is a
+// address from HOSTED_RELAY_HOST (packages/shared/src/protocol.ts), so a
+// self-hosted or `wrangler dev` relay hands out hosted-host addresses that can
+// never match its own host; refusing those breaks local development and
+// self-hosting for a mismatch that is currently normal. The merge of
+// origin/main briefly reinstated the rejection — main had never made this
+// change — which would have re-broken both. Note this is distinct from the
+// cross-tenant check below, which stays a hard REJECTION: that one is a
 // security boundary (#66), this one is a diagnostic.
 //
-// `org` still participates, from main: on the real relay a tenant's addresses
-// are `<handle>@<org>.agentcall.benree.tech`, so naming the expected host
-// without the org prefix would make the warning itself wrong.
+// `org` still participates, from main: on the hosted relay a tenant's addresses
+// are `<handle>@<org>.${HOSTED_RELAY_HOST}`, so naming the expected host without
+// the org prefix would make the warning itself wrong.
 //
 // An unparseable relay URL yields no warning — a diagnostic must not become a
 // second failure mode.
@@ -105,7 +105,7 @@ function relayHostWarning(address: string, host: string, relay?: string, org?: s
   } catch {
     return;
   }
-  const expected = relayHost === "agentcall.benree.tech" && org ? `${org}.${relayHost}` : relayHost;
+  const expected = relayHost === HOSTED_RELAY_HOST && org ? `${org}.${relayHost}` : relayHost;
   if (!expected || expected === host) return;
   return (
     `Warning: ${address} names the relay ${host}, but this line is registered on ${expected}. ` +
@@ -114,7 +114,7 @@ function relayHostWarning(address: string, host: string, relay?: string, org?: s
 }
 
 function addressTenant(host: string): string | undefined {
-  const suffix = ".agentcall.benree.tech";
+  const suffix = `.${HOSTED_RELAY_HOST}`;
   if (!host.endsWith(suffix)) return undefined;
   const org = host.slice(0, -suffix.length);
   return org && !org.includes(".") ? org : undefined;
