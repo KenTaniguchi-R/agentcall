@@ -16,6 +16,7 @@ import {
   encryptionKeyTranscript, exportPublicKey, fingerprint, generateEncryptionKeyPair, identityTranscript,
   generateIdentityKeyPair, HPKE_SUITE, keyIdFor, RELAY_CALL_TIMEOUT_MS, requestTranscript,
   signTranscript, transcriptHash, type E2EEOutcomeType, type E2EEResponsePayloadType,
+  type OrgInviteMetadataType,
 } from "@benree/agentcall-shared";
 import { openE2EERequest, sealE2EEResponse } from "../src/e2ee.js";
 import type { StoredKeys } from "../src/keys.js";
@@ -497,13 +498,19 @@ describe.sequential("CLI command actions", () => {
     const created = await runCommand(testHome, [
       "invite", "create", "--description", "contractor", "--expires-in-days", "30", "--role", "admin",
     ]);
-    const listed = await runCommand(testHome, ["invite", "list"]);
+    // #313 flipped `invite list`'s default from JSON to a table, so the
+    // machine-readable shape now lives behind --json like every other list
+    // verb. The relay request assertions below are unchanged by that.
+    const listed = await runCommand(testHome, ["invite", "list", "--json"]);
     const revoked = await runCommand(testHome, ["invite", "revoke", id]);
 
     expect(created).toMatchObject({ code: 0, stdout: secret });
     expect(created.stderr).toContain(`ID ${id}`);
     expect(listed.code).toBe(0);
     expect(JSON.parse(listed.stdout)).toEqual([metadata]);
+    // Compact, like `contacts list --json` and `line list --json`: pretty
+    // printing is for reading, and reading is what the table is for now.
+    expect(listed.stdout.trim()).not.toContain("\n");
     expect(listed.stdout).not.toContain(secret);
     expect(revoked).toMatchObject({ code: 0, stdout: expect.stringContaining(`Revoked ${id}`) });
     expect(requests).toEqual([
@@ -511,6 +518,89 @@ describe.sequential("CLI command actions", () => {
       { url: "/v1/invites/list", body: "" },
       { url: `/v1/invites/${id}/revoke`, body: "" },
     ]);
+  });
+
+  // #313. The real task at this inventory is "which of these do I revoke?",
+  // which the raw JSON dump answered by making the admin read four nullable
+  // timestamps off a wall of objects. State is derived here, not stored.
+  describe("invite list", () => {
+    const ACTIVE = Date.UTC(2033, 4, 18); // far future, so the date renders stably
+    const PAST = Date.UTC(2020, 0, 15);
+    const invite = (over: Partial<OrgInviteMetadataType> & { id: string }): OrgInviteMetadataType => ({
+      description: "", created_by: "ken", created_at: 1, expires_at: ACTIVE,
+      used_at: null, used_by: null, revoked_at: null, role: "member", ...over,
+    });
+
+    async function list(invites: OrgInviteMetadataType[], args: string[] = []) {
+      const relay = await startRelay(() => ({ status: 200, body: { invites } }));
+      const testHome = home();
+      seedConfig(testHome, relay);
+      return await runCommand(testHome, ["invite", "list", ...args]);
+    }
+
+    it("renders a row per invite carrying role, description, and expiry", async () => {
+      const id = "a".repeat(64);
+      const out = await list([invite({ id, description: "contractor", role: "member" })]);
+      expect(out.code).toBe(0);
+      expect(out.stdout).toMatch(/member/);
+      expect(out.stdout).toContain("contractor");
+      expect(out.stdout).toContain("2033-05-18");
+    });
+
+    // The whole point of showing the ID: `invite revoke` takes the full
+    // 64-char value (ORG_INVITE_ID_RE), so a truncated one would force the
+    // second lookup this issue exists to remove.
+    it("prints the full revoke ID so revoking is a copy, not another command", async () => {
+      const id = "b".repeat(64);
+      const out = await list([invite({ id })]);
+      expect(out.stdout).toContain(id);
+    });
+
+    it("derives state from the nullable timestamps rather than printing them", async () => {
+      const [a, b, c, d] = ["1", "2", "3", "4"].map((n) => n.repeat(64));
+      const out = await list([
+        invite({ id: a }),
+        invite({ id: b, expires_at: PAST }),
+        invite({ id: c, used_at: 5, used_by: "sota" }),
+        invite({ id: d, revoked_at: 6 }),
+      ]);
+      expect(out.stdout).toMatch(/active/);
+      expect(out.stdout).toMatch(/expired/);
+      expect(out.stdout).toMatch(/used by sota/);
+      expect(out.stdout).toMatch(/revoked/);
+      // Raw epoch timestamps are what the JSON dump made the admin read.
+      expect(out.stdout).not.toContain("used_at");
+      expect(out.stdout).not.toContain("revoked_at");
+    });
+
+    // Same reasoning as #304's admin call-out: an admin invite can itself
+    // issue invites and export the audit log, so "did I issue any admin
+    // invites?" must be answerable at a glance.
+    it("makes an admin invite stand out from a member invite", async () => {
+      const out = await list([
+        invite({ id: "c".repeat(64), role: "admin" }),
+        invite({ id: "d".repeat(64), role: "member" }),
+      ]);
+      expect(out.stdout).toMatch(/ADMIN/);
+    });
+
+    it("prints a next step rather than an empty array when there are none", async () => {
+      const out = await list([]);
+      expect(out.code).toBe(0);
+      expect(out.stdout).not.toContain("[]");
+      expect(out.stdout).toContain("agentcall invite create");
+    });
+
+    it("still emits the raw array under --json", async () => {
+      const rows = [invite({ id: "e".repeat(64) })];
+      const out = await list(rows, ["--json"]);
+      expect(JSON.parse(out.stdout)).toEqual(rows);
+      // Compact like the sibling list verbs, not the old `null, 2`. Asserted
+      // as "one line" rather than against JSON.stringify of the fixture: the
+      // response is re-serialized through the zod schema on the way back, so
+      // key order is the schema's, not this object literal's.
+      expect(out.stdout.trim()).not.toContain("\n");
+    });
   });
 
   // #304. On a terminal the admin's next move is "send this to someone", not

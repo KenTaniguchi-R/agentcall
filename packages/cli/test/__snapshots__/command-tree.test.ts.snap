@@ -74,9 +74,13 @@ exports[`CLI command tree > pins command paths, aliases, descriptions, and optio
         {
           "alias": undefined,
           "commands": [],
-          "description": "list organization invite lifecycle metadata",
+          "description": "list organization invites: state, role, expiry, and the ID to revoke",
           "name": "list",
           "options": [
+            {
+              "description": "print the raw invite array",
+              "flags": "--json",
+            },
             {
               "description": "line whose organization to list (defaults to the primary line)",
               "flags": "--line <name>",
