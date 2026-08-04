@@ -358,10 +358,27 @@ export async function checkAgentSpawn(
     // section: no live claude/codex spawn in CI). verifyAgent threads
     // fns.resolveBin through to here for exactly that reason.
     const home = mkdtempSync(join(tmpdir(), "agentcall-doctor-probe-"));
-    const spec = buildSpawnSpec(kind, VERIFY_PROMPT, workdir, resolveBin, ASK_TASK.envelope, "unknown", GUARD_PROBE_LINE);
-    spec.env = { ...spec.env, AGENTCALL_HOME: home };
-    await runFn(kind, VERIFY_PROMPT, workdir, VERIFY_TIMEOUT_MS, spec, ASK_TASK.envelope, "unknown", undefined, GUARD_PROBE_LINE);
-    return { name: "agent run", ok: true };
+    try {
+      const spec = buildSpawnSpec(kind, VERIFY_PROMPT, workdir, resolveBin, ASK_TASK.envelope, "unknown", GUARD_PROBE_LINE);
+      spec.env = { ...spec.env, AGENTCALL_HOME: home };
+      await runFn(kind, VERIFY_PROMPT, workdir, VERIFY_TIMEOUT_MS, spec, ASK_TASK.envelope, "unknown", undefined, GUARD_PROBE_LINE);
+      return { name: "agent run", ok: true };
+    } finally {
+      // Issue #293: this sits on the shared binary -> codex-auth -> agent-spawn
+      // ladder behind both `agentcall doctor` and `agentcall setup`, so a
+      // leaked temp dir here isn't a test artifact — it happens on every real
+      // run of either command, and doctor is exactly what people re-run when
+      // something is broken. Clean up unconditionally, on both the success
+      // and failure paths: the diagnostic the caller actually gets is the
+      // `detail` + `hint` built in the catch below from the thrown error
+      // itself, not from anything left on disk (a real spawn only ever writes
+      // under here if the probed agent calls a tool, which VERIFY_PROMPT's
+      // read-only "reply OK" ask envelope essentially never does). A retained
+      // directory nobody is told about and nobody looks at is strictly worse
+      // than deleting it. `force: true` so a cleanup failure can never turn a
+      // passing doctor check into a failing one.
+      rmSync(home, { recursive: true, force: true });
+    }
   } catch (e) {
     return { name: "agent run", ok: false, detail: short(e), hint: classifyAgentFailure(kind, e) };
   }
