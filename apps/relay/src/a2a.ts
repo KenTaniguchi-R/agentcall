@@ -6,7 +6,8 @@ import {
   A2ACancelTaskRequest, A2A_VERSION_HEADER, a2aError, isSupportedA2AVersion,
   standardError, toAgentCard, toDirectoryCard, visibleTasks,
 } from "@benree/agentcall-shared";
-import { authenticateRequest, identityKey } from "./tenant.js";
+import { authenticateRequest, identityObjectName } from "./tenant.js";
+import { resolveAgentId } from "./identity.js";
 import { sharedRosterIds } from "./groups.js";
 import { NATIVE_READ } from "./ratelimit/index.js";
 import { parseStoredCard } from "./stored-card.js";
@@ -33,7 +34,14 @@ async function taskCursorKey(req: A2AContext["req"]): Promise<string> {
 async function authorizeTaskAccess(c: A2AContext): Promise<TaskAccess | Response> {
   const identity = c.var.identity;
   const target = c.req.param("handle") ?? "";
-  const cursorScope = identityKey(identity.org, target);
+  const targetAgentId = await resolveAgentId(c.env.DB, identity.org, target);
+  if (!targetAgentId) return c.json({ error: "not found" }, 404);
+  // cursorScope is persisted inside issued cursor tokens, so moving it to the
+  // stable identity also means a cursor keeps pointing at the same object
+  // across a future rename instead of silently addressing a fresh one. Any
+  // cursor issued under the old scope stops validating, which is correct: it
+  // named an object that is no longer the one being read.
+  const cursorScope = identityObjectName({ org: identity.org, agentId: targetAgentId });
   return {
     caller: identity.handle,
     cursorKey: await taskCursorKey(c.req),

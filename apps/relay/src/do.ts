@@ -87,8 +87,12 @@ const CANCEL_CONFIRM_TIMEOUT_MS = 10_000;
 const CALL_AUDIT_PREFIX = "audit:";
 const CALL_AUDIT_RETRY_MS = 1_000;
 const CREDENTIAL_GENERATION_FLOOR_PREFIX = "meta:credential-generation-floor:";
-const credentialGenerationFloorKey = (org: string, handle: string) =>
-  `${CREDENTIAL_GENERATION_FLOOR_PREFIX}${JSON.stringify([org, handle])}`;
+// Keyed by the stable identity, not the address (#154 slice 4). This floor is
+// what stops a credential revoked by recovery from reconnecting, and it is
+// durable object storage — keyed by handle it would reset the moment an
+// address moved, silently readmitting revoked credentials.
+const credentialGenerationFloorKey = (org: string, agentId: string) =>
+  `${CREDENTIAL_GENERATION_FLOOR_PREFIX}${JSON.stringify([org, agentId])}`;
 // A D1 batch counts every statement against the per-Worker-invocation query
 // limit (50 on Workers Free). In the worst case each intent belongs to a
 // different org and needs its own retention trim, so 24 intents use at most 48
@@ -164,12 +168,16 @@ export class HandleDO extends DurableObject {
     const url = new URL(req.url);
     if (url.pathname === "/credentials/evict" && req.method === "POST") {
       const org = req.headers.get("X-Credential-Org") ?? "";
+      // Two distinct jobs: agentId keys the durable floor below, handle
+      // matches the live sockets further down. Neither substitutes for the
+      // other, so both are required rather than one being derived.
       const handle = req.headers.get("X-Credential-Handle") ?? "";
+      const agentId = req.headers.get("X-Credential-Agent-Id") ?? "";
       const generation = Number(req.headers.get("X-Recovery-Generation"));
-      if (!org || !handle || !Number.isSafeInteger(generation) || generation < 1) {
+      if (!org || !handle || !agentId || !Number.isSafeInteger(generation) || generation < 1) {
         return Response.json({ error: "invalid eviction command" }, { status: 400 });
       }
-      const floorKey = credentialGenerationFloorKey(org, handle);
+      const floorKey = credentialGenerationFloorKey(org, agentId);
       await this.ctx.storage.transaction(async (txn) => {
         const current = await txn.get<number>(floorKey) ?? 0;
         if (generation > current) await txn.put(floorKey, generation);
@@ -206,8 +214,12 @@ export class HandleDO extends DurableObject {
           credential_generation: credentialGeneration,
         }
         : undefined;
+      // Keyed by the connecting party's identity, not its address: this floor
+      // is what keeps a credential revoked by recovery from reconnecting, and
+      // keyed by handle it would reset whenever an address moved.
+      const fromAgentId = req.headers.get("X-Verified-Agent-Id") ?? "";
       const credentialGenerationFloor = await this.ctx.storage.get<number>(
-        credentialGenerationFloorKey(org ?? "", from),
+        credentialGenerationFloorKey(org ?? "", fromAgentId),
       ) ?? 0;
       if (credentialGeneration < credentialGenerationFloor) {
         return new Response("stale credentials", { status: 401 });

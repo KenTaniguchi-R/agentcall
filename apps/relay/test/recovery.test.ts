@@ -2,7 +2,7 @@ import { env, SELF } from "cloudflare:test";
 import { describe, expect, it } from "vitest";
 import { sha256Hex } from "../src/auth.js";
 import { drainRecoveryEvictions } from "../src/recovery.js";
-import { identityKey } from "../src/tenant.js";
+import { identityObjectName } from "../src/tenant.js";
 import { openWs, registerHandle, wsAuth, closed } from "./helpers.js";
 
 const proof = (seed: string) => `${seed}-${"x".repeat(40)}`;
@@ -145,11 +145,20 @@ describe("recovery v2", () => {
     })).status).toBe(200);
 
     const currentWs = await openWs("/v1/ws?role=listen", wsAuth(handle, nextToken));
-    const stub = env.HANDLE_DO.get(env.HANDLE_DO.idFromName(identityKey("acme", handle)));
+    // #154 slice 4: both the object name and the credential floor are keyed
+    // by the stable identity now, so this has to address the same identity
+    // the relay would rather than reconstructing a name from the handle.
+    const agentId = (await env.DB.prepare(
+      "SELECT agent_id FROM handles WHERE org = ? AND handle = ?",
+    ).bind("acme", handle).first<{ agent_id: string }>())!.agent_id;
+    const stub = env.HANDLE_DO.get(
+      env.HANDLE_DO.idFromName(identityObjectName({ org: "acme", agentId })),
+    );
     const stale = await stub.fetch("https://do/ws?role=listen", {
       headers: {
         Upgrade: "websocket",
         "X-Verified-From": handle,
+        "X-Verified-Agent-Id": agentId,
         "X-Verified-Org": "acme",
         "X-Verified-Target": handle,
         "X-Verified-Credential-Generation": "1",
