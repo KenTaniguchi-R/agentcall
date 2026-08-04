@@ -19,10 +19,12 @@
   }],
   "durable_objects": { "bindings": [
     { "name": "HANDLE_DO", "class_name": "HandleDO" },
+    { "name": "ROOM_DO", "class_name": "RoomDO" },
     { "name": "RATE_LIMITER_DO", "class_name": "RateLimiterDO" }
   ] },
   "exports": {
     "HandleDO": { "type": "durable-object", "storage": "sqlite" },
+    "RoomDO": { "type": "durable-object", "storage": "sqlite" },
     "RateLimiterDO": { "type": "durable-object", "storage": "sqlite" }
   },
   "routes": [{ "pattern": "agentcall.benree.tech", "custom_domain": true }],

@@ -2,6 +2,7 @@ declare namespace Cloudflare {
   interface Env {
     DB: D1Database;
     HANDLE_DO: DurableObjectNamespace;
+    ROOM_DO: DurableObjectNamespace<import("../src/room/do.js").RoomDO>;
     RATE_LIMITER_DO: DurableObjectNamespace;
     CARD_RL: RateLimit;
     READ_RL: RateLimit;
