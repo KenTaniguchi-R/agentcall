@@ -14,6 +14,10 @@ import {
   type AuthorizedCallLifecycle, type LiveCallPhase, type TeamCallPrincipal,
 } from "./call-lifecycle.js";
 
+export function recordCallPresenceRead(statusReads: AnalyticsEngineDataset): void {
+  statusReads.writeDataPoint({ indexes: ["allowed"], doubles: [Date.now()] });
+}
+
 type CallerAttachment = {
   kind: "caller";
   principal: TeamCallPrincipal;
@@ -257,10 +261,12 @@ function callAuditIntent(
 export class HandleDO extends DurableObject {
   private readonly cancelWaiters = new Map<string, Set<(result: CancelResolution) => void>>();
   private readonly db: D1Database;
+  private readonly statusReads: AnalyticsEngineDataset;
 
-  constructor(ctx: DurableObjectState, env: { DB: D1Database }) {
+  constructor(ctx: DurableObjectState, env: { DB: D1Database; STATUS_READS: AnalyticsEngineDataset }) {
     super(ctx, env as never);
     this.db = env.DB;
+    this.statusReads = env.STATUS_READS;
     this.ctx.setWebSocketAutoResponse(new WebSocketRequestResponsePair("ping", "pong"));
   }
 
@@ -597,7 +603,10 @@ export class HandleDO extends DurableObject {
       const correlation_id = frame.correlation_id!;
 
       const listener = this.ctx.getWebSockets("listener")[0];
-      if (!listener) return this.fail(ws, "offline", true, { correlation_id });
+      if (!listener) {
+        try { recordCallPresenceRead(this.statusReads); } catch { /* telemetry cannot block calls */ }
+        return this.fail(ws, "offline", true, { correlation_id });
+      }
 
       await recordRateLimitHit(this.ctx.storage, att.from, stamps, now);
       const call_id = crypto.randomUUID();
