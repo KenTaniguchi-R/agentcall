@@ -8,8 +8,8 @@ import { mountKeys } from "./keys.js";
 import { mountPresence } from "./presence.js";
 import { mountRoster } from "./roster.js";
 import { generateToken, sha256Hex } from "./auth.js";
-import { generateAgentId } from "./identity.js";
-import { deploymentOrgAllows, identityKey, registrationAddressHost,
+import { generateAgentId, resolveAgentId } from "./identity.js";
+import { deploymentOrgAllows, identityObjectName, registrationAddressHost,
   type DeploymentMode } from "./tenant.js";
 import { sharedRosterIds } from "./groups.js";
 import { checkLimit, NATIVE_CARD, NATIVE_READ, REGISTER, type RateLimitEnv } from "./ratelimit/index.js";
@@ -189,10 +189,15 @@ app.get("/v1/ws", async (c) => {
   const identity = c.var.identity;
   const { org, handle } = identity;
 
+  // The address is what the caller asked for and what gets displayed; the
+  // agent id is what selects the object. They are tracked separately from
+  // here down so neither is used for the other's job.
   let target: string;
+  let targetAgentId: string;
   let groups: string[] = [];
   if (role === "listen") {
     target = handle;
+    targetAgentId = identity.agentId;
   } else if (role === "call") {
     // A call socket is one opaque attempt, even when the target is offline or
     // unknown. Meter upgrades before target lookup so it cannot be used as a
@@ -201,8 +206,13 @@ app.get("/v1/ws", async (c) => {
       return c.json({ error: "rate limited" }, 429);
     }
     const to = c.req.query("to") ?? "";
-    if (!(await handleExists(c.env.DB, org, to))) return c.json({ error: "unknown handle" }, 404);
+    // Replaces the previous handleExists check: resolving the identity proves
+    // existence and yields the object name in the same query, so the two
+    // cannot disagree. Same 404 as before for an unknown handle.
+    const resolved = await resolveAgentId(c.env.DB, org, to);
+    if (!resolved) return c.json({ error: "unknown handle" }, 404);
     target = to;
+    targetAgentId = resolved;
     // The caller cannot supply a policy selector. Group attestation is the
     // relay's observation that both identities are currently live members of
     // the same roster, taken before the DO accepts the caller socket.
@@ -211,9 +221,15 @@ app.get("/v1/ws", async (c) => {
     return c.json({ error: "bad role" }, 400);
   }
 
-  const stub = c.env.HANDLE_DO.get(c.env.HANDLE_DO.idFromName(identityKey(org, target)));
+  const stub = c.env.HANDLE_DO.get(
+    c.env.HANDLE_DO.idFromName(identityObjectName({ org, agentId: targetAgentId })),
+  );
   const fwd = new Request(`https://do/ws?role=${role}&test_timeout_ms=${c.req.query("test_timeout_ms") ?? ""}`, c.req.raw);
   fwd.headers.set("X-Verified-From", handle);
+  // The connecting party's stable identity. X-Verified-From stays the address
+  // because the object echoes it into call records and audit, where the name
+  // shown at the time is the point; this is what keys durable state.
+  fwd.headers.set("X-Verified-Agent-Id", identity.agentId);
   fwd.headers.set("X-Verified-Org", org);
   fwd.headers.set("X-Verified-Target", target);
   fwd.headers.set("X-Verified-Credential-Generation", String(identity.recoveryGeneration));

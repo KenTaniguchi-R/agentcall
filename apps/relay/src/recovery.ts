@@ -8,8 +8,9 @@ import { rateLimit, type RelayAppEnv } from "./middleware.js";
 import type { Env } from "./index.js";
 import { orgAuditStatement, orgAuditTrimStatement } from "./events.js";
 import {
-  deploymentOrgAllows, identityKey,
+  deploymentOrgAllows, identityObjectName,
 } from "./tenant.js";
+import { resolveAgentId } from "./identity.js";
 
 const RECEIPT_TTL_MS = 7 * 24 * 60 * 60_000;
 
@@ -37,14 +38,31 @@ const MAX_EVICTIONS_PER_ALARM = 50;
 const MAX_EVICTION_BACKOFF_MS = 60 * 60_000;
 type EvictionEnv = Pick<Env, "DB" | "HANDLE_DO">;
 
+// Resolved here rather than at the five call sites: they all address the job
+// by (org, handle) because recovery_evictions is keyed that way, and the
+// object name is the only thing that needs the identity.
 async function evict(env: EvictionEnv, org: string, handle: string, generation: number): Promise<boolean> {
   try {
-    const stub = env.HANDLE_DO.get(env.HANDLE_DO.idFromName(identityKey(org, handle)));
+    const agentId = await resolveAgentId(env.DB, org, handle);
+    if (!agentId) {
+      // No identity behind the address means no object to evict from. Drop
+      // the job instead of retrying it forever against nothing. Unreachable
+      // today — handles cannot be released yet — but this queue retries with
+      // backoff and an orphan would never drain on its own.
+      await env.DB.prepare(
+        "DELETE FROM recovery_evictions WHERE org = ? AND handle = ? AND recovery_generation = ?",
+      ).bind(org, handle, generation).run();
+      return true;
+    }
+    const stub = env.HANDLE_DO.get(env.HANDLE_DO.idFromName(identityObjectName({ org, agentId })));
     if (!(await stub.fetch("https://do/credentials/evict", {
       method: "POST",
       headers: {
         "X-Credential-Org": org,
         "X-Credential-Handle": handle,
+        // The floor is durable DO state, so it is keyed by the identity while
+        // the handle above only matches live sockets for this request.
+        "X-Credential-Agent-Id": agentId,
         "X-Recovery-Generation": String(generation),
       },
     })).ok) throw new Error("eviction rejected");

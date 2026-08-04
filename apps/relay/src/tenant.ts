@@ -52,8 +52,19 @@ export function requireOrgAdmin(identity: Identity): boolean {
   return identity.role === "admin";
 }
 
-export function identityKey(org: string, handle: string): string {
-  return `${org}:${handle}`;
+// The Durable Object name (#154 slice 4). Named by the stable identity, not
+// by the reusable address: idFromName hashes this string, so an object named
+// by handle is a different physical object the moment the handle moves, and
+// its pending calls, audit outbox, and credential floor become unreachable
+// with no error raised.
+//
+// It takes an object rather than two strings deliberately. Both arguments
+// were `string`, so passing a handle where an agent_id belongs would have
+// typechecked and then silently split one identity across two objects — the
+// single most damaging mistake available in this refactor. Now it will not
+// compile.
+export function identityObjectName(identity: { org: string; agentId: string }): string {
+  return `${identity.org}:${identity.agentId}`;
 }
 
 export function registrationAddressHost(org: string, requestUrl: string): string {
