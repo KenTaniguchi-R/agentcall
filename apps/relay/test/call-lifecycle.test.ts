@@ -7,7 +7,7 @@ import {
 describe("identity-neutral authorized call lifecycle", () => {
   it("keeps durable Team and ephemeral Room principals discriminated", () => {
     const team = teamCallPrincipal({
-      org: "acme", handle: "ken", role: "member", recoveryGeneration: 2,
+      org: "acme", handle: "ken", agentId: `agt_${"a".repeat(32)}`, role: "member", recoveryGeneration: 2,
     });
     const room = roomCallPrincipal({
       roomId: `room_${"A".repeat(22)}`,
@@ -29,7 +29,7 @@ describe("identity-neutral authorized call lifecycle", () => {
 
   it("advances live phases monotonically for both routing paths", () => {
     const principals = [
-      teamCallPrincipal({ org: "acme", handle: "ken", role: "member", recoveryGeneration: 2 }),
+      teamCallPrincipal({ org: "acme", handle: "ken", agentId: `agt_${"a".repeat(32)}`, role: "member", recoveryGeneration: 2 }),
       roomCallPrincipal({
         roomId: `room_${"A".repeat(22)}`,
         participantId: `rp_${"B".repeat(22)}`,

@@ -4,7 +4,13 @@ import { authenticatedHandle } from "./auth.js";
 type RequestLike = { header(name: string): string | undefined; url: string };
 export type DeploymentMode = "hosted" | "self-hosted";
 type TenantAuthEnv = { DB: D1Database; DEPLOYMENT_MODE?: string; SELF_HOSTED_ORG?: string };
-export type Identity = { org: string; handle: string; role: OrgRoleType; recoveryGeneration: number };
+// agentId is the stable principal (#154); handle is the routing address
+// currently bound to it and is reusable. Anything durable — a Durable Object
+// name, card owner, roster member, policy subject, audit actor — belongs on
+// agentId. Non-optional so a consumer cannot quietly keep using handle.
+export type Identity = {
+  org: string; handle: string; agentId: string; role: OrgRoleType; recoveryGeneration: number;
+};
 
 export function deploymentOrgAllows(
   mode: string | undefined, configuredOrg: string | undefined, org: string,
