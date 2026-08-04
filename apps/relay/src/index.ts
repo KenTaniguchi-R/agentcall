@@ -8,6 +8,7 @@ import { mountKeys } from "./keys.js";
 import { mountPresence } from "./presence.js";
 import { mountRoster } from "./roster.js";
 import { generateToken, sha256Hex } from "./auth.js";
+import { generateAgentId } from "./identity.js";
 import { deploymentOrgAllows, identityKey, registrationAddressHost,
   type DeploymentMode } from "./tenant.js";
 import { sharedRosterIds } from "./groups.js";
@@ -87,12 +88,16 @@ app.post("/v1/register", async (c) => {
     const now = Date.now();
     const tokenHash = await sha256Hex(token);
     const results = await c.env.DB.batch([
+      // agent_id is minted inside this batch rather than in a follow-up write
+      // (#154, #319): the decision requires identity and address to be created
+      // atomically, so a partial failure consumes neither the invite nor the
+      // address and cannot leave an addressed handle with no identity.
       c.env.DB.prepare(
-        "INSERT INTO handles (org, handle, token_hash, agent_kind, created_at, org_role) " +
-          "SELECT org, ?, ?, ?, ?, org_role FROM invites " +
+        "INSERT INTO handles (org, handle, token_hash, agent_kind, created_at, org_role, agent_id) " +
+          "SELECT org, ?, ?, ?, ?, org_role, ? FROM invites " +
           "WHERE token_hash = ? AND used_at IS NULL AND revoked_at IS NULL AND expires_at > ? " +
           "ON CONFLICT(org, handle) DO NOTHING",
-      ).bind(handle, tokenHash, agent_kind ?? null, now, inviteHash, now),
+      ).bind(handle, tokenHash, agent_kind ?? null, now, generateAgentId(), inviteHash, now),
       c.env.DB.prepare(
         "UPDATE invites SET used_at = ?, used_by = ? " +
         "WHERE token_hash = ? AND used_at IS NULL AND revoked_at IS NULL AND EXISTS (" +
