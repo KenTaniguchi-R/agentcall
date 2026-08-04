@@ -8,11 +8,9 @@ import { callAgent, callStatusMessage, CallError } from "./callClient.js";
 import { getStatus, fetchCard, createRoster, joinRoster, leaveRoster,
   expelRosterMember, issueRosterJoinKey, listRosterJoinKeys, revokeRosterJoinKey, deleteRoster,
   ApiError } from "./api.js";
-import { startAllListeners } from "./listenAll.js";
-import { startListener } from "./listener.js";
 import { publishCard } from "./card.js";
 import { loadPolicy, loadUserPolicy, savePolicy, validatePolicy } from "./policy.js";
-import { assertValidLineName, loadLineConfig, readyLines } from "./lines.js";
+import { assertValidLineName, readyLines } from "./lines.js";
 import { loadTasks, scaffoldTask } from "./tasks.js";
 import { execVerb, type Verb } from "./verbs.js";
 import { buildCardReport } from "./lint.js";
@@ -43,6 +41,7 @@ import { register as registerPeer } from "./commands/peer.js";
 import { register as registerDoctor } from "./commands/doctor.js";
 import { register as registerHistory } from "./commands/history.js";
 import { register as registerPolicy } from "./commands/policy.js";
+import { register as registerListen } from "./commands/listen.js";
 
 export function createProgram(): Command {
 const program = new Command();
@@ -868,55 +867,7 @@ line
     }
   });
 
-program
-  .command("listen")
-  .description("run the foreground listener (the platform service runs this after setup)")
-  .option("--line <name>", "run only this line instead of every callable line")
-  .action((o: { line?: string }) => {
-    const machine = getMachinePaths();
-    let l: { stop(): Promise<void> };
-    if (o.line) {
-      // Single-line foreground run: mirrors startAllListeners' own per-line
-      // wiring (listenAll.ts) instead of duplicating it — same loadConfig
-      // re-read on every reconnect, so a rotated token or edited workdir
-      // still takes effect without a restart.
-      let ctx: LineContext;
-      try {
-        ctx = resolveLine(machine, { line: o.line });
-        assertCallableLine(ctx.config);
-      } catch (e) {
-        console.error(String(e instanceof Error ? e.message : e));
-        process.exitCode = 1;
-        return;
-      }
-      l = startListener({
-        relay: relayUrl(ctx.config),
-        paths: ctx.paths,
-        loadConfig: () => {
-          const cfg = loadLineConfig(ctx.paths);
-          assertCallableLine(cfg);
-          return cfg;
-        },
-      });
-      console.log(`listening as ${ctx.config.handle} (line ${ctx.name})`);
-    } else {
-      // One process, every callable line: startAllListeners enumerates
-      // ~/.agentcall/lines itself and opens one socket per callable line, so
-      // there's no single config/paths pair to load up front here.
-      l = startAllListeners(machine);
-    }
-    let stopping = false;
-    const stop = async () => {
-      if (stopping) return;
-      stopping = true;
-      await l.stop();
-      process.exit(0);
-    };
-    process.once("SIGTERM", () => { void stop(); });
-    process.once("SIGINT", () => { void stop(); });
-    // Keep the process alive without a busy loop; setInterval's max delay.
-    setInterval(() => {}, 1 << 30);
-  });
+registerListen(program);
 
 program
   .command("rotate")
