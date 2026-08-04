@@ -138,6 +138,36 @@ inv_relay_auth_middleware() {
   fi
 }
 
+inv_hosted_relay_host() {
+  # Keep identical to the matching step in invariants.yml. This host used to be a
+  # separate literal in four files, so a rebrand meant finding all four.
+  # packages/shared/src/a2a/card.ts is allowlisted deliberately: AGENTCALL_POLICY_EXT
+  # is a stable namespace URI that must NOT follow a host change — see its comment.
+  local host route strays
+  host=$(perl -ne 'print $1 if /^export const HOSTED_RELAY_HOST = "([^"]+)"/' \
+    packages/shared/src/protocol.ts)
+  if [ -z "$host" ]; then
+    fail "HOSTED_RELAY_HOST is declared in packages/shared/src/protocol.ts"
+    return
+  fi
+  route=$(perl -ne 'print $1 if /"pattern":\s*"([^"]+)",\s*"custom_domain":\s*true/' \
+    apps/relay/wrangler.jsonc)
+  if [ "$route" != "$host" ]; then
+    fail "the wrangler custom domain matches HOSTED_RELAY_HOST"
+    echo "    protocol.ts says \"$host\", wrangler.jsonc route says \"$route\""
+    return
+  fi
+  strays=$(grep -rlF "$host" apps/relay/src packages/cli/src packages/shared/src 2>/dev/null | \
+    grep -vE 'packages/shared/src/(protocol\.ts|a2a/card\.ts)$' || true)
+  if [ -n "$strays" ]; then
+    fail "the hosted relay host is written once"
+    echo "$strays" | sed 's/^/    /'
+    echo "    Import HOSTED_RELAY_HOST from @benree/agentcall-shared instead of repeating the literal."
+  else
+    ok "hosted relay host is declared once and matches the wrangler route"
+  fi
+}
+
 inv_historical_docs() {
   local grace=14 today modified stamp doc_date age
   today=$(date -u +%s)
@@ -223,6 +253,7 @@ run_invariants() {
   inv_protocol_frames
   inv_stored_cards
   inv_relay_auth_middleware
+  inv_hosted_relay_host
   inv_historical_docs
   inv_migrations
   inv_no_task_board

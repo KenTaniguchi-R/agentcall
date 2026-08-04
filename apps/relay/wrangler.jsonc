@@ -27,6 +27,10 @@
     "RoomDO": { "type": "durable-object", "storage": "sqlite" },
     "RateLimiterDO": { "type": "durable-object", "storage": "sqlite" }
   },
+  // Must stay in step with HOSTED_RELAY_HOST (packages/shared/src/protocol.ts),
+  // which is where every other copy of this host now lives. JSONC cannot import
+  // the constant, so this literal is the one deliberate duplicate — the
+  // hosted-relay-host invariant in scripts/ci-local.sh fails if the two drift.
   "routes": [{ "pattern": "agentcall.benree.tech", "custom_domain": true }],
   // Durable recovery eviction delivery. Each alarm drains a bounded page and
   // failed jobs retain exponential backoff state in D1.

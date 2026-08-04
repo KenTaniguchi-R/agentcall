@@ -1,7 +1,5 @@
-import { ORG_RE, type OrgRoleType } from "@benree/agentcall-shared";
+import { HOSTED_RELAY_HOST, ORG_RE, type OrgRoleType } from "@benree/agentcall-shared";
 import { authenticatedHandle } from "./auth.js";
-
-const HOSTED_RELAY_HOST = "agentcall.benree.tech";
 
 type RequestLike = { header(name: string): string | undefined; url: string };
 export type DeploymentMode = "hosted" | "self-hosted";
