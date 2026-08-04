@@ -15,7 +15,7 @@ import { checkLimit, NATIVE_CARD, NATIVE_READ, REGISTER, type RateLimitEnv } fro
 import { parseStoredCard } from "./stored-card.js";
 import { drainRecoveryEvictions, mountRecovery } from "./recovery.js";
 import { mountRooms } from "./room/routes.js";
-import { requireIdentity, type RelayAppEnv } from "./middleware.js";
+import { rateLimit, requireIdentity, type RelayAppEnv } from "./middleware.js";
 
 export { HandleDO } from "./do.js";
 export { RateLimiterDO } from "./ratelimit/do.js";
@@ -133,13 +133,9 @@ app.post("/v1/register", async (c) => {
 //
 // Token rotation shares the 5/min credential-operation policy. Its distinct
 // key keeps it from sharing a budget with registrations or invite creation.
-app.post("/v1/token/rotate", async (c) => {
-  const identity = await authenticateRequest(c.env, c.req);
-  if (!identity) return c.json({ error: "unauthorized" }, 401);
+app.post("/v1/token/rotate", rateLimit(REGISTER, "identity", "rotate:"), async (c) => {
+  const identity = (c as any).get("identity");
   const { org, handle } = identity;
-  if (!(await checkLimit(c.env, `rotate:${org}:${handle}`, REGISTER))) {
-    return c.json({ error: "rate limited" }, 429);
-  }
   const next = generateToken();
   // UPDATE, never INSERT: an unregistered handle can't reach here (it fails
   // the auth check above), so this must not be able to conjure a row.
@@ -151,11 +147,9 @@ app.post("/v1/token/rotate", async (c) => {
   return c.json({ token: next });
 });
 
-app.put("/v1/card", async (c) => {
-  const identity = await authenticateRequest(c.env, c.req);
-  if (!identity) return c.json({ error: "unauthorized" }, 401);
+app.put("/v1/card", rateLimit(NATIVE_CARD, "identity"), async (c) => {
+  const identity = (c as any).get("identity");
   const { org, handle } = identity;
-  if (!(await checkLimit(c.env, `${org}:${handle}`, NATIVE_CARD))) return c.json({ error: "rate limited" }, 429);
   const body = CardUpload.safeParse(await c.req.json().catch(() => null));
   if (!body.success) return c.json({ error: "invalid card" }, 400);
   await c.env.DB.prepare(
@@ -165,12 +159,9 @@ app.put("/v1/card", async (c) => {
   return c.json({ ok: true });
 });
 
-app.get("/v1/card/:handle", async (c) => {
-  const identity = await authenticateRequest(c.env, c.req);
-  if (!identity) return c.json({ error: "unauthorized" }, 401);
+app.get("/v1/card/:handle", rateLimit(NATIVE_READ, "ip"), async (c) => {
+  const identity = (c as any).get("identity");
   const { org, handle: viewer } = identity;
-  const ip = c.req.header("cf-connecting-ip") ?? "unknown";
-  if (!(await checkLimit(c.env, ip, NATIVE_READ))) return c.json({ error: "rate limited" }, 429);
   const handle = c.req.param("handle");
   const row = await c.env.DB.prepare("SELECT card_json, updated_at FROM cards WHERE org = ? AND handle = ?")
     .bind(org, handle).first<{ card_json: string; updated_at: number }>();

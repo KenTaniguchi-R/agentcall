@@ -31,13 +31,13 @@ export const requireIdentity = createMiddleware<RelayAppEnv>(async (c, next) => 
   await next();
 });
 
-export function rateLimit(policy: RateLimitPolicy, keyBy: "ip" | "identity") {
+export function rateLimit(policy: RateLimitPolicy, keyBy: "ip" | "identity", prefix = "") {
   return createMiddleware<RelayAppEnv>(async (c, next) => {
     const key = keyBy === "ip"
       ? c.req.header("cf-connecting-ip") ?? "unknown"
       : (() => {
           const identity = (c as any).get("identity") as Identity;
-          return `${identity.org}:${identity.handle}`;
+          return `${prefix}${identity.org}:${identity.handle}`;
         })();
     if (!(await checkLimit(c.env, key, policy))) return c.json({ error: "rate limited" }, 429);
     await next();
