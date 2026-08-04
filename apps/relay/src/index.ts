@@ -197,6 +197,12 @@ app.get("/v1/ws", async (c) => {
   if (role === "listen") {
     target = handle;
   } else if (role === "call") {
+    // A call socket is one opaque attempt, even when the target is offline or
+    // unknown. Meter upgrades before target lookup so it cannot be used as a
+    // free presence/namespace oracle.
+    if (!(await checkLimit(c.env, `${org}:${handle}`, NATIVE_READ))) {
+      return c.json({ error: "rate limited" }, 429);
+    }
     const to = c.req.query("to") ?? "";
     if (!(await handleExists(c.env.DB, org, to))) return c.json({ error: "unknown handle" }, 404);
     target = to;

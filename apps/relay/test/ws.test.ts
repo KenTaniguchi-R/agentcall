@@ -4,6 +4,7 @@ import app from "../src/index.js";
 import {
   closed, encryptedCallRequest, fixedRateLimit, issueInvite, nextFrame, openWs, registerHandle, wsAuth,
 } from "./helpers.js";
+import { recordCallPresenceRead } from "../src/do.js";
 
 describe("listener attach + status", () => {
   it("401s a listener with a bad token", async () => {
@@ -44,6 +45,22 @@ describe("listener attach + status", () => {
       headers: { Upgrade: "websocket", ...wsAuth("erin", token) },
     });
     expect(res.status).toBe(404);
+  });
+
+  it("meters call socket upgrades before target lookup", async () => {
+    const token = await registerHandle("call-rate-reader");
+    const response = await app.request(
+      "https://relay.test/v1/ws?role=call&to=never-registered",
+      { headers: { Upgrade: "websocket", ...wsAuth("call-rate-reader", token) } },
+      { ...env, READ_RL: fixedRateLimit(0) },
+    );
+    expect(response.status).toBe(429);
+  });
+
+  it("records offline call presence attempts with the status-read shape", () => {
+    const points: unknown[] = [];
+    recordCallPresenceRead({ writeDataPoint: (point) => points.push(point) } as AnalyticsEngineDataset);
+    expect(points).toEqual([{ indexes: ["allowed"], doubles: [expect.any(Number)] }]);
   });
 
   it("426s a websocket request without the Upgrade header", async () => {

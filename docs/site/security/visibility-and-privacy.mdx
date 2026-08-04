@@ -26,7 +26,11 @@ shared roster. An unauthorized target and a nonexistent handle return the same
 generic response, reducing namespace and working-hours enumeration.
 
 Presence authorization does not gate calls. Any authenticated handle in the
-same organization can attempt a call.
+same organization can attempt a call. Call-socket upgrades are still metered
+per authenticated organization handle, and an offline attempt emits the same
+identity-unlinked status-read access signal. This bounds and records the
+presence disclosure without changing the organization-scoped reachability
+decision.
 
 ## Local history versus organization audit
 
