@@ -1,33 +1,32 @@
 import WebSocket, { type RawData } from "ws";
 import {
-  AGENT_TIMEOUT_MS, E2EERelayToListenerFrame, MAX_E2EE_WIRE_BYTES, keyIdFor, requestTranscript,
-  safeParseFrame, transcriptHash, type E2EEOutcomeType, type E2EEResponsePayloadType,
+  AGENT_TIMEOUT_MS, E2EERelayToListenerFrame, MAX_E2EE_WIRE_BYTES,
+  requestTranscript, safeParseFrame, transcriptHash,
 } from "@benree/agentcall-shared";
 import { fetchKeys } from "./api.js";
-import { relayAddressHost, resolveLineWorkdir, type CallableLineConfig } from "./config.js";
+import { resolveLineWorkdir, type CallableLineConfig } from "./config.js";
 import type { LinePaths } from "./paths.js";
 import { buildPrompt } from "./prompt.js";
 import {
   AgentRunError, codexThreadingEnabled, codexToolTelemetryEnabled,
   CODEX_THREADING_VERIFIED_VERSION, runAgent,
 } from "./runner.js";
-import {
-  admitContext, loadContexts, mintContextId, pruneContexts, saveContexts, upsertContext,
-  type ContextBinding,
-} from "./contexts.js";
+import { mintContextId, pruneContexts, saveContexts, upsertContext } from "./contexts.js";
 import { SerialQueue } from "./queue.js";
-import { loadPolicy, resolveTask } from "./policy.js";
-import { loadTasks } from "./tasks.js";
+import { loadPolicy } from "./policy.js";
 import { appendPrivateLogLine } from "./audit-log.js";
 import {
   getTelemetry, shutdownTelemetry, telemetrySafely, type AgentCallTelemetry,
 } from "./telemetry.js";
-import { openE2EERequest, sealE2EEResponse } from "./e2ee.js";
+import { sealE2EEResponse } from "./e2ee.js";
 import { loadKeys } from "./keys.js";
 import { verifyAndPinPeer } from "./known-peers.js";
 import { reserveReplay } from "./replay-store.js";
 import { signalForInboundStatus } from "./abuse-signals.js";
 import { createToolEventSpool, type ToolEventSpool } from "./tool-telemetry-spool.js";
+import {
+  admitBinding, handleCancel, makeOutcomeSender, openInboundEnvelope, resolveAdmission,
+} from "./listener-stages.js";
 
 export interface ListenerDeps {
   relay: string;
@@ -203,16 +202,7 @@ export function startListener(deps: ListenerDeps): { stop(): Promise<void> } {
       const send = (obj: unknown) => { try { ws?.send(JSON.stringify(obj)); } catch { /* dead */ } };
 
       if (frame.type === "cancel_call") {
-        const outcome = queue.cancel(frame.call_id);
-        // A pending job never spawned, so removal IS the confirmation. A
-        // running job is only signalled here — its own catch path sends
-        // call_cancelled once runAgent settles, which happens on the child's
-        // exit event.
-        if (outcome === "pending") {
-          send({ type: "call_cancelled", call_id: frame.call_id, phase: "pending" });
-        } else if (outcome === "unknown") {
-          send({ type: "call_not_cancelled", call_id: frame.call_id, reason: "unknown" });
-        }
+        handleCancel(frame, queue, send);
         return;
       }
 
@@ -224,151 +214,75 @@ export function startListener(deps: ListenerDeps): { stop(): Promise<void> } {
       } = frame;
       const correlation = { correlation_id };
       const started = Date.now();
-      const relayOrigin = relayAddressHost(deps.relay, config.org);
-      const fromAddress = `${from}@${relayOrigin}`;
-      const toAddress = `${config.handle}@${relayOrigin}`;
-      let request;
-      let callerBundle;
-      let callerPeer;
-      let localKeys;
-      try {
-        callerBundle = await fetchPeerKeys(
-          deps.relay,
-          { org: config.org, handle: config.handle, token: config.token },
-          from,
-        );
-        callerPeer = await verifyPeer(deps.paths.machine, fromAddress, callerBundle);
-        localKeys = loadLocalKeys(deps.paths);
-        request = await openE2EERequest(
-          frame.envelope,
-          localKeys.encryption_pkcs8,
-          callerPeer.identity_pub,
-          {
-            relay_origin: relayOrigin,
-            from: fromAddress,
-            to: toAddress,
-            key_id: await keyIdFor(localKeys.encryption_pub),
-            epoch: localKeys.epoch,
-          },
-        );
-        await reserveRequest(deps.paths.machine, {
-          sender_fingerprint: callerPeer.fingerprint,
-          request_id: request.request_id,
-          expires_at: request.expires_at,
-        });
-      } catch (error) {
+
+      const opened = await openInboundEnvelope(
+        {
+          relay: deps.relay, org: config.org, handle: config.handle, token: config.token,
+          machine: deps.paths.machine, paths: deps.paths, from, envelope: frame.envelope,
+        },
+        {
+          fetchKeys: fetchPeerKeys, verifyAndPinPeer: verifyPeer,
+          loadKeys: loadLocalKeys, reserveReplay: reserveRequest,
+        },
+      );
+      if (!opened.ok) {
         admissionOutcome = "protocol_error";
         send({ type: "call_rejected", call_id, code: "protocol_error" });
         audit({
           call_id, ...correlation, from, status: "protocol_error", duration_ms: Date.now() - started,
-          error: String(error).slice(0, 2_000),
+          error: String(opened.error).slice(0, 2_000),
         });
         return;
       }
+      const {
+        request, callerBundle, localKeys, relayOrigin, fromAddress, toAddress,
+      } = opened.envelope;
 
       const { message, task: requestedTask, context_id } = request;
       const requestHash = await transcriptHash(requestTranscript(request));
-      const trySendOutcome = async (outcome: E2EEOutcomeType): Promise<string | undefined> => {
-        try {
-          const issuedAt = Date.now();
-          const payload: E2EEResponsePayloadType = {
-            v: 1,
-            direction: "response",
-            relay_origin: relayOrigin,
-            from: toAddress,
-            to: fromAddress,
-            request_id: request.request_id,
-            sender_identity_key_id: await keyIdFor(localKeys.identity_pub),
-            recipient_encryption_key_id: callerBundle.encryption.record.key_id,
-            recipient_epoch: callerBundle.encryption.record.epoch,
-            issued_at: issuedAt,
-            expires_at: request.expires_at,
-            request_transcript_hash: requestHash,
-            outcome,
-          };
-          const envelope = await sealResponse(payload, localKeys, {
-            pub: callerBundle.encryption.record.pub,
-            key_id: callerBundle.encryption.record.key_id,
-            epoch: callerBundle.encryption.record.epoch,
-          });
-          send({
-            type: "call_outcome", call_id,
-            terminal: outcome.kind === "reply" ? "completed" : "failed",
-            envelope,
-          });
-          return undefined;
-        } catch (error) {
-          const detail = String(error).slice(0, 2_000);
-          console.error(`Listener could not seal outcome for encrypted call ${call_id}: ${detail}`);
-          return detail;
-        }
-      };
+      const trySendOutcome = makeOutcomeSender(
+        { callId: call_id, relayOrigin, fromAddress, toAddress, request, requestHash, localKeys, callerBundle, send },
+        sealResponse,
+      );
 
       // Resolve caller -> task -> envelope BEFORE the message is placed in any
       // prompt (see policy.ts). Refusals never enqueue and never spawn: no
       // tokens are burned by blocked callers or menu probing.
-      let resolution: ReturnType<typeof resolveTask>;
-      try {
-        resolution = resolveTask(loadPolicy(deps.paths), loadTasks(deps.paths), from, requestedTask, groups);
-      } catch (e) {
-        admissionOutcome = "policy_error";
-        const outcomeDeliveryError = await trySendOutcome({ kind: "failure", code: "agent_error", detail: "A local policy error prevented this call from completing." });
-        audit({ call_id, ...correlation, from, message: message.slice(0, 500), status: "policy_error", duration_ms: 0, error: String(e).slice(0, 2000), outcome_delivery_error: outcomeDeliveryError });
+      const admission = resolveAdmission({
+        paths: deps.paths, from, requestedTask, groups, workdir, agentKind: config.agent_kind,
+      });
+      if (!admission.ok) {
+        if (admission.code === "policy_error") {
+          admissionOutcome = "policy_error";
+          const outcomeDeliveryError = await trySendOutcome({ kind: "failure", code: "agent_error", detail: "A local policy error prevented this call from completing." });
+          audit({ call_id, ...correlation, from, message: message.slice(0, 500), status: "policy_error", duration_ms: 0, error: String(admission.error).slice(0, 2000), outcome_delivery_error: outcomeDeliveryError });
+          return;
+        }
+        admissionOutcome = admission.code;
+        const outcomeDeliveryError = await trySendOutcome({ kind: "failure", code: admission.code, offered: admission.offered });
+        audit({ call_id, ...correlation, from, message: message.slice(0, 500), task: requestedTask, status: admission.code, duration_ms: 0, outcome_delivery_error: outcomeDeliveryError });
         return;
       }
-      if (!resolution.ok) {
-        admissionOutcome = resolution.code;
-        const outcomeDeliveryError = await trySendOutcome({ kind: "failure", code: resolution.code, offered: resolution.offered });
-        audit({ call_id, ...correlation, from, message: message.slice(0, 500), task: requestedTask, status: resolution.code, duration_ms: 0, outcome_delivery_error: outcomeDeliveryError });
-        return;
-      }
-      const task = resolution.task;
-      const taskWorkdir = {
-        dir: task.workdir ?? workdir.dir,
-        // Claude's file-shaped tools are bounded by AGENTCALL_ALLOWED_ROOT.
-        // Codex has no equivalent read boundary, so do not claim confinement.
-        confined: config.agent_kind === "claude",
-      };
+      const { task, taskWorkdir } = admission;
 
       // Task resolution above ran on the verified `from` and local files only
       // (see policy.ts's CaMeL invariant). context_id is caller-controlled, so
       // it is consulted only AFTER, and only to confirm the binding was made
       // under the SAME task. It can narrow a call, never select one. Inverting
       // this order reopens the hole the design exists to close.
-      const now = Date.now();
-      const threadingAvailable =
-        task.threadable && (config.agent_kind === "claude" || codexCanThread);
-      const contexts = pruneContexts(loadContexts(deps.paths), now);
-      // Explicitly typed: `let binding = undefined` infers the type `undefined`
-      // and rejects the assignment below.
-      let binding: ContextBinding | undefined;
-      if (context_id !== undefined) {
-        // `threadingAvailable` gates admission as well as minting. A binding
-        // outlives the conditions it was minted under: the owner can add
-        // `write`/`exec` to a task's SKILL.md (or set `threadable: false`) and
-        // admitContext would still match on the unchanged task *id*, resuming a
-        // conversation against an envelope the owner has just decided must not
-        // carry one. Same for the codex gate — an old binding must not be able
-        // to hand runAgent a resume id after codex threading becomes unavailable.
-        binding = threadingAvailable
-          ? admitContext(contexts, {
-              context_id, caller: from, task: task.id,
-              agent_kind: config.agent_kind, workdir: taskWorkdir.dir, now,
-            })
-          : undefined;
-        // One code for every failure — expired, not yours, wrong task, wrong
-        // directory, threading withdrawn. Distinguishing them would tell an
-        // attacker that a guessed token exists but belongs to someone else. And
-        // this FAILS the call rather than quietly starting a fresh session,
-        // because a silent almost-right answer is the #43/#51 failure mode.
-        if (!binding) {
-          admissionOutcome = "context_unknown";
-          const outcomeDeliveryError = await trySendOutcome({ kind: "failure", code: "context_unknown" });
-          audit({ call_id, ...correlation, from, message: message.slice(0, 500), task: task.id,
-                  status: "context_unknown", duration_ms: 0, outcome_delivery_error: outcomeDeliveryError });
-          return;
-        }
+      const admitted = admitBinding({
+        paths: deps.paths, from, taskId: task.id, contextId: context_id,
+        threadable: task.threadable, agentKind: config.agent_kind, codexCanThread,
+        workdirDir: taskWorkdir.dir,
+      });
+      if (!admitted.ok) {
+        admissionOutcome = "context_unknown";
+        const outcomeDeliveryError = await trySendOutcome({ kind: "failure", code: "context_unknown" });
+        audit({ call_id, ...correlation, from, message: message.slice(0, 500), task: task.id,
+                status: "context_unknown", duration_ms: 0, outcome_delivery_error: outcomeDeliveryError });
+        return;
       }
+      const { now, threadingAvailable, contexts, binding } = admitted;
 
       const timeoutMs = task.timeout_s !== undefined ? task.timeout_s * 1000 : AGENT_TIMEOUT_MS;
 
