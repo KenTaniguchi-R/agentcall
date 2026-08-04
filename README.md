@@ -227,6 +227,12 @@ from its owner's operating-system account.
   An address is a routing identifier, not a secret capability.
 - The callee's policy selects the task before untrusted message text enters the
   prompt. The built-in `ask` task is read-only.
+- The caller's message is defanged before it is placed in the prompt: AgentCall's
+  own instruction fence and model control tokens are replaced with `[filtered]`,
+  so a caller cannot forge the syntax that separates the owner's instructions
+  from the caller's message. This is a syntax boundary, not a classifier — a
+  harmful instruction written as ordinary prose still reaches the agent, and the
+  task and its capabilities are what bound it.
 - Claude file tools are guarded against credential paths and paths outside the
   task working directory. Shell access is recorded but not confined by that
   guard.

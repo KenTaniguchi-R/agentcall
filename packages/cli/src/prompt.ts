@@ -1,10 +1,16 @@
 import type { Workdir } from "./config.js";
+import { defangInbound } from "./defang.js";
 import type { Task } from "./tasks.js";
 
 // The task section is behavior-shaping only — enforcement lives in the spawn
 // envelope (runner.ts), which is fixed before this prompt is built. SKILL.md
 // content is fenced between markers so the model can tell the owner's
 // instructions from the caller's message.
+//
+// The fence is only as good as the caller's inability to write it, so the
+// message is defanged here rather than at the call site: this function owns the
+// reserved syntax, and a second caller of it (a Room path, a replay tool) would
+// otherwise have to remember to defang separately. See defang.ts.
 //
 // The workdir sentence is behavior-shaping too. It used to be backed by an OS
 // sandbox that made it true regardless of what the model decided; with that
@@ -45,6 +51,6 @@ export function buildPrompt(
     `${dirSection}Answer helpfully and concisely. ` +
     `Do not place another AgentCall; nested delegation is not supported. ` +
     `${taskSection}${threadWarning}` +
-    `The caller's message follows after the divider.\n---\n${message}`
+    `The caller's message follows after the divider.\n---\n${defangInbound(message)}`
   );
 }
