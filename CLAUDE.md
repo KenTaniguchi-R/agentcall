@@ -102,12 +102,26 @@ testing (WS auth, register, status).
 `wrangler dev` does not apply `apps/relay/migrations/*.sql` to the local D1
 instance for you. If any migration is missing — e.g. `0002_agent_kind_nullable.sql`
 (makes `agent_kind` nullable for caller-only lines) or `0003_cards.sql` (adds
-the `cards` table) — `/v1/register`'s `INSERT INTO handles` throws (missing
-table, or a NOT NULL violation on a caller-only registration), and the handler
-(`apps/relay/src/index.ts`, the `/v1/register` route) turns ANY insert failure
-into a 409 `"handle taken"`. That looks exactly like a real handle collision
-and is not one. Run `wrangler d1 migrations apply agentcall --local` from
-`apps/relay` before registering anything against a fresh local D1.
+the `cards` table) — `/v1/register`'s D1 work throws (missing table, or a NOT
+NULL violation on a caller-only registration), and the route's `catch` returns a
+**503** `"registration temporarily unavailable"` with `Retry-After: 5`
+(`apps/relay/src/index.ts:115-120`). The CLI renders that as `Registration is
+temporarily unavailable. Try again shortly.` — which reads like the relay is
+having a moment, not like your schema is wrong.
+
+**The signal is in the `wrangler dev` output, not the response.**
+`registrationDatabaseFailure` classifies the error before discarding it and logs
+`registration database failure { name, kind }` (`index.ts:50-62`). `kind:
+"schema"` is a missing table or column; `kind: "constraint"` is the NOT NULL
+case. It deliberately never echoes the raw D1 message, which can carry SQL and
+bound values — so the classification is all you get, and it is enough. Run
+`wrangler d1 migrations apply agentcall --local` from `apps/relay` before
+registering anything against a fresh local D1.
+
+A 409 `"handle taken"` here is real. The route confirms the row exists via
+`handleExists` before returning 409 and falls through to 404 `"invalid invite"`
+otherwise (`index.ts:110-113`), so it is not the migration symptom in disguise
+— an earlier revision of this note said it was.
 
 Before calling any task done: `pnpm -r build && pnpm -r typecheck && pnpm -r test`
 must all pass at the repo root. **Build first** — `packages/cli` typechecks against

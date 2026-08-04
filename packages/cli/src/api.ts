@@ -1,4 +1,5 @@
 import {
+  DEFAULT_ORG_INVITE_EXPIRY_DAYS,
   HANDLE_RE, AgentCard, AuditExportPage, CreateOrgInviteResponse, CreateRosterResponse, IssueRosterJoinKeyResponse,
   ListOrgInvitesResponse, ListRosterJoinKeysResponse, RegisterResponse, RevokeOrgInviteResponse,
   RecoveryIssueResponse, RecoveryReceipt, RecoveryStatusResponse,
@@ -118,7 +119,17 @@ export async function registerHandle(
   return relayCall({ relay, path: "/v1/register", method: "POST",
     body: { invite, handle, agent_kind: agentKind }, timeoutMs: opts.timeoutMs,
     schema: RegisterResponse, errors: {
-      404: relayError("This invite is invalid, expired, or already used.", "invite_invalid"),
+      // The relay answers 404 "invalid invite" for four distinct conditions —
+      // never existed, already redeemed, revoked, expired — and must keep doing
+      // so: /v1/register is unauthenticated, and telling them apart would turn
+      // it into an oracle for probing which invites exist. That makes this the
+      // only place a next step can be offered, and all four branches share one.
+      404: relayError(
+        "This invite is invalid, expired, or already used.\n" +
+          "Ask your administrator for a new one — invites are single-use and expire after " +
+          `${DEFAULT_ORG_INVITE_EXPIRY_DAYS} days by default.`,
+        "invite_invalid",
+      ),
       409: relayError(`Handle "${handle}" is already taken.`, "handle_taken"),
       503: relayError("Registration is temporarily unavailable. Try again shortly."),
       401: relayError("Registration failed (401).", "invalid"),
