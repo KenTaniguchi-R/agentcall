@@ -127,6 +127,21 @@ export function mountRooms(app: Hono<{ Bindings: Env }>): void {
   });
 
   app.get("/v1/room", async (c) => forwardRoom(c, "state", "GET", {}));
+  app.get("/v1/room/ws", async (c) => {
+    if (c.req.header("Upgrade")?.toLowerCase() !== "websocket") {
+      return c.json({ error: "expected websocket" }, 426);
+    }
+    const capability = parseRoomCapability(bearer(c.req.header("Authorization")));
+    if (!capability) return c.json({ error: "Room capability unauthorized" }, 401);
+    const stub = c.env.ROOM_DO.get(c.env.ROOM_DO.idFromName(capability.roomId));
+    return stub.fetch("https://room.internal/ws", {
+      headers: {
+        Upgrade: "websocket",
+        "X-Room-Participant": capability.participantId,
+        "X-Room-Credential-Hash": await sha256Hex(capability.secret),
+      },
+    });
+  });
   for (const action of RoomAction.options) {
     app.post(`/v1/room/${action}`, async (c) => {
       const parsed = RoomMutationRequest.safeParse(await c.req.json().catch(() => null));

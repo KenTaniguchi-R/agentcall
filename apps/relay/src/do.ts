@@ -9,9 +9,14 @@ import {
   toA2ATask, updateTask, validHistoryLength, type PersistedTask,
 } from "./task-store.js";
 import { MAX_RETAINED_ORG_AUDIT_EVENTS } from "./events.js";
+import {
+  advanceAuthorizedCall, beginAuthorizedCall, expireAuthorizedCall, terminateAuthorizedCall,
+  type AuthorizedCallLifecycle, type LiveCallPhase, type TeamCallPrincipal,
+} from "./call-lifecycle.js";
 
 type CallerAttachment = {
   kind: "caller";
+  principal: TeamCallPrincipal;
   from: string;
   org: string;
   to: string;
@@ -26,6 +31,7 @@ type CallerAttachment = {
 };
 type ListenerAttachment = {
   kind: "listener";
+  principal?: TeamCallPrincipal;
   org?: string;
   handle?: string;
   actorIp?: string;
@@ -51,11 +57,24 @@ type CallAuditIntent = {
 
 type CancelResolution = { kind: "canceled"; task: PersistedTask } | { kind: "not_cancelable" };
 
-const STATUS_RANK: Record<CallStatusType["state"], number> = {
-  ringing: 0,
-  answered: 1,
-  working: 2,
+const DURABLE_PHASE: Record<CallStatusType["state"], LiveCallPhase> = {
+  ringing: "submitted",
+  answered: "accepted",
+  working: "working",
 };
+
+function teamCallLifecycle(task: PersistedTask): AuthorizedCallLifecycle {
+  return {
+    principal: task.principal ?? {
+      kind: "team",
+      organization: task.org,
+      participant: task.from,
+      credential_generation: 0,
+    },
+    phase: DURABLE_PHASE[task.state],
+    deadline: task.deadline,
+  };
+}
 
 export const RATE_LIMIT_WINDOW_MS = 3_600_000;
 const RATE_LIMIT_PRUNE_INTERVAL_MS = 60_000;
@@ -283,6 +302,14 @@ export class HandleDO extends DurableObject {
       const actorCountry = req.headers.get("X-Verified-Actor-Country") || undefined;
       const relayOrigin = req.headers.get("X-Verified-Relay-Origin") || undefined;
       const credentialGeneration = Number(req.headers.get("X-Verified-Credential-Generation")) || 0;
+      const principal = org && from
+        ? {
+          kind: "team" as const,
+          organization: org,
+          participant: from,
+          credential_generation: credentialGeneration,
+        }
+        : undefined;
       const credentialGenerationFloor = await this.ctx.storage.get<number>(
         credentialGenerationFloorKey(org ?? "", from),
       ) ?? 0;
@@ -302,16 +329,16 @@ export class HandleDO extends DurableObject {
         for (const old of this.ctx.getWebSockets("listener")) old.close(4000, "replaced");
         this.ctx.acceptWebSocket(server, ["listener"]);
         server.serializeAttachment({
-          kind: "listener", org, handle: target, actorIp, actorCountry, relayOrigin,
+          kind: "listener", principal, org, handle: target, actorIp, actorCountry, relayOrigin,
           credentialGeneration,
         } satisfies ListenerAttachment);
       } else {
-        if (!org || !target || !relayOrigin) {
+        if (!org || !target || !relayOrigin || !principal) {
           return new Response("missing verified caller metadata", { status: 400 });
         }
         this.ctx.acceptWebSocket(server, ["caller"]);
         server.serializeAttachment({
-          kind: "caller", from, org, to: target, actorIp, actorCountry,
+          kind: "caller", principal: principal!, from, org, to: target, actorIp, actorCountry,
           groups, timeoutMs: testTimeout, relayOrigin,
           credentialGeneration,
         } satisfies CallerAttachment);
@@ -489,7 +516,7 @@ export class HandleDO extends DurableObject {
       // Re-read and decide inside the same transaction that deletes/enqueues so
       // a concurrent terminal completion can never be overwritten by timeout.
       const current = await txn.get<PersistedTask>(`call:${callId}`);
-      if (!current || current.deadline > now) return;
+      if (!current || !expireAuthorizedCall(teamCallLifecycle(current), now)) return;
       await txn.delete(`call:${callId}`);
       if (taskIsTerminal(current)) {
         return { task: current, timedOut: false };
@@ -510,7 +537,8 @@ export class HandleDO extends DurableObject {
     listener: ListenerAttachment,
   ): Promise<void> {
     const current = record.state;
-    if (STATUS_RANK[state] <= STATUS_RANK[current]) return;
+    const advanced = advanceAuthorizedCall(teamCallLifecycle(record), DURABLE_PHASE[state]);
+    if (advanced.phase === DURABLE_PHASE[current]) return;
     // Persist before fan-out so a DO restart or duplicate/out-of-order frame
     // cannot move the caller backward after it has observed a later state.
     const next = {
@@ -578,6 +606,7 @@ export class HandleDO extends DurableObject {
       const task = {
         call_id, correlation_id, from: att.from, org: att.org, to: att.to, deadline, state: "ringing",
         task_state: "TASK_STATE_SUBMITTED", created_at: now, updated_at: now,
+        principal: beginAuthorizedCall(att.principal, deadline).principal as TeamCallPrincipal,
       } satisfies PersistedTask;
       await this.persistTaskWithAudit(
         task,
@@ -614,7 +643,9 @@ export class HandleDO extends DurableObject {
       // Confirmation means a pending job was removed or the running process
       // was observed exited. Only now is it honest to publish a terminal
       // cancellation. The task record remains until its original deadline.
+      const cancellation = terminateAuthorizedCall(teamCallLifecycle(record), "canceled");
       const canceled = updateTask(record, { task_state: "TASK_STATE_CANCELED" });
+      canceled.principal = cancellation.principal as TeamCallPrincipal;
       // Persist terminal truth before fan-out. Once a caller observes a
       // terminal response, a concurrent GetTask must never move backward.
       await this.persistTaskWithAudit(

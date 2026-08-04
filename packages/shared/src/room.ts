@@ -10,6 +10,7 @@ export const ROOM_IDLE_TTL_MS = 600_000 as const;
 export const ROOM_HEARTBEAT_GRACE_MS = 15_000 as const;
 export const ROOM_MAX_PROMPT_BYTES = 4_096 as const;
 export const ROOM_MAX_REPLY_BYTES = 16_384 as const;
+export const ROOM_MAX_CALL_WIRE_BYTES = 32_768 as const;
 export const ROOM_AGENT_TIMEOUT_MS = 90_000 as const;
 export const ROOM_MAX_CALLS_PER_PARTICIPANT = 5 as const;
 export const ROOM_SUBMISSION_COOLDOWN_MS = 3_000 as const;
@@ -322,6 +323,107 @@ function encryptedPayload(maxBytes: number) {
   }, { message: `encrypted payload must be canonical base64url of at most ${maxBytes} bytes` });
 }
 
+export const RoomCallSubmit = z.object({
+  type: z.literal("room_call_submit"),
+  call_id: RoomCallId,
+  idempotency_key: RoomIdempotencyKey,
+  to_participant_id: RoomParticipantId,
+  request_digest: RoomSecretHash,
+  encrypted_request: encryptedPayload(ROOM_MAX_ENCRYPTED_REQUEST_BYTES),
+}).strict();
+
+export const RoomCallAccepted = z.object({
+  type: z.literal("room_call_accepted"),
+  call_id: RoomCallId,
+}).strict();
+
+export const RoomCallStarted = z.object({
+  type: z.literal("room_call_started"),
+  call_id: RoomCallId,
+}).strict();
+
+export const RoomCallOutcome = z.object({
+  type: z.literal("room_call_outcome"),
+  call_id: RoomCallId,
+  terminal: z.enum(["completed", "failed"]),
+  encrypted_outcome: encryptedPayload(ROOM_MAX_ENCRYPTED_OUTCOME_BYTES).optional(),
+}).strict().superRefine((frame, ctx) => {
+  if (frame.terminal === "completed" && frame.encrypted_outcome === undefined) {
+    ctx.addIssue({ code: "custom", path: ["encrypted_outcome"], message: "completed Room call needs an outcome" });
+  }
+});
+
+export const RoomCallCancel = z.object({
+  type: z.literal("room_call_cancel"),
+  call_id: RoomCallId,
+}).strict();
+
+export const RoomCallCanceled = z.object({
+  type: z.literal("room_call_canceled"),
+  call_id: RoomCallId,
+}).strict();
+
+export const RoomIncomingCall = z.object({
+  type: z.literal("room_incoming_call"),
+  room_id: RoomId,
+  membership_epoch: ActiveMembershipEpoch,
+  from_participant_id: RoomParticipantId,
+  to_participant_id: RoomParticipantId,
+  call_id: RoomCallId,
+  request_digest: RoomSecretHash,
+  encrypted_request: encryptedPayload(ROOM_MAX_ENCRYPTED_REQUEST_BYTES),
+  expires_at: Timestamp,
+}).strict().refine((frame) => frame.from_participant_id !== frame.to_participant_id, {
+  path: ["to_participant_id"], message: "Room calls must target another participant",
+});
+
+export const RoomRelayCallStatus = z.object({
+  type: z.literal("room_call_status"),
+  call_id: RoomCallId,
+  state: z.enum(["submitted", "accepted", "working"]),
+}).strict();
+
+export const RoomRelayCallResult = z.object({
+  type: z.literal("room_call_result"),
+  call_id: RoomCallId,
+  terminal: z.enum(["completed", "failed", "canceled", "expired"]),
+  encrypted_outcome: encryptedPayload(ROOM_MAX_ENCRYPTED_OUTCOME_BYTES).optional(),
+  replayed: z.literal(true).optional(),
+}).strict().superRefine((frame, ctx) => {
+  if (frame.terminal === "completed" && frame.encrypted_outcome === undefined && !frame.replayed) {
+    ctx.addIssue({
+      code: "custom", path: ["encrypted_outcome"],
+      message: "a live completed Room result needs an outcome",
+    });
+  }
+  if (frame.replayed && frame.encrypted_outcome !== undefined) {
+    ctx.addIssue({ code: "custom", path: ["replayed"], message: "replayed results cannot retain outcome bytes" });
+  }
+});
+
+export const RoomRelayCallErrorCode = z.enum([
+  "protocol_error", "busy", "paused", "offline", "unknown_target", "self_target",
+  "room_inactive", "limit", "cooldown", "peer_left", "room_expired", "canceled",
+]);
+
+export const RoomRelayCallError = z.object({
+  type: z.literal("room_call_error"),
+  call_id: RoomCallId.optional(),
+  code: RoomRelayCallErrorCode,
+}).strict();
+
+export const RoomRelayCancelCall = z.object({
+  type: z.literal("room_cancel_call"),
+  call_id: RoomCallId,
+}).strict();
+
+export const RoomSocketClientFrame = z.discriminatedUnion("type", [
+  RoomCallSubmit, RoomCallAccepted, RoomCallStarted, RoomCallOutcome, RoomCallCancel, RoomCallCanceled,
+]);
+export const RoomSocketRelayFrame = z.discriminatedUnion("type", [
+  RoomIncomingCall, RoomRelayCallStatus, RoomRelayCallResult, RoomRelayCallError, RoomRelayCancelCall,
+]);
+
 export const RoomCallRecord = z.object({
   call_id: RoomCallId,
   idempotency_key: RoomIdempotencyKey,
@@ -482,3 +584,17 @@ export type RoomPublicInviteType = z.infer<typeof RoomPublicInvite>;
 export type RoomCreateResponseType = z.infer<typeof RoomCreateResponse>;
 export type RoomJoinResponseType = z.infer<typeof RoomJoinResponse>;
 export type RoomMutationResponseType = z.infer<typeof RoomMutationResponse>;
+export type RoomCallSubmitType = z.infer<typeof RoomCallSubmit>;
+export type RoomCallAcceptedType = z.infer<typeof RoomCallAccepted>;
+export type RoomCallStartedType = z.infer<typeof RoomCallStarted>;
+export type RoomCallOutcomeType = z.infer<typeof RoomCallOutcome>;
+export type RoomCallCancelType = z.infer<typeof RoomCallCancel>;
+export type RoomCallCanceledType = z.infer<typeof RoomCallCanceled>;
+export type RoomIncomingCallType = z.infer<typeof RoomIncomingCall>;
+export type RoomRelayCallStatusType = z.infer<typeof RoomRelayCallStatus>;
+export type RoomRelayCallResultType = z.infer<typeof RoomRelayCallResult>;
+export type RoomRelayCallErrorCodeType = z.infer<typeof RoomRelayCallErrorCode>;
+export type RoomRelayCallErrorType = z.infer<typeof RoomRelayCallError>;
+export type RoomRelayCancelCallType = z.infer<typeof RoomRelayCancelCall>;
+export type RoomSocketClientFrameType = z.infer<typeof RoomSocketClientFrame>;
+export type RoomSocketRelayFrameType = z.infer<typeof RoomSocketRelayFrame>;

@@ -209,6 +209,127 @@ Return the current bounded Room membership view without credential hashes.
 | `participants` | object[] | yes |
 | `participant` | object | no |
 
+## Room participant to relay WebSocket
+
+### `room_call_submit`
+
+Submit one opaque call to an exact Room participant.
+
+| Field | Type | Required |
+| --- | --- | --- |
+| `type` | `room_call_submit` | yes |
+| `call_id` | string | yes |
+| `idempotency_key` | string | yes |
+| `to_participant_id` | string | yes |
+| `request_digest` | string | yes |
+| `encrypted_request` | string | yes |
+
+### `room_call_accepted`
+
+Confirm ownership of delivered Room work.
+
+| Field | Type | Required |
+| --- | --- | --- |
+| `type` | `room_call_accepted` | yes |
+| `call_id` | string | yes |
+
+### `room_call_started`
+
+Confirm the Room answering process started.
+
+| Field | Type | Required |
+| --- | --- | --- |
+| `type` | `room_call_started` | yes |
+| `call_id` | string | yes |
+
+### `room_call_outcome`
+
+Return an opaque terminal Room outcome.
+
+| Field | Type | Required |
+| --- | --- | --- |
+| `type` | `room_call_outcome` | yes |
+| `call_id` | string | yes |
+| `terminal` | `completed` / `failed` | yes |
+| `encrypted_outcome` | string | no |
+
+### `room_call_cancel`
+
+Cancel a previously submitted Room call.
+
+| Field | Type | Required |
+| --- | --- | --- |
+| `type` | `room_call_cancel` | yes |
+| `call_id` | string | yes |
+
+### `room_call_canceled`
+
+Confirm local cancellation completed.
+
+| Field | Type | Required |
+| --- | --- | --- |
+| `type` | `room_call_canceled` | yes |
+| `call_id` | string | yes |
+
+## Relay to Room participant WebSocket
+
+### `room_incoming_call`
+
+Deliver an opaque call with relay-attested Room membership metadata.
+
+| Field | Type | Required |
+| --- | --- | --- |
+| `type` | `room_incoming_call` | yes |
+| `room_id` | string | yes |
+| `membership_epoch` | integer | yes |
+| `from_participant_id` | string | yes |
+| `to_participant_id` | string | yes |
+| `call_id` | string | yes |
+| `request_digest` | string | yes |
+| `encrypted_request` | string | yes |
+| `expires_at` | integer | yes |
+
+### `room_call_status`
+
+Report Room call progress to its caller.
+
+| Field | Type | Required |
+| --- | --- | --- |
+| `type` | `room_call_status` | yes |
+| `call_id` | string | yes |
+| `state` | `submitted` / `accepted` / `working` | yes |
+
+### `room_call_result`
+
+Report a terminal Room result; duplicate submissions may omit erased outcome bytes.
+
+| Field | Type | Required |
+| --- | --- | --- |
+| `type` | `room_call_result` | yes |
+| `call_id` | string | yes |
+| `terminal` | `completed` / `failed` / `canceled` / `expired` | yes |
+| `encrypted_outcome` | string | no |
+| `replayed` | `true` | no |
+
+### `room_call_error`
+
+Return a bounded Room routing or lifecycle error.
+
+| Field | Type | Required |
+| --- | --- | --- |
+| `type` | `room_call_error` | yes |
+| `call_id` | string | no |
+| `code` | `protocol_error` / `busy` / `paused` / `offline` / `unknown_target` / `self_target` / `room_inactive` / `limit` / `cooldown` / `peer_left` / `room_expired` / `canceled` | yes |
+
+### `room_cancel_call`
+
+Request cancellation of exact inbound Room work.
+
+| Field | Type | Required |
+| --- | --- | --- |
+| `type` | `room_cancel_call` | yes |
+| `call_id` | string | yes |
+
 ## Important bounds
 
 - Messages are limited to 64,000 bytes; replies to 256,000 bytes.
