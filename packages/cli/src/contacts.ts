@@ -16,8 +16,8 @@ const ContactSchema = z.object({
 const ContactsFileSchema = z.object({
   contacts: z.array(ContactSchema).default([]),
 });
-export type Contact = z.infer<typeof ContactSchema>;
-export type ContactsFile = z.infer<typeof ContactsFileSchema>;
+type Contact = z.infer<typeof ContactSchema>;
+type ContactsFile = z.infer<typeof ContactsFileSchema>;
 
 // Missing file -> empty book (nothing saved yet). Malformed file -> THROW
 // naming the path: the file is user data, silently resetting it would lose

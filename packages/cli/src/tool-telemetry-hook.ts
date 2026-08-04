@@ -4,7 +4,7 @@ import {
 
 export const TOOL_EVENT_MAX_NAME_BYTES = 128;
 export const TOOL_EVENT_MAX_ID_BYTES = 256;
-export const TOOL_EVENT_MAX_CALL_ID_BYTES = 128;
+const TOOL_EVENT_MAX_CALL_ID_BYTES = 128;
 export const TOOL_EVENT_MAX_DURATION_MS = 24 * 60 * 60 * 1_000;
 export const TOOL_EVENT_MAX_EVENTS = 512;
 export const TOOL_EVENT_MAX_SPOOL_BYTES = 256 * 1_024;

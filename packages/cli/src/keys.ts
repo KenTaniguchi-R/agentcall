@@ -79,9 +79,9 @@ const PendingEncryptionPublicationSchema = z.object({
   record: EncryptionKeyRecord,
   signature: z.string().min(1).max(256),
 }).strict();
-export type PendingEncryptionPublication = z.infer<typeof PendingEncryptionPublicationSchema>;
+type PendingEncryptionPublication = z.infer<typeof PendingEncryptionPublicationSchema>;
 
-export type KeyRotationHooks = {
+type KeyRotationHooks = {
   /** Test seam for a process paused after election but before predecessor retirement. */
   afterElection?: () => void | Promise<void>;
   /** Test seam for exercising an abandoned cross-process election lock. */

@@ -17,7 +17,7 @@ const RATE_LIMIT_PRUNE_CONTINUE_DELAY_MS = 1_000;
 
 type RateLimitMaintenance = { cursor: string; due: number };
 
-export interface RateLimitStorage {
+interface RateLimitStorage {
   get<T>(key: string): Promise<T | undefined>;
   list<T>(options?: DurableObjectListOptions): Promise<Map<string, T>>;
   delete(keys: string[]): Promise<number>;

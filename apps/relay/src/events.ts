@@ -3,11 +3,11 @@ import type { OrgAuditEvent, OrgRoleType, RosterAuditEvent } from "@benree/agent
 import type { Env } from "./index.js";
 import type { RelayAppEnv } from "./middleware.js";
 
-export type AuditAction = "C" | "R" | "U" | "D";
-export type AuditActor = "handle" | "admin_secret" | "system";
-export type AuditTarget = "handle" | "roster" | "join_key";
+type AuditAction = "C" | "R" | "U" | "D";
+type AuditActor = "handle" | "admin_secret" | "system";
+type AuditTarget = "handle" | "roster" | "join_key";
 export type OrgAuditActor = "handle" | "bootstrap" | "invite" | "recovery";
-export type OrgAuditTarget = "invite" | "handle" | "call" | "retention_policy" | "legal_hold";
+type OrgAuditTarget = "invite" | "handle" | "call" | "retention_policy" | "legal_hold";
 
 type RosterAudit = {
   event: RosterAuditEvent;
@@ -38,7 +38,7 @@ type OrgAudit = {
 
 export const MAX_ROSTER_AUDIT_EVENTS = 10_000;
 export const MAX_RETAINED_ORG_AUDIT_EVENTS = 10_000;
-export type AuditCondition = "always" | "previous-change" | "roster-exists";
+type AuditCondition = "always" | "previous-change" | "roster-exists";
 
 export function auditLocation(c: Context<RelayAppEnv>): [string | null, string | null] {
   const country = c.req.raw.cf?.country;

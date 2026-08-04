@@ -16,7 +16,7 @@ import {
   uninstallSystemdService,
 } from "./systemd.js";
 
-export interface ListenerServiceOptions {
+interface ListenerServiceOptions {
   platform?: NodeJS.Platform;
   execCmd?: ServiceExec;
   extraPathDirs?: string[];
@@ -87,7 +87,7 @@ export function listenerServiceFile(
   return adapterFor(platform).file(machine);
 }
 
-export function isListenerServiceInstalled(
+function isListenerServiceInstalled(
   machine: MachinePaths,
   platform: NodeJS.Platform = process.platform,
 ): boolean {

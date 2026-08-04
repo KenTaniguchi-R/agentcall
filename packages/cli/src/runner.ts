@@ -72,7 +72,7 @@ const KILL_GRACE_MS = 10_000;
 // stalls one call (safe and visible); an abandoned one is neither. Measured cost
 // is ~33ms.
 export const GUARD_TIMEOUT_S = 30;
-export const TOOL_TELEMETRY_TIMEOUT_S = 5;
+const TOOL_TELEMETRY_TIMEOUT_S = 5;
 
 // Inline settings, not a plugin and not a file: scoped to this spawn, gone when
 // the process exits, and the owner's own ~/.claude is untouched.
@@ -89,7 +89,7 @@ const shellQuote = (s: string) => `'${s.replaceAll("'", `'\\''`)}'`;
 // Exported so doctor's direct probe invokes the exact file the spawn wires up,
 // rather than a second path expression that could drift from this one.
 export const guardEntryPath = () => fileURLToPath(new URL("./guard-entry.js", import.meta.url));
-export const toolTelemetryEntryPath = () => fileURLToPath(new URL("./tool-telemetry-entry.js", import.meta.url));
+const toolTelemetryEntryPath = () => fileURLToPath(new URL("./tool-telemetry-entry.js", import.meta.url));
 
 const guardCommand = () =>
   `${shellQuote(process.execPath)} ${shellQuote(guardEntryPath())}`;

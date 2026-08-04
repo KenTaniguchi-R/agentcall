@@ -65,7 +65,7 @@ export interface CallOpts {
   };
 }
 
-export interface CallReply {
+interface CallReply {
   type: "call_reply";
   call_id: string;
   correlation_id?: string;
@@ -80,7 +80,7 @@ export function callStatusMessage(state: CallStatusType["state"]): string {
   return "agent working...";
 }
 
-export function createCorrelationId(): string {
+function createCorrelationId(): string {
   return randomBytes(16).toString("hex");
 }
 

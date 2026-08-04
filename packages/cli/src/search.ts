@@ -10,7 +10,7 @@
 
 import type { BundleEntryType } from "@benree/agentcall-shared";
 
-export type SearchField = "keywords" | "name" | "description";
+type SearchField = "keywords" | "name" | "description";
 
 // Weighted highest first. `examples` are absent because the roster bundle
 // does not carry them (see BundleTask in packages/shared/src/roster.ts).
@@ -54,7 +54,7 @@ export interface Match {
   fields: SearchField[];
 }
 
-export interface SearchResult extends SearchEntry {
+interface SearchResult extends SearchEntry {
   score: number;
   matched: Match[];
 }

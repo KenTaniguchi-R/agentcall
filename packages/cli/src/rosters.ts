@@ -33,7 +33,7 @@ const CachedBundle = z.object({
   skipped: z.number().default(0),
 });
 const CacheFile = z.object({ version: z.literal(1), rosters: z.record(z.string(), CachedBundle) });
-export type CachedBundle = z.infer<typeof CachedBundle>;
+type CachedBundle = z.infer<typeof CachedBundle>;
 
 export function loadMemberships(p: LinePaths): Membership[] {
   return readJsonStore(p.rostersFile, MembershipsFile, {

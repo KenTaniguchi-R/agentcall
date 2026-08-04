@@ -67,7 +67,7 @@ registerRecovery(program);
 registerUninstall(program);
 return program;
 }
-export interface CliOutput {
+interface CliOutput {
   writeOut?: (text: string) => void;
   writeErr?: (text: string) => void;
 }

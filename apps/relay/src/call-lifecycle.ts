@@ -15,9 +15,9 @@ export type RoomCallPrincipal = {
   membership_epoch: number;
 };
 
-export type AuthorizedCallPrincipal = TeamCallPrincipal | RoomCallPrincipal;
+type AuthorizedCallPrincipal = TeamCallPrincipal | RoomCallPrincipal;
 export type LiveCallPhase = "submitted" | "accepted" | "working";
-export type CallTerminalReason = "completed" | "failed" | "canceled" | "expired";
+type CallTerminalReason = "completed" | "failed" | "canceled" | "expired";
 export type AuthorizedCallLifecycle = {
   principal: AuthorizedCallPrincipal;
   phase: LiveCallPhase;

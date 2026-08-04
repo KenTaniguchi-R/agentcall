@@ -3,8 +3,8 @@ import { z } from "zod";
 import type { MachinePaths } from "./paths.js";
 import { readJsonStore, writeJsonAtomic } from "./json-store.js";
 
-export const PersonSchema = z.object({ primary_line: z.string() });
-export type Person = z.infer<typeof PersonSchema>;
+const PersonSchema = z.object({ primary_line: z.string() });
+type Person = z.infer<typeof PersonSchema>;
 
 export function loadPerson(m: MachinePaths): Person {
   return readJsonStore(m.personFile, PersonSchema, {

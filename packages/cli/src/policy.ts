@@ -6,10 +6,10 @@ import type { LinePaths } from "./paths.js";
 import type { Task } from "./tasks.js";
 
 const GROUP_NAME_RE = /^[a-z0-9][a-z0-9-]{0,63}$/;
-export const MAX_POLICY_ASSERTIONS = 100;
-export const MAX_POLICY_ASSERTION_TASKS = 100;
+const MAX_POLICY_ASSERTIONS = 100;
+const MAX_POLICY_ASSERTION_TASKS = 100;
 
-export const PolicyAssertionSchema = z.object({
+const PolicyAssertionSchema = z.object({
   caller: z.string().regex(HANDLE_RE),
   groups: z.array(z.string().regex(GROUP_NAME_RE)).max(20).default([]),
   accept: z.array(z.string().regex(TASK_ID_RE)).max(MAX_POLICY_ASSERTION_TASKS).default([]),
@@ -27,7 +27,7 @@ export const PolicyAssertionSchema = z.object({
     ctx.addIssue({ code: "custom", message: `tasks cannot be both accepted and denied: ${overlap.join(", ")}` });
   }
 });
-export type PolicyAssertion = z.infer<typeof PolicyAssertionSchema>;
+type PolicyAssertion = z.infer<typeof PolicyAssertionSchema>;
 
 const CallerPolicySchema = z.object({
   offer: z.array(z.string()).default([]),
@@ -39,7 +39,7 @@ const GroupPolicySchema = z.object({
   offer: z.array(z.string()).default([]),
 }).strict();
 
-export const PolicySchema = z.object({
+const PolicySchema = z.object({
   description: z.string().max(500).default(""),
   default_offer: z.array(z.string()).default(["ask"]),
   callers: z.record(z.string(), CallerPolicySchema).default({}),
@@ -50,7 +50,7 @@ export const PolicySchema = z.object({
 }).strict();
 export type Policy = z.infer<typeof PolicySchema>;
 
-export const ManagedPolicySchema = z.object({
+const ManagedPolicySchema = z.object({
   version: z.literal(1),
   // Omitted means the administrator does not constrain task grants. An empty
   // list is an intentional deny-all ceiling.
@@ -58,7 +58,7 @@ export const ManagedPolicySchema = z.object({
   blocked_callers: z.array(z.string().regex(HANDLE_RE)).default([]),
   tests: z.array(PolicyAssertionSchema).max(MAX_POLICY_ASSERTIONS).optional(),
 }).strict();
-export type ManagedPolicy = z.infer<typeof ManagedPolicySchema>;
+type ManagedPolicy = z.infer<typeof ManagedPolicySchema>;
 
 export const DEFAULT_POLICY: Policy = { description: "", default_offer: ["ask"], callers: {}, groups: {} };
 
@@ -158,8 +158,8 @@ export function savePolicy(p: LinePaths, policy: Policy): void {
 // semantics are additive either way, so the prefix is just stripped.
 export const stripPlus = (id: string) => id.replace(/^\+/, "");
 
-export type CallerEntry = Policy["callers"][string];
-export type GroupEntry = Policy["groups"][string];
+type CallerEntry = Policy["callers"][string];
+type GroupEntry = Policy["groups"][string];
 
 // `policy.callers` comes from JSON.parse + zod's z.record, whose output object
 // inherits Object.prototype — and HANDLE_RE happily accepts "constructor".
@@ -186,7 +186,7 @@ export function offeredFor(policy: Policy, from: string, attestedGroups: readonl
   return [...ids];
 }
 
-export function validatePolicyAssertions(
+function validatePolicyAssertions(
   effective: Policy, assertions: readonly PolicyAssertion[], source: "user policy" | "managed policy",
 ): void {
   for (const [index, assertion] of assertions.entries()) {

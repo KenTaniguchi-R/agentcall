@@ -51,7 +51,7 @@ export function taskIsTerminal(task: PersistedTask): boolean {
   return TERMINAL_TASK_STATES.has(taskState(task));
 }
 
-export function taskCreatedAt(task: PersistedTask): number {
+function taskCreatedAt(task: PersistedTask): number {
   return task.created_at;
 }
 

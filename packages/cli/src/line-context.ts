@@ -10,7 +10,7 @@ export interface LineContext {
   config: LineConfig;
 }
 
-export interface LineSelector {
+interface LineSelector {
   line?: string;
 }
 
