@@ -11,7 +11,7 @@ import { getStatus, fetchCard, createRoster, joinRoster, leaveRoster,
 import { publishCard } from "./card.js";
 import { loadPolicy, loadUserPolicy, savePolicy, validatePolicy } from "./policy.js";
 import { assertValidLineName, readyLines } from "./lines.js";
-import { loadTasks, scaffoldTask } from "./tasks.js";
+import { loadTasks } from "./tasks.js";
 import { execVerb, type Verb } from "./verbs.js";
 import { buildCardReport } from "./lint.js";
 import { resolveAddress } from "./contacts.js";
@@ -42,6 +42,7 @@ import { register as registerDoctor } from "./commands/doctor.js";
 import { register as registerHistory } from "./commands/history.js";
 import { register as registerPolicy } from "./commands/policy.js";
 import { register as registerListen } from "./commands/listen.js";
+import { register as registerTask } from "./commands/task.js";
 
 export function createProgram(): Command {
 const program = new Command();
@@ -680,32 +681,7 @@ async function runPolicyVerb(verb: Verb, a: string, b: string | undefined, opts:
   }
 }
 
-const task = program.command("task").description("manage the tasks your agent offers");
-task
-  .command("new")
-  .description("scaffold a new task (does not publish it)")
-  .argument("<id>", "task id: lowercase kebab-case, becomes the directory name")
-  .option("--line <name>", "line to use (defaults to the primary line)")
-  .action((id: string, o: { line?: string }) => {
-    let ctx: LineContext;
-    try {
-      ctx = resolveLine(getMachinePaths(), { line: o.line });
-    } catch (e) {
-      console.error(String(e instanceof Error ? e.message : e));
-      process.exitCode = 1;
-      return;
-    }
-    try {
-      const file = scaffoldTask(ctx.paths, id);
-      console.log(`Created ${file}\nEdit it, then:`);
-      console.log(`  agentcall card                      # check it validates`);
-      console.log(`  agentcall offer ${id}    # offer to everyone, or:`);
-      console.log(`  agentcall allow <handle> ${id}`);
-    } catch (e) {
-      console.error(String(e instanceof Error ? e.message : e));
-      process.exitCode = 1;
-    }
-  });
+registerTask(program);
 
 program.command("allow").description("grant a caller an extra task (and republish your card)")
   .argument("<handle>").argument("<task-id>").option("--line <name>", "line to use (defaults to the primary line)")
