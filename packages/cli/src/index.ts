@@ -1,6 +1,5 @@
 import { Command, CommanderError } from "commander";
-import { getMachinePaths, type LinePaths } from "./paths.js";
-import { relayUrl } from "./config.js";
+import { getMachinePaths } from "./paths.js";
 // No rotateToken here: `rotate` goes through commands/rotate.ts's rotateLine,
 // which owns the per-line config write and calls the api helper itself.
 import { ApiError,
@@ -14,8 +13,7 @@ import { runRecoveryIssue, runRecoveryRedeem } from "./commands/recovery.js";
 import { register as registerLineCore } from "./commands/line-core.js";
 import { register as registerLineAdmin } from "./commands/line-admin.js";
 import { register as registerRosterCore } from "./commands/roster-core.js";
-import { deleteCached, forgetMembership, loadMemberships, saveMembership } from "./rosters.js";
-import { ask } from "./tty.js";
+import { register as registerRosterAdmin } from "./commands/roster-admin.js";
 import { register as registerAudit } from "./commands/audit.js";
 import { register as registerUninstall } from "./commands/uninstall.js";
 import { register as registerContacts } from "./commands/contacts.js";
@@ -82,162 +80,7 @@ function lineFor(line: string | undefined): LineContext | undefined {
 
 registerRosterCore(roster, lineFor);
 
-async function adminSecret(flag?: string): Promise<string> {
-  const value = flag ?? process.env.AGENTCALL_ADMIN_SECRET;
-  if (value) return value;
-  const prompted = (await ask("Admin secret: ")).trim();
-  if (!prompted) throw new Error("An admin secret is required.");
-  return prompted;
-}
-
-async function confirmRoster(name: string, consequence: string, yes?: boolean): Promise<void> {
-  if (yes) return;
-  const answer = (await ask(`${consequence} Type the roster name "${name}" to continue: `)).trim();
-  if (answer !== name) throw new Error("Confirmation did not match; nothing was changed.");
-}
-
-function namedRoster(paths: LinePaths, name: string) {
-  const membership = loadMemberships(paths).find((r) => r.name.toLowerCase() === name.toLowerCase());
-  if (!membership) throw new Error(`No roster named "${name}" — run \`agentcall roster list\`.`);
-  return membership;
-}
-
-roster
-  .command("expel")
-  .description("remove a member using the roster admin secret")
-  .argument("<name>", "local roster name")
-  .argument("<handle>", "member handle to remove")
-  .option("--admin-secret <secret>", "admin secret (prefer AGENTCALL_ADMIN_SECRET to avoid shell history)")
-  .option("--line <name>", "line to act as (defaults to the primary line)")
-  .action(async (name: string, handle: string, o: { adminSecret?: string; line?: string }) => {
-    const ctx = lineFor(o.line);
-    if (!ctx) return;
-    const cfg = ctx.config;
-    try {
-      const membership = namedRoster(ctx.paths, name);
-      await expelRosterMember(membership.relay, { org: cfg.org, handle: cfg.handle, token: cfg.token }, membership.roster_id, handle, await adminSecret(o.adminSecret));
-      console.log(`Expelled ${handle}. Revoke any join key they may still know.`);
-    } catch (e) { console.error(e instanceof Error ? e.message : String(e)); process.exitCode = 1; }
-  });
-
-const rosterKey = roster.command("key").description("issue, list, and revoke scoped roster join keys");
-
-rosterKey
-  .command("issue")
-  .description("issue a one-off join key (use --reusable for a shared key)")
-  .argument("<name>", "local roster name")
-  .option("--admin-secret <secret>", "admin secret (prefer AGENTCALL_ADMIN_SECRET to avoid shell history)")
-  .option("--description <text>", "short label shown by `roster key list`", "")
-  .option("--expires-in <days>", "expiry in days (1-90)", (v) => Number.parseInt(v, 10), 30)
-  .option("--reusable", "allow more than one member to use this key")
-  .option("--line <name>", "line to act as (defaults to the primary line)")
-  .action(async (name: string, o: { adminSecret?: string; description: string; expiresIn: number; reusable?: boolean; line?: string }) => {
-    const ctx = lineFor(o.line);
-    if (!ctx) return;
-    const cfg = ctx.config;
-    try {
-      const membership = namedRoster(ctx.paths, name);
-      if (!Number.isInteger(o.expiresIn) || o.expiresIn < 1 || o.expiresIn > 90) {
-        throw new Error("--expires-in must be an integer from 1 to 90.");
-      }
-      const out = await issueRosterJoinKey(
-        membership.relay, { org: cfg.org, handle: cfg.handle, token: cfg.token }, membership.roster_id,
-        await adminSecret(o.adminSecret), {
-          description: o.description, expiresInDays: o.expiresIn, reusable: Boolean(o.reusable),
-        },
-      );
-      console.log(`Join key (shown once): ${out.join_key}`);
-      console.log(`Prefix: ${out.key.prefix}  Expires: ${new Date(out.key.expires_at).toISOString()}`);
-    } catch (e) { console.error(e instanceof Error ? e.message : String(e)); process.exitCode = 1; }
-  });
-
-rosterKey
-  .command("list")
-  .description("list join-key metadata without revealing secrets")
-  .argument("<name>", "local roster name")
-  .option("--admin-secret <secret>", "admin secret (prefer AGENTCALL_ADMIN_SECRET to avoid shell history)")
-  .option("--line <name>", "line to act as (defaults to the primary line)")
-  .action(async (name: string, o: { adminSecret?: string; line?: string }) => {
-    const ctx = lineFor(o.line);
-    if (!ctx) return;
-    const cfg = ctx.config;
-    try {
-      const membership = namedRoster(ctx.paths, name);
-      const keys = await listRosterJoinKeys(
-        membership.relay, { org: cfg.org, handle: cfg.handle, token: cfg.token }, membership.roster_id,
-        await adminSecret(o.adminSecret),
-      );
-      if (keys.length === 0) { console.log("No join keys."); return; }
-      const now = Date.now();
-      for (const key of keys) {
-        const state = key.revoked_at !== null ? "revoked" : key.expires_at <= now ? "expired" : key.used && !key.reusable ? "used" : "active";
-        console.log(`${key.prefix}\t${state}\t${key.reusable ? "reusable" : "one-off"}\t${new Date(key.expires_at).toISOString()}\t${key.created_by}\t${key.description}`);
-      }
-    } catch (e) { console.error(e instanceof Error ? e.message : String(e)); process.exitCode = 1; }
-  });
-
-rosterKey
-  .command("revoke")
-  .description("revoke one join key; --evict removes only members admitted by it")
-  .argument("<name>", "local roster name")
-  .argument("<prefix>", "12-character public key prefix from `roster key list`")
-  .option("--admin-secret <secret>", "admin secret (prefer AGENTCALL_ADMIN_SECRET to avoid shell history)")
-  .option("--evict", "remove members admitted by this key")
-  .option("--yes", "confirm targeted eviction")
-  .option("--line <name>", "line to act as (defaults to the primary line)")
-  .action(async (name: string, prefix: string, o: { adminSecret?: string; evict?: boolean; yes?: boolean; line?: string }) => {
-    const ctx = lineFor(o.line);
-    if (!ctx) return;
-    const cfg = ctx.config;
-    try {
-      const membership = namedRoster(ctx.paths, name);
-      if (o.evict) await confirmRoster(name, `This removes members admitted by key ${prefix}.`, o.yes);
-      const out = await revokeRosterJoinKey(
-        membership.relay, { org: cfg.org, handle: cfg.handle, token: cfg.token }, membership.roster_id,
-        prefix, await adminSecret(o.adminSecret), Boolean(o.evict),
-      );
-      if (o.evict) deleteCached(ctx.paths, name);
-      console.log(`Revoked ${out.prefix}.${o.evict ? ` Evicted ${out.evicted} member(s).` : " Existing members were retained."}`);
-    } catch (e) { console.error(e instanceof Error ? e.message : String(e)); process.exitCode = 1; }
-  });
-
-roster
-  .command("delete")
-  .description("permanently delete a roster while retaining its relay audit events")
-  .argument("<name>", "local roster name")
-  .option("--admin-secret <secret>", "admin secret (prefer AGENTCALL_ADMIN_SECRET to avoid shell history)")
-  .option("--yes", "confirm deletion")
-  .option("--line <name>", "line to act as (defaults to the primary line)")
-  .action(async (name: string, o: { adminSecret?: string; yes?: boolean; line?: string }) => {
-    const ctx = lineFor(o.line);
-    if (!ctx) return;
-    const cfg = ctx.config;
-    try {
-      const membership = namedRoster(ctx.paths, name);
-      await confirmRoster(name, "Roster deletion cannot be undone.", o.yes);
-      await deleteRoster(membership.relay, { org: cfg.org, handle: cfg.handle, token: cfg.token }, membership.roster_id, await adminSecret(o.adminSecret));
-      forgetMembership(ctx.paths, name);
-      deleteCached(ctx.paths, name);
-      console.log(`Deleted "${name}"; relay audit events were retained.`);
-    } catch (e) { console.error(e instanceof Error ? e.message : String(e)); process.exitCode = 1; }
-  });
-
-roster
-  .command("forget")
-  .description("drop only the local roster record; use `roster leave` to remove relay membership")
-  .argument("<name>", "local roster name")
-  .option("--line <name>", "line to forget it for (defaults to the primary line)")
-  .action((name: string, o: { line?: string }) => {
-    const ctx = lineFor(o.line);
-    if (!ctx) return;
-    try {
-      forgetMembership(ctx.paths, name);
-      console.log(`Forgot "${name}" locally. Your membership on the relay is unchanged; use \`roster leave\` for removal.`);
-    } catch (e) {
-      console.error(String(e instanceof Error ? e.message : e));
-      process.exitCode = 1;
-    }
-  });
+registerRosterAdmin(roster, lineFor);
 
 registerSearch(program, lineFor);
 
