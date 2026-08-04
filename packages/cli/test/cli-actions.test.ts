@@ -513,6 +513,70 @@ describe.sequential("CLI command actions", () => {
     ]);
   });
 
+  // #304. On a terminal the admin's next move is "send this to someone", not
+  // "read a 43-char base64url string" — but the bare-token stdout is a piping
+  // contract (`agentcall invite create > token.txt`), so the human block is
+  // gated on isTTY and the test above pins the piped shape.
+  describe("invite create on a terminal", () => {
+    const id = "d".repeat(64);
+    const secret = "i".repeat(43);
+    const meta = (role: "admin" | "member") => ({
+      id, description: "", created_by: "ken", created_at: 1,
+      // Fixed, far-future instant so the rendered calendar date is stable.
+      expires_at: Date.UTC(2033, 4, 18), used_at: null, used_by: null, revoked_at: null, role,
+    });
+
+    async function createOnTty(role: "admin" | "member") {
+      const relay = await startRelay(() => ({ status: 200, body: { invite: secret, metadata: meta(role) } }));
+      const testHome = home();
+      seedConfig(testHome, relay);
+      const previous = process.stdout.isTTY;
+      process.stdout.isTTY = true;
+      try {
+        return await runCommand(testHome, ["invite", "create", "--role", role]);
+      } finally {
+        process.stdout.isTTY = previous;
+      }
+    }
+
+    it("prints a paste-ready install block instead of a bare token", async () => {
+      const out = await createOnTty("member");
+      expect(out.code).toBe(0);
+      expect(out.stdout).toContain("npm install -g @benree/agentcall");
+      expect(out.stdout).toContain(`agentcall setup --invite ${secret}`);
+    });
+
+    it("shows the granted role and a human expiry", async () => {
+      const out = await createOnTty("member");
+      expect(out.stdout).toMatch(/member/);
+      expect(out.stdout).toContain("2033-05-18");
+      expect(out.stdout).toMatch(/expires in \d+ days/);
+    });
+
+    // The one flag with real consequences had no feedback at all: an admin
+    // invite can itself issue invites, revoke invites, and export the org
+    // audit log, and its output was shape-identical to a member invite.
+    it("calls out an admin invite and what it grants", async () => {
+      const out = await createOnTty("admin");
+      expect(out.stdout).toMatch(/ADMIN/);
+      expect(out.stdout).toMatch(/audit log/i);
+    });
+
+    it("says nothing about admin powers for a member invite", async () => {
+      const out = await createOnTty("member");
+      expect(out.stdout).not.toMatch(/audit log/i);
+    });
+
+    // The ID is sha256(token), so the holder can already compute it — keeping
+    // it visible costs nothing and saves a second `invite list` call when an
+    // admin needs to cancel one they mis-sent.
+    it("keeps the revoke ID in reach", async () => {
+      const out = await createOnTty("member");
+      expect(out.stdout).toContain(id);
+      expect(out.stdout).toMatch(/revoke/i);
+    });
+  });
+
   it("streams every audit page as NDJSON and prints the final checkpoint", async () => {
     const requests: string[] = [];
     const relay = await startRelay((url) => {

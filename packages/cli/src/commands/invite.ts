@@ -1,8 +1,37 @@
+import type { OrgInviteMetadataType } from "@benree/agentcall-shared";
 import { ApiError, createInvite, listInvites, revokeInvite } from "../api.js";
 import { relayUrl } from "../config.js";
 import type { LineContext } from "../line-context.js";
 
 type LineFor = (line: string | undefined) => LineContext | undefined;
+
+// What an administrator does next with an invite is send it to a person, so
+// on a terminal print the message rather than the raw material for it. The
+// piped shape is a contract and stays a bare token — see the isTTY branch.
+//
+// The ID is sha256 of the token (apps/relay/src/invites.ts:58), so showing
+// both discloses nothing the holder cannot already derive, and it saves an
+// `invite list` round trip when a mis-sent invite has to be cancelled.
+function shareableInvite(invite: string, meta: OrgInviteMetadataType): string {
+  const expiresAt = new Date(meta.expires_at);
+  const days = Math.max(0, Math.round((meta.expires_at - Date.now()) / 86_400_000));
+  const role = meta.role === "admin" ? "ADMIN" : meta.role;
+  return [
+    `Invite created — ${role}, expires in ${days} days (${expiresAt.toISOString().slice(0, 10)}).`,
+    // The single most consequential flag on this command used to produce
+    // output shape-identical to a member invite. Say what it grants.
+    ...(meta.role === "admin"
+      ? ["  Grants organization admin: issue and revoke invites, and export the audit log."]
+      : []),
+    "",
+    "  Send this:",
+    "",
+    "    npm install -g @benree/agentcall",
+    `    agentcall setup --invite ${invite}`,
+    "",
+    `  Revoke it with:  agentcall invite revoke ${meta.id}`,
+  ].join("\n");
+}
 
 export function register(program: { command(name: string): any }, lineFor: LineFor): void {
   const invite = program.command("invite").description("manage one-time organization invites");
@@ -29,9 +58,14 @@ export function register(program: { command(name: string): any }, lineFor: LineF
             ...(o.role ? { role: o.role } : {}),
           },
         );
-        console.log(created.invite);
-        console.error(`ID ${created.metadata.id}`);
-        console.error(`Expires ${new Date(created.metadata.expires_at).toISOString()}`);
+        if (process.stdout.isTTY) console.log(shareableInvite(created.invite, created.metadata));
+        else {
+          // Piped or redirected: stdout stays exactly the token and nothing
+          // else, so `agentcall invite create > token.txt` keeps working.
+          console.log(created.invite);
+          console.error(`ID ${created.metadata.id}`);
+          console.error(`Expires ${new Date(created.metadata.expires_at).toISOString()}`);
+        }
       } catch (e) {
         console.error(e instanceof ApiError ? e.message : String(e));
         process.exitCode = 1;
