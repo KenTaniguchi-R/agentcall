@@ -109,7 +109,9 @@ and is not one. Run `wrangler d1 migrations apply agentcall --local` from
 Before calling any task done: `pnpm -r build && pnpm -r typecheck && pnpm -r test`
 must all pass at the repo root. **Build first** — `packages/cli` typechecks against
 `packages/shared`'s built `dist`, so running build last checks the *previous* run's
-types. `.github/workflows/ci.yml` runs exactly this order on every push and PR.
+types. `.github/workflows/ci.yml` runs exactly this order when manually dispatched;
+automatic push and PR runs are temporarily paused to avoid consuming GitHub Actions
+minutes.
 
 `typecheck` covers `src` *and* `test`. `shared` and `cli` each carry a
 `tsconfig.test.json` (`include: ["src", "test"]`, `noEmit`) that their `typecheck`

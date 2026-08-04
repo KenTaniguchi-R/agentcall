@@ -6,6 +6,7 @@ import { parse } from "yaml";
 const root = join(import.meta.dirname, "../../..");
 const workflow = readFileSync(join(root, ".github/workflows/release.yml"), "utf8");
 const ciWorkflow = readFileSync(join(root, ".github/workflows/ci.yml"), "utf8");
+const invariantsWorkflow = readFileSync(join(root, ".github/workflows/invariants.yml"), "utf8");
 const pagesWorkflow = readFileSync(join(root, ".github/workflows/pages.yml"), "utf8");
 const workflowFiles = ["ci.yml", "invariants.yml", "pages.yml", "release.yml", "stale-claims.yml"];
 
@@ -48,6 +49,13 @@ function actionReferences(value: unknown): string[] {
 }
 
 describe("npm release workflow", () => {
+  it("keeps billable verification workflows manual-only while automatic runs are paused", () => {
+    for (const source of [ciWorkflow, invariantsWorkflow]) {
+      expect(source).toMatch(/^on:\n  workflow_dispatch:\s*$/m);
+      expect(source).not.toMatch(/^  (?:pull_request|push):/m);
+    }
+  });
+
   it("publishes the CLI for both supported listener platforms", () => {
     const manifest = JSON.parse(readFileSync(join(root, "packages/cli/package.json"), "utf8"));
     expect(manifest.os).toEqual(["darwin", "linux"]);

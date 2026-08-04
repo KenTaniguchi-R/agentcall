@@ -3,10 +3,11 @@ name: Invariants
 # The rules in CLAUDE.md that nothing currently enforces. Deterministic checks
 # only -- no model, no secrets, no network. Runs read-only: findings surface as
 # GitHub annotations on the PR, which need no write permission.
+# Automatic runs are temporarily paused to avoid consuming GitHub Actions
+# minutes. Keep the workflow runnable by hand so the checks remain easy to
+# verify and restore.
 on:
-  pull_request:
-  push:
-    branches: [main]
+  workflow_dispatch:
 
 permissions:
   contents: read
