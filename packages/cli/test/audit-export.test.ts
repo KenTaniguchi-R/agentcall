@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vitest";
+import type { AuditExportEventType } from "@benree/agentcall-shared";
 import { auditCsvRow, csvCell, parseAuditFilter, parseAuditTime } from "../src/commands/audit-export.js";
 
 describe("audit export helpers", () => {
@@ -16,6 +17,6 @@ describe("audit export helpers", () => {
   it("neutralizes spreadsheet formulas and quotes CSV cells", () => {
     expect(csvCell("=SUM(A1)")).toBe("'=SUM(A1)");
     expect(csvCell("a,b")).toBe('"a,b"');
-    expect(auditCsvRow({ ledger: "org", id: "1", event: "x", action_type: "y", roster_id: null, actor: "a", actor_type: "human", target_type: null, target_id: null, target_role: null, actor_ip: null, actor_country: null, description: "ok", at: 1 })).toContain("org,1,x,y");
+    expect(auditCsvRow({ ledger: "org", id: 1, event: "x", action_type: "C", roster_id: null, actor: "a", actor_type: "human", target_type: null, target_id: null, target_role: null, actor_ip: null, actor_country: null, description: "ok", at: 1 } as AuditExportEventType)).toContain("org,1,x,C");
   });
 });

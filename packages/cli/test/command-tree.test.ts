@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { createProgram } from "../src/index.js";
 
-function commandTree(command: { name(): string; alias(): string; description(): string; commands: Array<any>; options: Array<{ flags: string; description: string }> }): unknown {
+function commandTree(command: { name(): string; alias(): string; description(): string; commands: readonly any[]; options: readonly { flags: string; description: string }[] }): unknown {
   return {
     name: command.name(),
     alias: command.alias(),
