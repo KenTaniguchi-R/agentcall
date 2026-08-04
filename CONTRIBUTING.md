@@ -69,7 +69,24 @@ work in this repo, and on 2026-08-01 two sessions committed to the same checkout
 minutes apart while neither could see the other.
 
 ```bash
-git worktree add .claude/worktrees/<topic> -b <branch>
+git worktree add /tmp/agentcall-<topic> -b <branch>
+```
+
+**Put it outside the repo.** Earlier guidance here used `.claude/worktrees/`,
+and nesting turned out to cost more than it saved: those checkouts reached
+3.8 GB, buried real untracked files in `git status`, sat one `git clean -fdx`
+away from deletion, and held their branches hostage — `main` checked out at
+`.codex/worktrees/issue49` makes `git switch main` fail in the main checkout
+with "already used by worktree". Both nested paths are now gitignored, but a
+path outside the repo avoids the problem rather than hiding it.
+
+Remove a worktree when you are done with it. `git worktree remove <path>`
+deletes only the directory; the branch and its commits stay in the repo.
+
+```bash
+git worktree list                  # what exists
+git worktree remove <path>         # done with it
+git worktree prune                 # drop records of directories already gone
 ```
 
 Claiming stops two people taking the same *issue*. This stops two sessions

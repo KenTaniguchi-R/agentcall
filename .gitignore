@@ -6,3 +6,16 @@ dist/
 .dev.vars
 apps/relay/wrangler.self-host.jsonc
 .DS_Store
+.pnpm-store/
+
+# Agent worktrees. CONTRIBUTING tells you to make one per session, and the
+# example path puts it here — so these accumulate, and unignored they bury the
+# real untracked files in `git status`. Only the `worktrees/` subdirectory is
+# ignored, so a future committed `.claude/settings.json` still shows up.
+#
+# Prefer a path OUTSIDE the repo. A worktree nested in the working tree is one
+# `git clean -fdx` away from being deleted with everything in it, and it holds
+# its branch hostage: `main` checked out at `.codex/worktrees/issue49` makes
+# `git switch main` fail in this checkout with "already used by worktree".
+.claude/worktrees/
+.codex/worktrees/
