@@ -122,6 +122,12 @@ inv_relay_auth_middleware() {
     fail "relay routes must have the shared identity middleware and explicit public allowlist"
     return
   fi
+  if grep -Fq 'startsWith("/v1/room/")' apps/relay/src/middleware.ts ||
+     grep -Fq 'startsWith("/v1/a2a/")' apps/relay/src/middleware.ts ||
+     ! grep -Fq 'requireA2AIdentity' apps/relay/src/a2a.ts; then
+    fail "relay identity exceptions must be explicit and A2A must use its route-local seam"
+    return
+  fi
   unexpected=$(grep -rl 'authenticateRequest' apps/relay/src --include='*.ts' | \
     grep -vE '/(tenant|middleware|a2a)\.ts$' || true)
   if [ -n "$unexpected" ]; then

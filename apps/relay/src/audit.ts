@@ -417,7 +417,7 @@ async function readPage(
 
 export function mountAudit(app: Hono<RelayAppEnv>): void {
   app.get("/v1/audit/retention-readiness", rateLimit(AUDIT_READ, "identity", "audit-retention-read:"), async (c) => {
-    const identity = (c as any).get("identity");
+    const identity = c.var.identity;
     if (!requireOrgAdmin(identity)) return c.json({ error: "administrator role required" }, 403);
     const evaluatedAt = parseEvaluationTime(new URL(c.req.url), Date.now());
     if (evaluatedAt === null) return c.json({ error: "invalid evaluation time" }, 400);
@@ -436,13 +436,13 @@ export function mountAudit(app: Hono<RelayAppEnv>): void {
   });
 
   app.get("/v1/audit/retention-policy", rateLimit(AUDIT_READ, "identity", "audit-retention-read:"), async (c) => {
-    const identity = (c as any).get("identity");
+    const identity = c.var.identity;
     if (!requireOrgAdmin(identity)) return c.json({ error: "administrator role required" }, 403);
     return c.json(await readPolicy(c.env.DB, identity.org), 200, { "Cache-Control": "no-store" });
   });
 
   app.put("/v1/audit/retention-policy", rateLimit(AUDIT_WRITE, "identity", "audit-retention-write:"), async (c) => {
-    const identity = (c as any).get("identity");
+    const identity = c.var.identity;
     if (!requireOrgAdmin(identity)) return c.json({ error: "administrator role required" }, 403);
     const body = AuditRetentionPolicyUpdateRequest.safeParse(await c.req.json().catch(() => null));
     if (!body.success) return c.json({ error: "invalid request" }, 400);
@@ -522,7 +522,7 @@ export function mountAudit(app: Hono<RelayAppEnv>): void {
   });
 
   app.get("/v1/audit/legal-holds", rateLimit(AUDIT_READ, "identity", "audit-hold-read:"), async (c) => {
-    const identity = (c as any).get("identity");
+    const identity = c.var.identity;
     if (!requireOrgAdmin(identity)) return c.json({ error: "administrator role required" }, 403);
     return c.json({ active_hold: publicAuditHold(await readActiveHold(c.env.DB, identity.org)) }, 200, {
       "Cache-Control": "no-store",
@@ -530,7 +530,7 @@ export function mountAudit(app: Hono<RelayAppEnv>): void {
   });
 
   app.get("/v1/audit/legal-holds/:holdId", rateLimit(AUDIT_READ, "identity", "audit-hold-read:"), async (c) => {
-    const identity = (c as any).get("identity");
+    const identity = c.var.identity;
     if (!requireOrgAdmin(identity)) return c.json({ error: "administrator role required" }, 403);
     const holdId = c.req.param("holdId");
     if (!AUDIT_HOLD_ID_RE.test(holdId)) return c.json({ error: "audit legal hold not found" }, 404);
@@ -540,7 +540,7 @@ export function mountAudit(app: Hono<RelayAppEnv>): void {
   });
 
   app.post("/v1/audit/legal-holds", rateLimit(AUDIT_WRITE, "identity", "audit-hold-write:"), async (c) => {
-    const identity = (c as any).get("identity");
+    const identity = c.var.identity;
     if (!requireOrgAdmin(identity)) return c.json({ error: "administrator role required" }, 403);
     const body = AuditLegalHoldCreateRequest.safeParse(await c.req.json().catch(() => null));
     if (!body.success) return c.json({ error: "invalid request" }, 400);
@@ -595,7 +595,7 @@ export function mountAudit(app: Hono<RelayAppEnv>): void {
   });
 
   app.post("/v1/audit/legal-holds/:holdId/release", rateLimit(AUDIT_WRITE, "identity", "audit-hold-write:"), async (c) => {
-    const identity = (c as any).get("identity");
+    const identity = c.var.identity;
     if (!requireOrgAdmin(identity)) return c.json({ error: "administrator role required" }, 403);
     const body = AuditLegalHoldReleaseRequest.safeParse(await c.req.json().catch(() => null));
     if (!body.success) return c.json({ error: "invalid request" }, 400);
@@ -657,7 +657,7 @@ export function mountAudit(app: Hono<RelayAppEnv>): void {
   });
 
   app.get("/v1/audit/events", rateLimit(AUDIT_READ, "identity", "audit-export:"), async (c) => {
-    const identity = (c as any).get("identity");
+    const identity = c.var.identity;
     if (!requireOrgAdmin(identity)) return c.json({ error: "administrator role required" }, 403);
     const query = parseQuery(new URL(c.req.url));
     if (!query) return c.json({ error: "invalid audit export parameters" }, 400);
@@ -711,7 +711,7 @@ export function mountAudit(app: Hono<RelayAppEnv>): void {
   });
 
   app.post("/v1/audit/export-acknowledgements", rateLimit(AUDIT_WRITE, "identity", "audit-ack:"), async (c) => {
-    const identity = (c as any).get("identity");
+    const identity = c.var.identity;
     if (!requireOrgAdmin(identity)) return c.json({ error: "administrator role required" }, 403);
     const body = AuditExportAcknowledgementRequest.safeParse(await c.req.json().catch(() => null));
     if (!body.success) return c.json({ error: "invalid request" }, 400);

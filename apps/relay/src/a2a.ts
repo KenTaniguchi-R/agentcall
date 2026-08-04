@@ -1,4 +1,4 @@
-import type { Context, Hono } from "hono";
+import type { Context, Hono, MiddlewareHandler } from "hono";
 // Type-only, so the index -> a2a -> index cycle is erased at compile time and
 // never exists at runtime. Do not turn this into a value import.
 import type { Env } from "./index.js";
@@ -8,8 +8,10 @@ import {
 } from "@benree/agentcall-shared";
 import { authenticateRequest, identityKey } from "./tenant.js";
 import { sharedRosterIds } from "./groups.js";
-import { checkLimit, NATIVE_READ } from "./ratelimit/index.js";
+import { NATIVE_READ } from "./ratelimit/index.js";
 import { parseStoredCard } from "./stored-card.js";
+import type { RelayAppEnv } from "./middleware.js";
+import { rateLimit } from "./middleware.js";
 
 // The card endpoint is public and cheap; a short TTL keeps the TCK's
 // Cache-Control/ETag checks satisfied without making policy edits slow to
@@ -18,7 +20,7 @@ const CARD_MAX_AGE = 300;
 const A2A_CONTENT_TYPE = "application/a2a+json";
 const A2A_HEADERS = { "Content-Type": A2A_CONTENT_TYPE } as const;
 
-type A2AContext = Context<{ Bindings: Env }>;
+type A2AContext = Context<RelayAppEnv>;
 type TaskAccess = { caller: string; cursorKey: string; cursorScope: string; stub: DurableObjectStub };
 
 async function taskCursorKey(req: A2AContext["req"]): Promise<string> {
@@ -29,21 +31,7 @@ async function taskCursorKey(req: A2AContext["req"]): Promise<string> {
 }
 
 async function authorizeTaskAccess(c: A2AContext): Promise<TaskAccess | Response> {
-  const version = c.req.header(A2A_VERSION_HEADER) ?? c.req.query(A2A_VERSION_HEADER);
-  if (!isSupportedA2AVersion(version)) {
-    const { status, body } = a2aError("VersionNotSupported", `unsupported A2A-Version: ${version}`);
-    return c.json(body, status as 400, A2A_HEADERS);
-  }
-  const identity = await authenticateRequest(c.env, c.req);
-  if (!identity) {
-    const { status, body } = standardError(401, "unauthorized");
-    return c.json(body, status as 401, A2A_HEADERS);
-  }
-  const ip = c.req.header("cf-connecting-ip") ?? "unknown";
-  if (!(await checkLimit(c.env, ip, NATIVE_READ))) {
-    const { status, body } = standardError(429, "rate limited");
-    return c.json(body, status as 429, A2A_HEADERS);
-  }
+  const identity = c.var.identity;
   const target = c.req.param("handle") ?? "";
   const cursorScope = identityKey(identity.org, target);
   return {
@@ -95,7 +83,35 @@ function privateCardHeaders(etagSource: string, updatedAtMs: number): Record<str
   };
 }
 
-export function mountA2A(app: Hono<{ Bindings: Env }>): void {
+export function mountA2A(app: Hono<RelayAppEnv>): void {
+  // A2A keeps its application/a2a+json error contract, so it has a narrow
+  // route-local identity seam while the shared /v1 middleware deliberately
+  // leaves these protocol handlers alone.
+  const requireA2AIdentity: MiddlewareHandler<RelayAppEnv> = async (c, next) => {
+    const identity = await authenticateRequest(c.env, c.req);
+    if (!identity) {
+      const { status, body } = standardError(401, "unauthorized");
+      return c.json(body, status as 401, A2A_HEADERS);
+    }
+    c.set("identity", identity);
+    await next();
+  };
+  const requireA2AVersion: MiddlewareHandler<RelayAppEnv> = async (c, next) => {
+    const version = c.req.header(A2A_VERSION_HEADER) ?? c.req.query(A2A_VERSION_HEADER);
+    if (!isSupportedA2AVersion(version)) {
+      const { status, body } = a2aError("VersionNotSupported", `unsupported A2A-Version: ${version}`);
+      return c.json(body, status as 400, A2A_HEADERS);
+    }
+    await next();
+  };
+  const a2aRateLimited = (c: A2AContext) => {
+    const { status, body } = standardError(429, "rate limited");
+    return c.json(body, status as 429, A2A_HEADERS);
+  };
+  app.use("/v1/a2a/:handle/agent-card.json", requireA2AIdentity);
+  app.use("/v1/a2a/:handle/tasks", requireA2AIdentity);
+  app.use("/v1/a2a/:handle/tasks/*", requireA2AIdentity);
+
   app.get("/.well-known/agent-card.json", (c) => {
     const version = c.req.header(A2A_VERSION_HEADER);
     if (!isSupportedA2AVersion(version)) {
@@ -107,25 +123,9 @@ export function mountA2A(app: Hono<{ Bindings: Env }>): void {
     return c.json(card, 200, cardHeaders(`dir-${CARD_MAX_AGE}`, 0));
   });
 
-  app.get("/v1/a2a/:handle/agent-card.json", async (c) => {
-    const version = c.req.header(A2A_VERSION_HEADER);
-    if (!isSupportedA2AVersion(version)) {
-      const { status, body } = a2aError("VersionNotSupported", `unsupported A2A-Version: ${version}`);
-      return c.json(body, status as 400, A2A_HEADERS);
-    }
-
-    const identity = await authenticateRequest(c.env, c.req);
-    if (!identity) {
-      const { status, body } = standardError(401, "unauthorized");
-      return c.json(body, status as 401, A2A_HEADERS);
-    }
+  app.get("/v1/a2a/:handle/agent-card.json", requireA2AVersion, rateLimit(NATIVE_READ, "ip", "", a2aRateLimited), async (c) => {
+    const identity = c.var.identity;
     const { org, handle: viewer } = identity;
-
-    const ip = c.req.header("cf-connecting-ip") ?? "unknown";
-    if (!(await checkLimit(c.env, ip, NATIVE_READ))) {
-      const { status, body } = standardError(429, "rate limited");
-      return c.json(body, status as 429, A2A_HEADERS);
-    }
 
     const handle = c.req.param("handle");
     const row = await c.env.DB.prepare(
@@ -158,13 +158,13 @@ export function mountA2A(app: Hono<{ Bindings: Env }>): void {
     return c.json(card, 200, privateCardHeaders(`${org}-${viewer}-${handle}-${row.updated_at}`, row.updated_at));
   });
 
-  app.get("/v1/a2a/:handle/tasks", async (c) => {
+  app.get("/v1/a2a/:handle/tasks", requireA2AVersion, rateLimit(NATIVE_READ, "ip", "", a2aRateLimited), async (c) => {
     const access = await authorizeTaskAccess(c);
     if (access instanceof Response) return access;
     return forwardTaskRequest(access, "/tasks", new URL(c.req.url).search);
   });
 
-  app.get("/v1/a2a/:handle/tasks/*", async (c) => {
+  app.get("/v1/a2a/:handle/tasks/*", requireA2AVersion, rateLimit(NATIVE_READ, "ip", "", a2aRateLimited), async (c) => {
     const access = await authorizeTaskAccess(c);
     if (access instanceof Response) return access;
     const id = taskPathSuffix(c);
@@ -175,7 +175,7 @@ export function mountA2A(app: Hono<{ Bindings: Env }>): void {
     return forwardTaskRequest(access, `/tasks/${encodeURIComponent(id)}`, new URL(c.req.url).search);
   });
 
-  app.post("/v1/a2a/:handle/tasks/*", async (c) => {
+  app.post("/v1/a2a/:handle/tasks/*", requireA2AVersion, rateLimit(NATIVE_READ, "ip", "", a2aRateLimited), async (c) => {
     const access = await authorizeTaskAccess(c);
     if (access instanceof Response) return access;
     const operation = taskPathSuffix(c);

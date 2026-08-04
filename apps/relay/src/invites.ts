@@ -50,7 +50,7 @@ export function expiredInviteCleanupStatement(
 }
 
 async function createInvite(
-  c: Context<{ Bindings: Env }>, org: string, createdBy: string | null,
+  c: Context<RelayAppEnv>, org: string, createdBy: string | null,
   actor: string, actorType: OrgAuditActor, description: string, expiresInDays: number,
   role: OrgRoleType,
 ) {
@@ -103,7 +103,7 @@ export function mountInvites(app: Hono<RelayAppEnv>): void {
   });
 
   app.post("/v1/invites", rateLimit(REGISTER, "identity", "invite:"), async (c) => {
-    const identity = (c as any).get("identity");
+    const identity = c.var.identity;
     if (!requireOrgAdmin(identity)) return c.json({ error: "administrator role required" }, 403);
     const body = CreateOrgInviteRequest.safeParse(await c.req.json().catch(() => null));
     if (!body.success) return c.json({ error: "invalid request" }, 400);
@@ -114,7 +114,7 @@ export function mountInvites(app: Hono<RelayAppEnv>): void {
   });
 
   app.post("/v1/invites/list", rateLimit(ROSTER_WRITE, "identity", "invite-list:"), async (c) => {
-    const identity = (c as any).get("identity");
+    const identity = c.var.identity;
     if (!requireOrgAdmin(identity)) return c.json({ error: "administrator role required" }, 403);
     const { results } = await c.env.DB.prepare(
       "SELECT token_hash, description, created_by, created_at, expires_at, used_at, used_by, revoked_at, org_role " +
@@ -126,7 +126,7 @@ export function mountInvites(app: Hono<RelayAppEnv>): void {
   });
 
   app.post("/v1/invites/:id/revoke", rateLimit(ROSTER_WRITE, "identity", "invite-revoke:"), async (c) => {
-    const identity = (c as any).get("identity");
+    const identity = c.var.identity;
     if (!requireOrgAdmin(identity)) return c.json({ error: "administrator role required" }, 403);
     const id = c.req.param("id");
     if (!ORG_INVITE_ID_RE.test(id)) return c.json({ error: "invalid invite id" }, 400);

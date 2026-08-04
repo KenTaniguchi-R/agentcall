@@ -116,7 +116,7 @@ function exactReceipt(row: StoredReceipt, request: RecoveryRedeemRequestType, cu
 
 export function mountRecovery(app: Hono<RelayAppEnv>): void {
   app.get("/v1/recovery/status", async (c) => {
-    const identity = (c as any).get("identity");
+    const identity = c.var.identity;
     const row = await c.env.DB.prepare(
       "SELECT recovery_hash, recovery_generation FROM handles WHERE org = ? AND handle = ?",
     ).bind(identity.org, identity.handle).first<{ recovery_hash: string | null; recovery_generation: number }>();
@@ -129,7 +129,7 @@ export function mountRecovery(app: Hono<RelayAppEnv>): void {
   });
 
   app.post("/v1/recovery/issue", rateLimit(REGISTER, "identity", "recovery-issue:"), async (c) => {
-    const identity = (c as any).get("identity");
+    const identity = c.var.identity;
     const body = RecoveryIssueRequest.safeParse(await c.req.json().catch(() => null));
     if (!body.success || body.data.successor_recovery_public_id !==
       publicId("agr", body.data.successor_recovery_digest)) {

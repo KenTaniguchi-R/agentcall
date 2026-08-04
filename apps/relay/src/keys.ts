@@ -11,7 +11,7 @@ import { rateLimit, type RelayAppEnv } from "./middleware.js";
 const NOT_FOUND = { error: "not found" } as const;
 
 async function storedIdentity(
-  c: Context<{ Bindings: Env }>, org: string, handle: string,
+  c: Context<RelayAppEnv>, org: string, handle: string,
 ): Promise<string | null> {
   const row = await c.env.DB.prepare(
     "SELECT identity_pub FROM identity_keys WHERE org = ? AND handle = ?",
@@ -25,7 +25,7 @@ async function storedIdentity(
  * address a CLI has ever seen — deriving it any other way here would sign one
  * address and serve another, and these records are permanent.
  */
-function addressFor(c: Context<{ Bindings: Env }>, org: string, handle: string): string {
+function addressFor(c: Context<RelayAppEnv>, org: string, handle: string): string {
   return `${handle}@${registrationAddressHost(org, c.req.url)}`;
 }
 
@@ -33,7 +33,7 @@ export function mountKeys(app: Hono<RelayAppEnv>): void {
   // Publish once. Replacement is refused rather than versioned: an identity key
   // a relay can swap is not a trust root.
   app.put("/v1/keys/identity", rateLimit(NATIVE_CARD, "identity"), async (c) => {
-    const identity = (c as any).get("identity");
+    const identity = c.var.identity;
     const body = await c.req.json().catch(() => null) as
       { record?: unknown; signature?: unknown } | null;
     const parsed = IdentityRecord.safeParse(body?.record);
@@ -82,7 +82,7 @@ export function mountKeys(app: Hono<RelayAppEnv>): void {
   });
 
   app.put("/v1/keys/encryption", rateLimit(NATIVE_CARD, "identity"), async (c) => {
-    const identity = (c as any).get("identity");
+    const identity = c.var.identity;
     const body = await c.req.json().catch(() => null) as
       { record?: unknown; signature?: unknown } | null;
     const parsed = EncryptionKeyRecord.safeParse(body?.record);
@@ -157,7 +157,7 @@ export function mountKeys(app: Hono<RelayAppEnv>): void {
   // Authenticated: key records name who talks to whom, so anonymous reads would
   // hand an unregistered scraper the whole namespace.
   app.get("/v1/keys/:handle", rateLimit(NATIVE_READ, "ip"), async (c) => {
-    const identity = (c as any).get("identity");
+    const identity = c.var.identity;
 
     const target = c.req.param("handle");
     const identityPub = await storedIdentity(c, identity.org, target);

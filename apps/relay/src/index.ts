@@ -32,7 +32,7 @@ export type Env = RateLimitEnv & {
   /** Pins a customer-operated relay to one tenant and makes the tenant hostname-independent. */
   SELF_HOSTED_ORG?: string;
 };
-const app = new Hono<{ Bindings: Env }>();
+const app = new Hono<RelayAppEnv>();
 app.use("/v1/*", requireIdentity);
 mountA2A(app);
 mountAudit(app);
@@ -134,7 +134,7 @@ app.post("/v1/register", async (c) => {
 // Token rotation shares the 5/min credential-operation policy. Its distinct
 // key keeps it from sharing a budget with registrations or invite creation.
 app.post("/v1/token/rotate", rateLimit(REGISTER, "identity", "rotate:"), async (c) => {
-  const identity = (c as any).get("identity");
+  const identity = c.var.identity;
   const { org, handle } = identity;
   const next = generateToken();
   // UPDATE, never INSERT: an unregistered handle can't reach here (it fails
@@ -148,7 +148,7 @@ app.post("/v1/token/rotate", rateLimit(REGISTER, "identity", "rotate:"), async (
 });
 
 app.put("/v1/card", rateLimit(NATIVE_CARD, "identity"), async (c) => {
-  const identity = (c as any).get("identity");
+  const identity = c.var.identity;
   const { org, handle } = identity;
   const body = CardUpload.safeParse(await c.req.json().catch(() => null));
   if (!body.success) return c.json({ error: "invalid card" }, 400);
@@ -160,7 +160,7 @@ app.put("/v1/card", rateLimit(NATIVE_CARD, "identity"), async (c) => {
 });
 
 app.get("/v1/card/:handle", rateLimit(NATIVE_READ, "ip"), async (c) => {
-  const identity = (c as any).get("identity");
+  const identity = c.var.identity;
   const { org, handle: viewer } = identity;
   const handle = c.req.param("handle");
   const row = await c.env.DB.prepare("SELECT card_json, updated_at FROM cards WHERE org = ? AND handle = ?")
@@ -181,7 +181,7 @@ app.get("/v1/card/:handle", rateLimit(NATIVE_READ, "ip"), async (c) => {
 app.get("/v1/ws", async (c) => {
   if (c.req.header("Upgrade")?.toLowerCase() !== "websocket") return c.json({ error: "expected websocket" }, 426);
   const role = c.req.query("role");
-  const identity = (c as any).get("identity");
+  const identity = c.var.identity;
   const { org, handle } = identity;
 
   let target: string;

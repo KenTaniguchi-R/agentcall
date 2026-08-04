@@ -1,6 +1,7 @@
 import type { Context } from "hono";
 import type { OrgAuditEvent, OrgRoleType, RosterAuditEvent } from "@benree/agentcall-shared";
 import type { Env } from "./index.js";
+import type { RelayAppEnv } from "./middleware.js";
 
 export type AuditAction = "C" | "R" | "U" | "D";
 export type AuditActor = "handle" | "admin_secret" | "system";
@@ -39,7 +40,7 @@ export const MAX_ROSTER_AUDIT_EVENTS = 10_000;
 export const MAX_RETAINED_ORG_AUDIT_EVENTS = 10_000;
 export type AuditCondition = "always" | "previous-change" | "roster-exists";
 
-export function auditLocation(c: Context<{ Bindings: Env }>): [string | null, string | null] {
+export function auditLocation(c: Context<RelayAppEnv>): [string | null, string | null] {
   const country = c.req.raw.cf?.country;
   return [
     c.req.header("cf-connecting-ip") ?? null,
@@ -51,7 +52,7 @@ export function auditLocation(c: Context<{ Bindings: Env }>): [string | null, st
 // Append this statement after every state-changing statement in the same D1
 // batch so a failed mutation cannot leave behind evidence that it succeeded.
 export function rosterAuditStatement(
-  c: Context<{ Bindings: Env }>, audit: RosterAudit, condition: AuditCondition = "always",
+  c: Context<RelayAppEnv>, audit: RosterAudit, condition: AuditCondition = "always",
 ): D1PreparedStatement {
   const [actorIp, actorCountry] = auditLocation(c);
   const values = "?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?";
@@ -73,7 +74,7 @@ export function rosterAuditStatement(
 }
 
 export function orgAuditStatement(
-  c: Context<{ Bindings: Env }>, audit: OrgAudit, condition: "always" | "previous-change" = "always",
+  c: Context<RelayAppEnv>, audit: OrgAudit, condition: "always" | "previous-change" = "always",
 ): D1PreparedStatement {
   const [actorIp, actorCountry] = auditLocation(c);
   const values = "?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?";
