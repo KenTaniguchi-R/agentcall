@@ -51,16 +51,26 @@ jobs:
       - name: Protocol frames must live in packages/shared
         run: |
           # A frame is identifiable by its `type:` discriminator, which is
-          # always a STRING literal -- z.literal("call_request"). Anywhere
+          # always a STRING literal -- type: z.literal("call_request"). Anywhere
           # outside packages/shared that means a frame shape was redefined
           # locally instead of imported from the single source of truth.
           #
-          # Matching bare `z.literal(` instead flagged `version: z.literal(1)`
-          # in packages/cli/src/rosters.ts -- a local file-format version tag,
-          # not a protocol frame. All 13 discriminators in protocol.ts are
-          # string literals and it declares no numeric ones, so requiring the
-          # quote costs no coverage.
-          hits=$(grep -rn 'z\.literal("' apps/relay/src packages/cli/src || true)
+          # Match the `type:` KEY, not a bare string literal. Two rounds of
+          # false positives came from matching less:
+          #   z.literal(         -> `version: z.literal(1)` in rosters.ts, a
+          #                         local file-format tag. Fixed by requiring
+          #                         the quote.
+          #   z.literal("        -> `state: z.literal("active"|"retired")` in
+          #                         keys.ts, the on-disk epoch state union, and
+          #                         `format: z.literal(2)` beside it. Same class
+          #                         of thing: a local file format, not a frame.
+          # Requiring `type:` costs no coverage, because a redefined frame must
+          # carry that discriminator to be a frame at all. protocol.ts holds 10
+          # string literals, 8 of them `type:` discriminators; the other two
+          # (`origin: z.literal("relay")`, `code: z.literal("protocol_error")`)
+          # are field constraints INSIDE a frame, not frame identifiers. No
+          # declaration splits the key and the literal across lines.
+          hits=$(grep -rnE 'type:\s*z\.literal\("' apps/relay/src packages/cli/src || true)
           if [ -n "$hits" ]; then
             echo "$hits" | while IFS=: read -r file line _; do
               echo "::error file=$file,line=$line::Protocol frame defined outside packages/shared. Frame shapes are declared once in packages/shared/src/protocol.ts and imported -- see CLAUDE.md."
