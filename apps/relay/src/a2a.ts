@@ -136,9 +136,12 @@ export function mountA2A(app: Hono<RelayAppEnv>): void {
     const { org, handle: viewer } = identity;
 
     const handle = c.req.param("handle");
-    const row = await c.env.DB.prepare(
-      "SELECT card_json, updated_at FROM cards WHERE org = ? AND handle = ?",
-    ).bind(org, handle).first<{ card_json: string; updated_at: number }>();
+    const targetAgentId = await resolveAgentId(c.env.DB, org, handle);
+    const row = targetAgentId
+      ? await c.env.DB.prepare(
+        "SELECT card_json, updated_at FROM cards WHERE org = ? AND agent_id = ?",
+      ).bind(org, targetAgentId).first<{ card_json: string; updated_at: number }>()
+      : null;
 
     // §3.3.2 Resource category — a plain 404, NOT TaskNotFoundError, which is
     // an A2A-specific error about tasks and would be semantically wrong for a
