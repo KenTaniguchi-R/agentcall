@@ -1,4 +1,4 @@
-import { existsSync, rmSync } from "node:fs";
+import { existsSync } from "node:fs";
 import { Command, CommanderError } from "commander";
 import type { AgentKind, AuditCheckpointType } from "@benree/agentcall-shared";
 import { getLinePaths, getMachinePaths, type LinePaths } from "./paths.js";
@@ -12,7 +12,6 @@ import { getStatus, fetchCard, fetchKeys, publishEncryptionKey, publishIdentityK
 import { startAllListeners } from "./listenAll.js";
 import { startListener } from "./listener.js";
 import { runSetup } from "./setup.js";
-import { uninstallListenerService } from "./listener-service.js";
 import { publishCard } from "./card.js";
 import { loadPolicy, loadUserPolicy, savePolicy, validatePolicy } from "./policy.js";
 import { assertValidLineName, loadLineConfig, readyLines } from "./lines.js";
@@ -40,6 +39,7 @@ import { getTelemetry, shutdownTelemetry, telemetrySafely } from "./telemetry.js
 import { loadKeys } from "./keys.js";
 import { resetPeerTrust, verifyAndPinPeer } from "./known-peers.js";
 import { AUDIT_CSV_COLUMNS, auditCsvRow, parseAuditFilter, parseAuditTime } from "./commands/audit-export.js";
+import { register as registerUninstall } from "./commands/uninstall.js";
 
 export function createProgram(): Command {
 const program = new Command();
@@ -1378,16 +1378,7 @@ recovery
     }
   });
 
-program
-  .command("uninstall")
-  .description("remove the background listener")
-  .option("--purge", "also delete ~/.agentcall (config, token, logs)")
-  .action((o: { purge?: boolean }) => {
-    const machine = getMachinePaths();
-    uninstallListenerService(machine);
-    if (o.purge) rmSync(machine.dir, { recursive: true, force: true });
-    console.log("agentcall listener removed." + (o.purge ? " Config purged." : ""));
-  });
+registerUninstall(program);
 
 return program;
 }
