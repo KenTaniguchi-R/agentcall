@@ -4,7 +4,7 @@ import {
   E2EERequestPayload, E2EEOutcome,
   HANDLE_RE, MAX_MESSAGE_BYTES, parseAddress, safeParseFrame,
   RegisterRequest, MAX_DETAIL_LENGTH, sanitizeDetail, sanitizeTerminalOutput,
-  stringifyTerminalSafeJson,
+  sanitizeTerminalCell, stringifyTerminalSafeJson,
   CallAccepted, CallStarted, CancelCall, CallCancelled, CallNotCancelled,
   AGENT_KINDS, AgentKindSchema,
   TASK_ID_RE, MAX_TASK_ID_LENGTH,
@@ -145,6 +145,41 @@ describe("call correlation", () => {
     expect(CallStatus.safeParse({
       type: "call_status", state: "ringing", call_id: "c1", correlation_id: correlationId,
     }).success).toBe(true);
+  });
+});
+
+// sanitizeTerminalOutput deliberately keeps \n and \t so a multi-line agent
+// reply stays readable. A single-line field in an aligned listing cannot
+// afford either: a newline forges a whole extra row, and a tab shifts every
+// column after it. sanitizeTerminalCell is that stricter variant.
+describe("sanitizeTerminalCell", () => {
+  it("strips the newline that would forge an extra row in a listing", () => {
+    const forged = sanitizeTerminalCell("contractor\nactive  member  2099-01-01  spoofed");
+    expect(forged).not.toContain("\n");
+    expect(forged).toContain("contractor");
+  });
+
+  it("strips tabs, which would shift every column in a tab-delimited row", () => {
+    expect(sanitizeTerminalCell("a\tb")).toBe("a b");
+  });
+
+  it("still strips what sanitizeTerminalOutput strips - ESC, C1, CR and bidi", () => {
+    // Erase-line plus carriage-return is the pair that hides an already-printed row.
+    const erasing = sanitizeTerminalCell("\u001b[2K\rgone");
+    expect(erasing).not.toContain("\u001b");
+    expect(erasing).not.toContain("\r");
+    expect(sanitizeTerminalCell("\u009b31m")).not.toContain("\u009b");
+    expect(sanitizeTerminalCell("real \u202espoof")).toBe("real  spoof");
+  });
+
+  it("leaves ordinary text, including non-ASCII, alone", () => {
+    expect(sanitizeTerminalCell("contractor ok")).toBe("contractor ok");
+  });
+
+  it("is strictly stronger than sanitizeTerminalOutput on the same input", () => {
+    const input = "one\ntwo";
+    expect(sanitizeTerminalOutput(input)).toContain("\n");
+    expect(sanitizeTerminalCell(input)).toBe("one two");
   });
 });
 
