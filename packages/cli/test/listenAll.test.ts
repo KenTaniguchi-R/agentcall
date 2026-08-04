@@ -1,14 +1,13 @@
 import { describe, expect, it, beforeEach, vi } from "vitest";
-import { mkdtempSync, mkdirSync } from "node:fs";
-import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { mkdirSync } from "node:fs";
 import { getLinePaths, getMachinePaths, type MachinePaths } from "../src/paths.js";
 import { saveLineConfig } from "../src/lines.js";
 import { startAllListeners } from "../src/listenAll.js";
+import { tempDir } from "./helpers.js";
 
 let m: MachinePaths;
 beforeEach(() => {
-  const root = mkdtempSync(join(tmpdir(), "agentcall-all-"));
+  const root = tempDir("agentcall-all-");
   m = getMachinePaths(root, root);
   mkdirSync(m.linesDir, { recursive: true });
 });

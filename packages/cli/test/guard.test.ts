@@ -1,9 +1,9 @@
-import { mkdirSync, mkdtempSync } from "node:fs";
-import { tmpdir } from "node:os";
+import { mkdirSync } from "node:fs";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 import { decide, DENY_REASON, runGuard, type GuardDeps, type GuardInput } from "../src/guard.js";
 import { getLinePaths, getMachinePaths } from "../src/paths.js";
+import { tempDir } from "./helpers.js";
 
 const HOME = "/Users/owner";
 const CWD = "/Users/owner/AgentCall/public";
@@ -634,8 +634,8 @@ describe("runGuard — observe mode", () => {
 describe("runGuard — enumerates every line's tasksDir from the real home, not a redirected state root", () => {
   function splitHomes() {
     return {
-      stateRoot: mkdtempSync(join(tmpdir(), "agentcall-guard-state-")),
-      userHome: mkdtempSync(join(tmpdir(), "agentcall-guard-home-")),
+      stateRoot: tempDir("agentcall-guard-state-"),
+      userHome: tempDir("agentcall-guard-home-"),
     };
   }
 

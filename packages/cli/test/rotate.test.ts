@@ -1,17 +1,16 @@
 import { describe, expect, it, beforeEach } from "vitest";
-import { mkdirSync, mkdtempSync, readFileSync } from "node:fs";
-import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { mkdirSync, readFileSync } from "node:fs";
 import { getLinePaths, getMachinePaths, type MachinePaths } from "../src/paths.js";
 import { saveLineConfig } from "../src/lines.js";
 import { resolveLine } from "../src/lineContext.js";
 import { rotateLine } from "../src/commands/rotate.js";
+import { tempDir } from "./helpers.js";
 
 let m: MachinePaths;
 const base = { org: "acme", handle: "ken", token: "old", relay: "https://r.example", agent_kind: "claude" as const };
 
 beforeEach(() => {
-  const root = mkdtempSync(join(tmpdir(), "agentcall-rot-"));
+  const root = tempDir("agentcall-rot-");
   m = getMachinePaths(root, root);
   mkdirSync(m.linesDir, { recursive: true });
 });

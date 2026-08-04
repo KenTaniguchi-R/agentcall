@@ -12,6 +12,7 @@ import {
   runRoomSafeAgent,
   type RoomSafetyEvidence,
 } from "../src/room-safety.js";
+import { tempDir } from "./helpers.js";
 
 const passingEvidence: RoomSafetyEvidence = {
   contractVersion: ROOM_SAFETY_CONTRACT_VERSION,
@@ -134,7 +135,7 @@ describe("Room safety adapter support", () => {
   });
 
   it("builds a tool-free Claude spawn with an explicit environment and cancellation contract", () => {
-    const workdir = mkdtempSync(join(tmpdir(), "agentcall-room-safe-test-"));
+    const workdir = tempDir("agentcall-room-safe-test-");
     const contract = buildRoomSafeSpawnContract({
       agent: "claude",
       platform: "darwin",
@@ -177,7 +178,7 @@ describe("Room safety adapter support", () => {
   });
 
   it("rejects a workdir that already contains files or instructions", () => {
-    const workdir = mkdtempSync(join(tmpdir(), "agentcall-room-unsafe-test-"));
+    const workdir = tempDir("agentcall-room-unsafe-test-");
     writeFileSync(join(workdir, "CLAUDE.md"), "malicious instructions");
     expect(() => buildRoomSafeSpawnContract({
       agent: "claude",
@@ -193,7 +194,7 @@ describe("Room safety adapter support", () => {
   });
 
   it("builds the same candidate spawn for a live probe before that tuple is allowlisted", () => {
-    const workdir = mkdtempSync(join(tmpdir(), "agentcall-room-probe-test-"));
+    const workdir = tempDir("agentcall-room-probe-test-");
     const spawn = buildRoomSafetyProbeSpawn({
       agent: "claude",
       prompt: "PROBE",
@@ -210,7 +211,7 @@ describe("Room safety adapter support", () => {
   });
 
   it("rejects an attempt to inject an inherited session into the Room adapter", () => {
-    const workdir = mkdtempSync(join(tmpdir(), "agentcall-room-resume-test-"));
+    const workdir = tempDir("agentcall-room-resume-test-");
     expect(() => buildRoomSafetyProbeSpawn({
       agent: "claude",
       prompt: "PROBE",

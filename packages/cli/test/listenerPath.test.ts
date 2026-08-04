@@ -1,15 +1,12 @@
-import { mkdtempSync } from "node:fs";
-import { tmpdir } from "node:os";
-import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 import { listenerPathDirs, resolveExtraPathDirs } from "../src/listenerPath.js";
-import { getLinePaths, getMachinePaths, type MachinePaths } from "../src/paths.js";
+import { getLinePaths, type MachinePaths } from "../src/paths.js";
 import { saveLineConfig } from "../src/lines.js";
 import type { LineConfig } from "../src/config.js";
+import { tempMachine } from "./helpers.js";
 
 function newMachine(): MachinePaths {
-  const root = mkdtempSync(join(tmpdir(), "agentcall-listenerpath-"));
-  return getMachinePaths(root, root);
+  return tempMachine("agentcall-listenerpath-");
 }
 
 const base: LineConfig = { org: "acme", handle: "ken", token: "t", relay: "https://r.example" };

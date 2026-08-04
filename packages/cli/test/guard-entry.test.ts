@@ -1,9 +1,9 @@
 import { execFile, execFileSync } from "node:child_process";
-import { mkdtempSync, readFileSync, statSync, writeFileSync } from "node:fs";
-import { tmpdir } from "node:os";
+import { readFileSync, statSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 import { GUARD_TIMEOUT_S } from "../src/runner.js";
+import { tempDir } from "./helpers.js";
 
 // The entry is a real process — that is the whole point of the file, and the
 // only way to measure what the timeout has to cover.
@@ -73,7 +73,7 @@ function one(home: string, body: string): Promise<void> {
 
 describe("guard-entry as a real process", () => {
   it("allows an ordinary read and writes tools.log", () => {
-    const home = mkdtempSync(join(tmpdir(), "guard-"));
+    const home = tempDir("guard-");
     const r = run(
       { tool_name: "Read", tool_input: { file_path: join(home, "a.ts") }, cwd: home },
       home,
@@ -91,7 +91,7 @@ describe("guard-entry as a real process", () => {
   });
 
   it("spools a stable pre-tool id without arguments and without changing the verdict", () => {
-    const home = mkdtempSync(join(tmpdir(), "guard-"));
+    const home = tempDir("guard-");
     const spool = join(home, "tool-events.jsonl");
     writeFileSync(spool, "", { mode: 0o600 });
     const r = run({
@@ -110,7 +110,7 @@ describe("guard-entry as a real process", () => {
   });
 
   it("denies a credential read and emits the structured decision", () => {
-    const home = mkdtempSync(join(tmpdir(), "guard-"));
+    const home = tempDir("guard-");
     const r = run({ tool_name: "Read", tool_input: { file_path: join(home, ".ssh/id_rsa") }, cwd: home }, home);
     expect(r.status).toBe(0);
     expect(JSON.parse(r.stdout).hookSpecificOutput.permissionDecision).toBe("deny");
@@ -119,7 +119,7 @@ describe("guard-entry as a real process", () => {
   });
 
   it("denies a file-shaped read outside AGENTCALL_ALLOWED_ROOT", () => {
-    const home = mkdtempSync(join(tmpdir(), "guard-"));
+    const home = tempDir("guard-");
     const allowed = join(home, "code", "payments");
     const r = run(
       { tool_name: "Read", tool_input: { file_path: join(home, "code", "payroll", "salary.ts") }, cwd: allowed },
@@ -131,7 +131,7 @@ describe("guard-entry as a real process", () => {
   });
 
   it("exits 2 on unparseable input", () => {
-    const home = mkdtempSync(join(tmpdir(), "guard-"));
+    const home = tempDir("guard-");
     const r = runRaw("{not json", home);
     expect(r.status).toBe(2);
   });
@@ -140,14 +140,14 @@ describe("guard-entry as a real process", () => {
   // an empty stderr it records a failed hook and runs the tool. The bare
   // `process.exit(2)` this file used to end on therefore failed OPEN there.
   it("exits 2 with a reason on stderr, which is what makes it blocking", () => {
-    const home = mkdtempSync(join(tmpdir(), "guard-"));
+    const home = tempDir("guard-");
     const r = runRaw("{not json", home);
     expect(r.status).toBe(2);
     expect(r.stderr.trim()).not.toBe("");
   });
 
   it("observes without denying when AGENTCALL_GUARD_MODE is observe", () => {
-    const home = mkdtempSync(join(tmpdir(), "guard-"));
+    const home = tempDir("guard-");
     const r = run(
       { tool_name: "Read", tool_input: { file_path: join(home, ".ssh/id_rsa") }, cwd: home },
       home,
@@ -161,7 +161,7 @@ describe("guard-entry as a real process", () => {
 
   // An unrecognised value must not silently downgrade enforcement.
   it("enforces when the mode env var is set to anything unrecognised", () => {
-    const home = mkdtempSync(join(tmpdir(), "guard-"));
+    const home = tempDir("guard-");
     const r = run(
       { tool_name: "Read", tool_input: { file_path: join(home, ".ssh/id_rsa") }, cwd: home },
       home,
@@ -176,7 +176,7 @@ describe("guard-entry as a real process", () => {
   // pass while this path was slow, because the cost is process startup.
   // Asserted against the REGISTERED timeout, not an arbitrary number.
   it("completes inside the registered timeout with 8 hooks in flight", async () => {
-    const home = mkdtempSync(join(tmpdir(), "guard-"));
+    const home = tempDir("guard-");
     const body = JSON.stringify({
       tool_name: "Read", tool_input: { file_path: join(home, "a.ts") }, cwd: home,
     });
@@ -186,7 +186,7 @@ describe("guard-entry as a real process", () => {
   });
 
   it("writes one tools.log line per concurrent call, losing none", async () => {
-    const home = mkdtempSync(join(tmpdir(), "guard-"));
+    const home = tempDir("guard-");
     const body = JSON.stringify({
       tool_name: "Read", tool_input: { file_path: join(home, "a.ts") }, cwd: home,
     });
@@ -211,7 +211,7 @@ describe("guard-entry requires AGENTCALL_LINE", () => {
   // records a guard_unwired entry so this failure mode is diagnosable rather
   // than silent.
   it("fails closed, writes no per-line log, but records guard_unwired in listenerLog", () => {
-    const home = mkdtempSync(join(tmpdir(), "guard-"));
+    const home = tempDir("guard-");
     const r = runWithoutLine(
       JSON.stringify({ tool_name: "Read", tool_input: { file_path: join(home, "a.ts") }, cwd: home }),
       home,
@@ -224,7 +224,7 @@ describe("guard-entry requires AGENTCALL_LINE", () => {
   });
 
   it("fails closed and records guard_unwired on a malformed line name too", () => {
-    const home = mkdtempSync(join(tmpdir(), "guard-"));
+    const home = tempDir("guard-");
     const r = run(
       { tool_name: "Read", tool_input: { file_path: join(home, "a.ts") }, cwd: home },
       home,
@@ -241,7 +241,7 @@ describe("guard-entry requires AGENTCALL_LINE", () => {
   // fail-open treatment (which exists so a broken guard doesn't take a
   // healthy codex spawn down with it).
   it("fails closed even when AGENTCALL_GUARD_MODE is observe", () => {
-    const home = mkdtempSync(join(tmpdir(), "guard-"));
+    const home = tempDir("guard-");
     const r = runWithoutLine(
       JSON.stringify({ tool_name: "Read", tool_input: { file_path: join(home, "a.ts") }, cwd: home }),
       home,

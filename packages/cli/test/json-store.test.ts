@@ -1,12 +1,12 @@
-import { mkdtempSync, readFileSync, writeFileSync } from "node:fs";
-import { tmpdir } from "node:os";
+import { readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 import { readJsonStore, writeJsonAtomic } from "../src/json-store.js";
+import { tempDir } from "./helpers.js";
 
 describe("writeJsonAtomic", () => {
   it("leaves the previous file intact when serialization fails", () => {
-    const dir = mkdtempSync(join(tmpdir(), "agentcall-json-store-"));
+    const dir = tempDir("agentcall-json-store-");
     const file = join(dir, "config.json");
     writeFileSync(file, "original\n");
     const circular: { self?: unknown } = {};
@@ -19,7 +19,7 @@ describe("writeJsonAtomic", () => {
 
 describe("readJsonStore", () => {
   it("uses the explicit missing-file policy", () => {
-    const dir = mkdtempSync(join(tmpdir(), "agentcall-json-store-"));
+    const dir = tempDir("agentcall-json-store-");
     const value = readJsonStore(join(dir, "missing.json"), { parse: (raw) => raw as string[] }, {
       missing: () => ["default"],
       corrupt: () => { throw new Error("unexpected corruption"); },
@@ -28,7 +28,7 @@ describe("readJsonStore", () => {
   });
 
   it("requires an explicit corruption policy and passes the detail to it", () => {
-    const dir = mkdtempSync(join(tmpdir(), "agentcall-json-store-"));
+    const dir = tempDir("agentcall-json-store-");
     const file = join(dir, "broken.json");
     writeFileSync(file, "not json\n");
     const value = readJsonStore(file, { parse: (raw) => raw as string[] }, {

@@ -1,17 +1,17 @@
 import { describe, expect, it, beforeEach, afterEach } from "vitest";
-import { mkdtempSync, mkdirSync } from "node:fs";
-import { tmpdir } from "node:os";
+import { mkdirSync } from "node:fs";
 import { join } from "node:path";
 import { getLinePaths, getMachinePaths, type MachinePaths } from "../src/paths.js";
 import { saveLineConfig } from "../src/lines.js";
 import { savePerson } from "../src/person.js";
 import { resolveLine } from "../src/lineContext.js";
+import { tempDir } from "./helpers.js";
 
 let m: MachinePaths;
 const cfg = { org: "acme", handle: "ken", token: "t", relay: "https://r.example", agent_kind: "claude" as const };
 
 beforeEach(() => {
-  const root = mkdtempSync(join(tmpdir(), "agentcall-ctx-"));
+  const root = tempDir("agentcall-linectx-");
   m = getMachinePaths(root, root);
   mkdirSync(m.linesDir, { recursive: true });
   delete process.env.AGENTCALL_LINE;

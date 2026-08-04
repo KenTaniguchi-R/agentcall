@@ -2,6 +2,7 @@ import { existsSync, mkdirSync, mkdtempSync, readdirSync, rmSync, writeFileSync 
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { describe, expect, it } from "vitest";
+import { tempDir } from "./helpers.js";
 import { runGuard } from "../src/guard.js";
 import { getLinePaths, getMachinePaths } from "../src/paths.js";
 import { AgentRunError, type AgentKind } from "../src/runner.js";
@@ -510,7 +511,7 @@ describe("checkRelaySelfCall", () => {
 // under GUARD_PROBE_LINE (verify.ts), so deniedInLog reads
 // .agentcall/lines/<GUARD_PROBE_LINE>/calls.log, not the flat legacy path.
 function homeWithDenial(): string {
-  const home = mkdtempSync(join(tmpdir(), "guardcheck-"));
+  const home = tempDir("guardcheck-");
   const callsLog = getLinePaths(getMachinePaths(home), GUARD_PROBE_LINE).callsLog;
   mkdirSync(dirname(callsLog), { recursive: true });
   writeFileSync(callsLog,
@@ -522,7 +523,7 @@ function homeWithDenial(): string {
 // hand-written: guardDenied's whole job is to recognize that exact shape, and
 // a literal here would keep passing after the shape changed.
 function realDenialStdout(): string {
-  const home = mkdtempSync(join(tmpdir(), "guardout-"));
+  const home = tempDir("guardout-");
   const line = getLinePaths(getMachinePaths(home, home), "probe-line");
   return runGuard(
     JSON.stringify({ tool_name: "Read", tool_input: { file_path: join(home, ".env") }, cwd: home }),
@@ -565,7 +566,7 @@ describe("checkGuard", () => {
   it("warns, not fails, when the model never called Read but the guard itself denies", async () => {
     const probe = async () => ({
       output: "I won't read .env — it holds secrets.",
-      home: mkdtempSync(join(tmpdir(), "empty-")),
+      home: tempDir("empty-"),
     });
     const c = await checkGuard(probe, binaryWorks);
     expect(c.ok).toBe(true);
@@ -577,7 +578,7 @@ describe("checkGuard", () => {
   });
 
   it("fails when the model never called Read AND the guard does not deny a direct probe", async () => {
-    const probe = async () => ({ output: "Sure, what would you like to know?", home: mkdtempSync(join(tmpdir(), "empty-")) });
+    const probe = async () => ({ output: "Sure, what would you like to know?", home: tempDir("empty-") });
     const c = await checkGuard(probe, binaryBroken);
     expect(c.ok).toBe(false);
     expect(c.warn).toBeFalsy();
@@ -586,7 +587,7 @@ describe("checkGuard", () => {
 
   // A direct probe that cannot even run is a broken guard, not an unknown one.
   it("fails when the direct probe throws", async () => {
-    const probe = async () => ({ output: "no comment", home: mkdtempSync(join(tmpdir(), "empty-")) });
+    const probe = async () => ({ output: "no comment", home: tempDir("empty-") });
     const c = await checkGuard(probe, async () => { throw new Error("ENOENT guard-entry.js"); });
     expect(c.ok).toBe(false);
   });

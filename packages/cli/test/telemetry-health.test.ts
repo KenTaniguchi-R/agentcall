@@ -1,12 +1,11 @@
-import { mkdtempSync } from "node:fs";
-import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 import { readTelemetryHealth, TelemetryHealthReporter } from "../src/telemetry-health.js";
+import { tempDir } from "./helpers.js";
 
 describe("TelemetryHealthReporter", () => {
   it("does not clear one degraded signal when another exporter recovers", () => {
-    const file = join(mkdtempSync(join(tmpdir(), "agentcall-telemetry-health-")), "health.json");
+    const file = join(tempDir("agentcall-telemetry-health-"), "health.json");
     const reporter = new TelemetryHealthReporter(file, () => {});
     reporter.recordFailure("trace_export");
     reporter.recordFailure("metric_export");

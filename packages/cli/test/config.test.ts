@@ -1,12 +1,12 @@
-import { mkdirSync, mkdtempSync } from "node:fs";
-import { tmpdir } from "node:os";
+import { mkdirSync } from "node:fs";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 import { getLinePaths, getMachinePaths } from "../src/paths.js";
 import { assertCallableLine, relayAddressHost, relayUrl, resolveLineWorkdir } from "../src/config.js";
 import { saveLineConfig } from "../src/lines.js";
+import { tempDir } from "./helpers.js";
 
-function tempHome() { return mkdtempSync(join(tmpdir(), "agentcall-test-")); }
+function tempHome() { return tempDir("agentcall-test-"); }
 function linePaths(home: string) { return getLinePaths(getMachinePaths(home, home), "line"); }
 
 // The legacy round-trip and permission-bits coverage now lives in

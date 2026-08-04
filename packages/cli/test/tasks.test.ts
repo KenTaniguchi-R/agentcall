@@ -1,11 +1,11 @@
-import { mkdirSync, mkdtempSync, writeFileSync } from "node:fs";
-import { tmpdir } from "node:os";
+import { mkdirSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 import { ASK_TASK, deriveThreadable, FULL_ACCESS_ENVELOPE, loadTasks, scaffoldTask, SkillFrontmatter, splitFrontmatter } from "../src/tasks.js";
 import { getLinePaths, getMachinePaths } from "../src/paths.js";
+import { tempDir } from "./helpers.js";
 
-function tempHome() { return mkdtempSync(join(tmpdir(), "agentcall-tasks-")); }
+function tempHome() { return tempDir("agentcall-tasks-"); }
 
 // tasksDir/policyFile's exact shape (AgentCall/<line>/tasks, .agentcall/lines/<line>/policy.json)
 // is asserted once, in paths.test.ts's getLinePaths tests — this just needs a

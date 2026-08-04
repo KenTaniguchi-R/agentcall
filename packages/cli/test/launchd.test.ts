@@ -1,10 +1,10 @@
-import { mkdtempSync, existsSync, readFileSync, writeFileSync, mkdirSync } from "node:fs";
-import { tmpdir } from "node:os";
+import { existsSync, readFileSync, writeFileSync, mkdirSync } from "node:fs";
 import { join } from "node:path";
 import { XMLValidator } from "fast-xml-parser";
 import { describe, expect, it } from "vitest";
 import { plistContent, installLaunchAgent, isLaunchAgentInstalled, launchAgentFile, LAUNCH_LABEL, uninstallLaunchAgent } from "../src/launchd.js";
 import { getMachinePaths } from "../src/paths.js";
+import { tempDir } from "./helpers.js";
 
 describe("plistContent", () => {
   it("renders a valid-looking plist", () => {
@@ -69,7 +69,7 @@ describe("plistContent PATH", () => {
 
 describe("install/uninstall", () => {
   it("writes plist and calls launchctl bootstrap", () => {
-    const home = mkdtempSync(join(tmpdir(), "agentcall-ld-"));
+    const home = tempDir("agentcall-ld-");
     const m = getMachinePaths(home, home);
     const calls: string[][] = [];
     installLaunchAgent(m, (cmd) => { calls.push(cmd); });
@@ -79,7 +79,7 @@ describe("install/uninstall", () => {
     expect(readFileSync(launchAgentFile(m), "utf8")).toContain("agentcall");
   });
   it("forwards extraPathDirs into the written plist", () => {
-    const home = mkdtempSync(join(tmpdir(), "agentcall-ld-"));
+    const home = tempDir("agentcall-ld-");
     const m = getMachinePaths(home, home);
     installLaunchAgent(m, () => {}, ["/Users/x/.local/bin"]);
     const xml = readFileSync(launchAgentFile(m), "utf8");
@@ -89,7 +89,7 @@ describe("install/uninstall", () => {
   // launchd finishes tearing it down, so an immediate bootstrap fails with
   // "Input/output error" and setup dies — install must retry briefly.
   it("retries bootstrap while launchd finishes tearing down the old instance", () => {
-    const home = mkdtempSync(join(tmpdir(), "agentcall-ld-"));
+    const home = tempDir("agentcall-ld-");
     const m = getMachinePaths(home, home);
     let bootstraps = 0;
     installLaunchAgent(
@@ -104,7 +104,7 @@ describe("install/uninstall", () => {
   });
 
   it("gives up with an error after repeated bootstrap failures", () => {
-    const home = mkdtempSync(join(tmpdir(), "agentcall-ld-"));
+    const home = tempDir("agentcall-ld-");
     const m = getMachinePaths(home, home);
     expect(() =>
       installLaunchAgent(
@@ -119,7 +119,7 @@ describe("install/uninstall", () => {
   });
 
   it("uninstall removes the plist", () => {
-    const home = mkdtempSync(join(tmpdir(), "agentcall-ld-"));
+    const home = tempDir("agentcall-ld-");
     const m = getMachinePaths(home, home);
     mkdirSync(join(m.userHome, "Library", "LaunchAgents"), { recursive: true });
     writeFileSync(launchAgentFile(m), "x");
@@ -134,7 +134,7 @@ describe("install/uninstall", () => {
 // this adapter on macOS and the systemd sibling on Linux.
 describe("isLaunchAgentInstalled", () => {
   it("reports false before install and true once the plist exists", () => {
-    const home = mkdtempSync(join(tmpdir(), "agentcall-ld-"));
+    const home = tempDir("agentcall-ld-");
     const m = getMachinePaths(home, home);
     expect(isLaunchAgentInstalled(m)).toBe(false);
     mkdirSync(join(m.userHome, "Library", "LaunchAgents"), { recursive: true });

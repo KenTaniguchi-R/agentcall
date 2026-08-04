@@ -1,14 +1,8 @@
-import { mkdtempSync } from "node:fs";
-import { tmpdir } from "node:os";
-import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 import { findOutbound, loadOutbound, rememberOutbound, type OutboundContext } from "../src/contextsOut.js";
-import { getLinePaths, getMachinePaths } from "../src/paths.js";
+import { tempLine } from "./helpers.js";
 
-const paths = () => {
-  const root = mkdtempSync(join(tmpdir(), "agentcall-out-"));
-  return getLinePaths(getMachinePaths(root, root), "claude");
-};
+const paths = () => tempLine("claude", "agentcall-out-");
 const entry = (over: Partial<OutboundContext> = {}): OutboundContext => ({
   relay: "https://r", from: "ken", to: "sota", task: "ask",
   context_id: "ctx_AAAAAAAAAAAAAAAAAAAAAA", at: 1, ...over,

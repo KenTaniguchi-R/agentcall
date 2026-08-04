@@ -1,6 +1,5 @@
-import { chmodSync, mkdirSync, mkdtempSync, symlinkSync, writeFileSync } from "node:fs";
+import { chmodSync, mkdirSync, symlinkSync, writeFileSync } from "node:fs";
 import { dirname } from "node:path";
-import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 import { checkCredentialStorage, checkLineKeyHealth, checkRecoveryHealth, runDoctor } from "../src/doctor.js";
@@ -12,19 +11,19 @@ import { TelemetryHealthReporter } from "../src/telemetry-health.js";
 import { generateIdentityKeys } from "../src/keys.js";
 import { encryptionKeyTranscript, fromBase64Url, HPKE_SUITE, keyIdFor, signTranscript, type EncryptionKeyRecordType } from "@benree/agentcall-shared";
 import type { StoredKeys } from "../src/keys.js";
+import { tempDir, tempMachine } from "./helpers.js";
 
 // A single-line machine, still used by tests that only care about one line's
 // checks. Multi-line behavior gets its own describe block below.
 const LINE = "claude";
-const CLI_INSTALL_ROOT = mkdtempSync(join(tmpdir(), "agentcall-cli-install-"));
+const CLI_INSTALL_ROOT = tempDir("agentcall-cli-install-");
 const CLI_ENTRY = join(CLI_INSTALL_ROOT, "agentcall.js");
 const CLI_BIN = join(CLI_INSTALL_ROOT, "agentcall");
 writeFileSync(CLI_ENTRY, "#!/usr/bin/env node\n");
 symlinkSync(CLI_ENTRY, CLI_BIN);
 
 function freshMachine(): MachinePaths {
-  const home = mkdtempSync(join(tmpdir(), "agentcall-doctor-"));
-  const m = getMachinePaths(home, home);
+  const m = tempMachine("agentcall-doctor-");
   mkdirSync(m.linesDir, { recursive: true });
   return m;
 }
@@ -35,7 +34,7 @@ function freshMachine(): MachinePaths {
 // checkGuard's default probes run doctor's guard probe under that fixed line
 // name (see verify.ts) — not the flat legacy .agentcall/calls.log.
 function homeWithDenial(): string {
-  const home = mkdtempSync(join(tmpdir(), "guardcheck-"));
+  const home = tempDir("guardcheck-");
   const callsLog = getLinePaths(getMachinePaths(home), GUARD_PROBE_LINE).callsLog;
   mkdirSync(dirname(callsLog), { recursive: true });
   writeFileSync(callsLog,
@@ -91,7 +90,7 @@ describe("doctor CLI install provenance", () => {
     saveLineConfig(getLinePaths(m, "caller"), {
       org: "acme", handle: "solo", token: "t", relay: "https://relay.example",
     });
-    const secondRoot = mkdtempSync(join(tmpdir(), "agentcall-cli-shadow-"));
+    const secondRoot = tempDir("agentcall-cli-shadow-");
     const secondEntry = join(secondRoot, "agentcall.js");
     const secondBin = join(secondRoot, "agentcall");
     writeFileSync(secondEntry, "#!/usr/bin/env node\n");
@@ -117,7 +116,7 @@ describe("doctor CLI install provenance", () => {
   });
 
   it("deduplicates PATH entries that symlink to the same real executable", async () => {
-    const root = mkdtempSync(join(tmpdir(), "agentcall-doctor-bin-"));
+    const root = tempDir("agentcall-doctor-bin-");
     const real = join(root, "agentcall.js");
     const first = join(root, "first-agentcall");
     const second = join(root, "second-agentcall");
@@ -548,7 +547,7 @@ describe("runDoctor", () => {
     const code = await runDoctor({
       ...baseDeps,
       machine: m,
-      guardFn: async () => ({ output: "I'd rather not read .env", home: mkdtempSync(join(tmpdir(), "empty-")) }),
+      guardFn: async () => ({ output: "I'd rather not read .env", home: tempDir("empty-") }),
       guardBinaryFn: async () => true,
       log: (l) => lines.push(l),
     });
