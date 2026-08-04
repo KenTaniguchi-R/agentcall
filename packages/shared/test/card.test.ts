@@ -1,14 +1,12 @@
 import { describe, expect, it } from "vitest";
 import { CardTask, CardUpload, visibleTasks } from "../src/card.js";
 
-const TASK = { id: "ask", name: "Ask", description: "Answer questions.", examples: [] };
+const TASK = { id: "ask", name: "Ask", description: "Answer questions.", examples: [], keywords: [] };
 
 describe("CardTask.keywords", () => {
-  it("defaults to [] for a card stored before the field existed", () => {
-    // This is the back-compat mechanism: .default([]) supplies the missing
-    // field. (Zod's unknown-key stripping is a different property — it is what
-    // let `tier` be removed — and is NOT what makes additions safe.)
-    expect(CardTask.parse(TASK).keywords).toEqual([]);
+  it("requires the current keyword field", () => {
+    const { keywords: _, ...withoutKeywords } = TASK;
+    expect(CardTask.safeParse(withoutKeywords).success).toBe(false);
   });
 
   it("round-trips supplied keywords", () => {
@@ -29,20 +27,19 @@ describe("CardTask.keywords", () => {
     expect(CardTask.safeParse({ ...TASK, keywords: many }).success).toBe(false);
   });
 
-  it("keeps parsing a whole CardUpload stored before the field existed", () => {
-    const upload = CardUpload.parse({
+  it("requires the complete current upload shape", () => {
+    expect(CardUpload.safeParse({
       description: "d", agent_kind: "claude", tasks: [TASK], default_offer: ["ask"],
-    });
-    expect(upload.tasks[0]!.keywords).toEqual([]);
+    }).success).toBe(false);
   });
 });
 
 const UPLOAD = CardUpload.parse({
   description: "d", agent_kind: "claude",
   tasks: [
-    { id: "ask", name: "Ask", description: "Answer questions.", examples: [] },
-    { id: "adr", name: "ADR", description: "Why.", examples: [] },
-    { id: "payroll", name: "Payroll", description: "Secret.", examples: [] },
+    { id: "ask", name: "Ask", description: "Answer questions.", examples: [], keywords: [] },
+    { id: "adr", name: "ADR", description: "Why.", examples: [], keywords: [] },
+    { id: "payroll", name: "Payroll", description: "Secret.", examples: [], keywords: [] },
   ],
   default_offer: ["ask"],
   // mia's grants are deliberately out of card order (payroll before adr):

@@ -5,6 +5,7 @@ import { registerHandle, wsAuth } from "./helpers.js";
 
 const card = (tasks: unknown[], defaultOffer: string[], grants: Record<string, string[]> = {}) => ({
   description: "d", agent_kind: "claude", tasks, default_offer: defaultOffer, grants,
+  group_grants: {}, blocked: [],
 });
 const task = (id: string, keywords: string[] = []) =>
   ({ id, name: id.toUpperCase(), description: `About ${id}.`, examples: [], keywords });

@@ -8,18 +8,6 @@
 // nothing duplicates it.
 export const LINE_NAME_RE = /^[a-z0-9][a-z0-9-]{0,31}$/;
 
-// A line's authored content lives at ~/AgentCall/<line>/ (see getLinePaths in
-// paths.ts). The guard denies the legacy path ~/AgentCall/tasks wholesale, so
-// a line named "tasks" would put its own share directory
-// (~/AgentCall/tasks/public) *inside* a denied root: `line add tasks` would
-// succeed, and every answered call on that line would then fail at its first
-// tool use with the generic denial (which deliberately reveals no path or
-// rule name) — silent and very hard to diagnose. See guard.ts's DENIED_DIRS
-// entry for the other half of this. "public" is reserved for the symmetric
-// reason (~/AgentCall/<line>/public colliding with a line literally named
-// "public"). Do not remove these without re-checking that the guard's path
-// denial no longer applies.
-//
 // "doctor-probe" is reserved for an unrelated reason: it is
 // verify.ts's GUARD_PROBE_LINE, the synthetic line name every verification
 // spawn in that file runs under (checkAgentSpawn, and the two checkGuard
@@ -34,7 +22,7 @@ export const LINE_NAME_RE = /^[a-z0-9][a-z0-9-]{0,31}$/;
 // enumerate a stray directory by this name rather than filtering it out, so
 // that if a redirect ever does regress, the orphan stays visible instead of
 // disappearing.
-const RESERVED_LINE_NAMES = new Set(["tasks", "public", "doctor-probe"]);
+const RESERVED_LINE_NAMES = new Set(["doctor-probe"]);
 
 export function assertValidLineName(name: string): void {
   if (!LINE_NAME_RE.test(name)) {

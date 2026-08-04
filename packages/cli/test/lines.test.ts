@@ -26,15 +26,13 @@ describe("assertValidLineName", () => {
     },
   );
 
-  // "tasks" and "public" are otherwise well-formed names, but a line's
-  // authored content lives at ~/AgentCall/<line>/{tasks,public} and the
-  // guard denies the legacy ~/AgentCall/tasks path wholesale — a line named
-  // "tasks" would nest its own tasks dir inside a denied root and fail
-  // every call silently. "doctor-probe" is reserved for an unrelated
-  // reason — it's verify.ts's GUARD_PROBE_LINE, the synthetic line name
-  // every doctor/setup verification spawn runs under. See the comment on
-  // RESERVED_LINE_NAMES in lineName.ts.
-  it.each(["tasks", "public", "doctor-probe"])("rejects the reserved name %j", (name) => {
+  it.each(["tasks", "public"])("accepts the current-layout line name %j", (name) => {
+    expect(() => assertValidLineName(name)).not.toThrow();
+  });
+
+  // verify.ts uses this synthetic line name for doctor/setup probes.
+  it("rejects the reserved doctor probe name", () => {
+    const name = "doctor-probe";
     expect(() => assertValidLineName(name)).toThrow(/reserved/i);
   });
 });
@@ -76,16 +74,11 @@ describe("saveLineConfig / loadLineConfig", () => {
     expect(loadLineConfig(l)).toEqual(cfg);
   });
 
-  // Re-homed from main's config.test.ts, where it covered loadConfig. `org`
-  // moved onto the LINE with the rest of the tenant identity, so this is now
-  // loadLineConfig's job. The message must stay distinct from the generic
-  // "corrupt config.json" one: `org` cannot be recovered locally, so the only
-  // useful instruction is to re-enroll against an invite.
-  it("rejects a line config without an organization, pointing at re-enrollment", () => {
+  it("treats a line config missing a current required field as corrupt", () => {
     const l = getLinePaths(m, "preorg");
     mkdirSync(l.dir, { recursive: true });
     writeFileSync(l.configFile, JSON.stringify({ handle: "ken", token: "old", relay: "https://relay.example" }));
-    expect(() => loadLineConfig(l)).toThrow(/no organization.*line add.*--invite/i);
+    expect(() => loadLineConfig(l)).toThrow(/corrupt config\.json.*org.*line add.*--invite/i);
   });
 
   it("rejects a malformed organization slug", () => {
@@ -133,14 +126,12 @@ describe("saveLineConfig / loadLineConfig", () => {
     expect(loadLineConfig(l).relay).toBe("not a url");
   });
 
-  // An older CLI reading, updating, and saving a config written by a newer
-  // release must not silently drop the fields it doesn't know about.
-  it("preserves unknown fields across a load and save", () => {
+  it("writes only fields owned by the current line schema", () => {
     const l = getLinePaths(m, "future");
     mkdirSync(l.dir, { recursive: true });
     writeFileSync(l.configFile, JSON.stringify({ ...cfg, future_option: true }));
     saveLineConfig(l, loadLineConfig(l));
-    expect(JSON.parse(readFileSync(l.configFile, "utf8"))).toMatchObject({ future_option: true });
+    expect(JSON.parse(readFileSync(l.configFile, "utf8"))).not.toHaveProperty("future_option");
   });
 });
 

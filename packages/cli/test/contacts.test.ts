@@ -69,7 +69,7 @@ describe("contacts store", () => {
     expect(() => removeContact(p, "ken")).toThrow(/No contact named "ken"/);
   });
 
-  it("preserves unknown top-level keys across a load + save round-trip", () => {
+  it("writes only fields owned by the current contacts schema", () => {
     const p = getMachinePaths(tempHome());
     mkdirSync(p.dir, { recursive: true });
     writeFileSync(
@@ -82,7 +82,7 @@ describe("contacts store", () => {
     loadContacts(p);
     addContact(p, "amy", "amy@agentcall.benree.tech");
     const raw = JSON.parse(readFileSync(p.contactsFile, "utf8"));
-    expect(raw.future_field).toBe("x");
+    expect(raw).not.toHaveProperty("future_field");
   });
 });
 

@@ -15,9 +15,11 @@ async function seedCard(handle: string) {
       JSON.stringify({
         description: "Ken's agent",
         agent_kind: "claude",
-        tasks: [{ id: "ask", name: "Ask", description: "Answer a question.", examples: [] }],
+        tasks: [{ id: "ask", name: "Ask", description: "Answer a question.", examples: [], keywords: [] }],
         default_offer: ["ask"],
         grants: { someoneelse: ["secret-task"] },
+        group_grants: {},
+        blocked: [],
       }),
       1,
     )
@@ -114,7 +116,7 @@ describe("GET /v1/a2a/:handle/agent-card.json", () => {
     await env.DB.prepare("INSERT OR REPLACE INTO cards (org, handle, card_json, updated_at) VALUES (?, ?, ?, ?)")
       .bind("acme", "a2a-group", JSON.stringify({
         description: "grouped", agent_kind: "claude",
-        tasks: [{ id: "eng", name: "Eng", description: "Engineering", examples: [] }],
+        tasks: [{ id: "eng", name: "Eng", description: "Engineering", examples: [], keywords: [] }],
         default_offer: [], grants: {}, group_grants: { [created.roster_id]: ["eng"] }, blocked: [],
       }), 2).run();
 
@@ -127,7 +129,7 @@ describe("GET /v1/a2a/:handle/agent-card.json", () => {
     await env.DB.prepare("INSERT INTO cards (org, handle, card_json, updated_at) VALUES ('acme', ?, ?, 3)")
       .bind("a2a-blocked", JSON.stringify({
         description: "blocked", agent_kind: "claude",
-        tasks: [{ id: "ask", name: "Ask", description: "Ask", examples: [] }],
+        tasks: [{ id: "ask", name: "Ask", description: "Ask", examples: [], keywords: [] }],
         default_offer: ["ask"], grants: {}, group_grants: {}, blocked: ["viewer"],
       })).run();
     const blocked = await SELF.fetch(`${ORIGIN}/v1/a2a/a2a-blocked/agent-card.json`, { headers: viewerHeaders() });

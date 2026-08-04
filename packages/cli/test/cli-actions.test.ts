@@ -482,6 +482,7 @@ describe.sequential("CLI command actions", () => {
     const metadata = {
       id, description: "contractor", created_by: "ken", created_at: 1,
       expires_at: 2_000_000_000_000, used_at: null, used_by: null, revoked_at: null,
+      role: "admin" as const,
     };
     const requests: Array<{ url: string; body: string }> = [];
     const relay = await startRelay((url, _method, body) => {

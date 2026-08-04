@@ -29,8 +29,7 @@ export const OrgInviteMetadata = z.object({
   used_at: z.number().int().nonnegative().nullable(),
   used_by: z.string().regex(HANDLE_RE).nullable(),
   revoked_at: z.number().int().nonnegative().nullable(),
-  // Optional only for compatibility with relay responses from before org roles.
-  role: OrgRole.optional(),
+  role: OrgRole,
 });
 
 export const CreateOrgInviteResponse = z.object({

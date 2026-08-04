@@ -666,15 +666,12 @@ describe("runGuard — enumerates every line's tasksDir from the real home, not 
     expect(decision.hookSpecificOutput.permissionDecision).toBe("deny");
   });
 
-  // Legacy flat layout, pre-dating per-line: still real and writable on
-  // every already-set-up machine until Task 12, so it must stay denied
-  // independently of the per-line enumeration above.
-  it("denies the legacy flat AgentCall/tasks directory under the real home", () => {
+  it("does not treat the obsolete flat task path as a policy directory", () => {
     const { stateRoot, userHome } = splitHomes();
     const legacyTask = join(userHome, "AgentCall", "tasks", "ask", "SKILL.md");
     const out = runGuard(payload("Write", { file_path: legacyTask }), actingDeps(stateRoot, userHome));
-    const decision = JSON.parse(out.stdout);
-    expect(decision.hookSpecificOutput.permissionDecision).toBe("deny");
+    expect(out.stdout).toBe("");
+    expect(out.exitCode).toBe(0);
   });
 
   it("still allows writing to the acting line's own share directory", () => {

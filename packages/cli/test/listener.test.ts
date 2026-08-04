@@ -126,7 +126,7 @@ async function sendIncoming(
   const wire = {
     type: "incoming_call", call_id: frame.call_id, from: frame.from,
     groups: frame.groups ?? [], envelope,
-    ...(frame.correlation_id ? { correlation_id: frame.correlation_id } : {}),
+    correlation_id: frame.correlation_id ?? "f".repeat(32),
     ...(frame.traceparent ? { traceparent: frame.traceparent } : {}),
   };
   ws.send(JSON.stringify(wire));

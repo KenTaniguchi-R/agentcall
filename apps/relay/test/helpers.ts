@@ -45,7 +45,12 @@ function envelope(direction: "request" | "response", from: string, to: string) {
 export function encryptedCallRequest(
   from: string, to: string, metadata: { correlation_id?: string; traceparent?: string } = {},
 ) {
-  return { type: "call_request" as const, envelope: envelope("request", from, to), ...metadata };
+  return {
+    type: "call_request" as const,
+    envelope: envelope("request", from, to),
+    correlation_id: metadata.correlation_id ?? "f".repeat(32),
+    ...(metadata.traceparent ? { traceparent: metadata.traceparent } : {}),
+  };
 }
 
 export function encryptedCallOutcome(

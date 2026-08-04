@@ -41,22 +41,9 @@ const DENIED_DIRS = [
   ".codex",       // auth.json, plus a config.toml that routinely holds API keys
   "Library/LaunchAgents",  // how the listener itself gets launched
   ".config/systemd/user",  // Linux user units can replace the listener command
-  // Legacy flat layout. As of Task 12, nothing in this codebase reads or
-  // writes this path anymore — card.ts, index.ts, and lint.ts all moved to
-  // the per-line AgentCall/<line>/tasks layout, and setup.ts no longer
-  // creates it. It stays denied because it may still exist on disk, holding
-  // real SKILL.md files from an install made before Task 12: a stale entry
-  // over-denies (fails safe), while removing it would leave genuine content
-  // from a previous install unprotected. The per-line entries below cover
-  // AgentCall/<line>/tasks; this covers the pre-multi-line AgentCall/tasks
-  // that may still be sitting there regardless. This is also the reason
-  // "tasks" and "public" are reserved line names — see RESERVED_LINE_NAMES in
-  // lineName.ts for the other half of this.
-  "AgentCall/tasks",
   // AgentCall/<line>/tasks, one directory per line, has no single
   // home-relative entry that can name them all — see runGuard, which
-  // enumerates every line's tasksDir and passes it in as an extra denied
-  // root, alongside this legacy path.
+  // enumerates every line's tasksDir and passes it in as an extra denied root.
 ];
 
 // Home-relative single files.

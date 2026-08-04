@@ -58,6 +58,11 @@ describe("RosterBundle", () => {
     const b = RosterBundle.parse({ roster_id: "a".repeat(22), entries: [ENTRY], skipped: 0 });
     expect(b.entries[0]!.tasks[0]!.keywords).toEqual(["auth"]);
   });
+  it("requires current projection metadata", () => {
+    expect(RosterBundle.safeParse({ roster_id: "a".repeat(22), entries: [] }).success).toBe(false);
+    const { truncated: _, ...withoutTruncated } = ENTRY;
+    expect(BundleEntry.safeParse(withoutTruncated).success).toBe(false);
+  });
   it("rejects an entry with more than MAX_BUNDLE_TASKS_PER_CARD tasks", () => {
     const tasks = Array.from({ length: MAX_BUNDLE_TASKS_PER_CARD + 1 }, (_, i) => ({
       id: `t${i}`, name: "N", description: "D", keywords: [],

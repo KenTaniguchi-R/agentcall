@@ -21,9 +21,7 @@ const Membership = z.object({
   relay: z.string().min(1),
   roster_id: z.string().regex(ROSTER_ID_RE),
 });
-// .loose() so unknown top-level keys survive a load+save round-trip under an
-// older CLI, matching contacts.json.
-const MembershipsFile = z.object({ rosters: z.array(Membership).default([]) }).loose();
+const MembershipsFile = z.object({ rosters: z.array(Membership).default([]) });
 export type Membership = z.infer<typeof Membership>;
 
 const CachedBundle = z.object({

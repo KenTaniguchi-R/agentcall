@@ -121,7 +121,7 @@ const ResponseEnvelope = HpkeEnvelope.refine((value) => value.direction === "res
 export const EncryptedCallRequest = z.preprocess(normalizeTraceContext, z.object({
   type: z.literal("call_request"),
   envelope: RequestEnvelope,
-  correlation_id: CorrelationId.optional(),
+  correlation_id: CorrelationId,
   traceparent: z.string().optional(),
 }).strict());
 
@@ -130,7 +130,7 @@ export const EncryptedIncomingCall = z.preprocess(normalizeTraceContext, z.objec
   call_id: z.string(),
   from: z.string().regex(HANDLE_RE),
   envelope: RequestEnvelope,
-  correlation_id: CorrelationId.optional(),
+  correlation_id: CorrelationId,
   traceparent: z.string().optional(),
   groups: z.array(z.string().regex(/^[A-Za-z0-9_-]{16,64}$/)).max(MAX_CALLER_GROUPS).default([]),
 }).strict());

@@ -7,11 +7,13 @@ const UPLOAD = {
   description: "Ken's public agent",
   agent_kind: "claude",
   tasks: [
-    { id: "ask", name: "Ask", description: "Answer questions.", examples: [] },
-    { id: "schedule-meeting", name: "Schedule", description: "Book a time.", examples: [] },
+    { id: "ask", name: "Ask", description: "Answer questions.", examples: [], keywords: [] },
+    { id: "schedule-meeting", name: "Schedule", description: "Book a time.", examples: [], keywords: [] },
   ],
   default_offer: ["ask"],
   grants: { mia: ["schedule-meeting"] },
+  group_grants: {},
+  blocked: [],
 };
 const ORG_HEADERS = { "X-AgentCall-Org": "acme" };
 

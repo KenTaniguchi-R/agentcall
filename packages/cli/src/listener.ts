@@ -222,7 +222,7 @@ export function startListener(deps: ListenerDeps): { stop(): Promise<void> } {
       const {
         call_id, correlation_id, from, groups,
       } = frame;
-      const correlation = correlation_id ? { correlation_id } : {};
+      const correlation = { correlation_id };
       const started = Date.now();
       const relayOrigin = relayAddressHost(deps.relay, config.org);
       const fromAddress = `${from}@${relayOrigin}`;

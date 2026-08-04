@@ -7,6 +7,7 @@ import {
 const metadata = {
   id: "a".repeat(64), description: "contractor onboarding", created_by: "ken",
   created_at: 1, expires_at: 2, used_at: null, used_by: null, revoked_at: null,
+  role: "member" as const,
 };
 
 describe("organization invite protocol", () => {
@@ -27,5 +28,8 @@ describe("organization invite protocol", () => {
     expect(ListOrgInvitesResponse.safeParse({
       invites: Array.from({ length: MAX_LISTED_ORG_INVITES + 1 }, () => metadata),
     }).success).toBe(false);
+    const { role: _role, ...missingRole } = metadata;
+    expect(CreateOrgInviteResponse.safeParse({ invite: "i".repeat(43), metadata: missingRole }).success)
+      .toBe(false);
   });
 });

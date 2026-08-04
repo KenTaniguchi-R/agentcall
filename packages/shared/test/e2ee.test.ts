@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import {
-  E2EECallerFrame, E2EEListenerToRelayFrame, E2EERelayToCallerFrame,
+  E2EECallerFrame, E2EEListenerToRelayFrame, E2EERelayToCallerFrame, E2EERelayToListenerFrame,
   E2EERequestPayload, E2EEResponsePayload, HpkeEnvelope, MAX_E2EE_CIPHERTEXT_BYTES,
   hpkeEnvelopeAad, requestTranscript, responseTranscript, transcriptHash, type E2EERequestPayloadType,
   type E2EEResponsePayloadType,
@@ -23,7 +23,9 @@ describe("E2EE envelope schemas and transcripts", () => {
       from: request.from, to: request.to, key_id: request.recipient_encryption_key_id,
       epoch: request.recipient_epoch, enc: "A", ct: "B",
     };
-    expect(E2EECallerFrame.safeParse({ type: "call_request", envelope: requestEnvelope }).success).toBe(true);
+    expect(E2EECallerFrame.safeParse({
+      type: "call_request", envelope: requestEnvelope, correlation_id: "4".repeat(32),
+    }).success).toBe(true);
     for (const field of ["message", "task", "context_id"] as const) {
       expect(E2EECallerFrame.safeParse({
         type: "call_request", envelope: requestEnvelope, [field]: "plaintext",
@@ -39,6 +41,18 @@ describe("E2EE envelope schemas and transcripts", () => {
         [field]: field === "offered" ? ["ask"] : "plaintext",
       }).success).toBe(false);
     }
+  });
+
+  it("requires correlation metadata on both sides of call admission", () => {
+    const requestEnvelope = {
+      v: 1 as const, direction: "request" as const, relay_origin: request.relay_origin,
+      from: request.from, to: request.to, key_id: request.recipient_encryption_key_id,
+      epoch: request.recipient_epoch, enc: "A", ct: "B",
+    };
+    expect(E2EECallerFrame.safeParse({ type: "call_request", envelope: requestEnvelope }).success).toBe(false);
+    expect(E2EERelayToListenerFrame.safeParse({
+      type: "incoming_call", call_id: "c1", from: "alice", envelope: requestEnvelope, groups: [],
+    }).success).toBe(false);
   });
 
   it("separates unauthenticated relay errors from encrypted peer outcomes", () => {
