@@ -6,7 +6,7 @@ import { addressHost, assertCallableLine, relayUrl, resolveLineWorkdir, type Lin
 import { callAgent, callStatusMessage, CallError } from "./callClient.js";
 // No rotateToken here: `rotate` goes through commands/rotate.ts's rotateLine,
 // which owns the per-line config write and calls the api helper itself.
-import { getStatus, fetchCard, fetchKeys, publishEncryptionKey, publishIdentityKey, createRoster, joinRoster, leaveRoster,
+import { getStatus, fetchCard, fetchKeys, createRoster, joinRoster, leaveRoster,
   expelRosterMember, issueRosterJoinKey, listRosterJoinKeys, revokeRosterJoinKey, deleteRoster,
   ApiError } from "./api.js";
 import { startAllListeners } from "./listenAll.js";
@@ -35,7 +35,6 @@ import { renderPolicyReport } from "./policy-report.js";
 import { loadLocalHistory, renderLocalHistory } from "./history.js";
 import { sanitizeTerminalOutput, stringifyTerminalSafeJson } from "@benree/agentcall-shared";
 import { getTelemetry, shutdownTelemetry, telemetrySafely } from "./telemetry.js";
-import { loadKeys } from "./keys.js";
 import { resetPeerTrust, verifyAndPinPeer } from "./known-peers.js";
 import { register as registerAudit } from "./commands/audit.js";
 import { register as registerUninstall } from "./commands/uninstall.js";
@@ -44,6 +43,7 @@ import { register as registerSetup } from "./commands/setup.js";
 import { register as registerRecovery } from "./commands/recovery-register.js";
 import { register as registerInvite } from "./commands/invite.js";
 import { register as registerStatus } from "./commands/status.js";
+import { register as registerKeys } from "./commands/keys.js";
 
 export function createProgram(): Command {
 const program = new Command();
@@ -235,26 +235,7 @@ program
     }
   });
 
-const keys = program.command("keys").description("manage this line's end-to-end encryption keys");
-keys
-  .command("publish")
-  .description("publish the identity and current encryption key already stored on disk")
-  .option("--line <name>", "line whose persisted keys to publish")
-  .action(async (o: { line?: string }) => {
-    try {
-      const ctx = resolveLine(getMachinePaths(), o);
-      const cfg = ctx.config;
-      const stored = loadKeys(ctx.paths);
-      const auth = { org: cfg.org, handle: cfg.handle, token: cfg.token };
-      const relayHost = addressHost(cfg);
-      await publishIdentityKey(relayUrl(cfg), auth, stored, relayHost);
-      await publishEncryptionKey(relayUrl(cfg), auth, ctx.paths, relayHost);
-      console.log(`Published identity and encryption key for ${cfg.handle}@${relayHost}.`);
-    } catch (error) {
-      console.error(error instanceof Error ? error.message : String(error));
-      process.exitCode = 1;
-    }
-  });
+registerKeys(program);
 
 program
   .command("doctor")
