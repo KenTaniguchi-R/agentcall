@@ -234,6 +234,14 @@ from its owner's operating-system account.
   hook. Its read-only mode prevents writes but does not confine reads.
 - A task that grants shell execution gives broad local and network authority.
   AgentCall has no domain firewall.
+- A caller's prompt can induce the answering agent to read and echo back
+  material the guard does not cover — a key pasted into a tracked config file, a
+  credential printed by an allowed command. Replies are scanned locally for
+  credential shapes (`sk-`, `gh*_`, AWS key ids, JWTs, bearer tokens, roster join
+  keys) and for this line's own relay token, and matches are replaced with
+  `[redacted]` before the reply is sealed and before it is written to the local
+  log. The scan is a fixed local pass with no network call, so it cannot fail
+  open — but it recognizes shapes, not secrets in general.
 - Calls and tool attempts are logged locally on the callee's machine. Relay and
   organization audit records contain metadata, not call plaintext.
 - The callee's own Claude or Codex account pays for the answering process.

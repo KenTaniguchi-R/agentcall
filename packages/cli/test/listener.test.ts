@@ -309,6 +309,38 @@ describe("startListener", () => {
     expect(statSync(paths.callsLog).mode & 0o777).toBe(0o600);
   });
 
+  // The reply is E2EE, so this process is the last place a credential the agent
+  // read can be caught. Redaction has to happen before the wire AND before the
+  // audit slice — calls.log is what gets pasted into a bug report.
+  it("redacts credentials from the reply on the wire and in the audit log", async () => {
+    let paths!: LinePaths;
+    // Assembled, not a literal — see the note in test/redact.test.ts.
+    const leaked = "ghp" + "_abcdefghijklmnopqrstuvwxyz0123456789AB";
+    const relayReady = new Promise<WsSocket>((resolveWs) => {
+      void fakeRelay((ws) => resolveWs(ws)).then((url) => {
+        const deps = baseDeps(url);
+        paths = deps.paths;
+        stopper = startListener({
+          ...deps,
+          run: async () => ({ text: `your key is ${leaked} — keep it safe` }),
+        });
+      });
+    });
+    const ws = await relayReady;
+    const expectFrames = frames(ws, 3);
+    await sendIncoming(ws, {
+      call_id: "c1", correlation_id: "c".repeat(32), from: "shusaku", message: "what is the key?",
+    });
+    const [, , result] = await expectFrames;
+    expect(result.text).not.toContain(leaked);
+    expect(result.text).toContain("[redacted]");
+    // The non-secret words around it must survive — a redactor that eats the
+    // whole reply is one the owner turns off.
+    expect(result.text).toContain("keep it safe");
+    const audit = readFileSync(paths.callsLog, "utf8").trim().split("\n").map((l) => JSON.parse(l));
+    expect(audit[0].reply).not.toContain(leaked);
+  });
+
   it("audits a reply sealing failure once without retrying it as an agent failure", async () => {
     let paths!: LinePaths;
     let sealAttempts = 0;

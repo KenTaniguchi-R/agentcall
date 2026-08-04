@@ -7,6 +7,7 @@ import { fetchKeys } from "./api.js";
 import { resolveLineWorkdir, type CallableLineConfig } from "./config.js";
 import type { LinePaths } from "./paths.js";
 import { buildPrompt } from "./prompt.js";
+import { redactOutbound } from "./redact.js";
 import {
   AgentRunError, codexThreadingEnabled, codexToolTelemetryEnabled,
   CODEX_THREADING_VERIFIED_VERSION, runAgent,
@@ -386,11 +387,19 @@ export function startListener(deps: ListenerDeps): { stop(): Promise<void> } {
             }
           }
 
+          // Redacted once, here, and used for both the caller's reply and the
+          // audit line. Before the slice, not after: truncating first would
+          // leave anything past character 500 unredacted in calls.log. The
+          // line's own token goes in by value — it has no matchable shape (see
+          // redact.ts) and it is the one secret this process is guaranteed to
+          // hold.
+          const reply = redactOutbound(out.text, [config.token]);
+
           // context_id, never out.session_id: the minted handle is the only
           // thing that travels. The audit log gets the same treatment — it is
           // the owner's file, but it is also what gets pasted into a bug report.
           const outcomeDeliveryError = await trySendOutcome({
-            kind: "reply", text: out.text, context_id: contextId, task: task.id,
+            kind: "reply", text: reply, context_id: contextId, task: task.id,
           });
           if (outcomeDeliveryError) {
             finishInvocation("agent_error", contextId);
@@ -405,7 +414,7 @@ export function startListener(deps: ListenerDeps): { stop(): Promise<void> } {
           }
           finishInvocation("success", contextId);
           audit({
-            call_id, ...correlation, from, message: message.slice(0, 500), reply: out.text.slice(0, 500),
+            call_id, ...correlation, from, message: message.slice(0, 500), reply: reply.slice(0, 500),
             task: task.id, status: "ok",
             duration_ms: Date.now() - started,
             context_id: contextId, turn: (binding?.turns ?? 0) + 1,
@@ -428,9 +437,13 @@ export function startListener(deps: ListenerDeps): { stop(): Promise<void> } {
           // before the slice, because contexts.ts's invariant is that the real
           // agent_session_id never reaches an audit log — nothing leaves the
           // machine, but calls.log is what gets pasted into a bug report.
-          const err = binding
-            ? String(e).replaceAll(binding.agent_session_id, "<session>")
-            : String(e);
+          // Redacted as well as session-scrubbed, and before the slice: runAgent
+          // folds the child's stderr/stdout into its message, so a credential
+          // the agent printed on its way to failing lands here too.
+          const err = redactOutbound(
+            binding ? String(e).replaceAll(binding.agent_session_id, "<session>") : String(e),
+            [config.token],
+          );
           audit({
             call_id, ...correlation, from, message: message.slice(0, 500), task: task.id, status: code,
             duration_ms: Date.now() - started, error: err.slice(0, 2000),
