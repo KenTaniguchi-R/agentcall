@@ -4,6 +4,7 @@ import { sha256Hex } from "../src/auth.js";
 import app from "../src/index.js";
 import { issueInvite, registerHandle, wsAuth } from "./helpers.js";
 import { resolveAgentId } from "../src/identity.js";
+import { authenticatedHandle } from "../src/auth.js";
 
 // Each test uses its own synthetic source IP so the per-IP register rate
 // limit (5/60s, see REGISTER in src/ratelimit) doesn't make unrelated
@@ -81,6 +82,40 @@ describe("POST /v1/register", () => {
       await expect(env.DB.prepare(
         "INSERT INTO handles (org, handle, token_hash, created_at, org_role, agent_id) VALUES (?, ?, ?, ?, ?, ?)",
       ).bind("acme", "unique-b", "y".repeat(64), Date.now(), "member", taken).run()).rejects.toThrow();
+    });
+
+    // Slice 2 (#321): the id now travels on the authenticated Identity, so
+    // slices 4-7 can key on it without re-querying handles. The lookup is
+    // still by the caller-supplied handle -- slice 3 inverts that.
+    it("carries agentId on an authenticated identity", async () => {
+      const token = await registerHandle("authed", "claude", "acme");
+      const authed = await authenticatedHandle(env.DB, "acme", "authed", token);
+      expect(authed?.agentId).toMatch(/^agt_[0-9a-f]{32}$/);
+      expect(authed?.agentId).toBe(await agentIdOf("acme", "authed"));
+    });
+
+    it("gives the same handle in two orgs different authenticated principals", async () => {
+      const alpha = await registerHandle("twin", "claude", "org-one");
+      const beta = await registerHandle("twin", "claude", "org-two");
+      const a = await authenticatedHandle(env.DB, "org-one", "twin", alpha);
+      const b = await authenticatedHandle(env.DB, "org-two", "twin", beta);
+      expect(a?.agentId).toMatch(/^agt_[0-9a-f]{32}$/);
+      expect(b?.agentId).toMatch(/^agt_[0-9a-f]{32}$/);
+      expect(a?.agentId).not.toBe(b?.agentId);
+    });
+
+    it("returns no identity at all for a wrong token", async () => {
+      await registerHandle("wrong-token", "claude", "acme");
+      expect(await authenticatedHandle(env.DB, "acme", "wrong-token", "not-the-token")).toBeNull();
+    });
+
+    // One handle's credential must not authenticate another row, which is the
+    // property slice 3 has to preserve when it stops looking the row up by
+    // the caller-supplied handle at all.
+    it("does not let one handle's token authenticate another handle", async () => {
+      await registerHandle("victim", "claude", "acme");
+      const attacker = await registerHandle("attacker", "claude", "acme");
+      expect(await authenticatedHandle(env.DB, "acme", "victim", attacker)).toBeNull();
     });
 
     // The shim slice 9 deletes. Tested rather than shipped uncalled: slices 4
