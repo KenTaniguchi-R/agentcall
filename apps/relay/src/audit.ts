@@ -10,8 +10,9 @@ import {
 } from "@benree/agentcall-shared";
 import type { Env } from "./index.js";
 import { sha256Hex } from "./auth.js";
-import { AUDIT_READ, AUDIT_WRITE, checkLimit } from "./ratelimit/index.js";
-import { authenticateRequest, requireOrgAdmin } from "./tenant.js";
+import { AUDIT_READ, AUDIT_WRITE } from "./ratelimit/index.js";
+import { requireOrgAdmin } from "./tenant.js";
+import { rateLimit, type RelayAppEnv } from "./middleware.js";
 import { auditLocation, orgAuditTrimStatement } from "./events.js";
 import {
   AUDIT_HOLD_COLUMNS,
@@ -414,14 +415,10 @@ async function readPage(
   return results ?? [];
 }
 
-export function mountAudit(app: Hono<{ Bindings: Env }>): void {
-  app.get("/v1/audit/retention-readiness", async (c) => {
-    const identity = await authenticateRequest(c.env, c.req);
-    if (!identity) return c.json({ error: "unauthorized" }, 401);
+export function mountAudit(app: Hono<RelayAppEnv>): void {
+  app.get("/v1/audit/retention-readiness", rateLimit(AUDIT_READ, "identity", "audit-retention-read:"), async (c) => {
+    const identity = (c as any).get("identity");
     if (!requireOrgAdmin(identity)) return c.json({ error: "administrator role required" }, 403);
-    if (!(await checkLimit(c.env, `audit-retention-read:${identity.org}:${identity.handle}`, AUDIT_READ))) {
-      return c.json({ error: "rate limited" }, 429, { "Retry-After": "60" });
-    }
     const evaluatedAt = parseEvaluationTime(new URL(c.req.url), Date.now());
     if (evaluatedAt === null) return c.json({ error: "invalid evaluation time" }, 400);
     try {
@@ -438,25 +435,17 @@ export function mountAudit(app: Hono<{ Bindings: Env }>): void {
     }
   });
 
-  app.get("/v1/audit/retention-policy", async (c) => {
-    const identity = await authenticateRequest(c.env, c.req);
-    if (!identity) return c.json({ error: "unauthorized" }, 401);
+  app.get("/v1/audit/retention-policy", rateLimit(AUDIT_READ, "identity", "audit-retention-read:"), async (c) => {
+    const identity = (c as any).get("identity");
     if (!requireOrgAdmin(identity)) return c.json({ error: "administrator role required" }, 403);
-    if (!(await checkLimit(c.env, `audit-retention-read:${identity.org}:${identity.handle}`, AUDIT_READ))) {
-      return c.json({ error: "rate limited" }, 429, { "Retry-After": "60" });
-    }
     return c.json(await readPolicy(c.env.DB, identity.org), 200, { "Cache-Control": "no-store" });
   });
 
-  app.put("/v1/audit/retention-policy", async (c) => {
-    const identity = await authenticateRequest(c.env, c.req);
-    if (!identity) return c.json({ error: "unauthorized" }, 401);
+  app.put("/v1/audit/retention-policy", rateLimit(AUDIT_WRITE, "identity", "audit-retention-write:"), async (c) => {
+    const identity = (c as any).get("identity");
     if (!requireOrgAdmin(identity)) return c.json({ error: "administrator role required" }, 403);
     const body = AuditRetentionPolicyUpdateRequest.safeParse(await c.req.json().catch(() => null));
     if (!body.success) return c.json({ error: "invalid request" }, 400);
-    if (!(await checkLimit(c.env, `audit-retention-write:${identity.org}:${identity.handle}`, AUDIT_WRITE))) {
-      return c.json({ error: "rate limited" }, 429, { "Retry-After": "60" });
-    }
     const existingRequest = await readPolicyRequest(c.env.DB, identity.org, body.data.request_id);
     if (existingRequest) {
       if (!policyRequestMatches(
@@ -532,25 +521,17 @@ export function mountAudit(app: Hono<{ Bindings: Env }>): void {
     return c.json(policyFromRequest(storedRequest), 200, { "Cache-Control": "no-store" });
   });
 
-  app.get("/v1/audit/legal-holds", async (c) => {
-    const identity = await authenticateRequest(c.env, c.req);
-    if (!identity) return c.json({ error: "unauthorized" }, 401);
+  app.get("/v1/audit/legal-holds", rateLimit(AUDIT_READ, "identity", "audit-hold-read:"), async (c) => {
+    const identity = (c as any).get("identity");
     if (!requireOrgAdmin(identity)) return c.json({ error: "administrator role required" }, 403);
-    if (!(await checkLimit(c.env, `audit-hold-read:${identity.org}:${identity.handle}`, AUDIT_READ))) {
-      return c.json({ error: "rate limited" }, 429, { "Retry-After": "60" });
-    }
     return c.json({ active_hold: publicAuditHold(await readActiveHold(c.env.DB, identity.org)) }, 200, {
       "Cache-Control": "no-store",
     });
   });
 
-  app.get("/v1/audit/legal-holds/:holdId", async (c) => {
-    const identity = await authenticateRequest(c.env, c.req);
-    if (!identity) return c.json({ error: "unauthorized" }, 401);
+  app.get("/v1/audit/legal-holds/:holdId", rateLimit(AUDIT_READ, "identity", "audit-hold-read:"), async (c) => {
+    const identity = (c as any).get("identity");
     if (!requireOrgAdmin(identity)) return c.json({ error: "administrator role required" }, 403);
-    if (!(await checkLimit(c.env, `audit-hold-read:${identity.org}:${identity.handle}`, AUDIT_READ))) {
-      return c.json({ error: "rate limited" }, 429, { "Retry-After": "60" });
-    }
     const holdId = c.req.param("holdId");
     if (!AUDIT_HOLD_ID_RE.test(holdId)) return c.json({ error: "audit legal hold not found" }, 404);
     const hold = await readHold(c.env.DB, identity.org, holdId);
@@ -558,15 +539,11 @@ export function mountAudit(app: Hono<{ Bindings: Env }>): void {
     return c.json(publicAuditHold(hold), 200, { "Cache-Control": "no-store" });
   });
 
-  app.post("/v1/audit/legal-holds", async (c) => {
-    const identity = await authenticateRequest(c.env, c.req);
-    if (!identity) return c.json({ error: "unauthorized" }, 401);
+  app.post("/v1/audit/legal-holds", rateLimit(AUDIT_WRITE, "identity", "audit-hold-write:"), async (c) => {
+    const identity = (c as any).get("identity");
     if (!requireOrgAdmin(identity)) return c.json({ error: "administrator role required" }, 403);
     const body = AuditLegalHoldCreateRequest.safeParse(await c.req.json().catch(() => null));
     if (!body.success) return c.json({ error: "invalid request" }, 400);
-    if (!(await checkLimit(c.env, `audit-hold-write:${identity.org}:${identity.handle}`, AUDIT_WRITE))) {
-      return c.json({ error: "rate limited" }, 429, { "Retry-After": "60" });
-    }
     const existingRequest = await readHoldByCreateRequest(c.env.DB, identity.org, body.data.request_id);
     if (existingRequest) {
       if (existingRequest.reason !== body.data.reason) {
@@ -617,15 +594,11 @@ export function mountAudit(app: Hono<{ Bindings: Env }>): void {
     });
   });
 
-  app.post("/v1/audit/legal-holds/:holdId/release", async (c) => {
-    const identity = await authenticateRequest(c.env, c.req);
-    if (!identity) return c.json({ error: "unauthorized" }, 401);
+  app.post("/v1/audit/legal-holds/:holdId/release", rateLimit(AUDIT_WRITE, "identity", "audit-hold-write:"), async (c) => {
+    const identity = (c as any).get("identity");
     if (!requireOrgAdmin(identity)) return c.json({ error: "administrator role required" }, 403);
     const body = AuditLegalHoldReleaseRequest.safeParse(await c.req.json().catch(() => null));
     if (!body.success) return c.json({ error: "invalid request" }, 400);
-    if (!(await checkLimit(c.env, `audit-hold-write:${identity.org}:${identity.handle}`, AUDIT_WRITE))) {
-      return c.json({ error: "rate limited" }, 429, { "Retry-After": "60" });
-    }
     const holdId = c.req.param("holdId");
     if (!AUDIT_HOLD_ID_RE.test(holdId)) return c.json({ error: "audit legal hold not found" }, 404);
     const requestReplay = await readHoldByReleaseRequest(c.env.DB, identity.org, body.data.request_id);
@@ -683,17 +656,13 @@ export function mountAudit(app: Hono<{ Bindings: Env }>): void {
     return c.json(publicAuditHold(released), 200, { "Cache-Control": "no-store" });
   });
 
-  app.get("/v1/audit/events", async (c) => {
-    const identity = await authenticateRequest(c.env, c.req);
-    if (!identity) return c.json({ error: "unauthorized" }, 401);
+  app.get("/v1/audit/events", rateLimit(AUDIT_READ, "identity", "audit-export:"), async (c) => {
+    const identity = (c as any).get("identity");
     if (!requireOrgAdmin(identity)) return c.json({ error: "administrator role required" }, 403);
     const query = parseQuery(new URL(c.req.url));
     if (!query) return c.json({ error: "invalid audit export parameters" }, 400);
     const secret = c.env.BOOTSTRAP_TOKEN;
     if (!secret) return c.json({ error: "audit export unavailable" }, 503);
-    if (!(await checkLimit(c.env, `audit-export:${identity.org}:${identity.handle}`, AUDIT_READ))) {
-      return c.json({ error: "rate limited" }, 429, { "Retry-After": "60" });
-    }
     const cursor = query.pageToken
       ? await decodeCursor(query.pageToken, secret, identity.org, identity.handle, query)
       : undefined;
@@ -741,17 +710,13 @@ export function mountAudit(app: Hono<{ Bindings: Env }>): void {
     });
   });
 
-  app.post("/v1/audit/export-acknowledgements", async (c) => {
-    const identity = await authenticateRequest(c.env, c.req);
-    if (!identity) return c.json({ error: "unauthorized" }, 401);
+  app.post("/v1/audit/export-acknowledgements", rateLimit(AUDIT_WRITE, "identity", "audit-ack:"), async (c) => {
+    const identity = (c as any).get("identity");
     if (!requireOrgAdmin(identity)) return c.json({ error: "administrator role required" }, 403);
     const body = AuditExportAcknowledgementRequest.safeParse(await c.req.json().catch(() => null));
     if (!body.success) return c.json({ error: "invalid request" }, 400);
     const secret = c.env.BOOTSTRAP_TOKEN;
     if (!secret) return c.json({ error: "audit export unavailable" }, 503);
-    if (!(await checkLimit(c.env, `audit-ack:${identity.org}:${identity.handle}`, AUDIT_WRITE))) {
-      return c.json({ error: "rate limited" }, 429, { "Retry-After": "60" });
-    }
     const receipt = await decodeCompletionReceipt(body.data.completion_receipt, secret, identity.org);
     if (!receipt) return c.json({ error: "invalid completion receipt" }, 400);
     const checkpoint = receipt.checkpoint;
