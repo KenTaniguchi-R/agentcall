@@ -12,6 +12,10 @@
 #             Node 20/22/24. Slow (three npm global installs); run before a
 #             release, not on every push.
 #   all       both
+#
+# Plus one narrow mode, `mirror-check`, which runs only the assertion that this
+# script still mirrors ci.yml's verify job. invariants.yml calls it so the
+# mirror rule is enforced from CI's side too.
 set -uo pipefail
 
 cd "$(dirname "$0")/.."
@@ -59,17 +63,36 @@ epoch_of_date() {
 # verify job
 # ---------------------------------------------------------------------------
 run_verify() {
-  step "verify — build, typecheck, test"
-  # Build first: packages/cli typechecks against packages/shared's built dist,
-  # so a build after typecheck would check the previous run's types.
-  for task in build typecheck test; do
-    if pnpm -r "$task" >"$TMP/$task.log" 2>&1; then
-      ok "pnpm -r $task"
-    else
-      fail "pnpm -r $task"
-      tail -40 "$TMP/$task.log" | sed 's/^/    /'
-    fi
-  done
+  step "verify — build, docs, typecheck, test, bundle"
+  # Step order mirrors the verify job in ci.yml exactly, and the order is
+  # load-bearing twice over. Build first: packages/cli typechecks against
+  # packages/shared's built dist, so a build after typecheck would check the
+  # previous run's types. docs:check before typecheck: it reads the built CLI,
+  # and failing there first keeps a docs drift from being reported as a test
+  # failure three minutes later.
+  run_step build      "pnpm -r build"      pnpm -r build
+  run_step docs       "pnpm docs:check"    pnpm docs:check
+  run_step typecheck  "pnpm -r typecheck"  pnpm -r typecheck
+  run_step test       "pnpm -r test"       pnpm -r test
+
+  # Both relay configurations must still bundle. A binding renamed in one and
+  # not the other typechecks clean and fails at deploy — which is why ci.yml
+  # dry-runs them here rather than leaving it to the release.
+  run_step bundle "wrangler bundles both relay configurations" \
+    bash -c 'cd apps/relay &&
+      pnpm exec wrangler deploy --dry-run --config wrangler.jsonc &&
+      pnpm exec wrangler deploy --dry-run --config wrangler.self-host.example.jsonc'
+}
+
+# run_step <log-name> <label> <command...>
+run_step() {
+  local log=$1 label=$2; shift 2
+  if "$@" >"$TMP/$log.log" 2>&1; then
+    ok "$label"
+  else
+    fail "$label"
+    tail -40 "$TMP/$log.log" | sed 's/^/    /'
+  fi
 }
 
 # ---------------------------------------------------------------------------
@@ -233,6 +256,75 @@ inv_migrations() {
   ok "D1 migration history is append-only"
 }
 
+# This script claims to be a faithful mirror of ci.yml's verify job. Nothing
+# enforced that claim, and it drifted: `pnpm docs:check` and the wrangler
+# bundle step ran in CI and not here, so a push could pass this gate on a
+# commit CI would fail. With automatic Actions runs paused that difference is
+# invisible until a release.
+#
+# So classify every shell step in the verify job. `mirrored` means the command
+# text must appear verbatim inside run_verify; `unmirrored` names a step this
+# script deliberately does not run, with the reason. A step added to ci.yml is
+# in neither list, and this check fails until someone decides which it is.
+inv_gate_mirrors_ci() {
+  local actual expected mirrored unmirrored body missing=""
+
+  # Shell steps of the verify job only: `- run: x` plus the lines of a `run: |`
+  # block, stopping at the next job.
+  actual=$(perl -ne '
+    if (/^  (\S+):\s*$/) { $in = ($1 eq "verify") ? 1 : 0; $blk = 0; next }
+    next unless $in;
+    if (/^\s*-?\s*run:\s*\|\s*$/) { $blk = 1; ($ind) = /^(\s*)/; next }
+    if ($blk) {
+      next if /^\s*$/;
+      my ($i) = /^(\s*)/;
+      if (length($i) > length($ind)) { s/^\s+|\s+$//g; print "$_\n"; next }
+      $blk = 0;
+    }
+    if (/^\s*-?\s*run:\s*(\S.*?)\s*$/) { print "$1\n" }
+  ' .github/workflows/ci.yml)
+
+  mirrored=$(printf '%s\n' \
+    'pnpm -r build' \
+    'pnpm docs:check' \
+    'pnpm -r typecheck' \
+    'pnpm -r test' \
+    'pnpm exec wrangler deploy --dry-run --config wrangler.jsonc' \
+    'pnpm exec wrangler deploy --dry-run --config wrangler.self-host.example.jsonc')
+
+  # Runner-only setup and the packing that feeds the packed-cli-consumer job.
+  # Locally the workspace is already installed, and `ci-local.sh packaged`
+  # packs into its own temp dir rather than $RUNNER_TEMP.
+  unmirrored=$(printf '%s\n' \
+    'pnpm install --frozen-lockfile' \
+    'mkdir -p "$RUNNER_TEMP/agentcall-packages"' \
+    'pnpm --filter @benree/agentcall-shared pack --pack-destination "$RUNNER_TEMP/agentcall-packages"' \
+    'pnpm --filter @benree/agentcall pack --pack-destination "$RUNNER_TEMP/agentcall-packages"')
+
+  expected=$(printf '%s\n%s\n' "$mirrored" "$unmirrored" | sort)
+  if [ "$(printf '%s\n' "$actual" | sort)" != "$expected" ]; then
+    fail "every verify-job step is classified as mirrored or deliberately not"
+    diff -u <(echo "$expected") <(printf '%s\n' "$actual" | sort) | sed 's/^/    /' || true
+    echo "    A step changed in ci.yml. Mirror it in run_verify and add it to the"
+    echo "    mirrored list, or record here why this script does not run it."
+    return
+  fi
+
+  # Match against run_verify's body only. Grepping the whole file would match
+  # the mirrored list above and pass no matter what run_verify actually does.
+  body=$(sed -n '/^run_verify() {/,/^}/p' "$ROOT/scripts/ci-local.sh")
+  while IFS= read -r cmd; do
+    printf '%s' "$body" | grep -Fq -- "$cmd" || missing+="    $cmd"$'\n'
+  done <<< "$mirrored"
+
+  if [ -n "$missing" ]; then
+    fail "run_verify runs every mirrored verify-job step"
+    printf '%s' "$missing"
+    return
+  fi
+  ok "local gate mirrors the verify job in ci.yml"
+}
+
 inv_no_task_board() {
   local added
   added=$(git diff --name-only --diff-filter=A "${BASE}...HEAD" 2>/dev/null || true)
@@ -257,6 +349,7 @@ run_invariants() {
   inv_historical_docs
   inv_migrations
   inv_no_task_board
+  inv_gate_mirrors_ci
 }
 
 # ---------------------------------------------------------------------------
@@ -344,7 +437,10 @@ main() {
     fast)     run_verify; run_invariants ;;
     packaged) run_packaged ;;
     all)      run_verify; run_invariants; run_packaged ;;
-    *) echo "usage: $0 [fast|packaged|all]" >&2; exit 64 ;;
+    # Just the mirror assertion. invariants.yml runs this so CI enforces the
+    # same rule from its side; it needs no comparison base and no toolchain.
+    mirror-check) inv_gate_mirrors_ci ;;
+    *) echo "usage: $0 [fast|packaged|all|mirror-check]" >&2; exit 64 ;;
   esac
 
   echo

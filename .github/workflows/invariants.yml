@@ -231,3 +231,23 @@ jobs:
             esac
           done
           echo "OK: no markdown task board reintroduced"
+
+      - name: The local gate mirrors this workflow's verify job
+        run: |
+          # scripts/ci-local.sh calls itself a faithful mirror of ci.yml's
+          # verify job, and with automatic runs paused it is the only gate a
+          # push crosses. Nothing enforced the claim, and it drifted: docs:check
+          # and the wrangler bundle ran in ci.yml and not there, so the pre-push
+          # hook passed commits CI would have failed.
+          #
+          # Every shell step in the verify job is classified inside ci-local.sh
+          # as mirrored (the command appears verbatim in run_verify) or
+          # knowingly unmirrored. A new step is in neither list and fails there.
+          # This step runs that same assertion from CI's side, so the two cannot
+          # drift while only one of them is being run.
+          if bash scripts/ci-local.sh mirror-check; then
+            echo "OK: scripts/ci-local.sh mirrors the verify job"
+          else
+            echo "::error file=scripts/ci-local.sh::The local gate has drifted from ci.yml's verify job -- see CLAUDE.md."
+            exit 1
+          fi
