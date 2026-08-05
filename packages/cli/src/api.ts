@@ -386,7 +386,11 @@ export async function publishIdentityKey(
   relay: string, auth: Auth, keys: StoredKeys, host: string,
 ): Promise<void> {
   const record: IdentityRecordType = IdentityRecord.parse({
-    v: 1, address: `${auth.handle}@${host}`, identity_pub: keys.identity_pub,
+    // `host` is already the org-scoped address host, which is exactly what the
+    // envelopes put in `relay_origin`. Keeping the two identical is the point:
+    // the signed binding and the wire binding must name the same thing.
+    v: 2, relay_origin: host, address: `${auth.handle}@${host}`,
+    identity_pub: keys.identity_pub,
   });
   // Self-signed: the record is signed by the very key it publishes. The relay
   // has no way to check an identity key against anything else, so possession of
@@ -418,7 +422,8 @@ export async function publishEncryptionKey(
   if (!publication) {
     const pub = keys.encryption_pub;
     const record: EncryptionKeyRecordType = EncryptionKeyRecord.parse({
-      v: 1,
+      v: 2,
+      relay_origin: host,
       address: `${auth.handle}@${host}`,
       key_id: await keyIdFor(pub),
       suite: HPKE_SUITE,

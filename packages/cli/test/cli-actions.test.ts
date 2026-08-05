@@ -113,6 +113,7 @@ describe("trust CLI", () => {
     const testHome = home();
     const machine = getMachinePaths(testHome, testHome);
     writeJsonAtomic(machine.knownPeersFile, { peers: [{
+      relay_origin: "relay.example",
       address: "peer@relay.example", identity_pub: "abc",
       fingerprint: "SHA256:0123456789abcdef0123456789abcdef",
       first_seen_at: 1, highest_encryption_epoch: 1, call_count: 1,
@@ -130,10 +131,14 @@ describe("trust CLI", () => {
       const encryption = await generateEncryptionKeyPair();
       const pub = await exportPublicKey(encryption.publicKey);
       const record = {
-        v: 1 as const, address, key_id: await keyIdFor(pub), suite: HPKE_SUITE, pub,
+        v: 2 as const, relay_origin: address.slice(address.indexOf("@") + 1),
+        address, key_id: await keyIdFor(pub), suite: HPKE_SUITE, pub,
         epoch: 1, not_before: Date.now() - 1_000, not_after: Date.now() + 60_000, prev: null,
       };
-      const identityRecord = { v: 1 as const, address, identity_pub: identityPub };
+      const identityRecord = {
+        v: 2 as const, relay_origin: address.slice(address.indexOf("@") + 1),
+        address, identity_pub: identityPub,
+      };
       return {
         expected: await fingerprint(identityTranscript(identityRecord)),
         response: {
@@ -212,9 +217,13 @@ async function startCallRelay(
   const remote = await testKeys();
   const relayOrigin = "127.0.0.1";
   const remoteAddress = `sota@${relayOrigin}`;
-  const identity = { v: 1 as const, address: remoteAddress, identity_pub: remote.identity_pub };
+  const identity = {
+    v: 2 as const, relay_origin: remoteAddress.slice(remoteAddress.indexOf("@") + 1),
+    address: remoteAddress, identity_pub: remote.identity_pub,
+  };
   const record = {
-    v: 1 as const, address: remoteAddress, key_id: await keyIdFor(remote.encryption_pub),
+    v: 2 as const, relay_origin: remoteAddress.slice(remoteAddress.indexOf("@") + 1),
+    address: remoteAddress, key_id: await keyIdFor(remote.encryption_pub),
     suite: HPKE_SUITE, pub: remote.encryption_pub, epoch: 1,
     not_before: Date.now() - 1_000, not_after: Date.now() + 60_000, prev: null,
   };

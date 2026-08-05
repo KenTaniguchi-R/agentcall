@@ -18,7 +18,8 @@ async function newIdentity(handle: string) {
   const token = await registerHandle(handle);
   const idKp = await generateIdentityKeyPair();
   const record = {
-    v: 1 as const,
+    v: 2 as const,
+    relay_origin: HOST,
     address: `${handle}@${HOST}`,
     identity_pub: await exportPublicKey(idKp.publicKey),
   };
@@ -47,7 +48,8 @@ async function encRecord(who: Awaited<ReturnType<typeof newIdentity>>, epoch: nu
   const encKp = await generateEncryptionKeyPair();
   const pub = await exportPublicKey(encKp.publicKey);
   const record = {
-    v: 1 as const,
+    v: 2 as const,
+    relay_origin: (address ?? `${who.handle}@${HOST}`).split("@")[1]!,
     address: address ?? `${who.handle}@${HOST}`,
     key_id: await keyIdFor(pub),
     suite: HPKE_SUITE,
@@ -218,7 +220,8 @@ describe("key publication endpoints", () => {
     const token = await registerHandle(handle);
     const idKp = await generateIdentityKeyPair();
     const identity = {
-      v: 1 as const, address, identity_pub: await exportPublicKey(idKp.publicKey),
+      v: 2 as const, relay_origin: address.split("@")[1]!,
+      address, identity_pub: await exportPublicKey(idKp.publicKey),
     };
     const headers = {
       "content-type": "application/json",
@@ -240,7 +243,8 @@ describe("key publication endpoints", () => {
     const encKp = await generateEncryptionKeyPair();
     const pub = await exportPublicKey(encKp.publicKey);
     const encryption = {
-      v: 1 as const,
+      v: 2 as const,
+      relay_origin: address.split("@")[1]!,
       address,
       key_id: await keyIdFor(pub),
       suite: HPKE_SUITE,
@@ -281,7 +285,8 @@ describe("key publication endpoints", () => {
     const token = await registerHandle(handle);
     const idKp = await generateIdentityKeyPair();
     const identity = {
-      v: 1 as const, address, identity_pub: await exportPublicKey(idKp.publicKey),
+      v: 2 as const, relay_origin: address.split("@")[1]!,
+      address, identity_pub: await exportPublicKey(idKp.publicKey),
     };
     const headers = {
       "content-type": "application/json",
@@ -303,7 +308,8 @@ describe("key publication endpoints", () => {
     const encKp = await generateEncryptionKeyPair();
     const pub = await exportPublicKey(encKp.publicKey);
     const encryption = {
-      v: 1 as const,
+      v: 2 as const,
+      relay_origin: address.split("@")[1]!,
       address,
       key_id: await keyIdFor(pub),
       suite: HPKE_SUITE,

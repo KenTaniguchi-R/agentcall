@@ -56,18 +56,19 @@ function seedTask(paths: LinePaths, id: string, frontmatter: string[], body = "d
 
 async function callerBundleFor(handle: string) {
   const record: EncryptionKeyRecordType = {
-    v: 1, address: `${handle}@127.0.0.1`, key_id: await keyIdFor(callerKeys.encryption_pub),
+    v: 2, relay_origin: `${handle}@127.0.0.1`.slice(`${handle}@127.0.0.1`.indexOf("@") + 1), address: `${handle}@127.0.0.1`, key_id: await keyIdFor(callerKeys.encryption_pub),
     suite: HPKE_SUITE, pub: callerKeys.encryption_pub, epoch: callerKeys.epoch,
     not_before: 1, not_after: Date.now() + RELAY_CALL_TIMEOUT_MS, prev: null,
   };
   return {
-    identity: { v: 1 as const, address: `${handle}@127.0.0.1`, identity_pub: callerKeys.identity_pub },
+    identity: { v: 2 as const, relay_origin: `${handle}@127.0.0.1`.slice(`${handle}@127.0.0.1`.indexOf("@") + 1), address: `${handle}@127.0.0.1`, identity_pub: callerKeys.identity_pub },
     encryption: { record, signature: "unused" },
   };
 }
 
 function fakePeer(address: string) {
   return {
+    relay_origin: address.slice(address.indexOf("@") + 1),
     address, identity_pub: callerKeys.identity_pub, fingerprint: `SHA256:${"a".repeat(32)}`,
     first_seen_at: 1, highest_encryption_epoch: callerKeys.epoch, call_count: 1,
   };

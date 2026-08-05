@@ -30,13 +30,17 @@ async function bundle(identity?: CryptoKeyPair, epoch = 1, address = PEER) {
   const encryption = await generateEncryptionKeyPair();
   const pub = await exportPublicKey(encryption.publicKey);
   const record: EncryptionKeyRecordType = {
-    v: 1, address, key_id: await keyIdFor(pub), suite: HPKE_SUITE, pub, epoch,
+    v: 2, relay_origin: address.slice(address.indexOf("@") + 1), address,
+    key_id: await keyIdFor(pub), suite: HPKE_SUITE, pub, epoch,
     not_before: 1, not_after: 1_000, prev: null,
   };
   return {
     identityKey: identity,
     value: {
-      identity: { v: 1 as const, address, identity_pub: identityPub },
+      identity: {
+        v: 2 as const, relay_origin: address.slice(address.indexOf("@") + 1),
+        address, identity_pub: identityPub,
+      },
       encryption: { record, signature: await signTranscript(identity.privateKey, encryptionKeyTranscript(record)) },
     },
   };
@@ -130,7 +134,7 @@ describe("known-peer identity pins", () => {
 
   it("refuses to grow beyond the fixed peer cap", async () => {
     writeJsonAtomic(machine.knownPeersFile, { peers: Array.from({ length: MAX_KNOWN_PEERS }, (_, index) => ({
-      address: `p${index}@r.test`, identity_pub: "abc",
+      relay_origin: "r.test", address: `p${index}@r.test`, identity_pub: "abc",
       fingerprint: "SHA256:0123456789abcdef0123456789abcdef",
       first_seen_at: 1, highest_encryption_epoch: 1, call_count: 1,
     })) });

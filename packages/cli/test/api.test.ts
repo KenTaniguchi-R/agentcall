@@ -469,10 +469,14 @@ async function previousTranscriptHash(record: EncryptionKeyRecordType): Promise<
 async function buildValidKeysResponse(
   keys: StoredKeys, address: string,
 ): Promise<{ identity: IdentityRecordType; encryption: { record: EncryptionKeyRecordType; signature: string } }> {
-  const identity: IdentityRecordType = { v: 1, address, identity_pub: keys.identity_pub };
+  const identity: IdentityRecordType = {
+    v: 2, relay_origin: address.slice(address.indexOf("@") + 1), address,
+    identity_pub: keys.identity_pub,
+  };
   const now = 1_754_000_000_000;
   const record: EncryptionKeyRecordType = {
-    v: 1,
+    v: 2,
+    relay_origin: address.slice(address.indexOf("@") + 1),
     address,
     key_id: await keyIdFor(keys.encryption_pub),
     suite: HPKE_SUITE,
