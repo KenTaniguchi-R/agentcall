@@ -322,7 +322,7 @@ consumer_leg() {
   fi
   grep -F "No agentcall config found" "$out-doctor" || return 1
 
-  if "$cli" status nobody@example.invalid >"$out-status" 2>&1; then
+  if "$cli" status @acme/nobody >"$out-status" 2>&1; then
     echo "status unexpectedly succeeded without a configured identity"; return 1
   fi
   grep -F "No agentcall config found" "$out-status" || return 1
