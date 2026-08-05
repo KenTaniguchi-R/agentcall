@@ -153,7 +153,7 @@ describe("key storage", () => {
 
   it("waits before reading a canonical epoch slot that another process is writing", async () => {
     const paths = linePaths(home);
-    const first = await generateIdentityKeys(paths);
+    await generateIdentityKeys(paths);
     const target = `${paths.identityKeyFile}.epoch-2.state.json`;
     const lock = `${target}.lock`;
     mkdirSync(lock, { mode: 0o700 });

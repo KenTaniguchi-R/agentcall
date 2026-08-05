@@ -5,8 +5,8 @@ import { join } from "node:path";
 import { WebSocketServer } from "ws";
 import { afterEach, describe, expect, it } from "vitest";
 import {
-  CORRELATION_ID_RE, HPKE_SUITE, MAX_E2EE_WIRE_BYTES, RELAY_CALL_TIMEOUT_MS, encryptionKeyTranscript,
-  keyIdFor, requestTranscript, signTranscript, transcriptHash,
+  CORRELATION_ID_RE, HPKE_SUITE, MAX_E2EE_WIRE_BYTES, RELAY_CALL_TIMEOUT_MS,
+  keyIdFor, requestTranscript, transcriptHash,
   type E2EEOutcomeType, type E2EEResponsePayloadType, type EncryptionKeyRecordType,
 } from "@benree/agentcall-shared";
 import { callAgent, callStatusMessage, CallError, type CallOpts } from "../src/call-client.js";

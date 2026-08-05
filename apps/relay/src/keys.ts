@@ -3,7 +3,6 @@ import {
   EncryptionKeyRecord, IdentityRecord, encryptionKeyTranscript, identityTranscript,
   importIdentityPublicKey, verifyTranscript,
 } from "@benree/agentcall-shared";
-import type { Env } from "./index.js";
 import { formatAddress } from "@benree/agentcall-shared";
 import { NATIVE_CARD, NATIVE_READ } from "./ratelimit/index.js";
 import { rateLimit, type RelayAppEnv } from "./middleware.js";

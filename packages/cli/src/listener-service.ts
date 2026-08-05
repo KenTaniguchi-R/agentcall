@@ -87,13 +87,6 @@ export function listenerServiceFile(
   return adapterFor(platform).file(machine);
 }
 
-function isListenerServiceInstalled(
-  machine: MachinePaths,
-  platform: NodeJS.Platform = process.platform,
-): boolean {
-  return ADAPTERS[platform]?.isInstalled(machine) ?? false;
-}
-
 export function installListenerService(
   machine: MachinePaths,
   options: ListenerServiceOptions = {},

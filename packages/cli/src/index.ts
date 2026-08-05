@@ -1,11 +1,9 @@
 import { Command, CommanderError } from "commander";
 import { getMachinePaths } from "./paths.js";
-import { ApiError } from "./api.js";
 import { resolveLine } from "./line-context.js";
 import type { LineContext } from "./line-context.js";
 import { register as registerCall } from "./commands/call.js";
 import { register as registerRotate } from "./commands/rotate.js";
-import { runRecoveryIssue, runRecoveryRedeem } from "./commands/recovery.js";
 import { register as registerLineCore } from "./commands/line-core.js";
 import { register as registerLineAdmin } from "./commands/line-admin.js";
 import { register as registerRosterCore } from "./commands/roster-core.js";

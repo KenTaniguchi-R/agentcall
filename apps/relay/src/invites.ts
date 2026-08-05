@@ -3,7 +3,6 @@ import {
   BootstrapOrgInviteRequest, CreateOrgInviteRequest, MAX_ACTIVE_ORG_INVITES,
   MAX_LISTED_ORG_INVITES, ORG_INVITE_ID_RE, type OrgInviteMetadataType, type OrgRoleType,
 } from "@benree/agentcall-shared";
-import type { Env } from "./index.js";
 import { constantTimeEqual, generateToken, sha256Hex } from "./auth.js";
 import { orgAuditStatement, orgAuditTrimStatement, type OrgAuditActor } from "./events.js";
 import { checkLimit, REGISTER, ROSTER_WRITE } from "./ratelimit/index.js";

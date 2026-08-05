@@ -1,7 +1,6 @@
 import type { Context, Hono, MiddlewareHandler } from "hono";
 // Type-only, so the index -> a2a -> index cycle is erased at compile time and
 // never exists at runtime. Do not turn this into a value import.
-import type { Env } from "./index.js";
 import {
   A2ACancelTaskRequest, A2A_VERSION_HEADER, a2aError, isSupportedA2AVersion,
   standardError, toAgentCard, toDirectoryCard, visibleTasks,

@@ -2,7 +2,6 @@ import type { Context, Hono } from "hono";
 // Type-only, so the index -> roster -> index cycle is erased at compile time
 // and never exists at runtime. Do not turn this into a value import — the
 // same rule a2a.ts follows.
-import type { Env } from "./index.js";
 import { constantTimeEqual, generateToken, sha256Hex } from "./auth.js";
 import {
   AdminSecretRequest, DEFAULT_ROSTER_JOIN_KEY_EXPIRY_DAYS, ExpelRosterRequest,

@@ -10,7 +10,6 @@ import {
   createTestRoom as createRoom,
   joinTestRoom as join,
   mutateTestRoom as mutate,
-  roomAuth,
   roomJoinBody as joinBody,
   roomJson as json,
   roomTestKey as key,

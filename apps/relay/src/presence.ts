@@ -1,6 +1,5 @@
 import type { Context, Hono } from "hono";
 import { HANDLE_RE } from "@benree/agentcall-shared";
-import type { Env } from "./index.js";
 import { sharedRosterIds } from "./groups.js";
 import { NATIVE_READ } from "./ratelimit/index.js";
 import { identityObjectName } from "./tenant.js";
