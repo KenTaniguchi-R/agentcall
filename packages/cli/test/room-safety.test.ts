@@ -8,6 +8,8 @@ import {
   PASSING_ROOM_SAFETY_SURFACES,
   buildRoomSafeSpawnContract,
   buildRoomSafetyProbeSpawn,
+  checkRoomSafetyEligibility,
+  resolveRoomSafetyTuple,
   roomSafetySupport,
   runRoomSafeAgent,
   type RoomSafetyEvidence,
@@ -272,4 +274,53 @@ describe("Room safety adapter support", () => {
     },
     15_000,
   );
+});
+
+describe("checkRoomSafetyEligibility / resolveRoomSafetyTuple (#347)", () => {
+  const evidenceCatalog: RoomSafetyEvidence[] = [{
+    ...passingEvidence, cliVersion: "9.9.9",
+  }];
+
+  it("checkRoomSafetyEligibility matches roomSafetySupport(resolveRoomSafetyTuple(...))", () => {
+    const options = {
+      agent: "claude" as const, platform: "darwin" as const, arch: "arm64",
+      resolveBin: () => "/usr/bin/claude", readVersion: () => "9.9.9",
+    };
+    const tuple = resolveRoomSafetyTuple(options);
+    expect(tuple).toEqual({ agent: "claude", cliVersion: "9.9.9", platform: "darwin", arch: "arm64" });
+    expect(checkRoomSafetyEligibility({ ...options, evidenceCatalog }))
+      .toEqual(roomSafetySupport(tuple, evidenceCatalog));
+  });
+
+  it("resolveRoomSafetyTuple extracts the version from readVersion's raw output", () => {
+    const tuple = resolveRoomSafetyTuple({
+      agent: "claude", platform: "linux", arch: "x64",
+      resolveBin: () => "/usr/bin/claude", readVersion: () => "claude-code 9.9.9 (build 42)\n",
+    });
+    expect(tuple).toEqual({ agent: "claude", cliVersion: "9.9.9", platform: "linux", arch: "x64" });
+  });
+
+  it("fails closed for a version with no probe evidence", () => {
+    const result = checkRoomSafetyEligibility({
+      agent: "claude", platform: "darwin", arch: "arm64",
+      resolveBin: () => "/usr/bin/claude", readVersion: () => "0.0.1",
+      evidenceCatalog,
+    });
+    expect(result.supported).toBe(false);
+  });
+
+  it("does not change buildRoomSafeSpawnContract's behavior (regression)", () => {
+    const workdir = mkdtempSync(join(tmpdir(), "room-safety-"));
+    try {
+      const contract = buildRoomSafeSpawnContract({
+        agent: "claude", prompt: "hello", workdir,
+        resolveBin: () => "/usr/bin/claude", readVersion: () => "9.9.9",
+        evidenceCatalog, env: {},
+      });
+      expect(contract.evidence.cliVersion).toBe("9.9.9");
+      expect(contract.spawn.cmd).toBe("/usr/bin/claude");
+    } finally {
+      rmSync(workdir, { recursive: true, force: true });
+    }
+  });
 });

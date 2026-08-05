@@ -18,6 +18,7 @@ Options:
 
 Commands:
   setup [options]                        enroll with an organization invite, configure your agent, and install the background listener
+  room [options]                         host a temporary, accountless group Room — no account, handle, or listener required
   invite                                 manage one-time organization invites
   audit                                  export organization audit evidence
   call [options] <address> <message...>  call another handle's agent with a message and print its reply
@@ -69,6 +70,36 @@ Options:
                      agent callable
   --no-verify        skip verifying the agent can answer a test call
   -h, --help         display help for command
+```
+
+## room
+
+```text
+Usage: agentcall room [options] [command]
+
+host a temporary, accountless group Room — no account, handle, or listener
+required
+
+Options:
+  --seats <n>     Room size including you (2-6) (default: "2")
+  --relay <url>   relay URL
+  --name <name>   your display name in this Room
+  -h, --help      display help for command
+
+Commands:
+  join [options]  join a Room using an invitation from its host
+```
+
+## room join
+
+```text
+Usage: agentcall room join [options]
+
+join a Room using an invitation from its host
+
+Options:
+  --relay <url>  relay URL
+  -h, --help     display help for command
 ```
 
 ## invite

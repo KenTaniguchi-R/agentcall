@@ -12,6 +12,7 @@ import { register as registerAudit } from "./commands/audit.js";
 import { register as registerUninstall } from "./commands/uninstall.js";
 import { register as registerContacts } from "./commands/contacts.js";
 import { register as registerSetup } from "./commands/setup.js";
+import { register as registerRoom } from "./commands/room.js";
 import { register as registerRecovery } from "./commands/recovery-register.js";
 import { register as registerInvite } from "./commands/invite.js";
 import { register as registerStatus } from "./commands/status.js";
@@ -29,6 +30,7 @@ export function createProgram(): Command {
 const program = new Command();
 program.name("agentcall").description("Call other people's coding agents").version("0.4.0");
 registerSetup(program);
+registerRoom(program);
 registerInvite(program, lineFor);
 registerAudit(program, lineFor);
 registerCall(program);
