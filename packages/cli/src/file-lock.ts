@@ -54,14 +54,34 @@ export async function withFileLock<T>(
   }
 
   closeSync(fd);
+  let result: T;
   try {
-    return await operation();
-  } finally {
-    // A process may only remove the exact random ownership token it created.
+    result = await operation();
+  } catch (error) {
+    // Releasing must not throw over an error already on its way to the caller.
+    // That error says what went wrong with the credential or trust-store write;
+    // a failed release is the lesser fact, and it announces itself anyway on the
+    // next acquire, which times out with an explicit manual-recovery message.
     try {
-      if (readFileSync(lockFile, "utf8") === owner) rmSync(lockFile, { force: true });
-    } catch (error) {
-      if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
+      releaseLock(lockFile, owner);
+    } catch {
+      // Deliberately dropped -- see above.
     }
+    throw error;
+  }
+
+  // On the success path a failed release is worth surfacing: nothing else
+  // reports a lock this process could not remove, and every later acquire pays
+  // the full wait for it.
+  releaseLock(lockFile, owner);
+  return result;
+}
+
+/** Removes the lock, but only the exact random ownership token we created. */
+function releaseLock(lockFile: string, owner: string): void {
+  try {
+    if (readFileSync(lockFile, "utf8") === owner) rmSync(lockFile, { force: true });
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
   }
 }
