@@ -20,7 +20,10 @@ describe("createRoom", () => {
     const fetchMock = vi.spyOn(globalThis, "fetch").mockResolvedValue(jsonResponse({
       ...validRoomSnapshot,
       credential: "acrp.room_AAAAAAAAAAAAAAAAAAAAAA.rp_AAAAAAAAAAAAAAAAAAAAAA." + "a".repeat(43),
-      invites: [{ seat: 2, invite: "acri.room_AAAAAAAAAAAAAAAAAAAAAA.ri_AAAAAAAAAAAAAAAAAAAAAA." + "b".repeat(43), expires_at: 5 }],
+      invite: {
+        invite: "acri.room_AAAAAAAAAAAAAAAAAAAAAA.ri_AAAAAAAAAAAAAAAAAAAAAA." + "b".repeat(43),
+        expires_at: 5, seats_remaining: 1,
+      },
     }, 201));
     const request = {
       expected_participants: 2 as const, display_name: "ken",

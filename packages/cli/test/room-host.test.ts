@@ -16,10 +16,10 @@ const created = {
   room: { room_id: ROOM_ID, state: "waiting", membership_epoch: 0, expected_participants: 2 },
   participants: [],
   credential: `acrp.${ROOM_ID}.${HOST_ID}.${randomBase64Url(32)}`,
-  invites: [{
-    seat: 2, invite: `acri.${ROOM_ID}.ri_${randomBase64Url(16)}.${randomBase64Url(32)}`,
-    expires_at: Date.now() + 300_000,
-  }],
+  invite: {
+    invite: `acri.${ROOM_ID}.ri_${randomBase64Url(16)}.${randomBase64Url(32)}`,
+    expires_at: Date.now() + 300_000, seats_remaining: 1,
+  },
 };
 
 function waitingSnapshot(participants: unknown[]) {
@@ -91,9 +91,9 @@ describe("runRoomHost", () => {
     // onSnapshot blocks on the admit answer, so it must not be awaited yet --
     // awaiting it here would deadlock on an answer nobody has given.
     const admitting = deps.deliver(waitingSnapshot([
-      { participant_id: "rp_guest", state: "pending", display_name: "sota", seat: 2 },
+      { participant_id: "rp_guest", state: "pending", display_name: "sota" },
     ]));
-    await vi.waitFor(() => expect(deps.listener.printed.join("")).toContain("sota requested Guest 2. Admit?"));
+    await vi.waitFor(() => expect(deps.listener.printed.join("")).toContain("sota wants to join. Admit?"));
     deps.listener.emit("y");
     await vi.waitFor(() => expect(deps.mutate).toHaveBeenCalledWith(
       "https://relay.test", created.credential, "admit", "rp_guest",
@@ -116,9 +116,9 @@ describe("runRoomHost", () => {
       createListener: deps.listener.factory, runVerification: deps.runVerification,
     });
     const denying = deps.deliver(waitingSnapshot([
-      { participant_id: "rp_guest", state: "pending", display_name: "sota", seat: 2 },
+      { participant_id: "rp_guest", state: "pending", display_name: "sota" },
     ]));
-    await vi.waitFor(() => expect(deps.listener.printed.join("")).toContain("sota requested Guest 2. Admit?"));
+    await vi.waitFor(() => expect(deps.listener.printed.join("")).toContain("sota wants to join. Admit?"));
     deps.listener.emit("n");
     await vi.waitFor(() => expect(deps.mutate).toHaveBeenCalledWith(
       "https://relay.test", created.credential, "deny", "rp_guest",
