@@ -1,5 +1,6 @@
 import { z } from "zod";
 import { canonicalEncode } from "./canonical.js";
+import { BASE64URL_RE, fromBase64UrlStrict } from "./signing.js";
 
 export const ROOM_MIN_PARTICIPANTS = 2 as const;
 export const ROOM_MAX_PARTICIPANTS = 6 as const;
@@ -18,8 +19,6 @@ export const ROOM_MAX_FAILED_JOINS = 3 as const;
 
 const ROOM_MAX_ENCRYPTED_REQUEST_BYTES = ROOM_MAX_PROMPT_BYTES + 1_024;
 const ROOM_MAX_ENCRYPTED_OUTCOME_BYTES = ROOM_MAX_REPLY_BYTES + 1_024;
-const BASE64URL_ALPHABET = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_";
-const BASE64URL_RE = /^[A-Za-z0-9_-]+$/;
 const UNSAFE_DISPLAY_CHARACTERS =
   /[\u0000-\u001f\u007f-\u009f\u061c\u200e\u200f\u202a-\u202e\u2066-\u2069]/u;
 
@@ -30,36 +29,16 @@ export const RoomCallId = z.string().regex(/^rc_[A-Za-z0-9_-]{22}$/);
 export const RoomSecretHash = z.string().regex(/^[0-9a-f]{64}$/);
 export const RoomIdempotencyKey = z.string().regex(/^[A-Za-z0-9_-]{16,64}$/);
 export const RoomSecret = z.string().regex(/^[A-Za-z0-9_-]{43}$/).refine(
-  (value) => decodeCanonicalBase64url(value)?.byteLength === 32,
+  (value) => fromBase64UrlStrict(value)?.byteLength === 32,
   { message: "Room secret must be canonical unpadded base64url for 32 bytes" },
 );
 export const RoomSigningProof = z.string().regex(/^[A-Za-z0-9_-]{86}$/).refine(
-  (value) => decodeCanonicalBase64url(value)?.byteLength === 64,
+  (value) => fromBase64UrlStrict(value)?.byteLength === 64,
   { message: "Room signing proof must be canonical unpadded base64url for 64 bytes" },
 );
 
-function decodeCanonicalBase64url(value: string): Uint8Array | undefined {
-  if (!BASE64URL_RE.test(value)) return undefined;
-  const bytes: number[] = [];
-  let accumulator = 0;
-  let bitCount = 0;
-  for (const character of value) {
-    const index = BASE64URL_ALPHABET.indexOf(character);
-    if (index < 0) return undefined;
-    accumulator = (accumulator << 6) | index;
-    bitCount += 6;
-    while (bitCount >= 8) {
-      bitCount -= 8;
-      bytes.push((accumulator >> bitCount) & 0xff);
-      accumulator &= (1 << bitCount) - 1;
-    }
-  }
-  if (bitCount > 0 && accumulator !== 0) return undefined;
-  return Uint8Array.from(bytes);
-}
-
 export const RoomPublicKey = z.string().regex(/^[A-Za-z0-9_-]{43}$/).refine(
-  (value) => decodeCanonicalBase64url(value)?.byteLength === 32,
+  (value) => fromBase64UrlStrict(value)?.byteLength === 32,
   { message: "Room public key must be canonical unpadded base64url for 32 bytes" },
 );
 
@@ -157,7 +136,7 @@ export async function verifyRoomJoinProof(input: z.input<typeof RoomJoinRequest>
   try {
     const publicKey = await crypto.subtle.importKey(
       "raw",
-      decodeCanonicalBase64url(parsed.data.signing_public_key)! as BufferSource,
+      fromBase64UrlStrict(parsed.data.signing_public_key)! as BufferSource,
       { name: "Ed25519" },
       false,
       ["verify"],
@@ -166,7 +145,7 @@ export async function verifyRoomJoinProof(input: z.input<typeof RoomJoinRequest>
     return crypto.subtle.verify(
       { name: "Ed25519" },
       publicKey,
-      decodeCanonicalBase64url(parsed.data.signing_proof)! as BufferSource,
+      fromBase64UrlStrict(parsed.data.signing_proof)! as BufferSource,
       canonicalRoomJoinProofTranscript(transcriptInput) as BufferSource,
     );
   } catch {
@@ -318,8 +297,8 @@ export const RoomMutationResponse = RoomSnapshot;
 
 function encryptedPayload(maxBytes: number) {
   return z.string().regex(BASE64URL_RE).refine((value) => {
-    const decoded = decodeCanonicalBase64url(value);
-    return decoded !== undefined && decoded.byteLength > 0 && decoded.byteLength <= maxBytes;
+    const decoded = fromBase64UrlStrict(value);
+    return decoded !== null && decoded.byteLength > 0 && decoded.byteLength <= maxBytes;
   }, { message: `encrypted payload must be canonical base64url of at most ${maxBytes} bytes` });
 }
 
@@ -521,8 +500,8 @@ export function canonicalRoomMembershipTranscript(input: {
     parts.push(
       lengthPrefixed(encoder.encode(member.participant_id)),
       lengthPrefixed(encoder.encode(member.display_name)),
-      decodeCanonicalBase64url(member.signing_public_key)!,
-      decodeCanonicalBase64url(member.encryption_public_key)!,
+      fromBase64UrlStrict(member.signing_public_key)!,
+      fromBase64UrlStrict(member.encryption_public_key)!,
     );
   }
   return concatenate(parts);

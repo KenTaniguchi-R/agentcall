@@ -309,6 +309,17 @@ describe("RoomCallRecord", () => {
   it("rejects non-canonical ciphertext padding bits", () => {
     expect(RoomCallRecord.safeParse({ ...call, encrypted_request: "B" }).success).toBe(false);
   });
+
+  // No byte sequence encodes to a base64url string of length 1 mod 4: four
+  // characters carry three bytes, so the valid remainders are 0, 2, and 3.
+  // Ciphertext is variable-length and its only length check is the byte
+  // ceiling, so an impossible spelling has to be rejected by the decoder.
+  it.each(["A".repeat(5), "A".repeat(9), "A".repeat(13)])(
+    "rejects ciphertext of impossible base64url length (%s)",
+    (encrypted_request) => {
+      expect(RoomCallRecord.safeParse({ ...call, encrypted_request }).success).toBe(false);
+    },
+  );
 });
 
 describe("Room membership transcript", () => {

@@ -32,8 +32,11 @@ describe("fromBase64UrlStrict", () => {
     expect(fromBase64UrlStrict("")).toBeNull();
   });
 
-  it("returns null rather than throwing on undecodable input", () => {
-    expect(fromBase64UrlStrict("A")).toBeNull();
+  // Four characters carry three bytes, so a base64url string's length is
+  // always 0, 2, or 3 mod 4. A length of 1 mod 4 is not a short encoding of
+  // anything — it is not an encoding at all.
+  it.each([1, 5, 9, 13])("rejects the impossible length %i mod 4", (length) => {
+    expect(fromBase64UrlStrict("A".repeat(length))).toBeNull();
   });
 });
 

@@ -18,15 +18,22 @@ function fromBase64Url(value: string): Uint8Array {
   return out;
 }
 
+/** The unpadded base64url alphabet. The single source for "looks like base64url". */
+export const BASE64URL_RE = /^[A-Za-z0-9_-]+$/;
+
 /**
  * Canonical unpadded base64url, or null. `atob` ignores the unused low bits of
  * a final sextet, so several spellings decode to the same bytes; requiring the
  * round trip means a signed token has exactly one textual form. Use this, not
  * `fromBase64Url`, whenever the input is attacker-supplied — that one throws on
  * malformed input and accepts non-canonical spellings.
+ *
+ * The round trip also rejects lengths of 1 mod 4. Four characters carry three
+ * bytes, so a base64url string's length is always 0, 2, or 3 mod 4; a length of
+ * 1 is not a short encoding of anything, it is not an encoding at all.
  */
 export function fromBase64UrlStrict(value: string): Uint8Array | null {
-  if (!/^[A-Za-z0-9_-]+$/.test(value)) return null;
+  if (!BASE64URL_RE.test(value)) return null;
   try {
     const bytes = fromBase64Url(value);
     return toBase64Url(bytes) === value ? bytes : null;

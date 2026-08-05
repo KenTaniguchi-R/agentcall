@@ -1,6 +1,7 @@
 import { z } from "zod";
 import { canonicalEncode } from "./canonical.js";
 import { ADDRESS_RE } from "./protocol.js";
+import { BASE64URL_RE } from "./signing.js";
 
 /** The one HPKE suite this protocol version implements. Exact string, no spaces. */
 export const HPKE_SUITE = "DHKEM(P-256,HKDF-SHA256)/HKDF-SHA256/AES-128-GCM" as const;
@@ -18,7 +19,6 @@ const KEY_ID_RE = /^[0-9a-f]{32}$/;
 // epoch's transcript. It gets its own pattern so that widening one can never
 // silently widen the other.
 const PREV_RE = /^[0-9a-f]{32}$/;
-const BASE64URL_RE = /^[A-Za-z0-9_-]+$/;
 
 export const IdentityRecord = z.object({
   v: z.literal(1),

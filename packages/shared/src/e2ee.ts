@@ -1,6 +1,7 @@
 import { z } from "zod";
 import { canonicalEncode } from "./canonical.js";
 import { ADDRESS_RE, RELAY_ORIGIN_RE } from "./keys.js";
+import { BASE64URL_RE } from "./signing.js";
 import {
   CallAccepted, CallCancelled, CallNotCancelled, CallRejected, CallStarted, CallStatus,
   CancelCall, CorrelationId, CONTEXT_ID_RE, MAX_DETAIL_LENGTH, MAX_MESSAGE_BYTES,
@@ -8,7 +9,6 @@ import {
   normalizeTraceContext, PeerFailureCode, RELAY_CALL_TIMEOUT_MS, RelayCallError, TASK_ID_RE,
 } from "./protocol.js";
 
-const BASE64URL_RE = /^[A-Za-z0-9_-]+$/;
 const KEY_ID_RE = /^[0-9a-f]{32}$/;
 const HASH_RE = /^[0-9a-f]{64}$/;
 const REQUEST_ID_RE = /^[0-9a-f]{32}$/;
