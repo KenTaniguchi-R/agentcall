@@ -221,6 +221,12 @@ export const RecoveryReceipt = z.object({
   // Confirms the recovered identity's current DO applied its tombstone. Before
   // #154, this is not a claim that caller sockets housed in remote DOs closed.
   eviction_confirmed: z.boolean(),
+  // #346: the relay already knows this from `handles`, and it never changes
+  // after registration. Redeeming with no local config.json to preserve it
+  // from must still be able to restore a callable line as callable — nullable,
+  // not optional, because the relay always knows the true answer and a missing
+  // key here would be indistinguishable from "not reported."
+  agent_kind: AgentKindSchema.nullable(),
 }).strict();
 
 export type ErrorCodeType = z.infer<typeof ErrorCode>;

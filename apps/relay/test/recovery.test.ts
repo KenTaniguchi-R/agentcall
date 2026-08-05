@@ -3,7 +3,7 @@ import { describe, expect, it } from "vitest";
 import { sha256Hex } from "../src/auth.js";
 import { drainRecoveryEvictions } from "../src/recovery.js";
 import { identityObjectName } from "../src/tenant.js";
-import { openWs, registerHandle, wsAuth, closed } from "./helpers.js";
+import { closed, issueInvite, openWs, registerHandle, wsAuth } from "./helpers.js";
 
 const proof = (seed: string) => `${seed}-${"x".repeat(40)}`;
 const publicId = (kind: "act" | "agr", digest: string) => `${kind}_${digest.slice(0, 16)}`;
@@ -216,5 +216,38 @@ describe("recovery v2", () => {
     expect(await env.DB.prepare(
       "SELECT 1 FROM recovery_evictions WHERE org = ? AND handle = ?",
     ).bind("acme", "alarm-rec").first()).toBeNull();
+  });
+
+  it("reports the registered agent_kind in the redeem receipt, null for a caller-only handle (regression #346)", async () => {
+    // #346: a recovering CLI with no local config.json to preserve agent_kind
+    // from has only this receipt to learn it from. Before this fix the receipt
+    // never carried it at all, so a callable line recovered from a genuine
+    // config loss silently came back caller-only.
+    const callableToken = await registerHandle("recover-callable", "claude");
+    const callableCurrent = proof("callable-current");
+    await issue("recover-callable", callableToken, callableCurrent);
+    const callable = await redeem({
+      handle: "recover-callable", generation: 1, current: callableCurrent,
+      token: proof("callable-next"), successor: proof("callable-successor"),
+    });
+    expect(callable.status).toBe(200);
+    expect(await callable.json()).toMatchObject({ agent_kind: "claude" });
+
+    const invite = await issueInvite("acme", "recover-caller-only");
+    const registerRes = await SELF.fetch("https://relay.test/v1/register", {
+      method: "POST",
+      headers: { "content-type": "application/json", "cf-connecting-ip": "test-recover-caller-only" },
+      body: JSON.stringify({ invite, handle: "recover-caller-only" }),
+    });
+    expect(registerRes.status).toBe(200);
+    const { token: callerOnlyToken } = await registerRes.json<{ token: string }>();
+    const callerOnlyCurrent = proof("caller-only-current");
+    await issue("recover-caller-only", callerOnlyToken, callerOnlyCurrent);
+    const callerOnly = await redeem({
+      handle: "recover-caller-only", generation: 1, current: callerOnlyCurrent,
+      token: proof("caller-only-next"), successor: proof("caller-only-successor"),
+    });
+    expect(callerOnly.status).toBe(200);
+    expect(await callerOnly.json()).toMatchObject({ agent_kind: null });
   });
 });

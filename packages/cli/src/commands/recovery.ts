@@ -214,15 +214,26 @@ async function runRecoveryRedeemLocked(target: RecoveryTarget, deps: RecoveryRed
   )) {
     throw new Error(`Line "${target.name}" belongs to ${existing.handle} in ${existing.org}; refusing to overwrite it.`);
   }
+  // #346: when there is no existing config to spread, agent_kind has no local
+  // source at all — but the relay has known it since registration and never
+  // changes it, so the receipt is the only place a genuinely lost line can
+  // recover it from. Without this, a callable line that loses its config.json
+  // silently comes back caller-only, and `agentcall listen` refuses to start.
   const next: LineConfig = existing
     ? { ...existing, org: pending.org, handle: pending.handle, relay: pending.relay, token: pending.candidate_token }
-    : { org: pending.org, handle: pending.handle, relay: pending.relay, token: pending.candidate_token };
+    : {
+      org: pending.org, handle: pending.handle, relay: pending.relay, token: pending.candidate_token,
+      ...(receipt.agent_kind ? { agent_kind: receipt.agent_kind } : {}),
+    };
   writeJsonDurable(target.paths.configFile, next);
   removeFileDurable(target.paths.recoveryPendingFile);
   (deps.log ?? console.log)(
     `Recovery committed for ${pending.handle} (client ${receipt.client_public_id}, recovery generation ` +
       `${receipt.recovery_generation}). ${receipt.eviction_confirmed ? "The recovered identity's current Durable Object applied its session-eviction tombstone." : "Current identity session eviction is pending; reconnect is already blocked."} ` +
-      "The predecessor proof may now be removed from the out-of-band backup.",
+      "The predecessor proof may now be removed from the out-of-band backup. " +
+      (next.agent_kind
+        ? `This line is callable (agent: ${next.agent_kind}).`
+        : "This line is caller-only — it cannot answer calls."),
   );
 }
 

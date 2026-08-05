@@ -63,9 +63,27 @@ describe("recovery protocol", () => {
       consumed_generation: 1, recovery_generation: 2,
       client_public_id: request.client_public_id,
       recovery_public_id: request.successor_recovery_public_id,
-      committed_at: 1, eviction_confirmed: true,
+      committed_at: 1, eviction_confirmed: true, agent_kind: "claude",
     });
     expect(JSON.stringify(receipt)).not.toContain("proof");
+  });
+
+  it("requires agent_kind, nullable for a caller-only handle (regression #346)", () => {
+    const base = {
+      org: "acme", handle: "alice", operation_id: request.operation_id,
+      consumed_generation: 1, recovery_generation: 2,
+      client_public_id: request.client_public_id,
+      recovery_public_id: request.successor_recovery_public_id,
+      committed_at: 1, eviction_confirmed: true,
+    };
+    // A caller-only handle has no agent_kind, and the relay must be able to
+    // say so explicitly rather than omit the field -- omission is exactly what
+    // left the CLI with no way to distinguish "not reported" from "genuinely
+    // none," which is how a recovered callable line came back caller-only.
+    expect(RecoveryReceipt.safeParse({ ...base, agent_kind: null }).success).toBe(true);
+    expect(RecoveryReceipt.safeParse({ ...base, agent_kind: "claude" }).success).toBe(true);
+    expect(RecoveryReceipt.safeParse({ ...base, agent_kind: "vim" }).success).toBe(false);
+    expect(RecoveryReceipt.safeParse(base).success).toBe(false);
   });
 });
 
