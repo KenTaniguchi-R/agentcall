@@ -64,10 +64,7 @@ export async function runRoomHost(options: RoomHostOptions): Promise<RoomVerific
   log("Ask each person to run:");
   log("  agentcall room join");
   log("");
-  log("Send one invitation privately to each person:");
-  for (const line of formatInviteLines(created.invites)) log(line);
-  log("");
-  log("Each invitation expires in 5 minutes and works once.");
+  for (const line of formatInviteLines(created.invite)) log(line);
   log(`Waiting for ${seats - 1} people…  Ctrl-C closes the Room.`);
 
   const listener = createListener();
@@ -107,7 +104,7 @@ export async function runRoomHost(options: RoomHostOptions): Promise<RoomVerific
         for (const guest of newlyPending) {
           seenPending.add(guest.participant_id);
           admitting = true;
-          listener.print(`${guest.display_name} requested Guest ${guest.seat}. Admit? [Y/n] `);
+          listener.print(`${guest.display_name} wants to join. Admit? [Y/n] `);
           const answer = await new Promise<string>((res) => { pendingAdmitResolve = res; });
           const admit = answer.trim() === "" || answer.trim().toLowerCase().startsWith("y");
           await mutate(relay, created.credential, admit ? "admit" : "deny", guest.participant_id).catch(() => {});

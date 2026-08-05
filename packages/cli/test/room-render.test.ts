@@ -6,12 +6,21 @@ import {
 import type { RoomCloseReasonType } from "@benree/agentcall-shared";
 
 describe("formatInviteLines", () => {
-  it("labels each invite by its seat number", () => {
-    const lines = formatInviteLines([
-      { seat: 2, invite: "acri.x", expires_at: 1 },
-      { seat: 3, invite: "acri.y", expires_at: 1 },
+  it("prints one invitation for the whole group with the seats it still admits", () => {
+    const lines = formatInviteLines({ invite: "acri.x", expires_at: 1, seats_remaining: 3 });
+    expect(lines).toEqual([
+      "Send this invitation to your group:",
+      "  acri.x",
+      "",
+      "This invitation expires in 5 minutes and admits up to 3 more people.",
     ]);
-    expect(lines).toEqual(["  Guest 2: acri.x", "  Guest 3: acri.y"]);
+  });
+
+  // A 2-person Room has exactly one seat left, and "1 more people" is the kind
+  // of copy an evaluator notices in the first thirty seconds.
+  it("says person, not people, for the last remaining seat", () => {
+    const lines = formatInviteLines({ invite: "acri.x", expires_at: 1, seats_remaining: 1 });
+    expect(lines).toContain("This invitation expires in 5 minutes and admits up to 1 more person.");
   });
 });
 

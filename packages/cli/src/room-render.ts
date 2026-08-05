@@ -4,8 +4,17 @@ import {
   type RoomCloseReasonType, type RoomMutationResponseType, type RoomPublicInviteType, type RoomPublicParticipantType,
 } from "@benree/agentcall-shared";
 
-export function formatInviteLines(invites: readonly RoomPublicInviteType[]): string[] {
-  return invites.map((invite) => `  Guest ${invite.seat}: ${invite.invite}`);
+// One invite now covers every remaining seat, so the host pastes a single
+// string once instead of one per guest. seats_remaining is read off the relay
+// rather than recomputed from --seats.
+export function formatInviteLines(invite: RoomPublicInviteType): string[] {
+  const people = invite.seats_remaining === 1 ? "1 more person" : `${invite.seats_remaining} more people`;
+  return [
+    "Send this invitation to your group:",
+    `  ${invite.invite}`,
+    "",
+    `This invitation expires in 5 minutes and admits up to ${people}.`,
+  ];
 }
 
 const CLOSE_REASON_COPY: Record<RoomCloseReasonType, string> = {
