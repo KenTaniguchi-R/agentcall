@@ -339,6 +339,71 @@ inv_no_task_board() {
   ok "no markdown task board reintroduced"
 }
 
+# #335: nothing stopped an agent (or a human in a hurry) from quietly relaxing
+# the check that would catch its own broken change. This is the durable half
+# of the fix -- it holds for Codex, for CI, and for anyone who never reads a
+# Claude-specific config file; the PreToolUse deny in .claude/settings.json
+# (scripts/guard-verification-gate.sh) is the fast-feedback half for Claude
+# Code specifically, and blocks the edit before it lands rather than at push.
+#
+# #335's own recommendation reads literally as "fail whenever a branch
+# modifies a test file and also touches src/" -- but that is the exact shape
+# of ordinary TDD (a test extended alongside its implementation), which this
+# repo's CLAUDE.md requires ("write the failing test before the
+# implementation"). A literal reading would fail almost every legitimate PR
+# and train everyone to reach for --no-verify by default, which defeats the
+# gate instead of strengthening it.
+#
+# So this checks net line count instead of file identity: a modified (not
+# newly added) test file that lost more lines than it gained, on a branch
+# that also touched src/, is the actual signature of "an assertion got
+# deleted or softened to make the diff pass" -- additive test changes
+# (the normal case) never trip it. It cannot distinguish a weakened
+# assertion from a legitimate simplification (e.g. dropping a redundant
+# case), so it fails loud rather than silently guessing; a human confirms by
+# reading the diff, same escape hatch CONTRIBUTING.md already documents for
+# the rest of this gate (--no-verify, "not a habit").
+inv_test_churn() {
+  local test_globs=(packages/*/test packages/*/test/* apps/relay/test apps/relay/test/*)
+  local src_globs=(packages/*/src packages/*/src/* apps/relay/src apps/relay/src/*)
+  local modified_tests touched_src shrunk="" added deleted rest file
+
+  modified_tests=$(git diff --name-only --diff-filter=M "${BASE}...HEAD" -- "${test_globs[@]}" 2>/dev/null || true)
+  touched_src=$(git diff --name-only --diff-filter=ACMR "${BASE}...HEAD" -- "${src_globs[@]}" 2>/dev/null || true)
+
+  if [ -n "$modified_tests" ] && [ -n "$touched_src" ]; then
+    while IFS= read -r file; do
+      [ -n "$file" ] || continue
+      read -r added deleted rest <<< "$(git diff --numstat "${BASE}...HEAD" -- "$file" 2>/dev/null)"
+      if [ "${deleted:-0}" -gt "${added:-0}" ]; then
+        shrunk+="    $file (+${added:-0}/-${deleted:-0})"$'\n'
+      fi
+    done <<< "$modified_tests"
+  fi
+
+  if [ -n "$shrunk" ]; then
+    fail "an existing test file lost more lines than it gained on a branch that also changed src/"
+    printf '%s' "$shrunk"
+    echo "    If this is a deliberate simplification and not a weakened check, confirm it by eye --"
+    echo "    this heuristic cannot tell the difference. Push with --no-verify once you have."
+    return
+  fi
+
+  if [ -n "$touched_src" ]; then
+    local added_test_lines=0 test_file
+    while IFS= read -r test_file; do
+      [ -n "$test_file" ] || continue
+      read -r added rest <<< "$(git diff --numstat "${BASE}...HEAD" -- "$test_file" 2>/dev/null)"
+      added_test_lines=$((added_test_lines + ${added:-0}))
+    done < <(git diff --name-only --diff-filter=ACMR "${BASE}...HEAD" -- "${test_globs[@]}" 2>/dev/null || true)
+    if [ "$added_test_lines" -eq 0 ]; then
+      warn "src/ changed with no lines added to any test file — confirm existing coverage already exercises this"
+      return
+    fi
+  fi
+  ok "no test file shrank alongside a src/ change"
+}
+
 run_invariants() {
   step "invariants — comparing ${BASE}...HEAD"
   inv_action_pins
@@ -349,6 +414,7 @@ run_invariants() {
   inv_historical_docs
   inv_migrations
   inv_no_task_board
+  inv_test_churn
   inv_gate_mirrors_ci
 }
 
