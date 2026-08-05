@@ -2,7 +2,8 @@ import { env, SELF } from "cloudflare:test";
 import { describe, expect, it } from "vitest";
 import {
   encryptionKeyTranscript, exportPublicKey, generateEncryptionKeyPair,
-  generateIdentityKeyPair, HPKE_SUITE, identityTranscript, keyIdFor, signTranscript,
+  generateIdentityKeyPair, HPKE_SUITE, identityTranscript, importIdentityPublicKey,
+  keyIdFor, signTranscript, verifyTranscript,
 } from "@benree/agentcall-shared";
 import app from "../src/index.js";
 import { fixedRateLimit, registerHandle } from "./helpers.js";
@@ -204,6 +205,77 @@ describe("key publication endpoints", () => {
     expect(json.identity.address).toBe(who.identity.address);
     expect(json.encryption.record.address).toBe(record.address);
     expect(json.identity.address).toBe(json.encryption.record.address);
+  });
+
+  it("serves the exact relay_origin that was signed, not the live request's host (regression #345)", async () => {
+    // #345: GET used to serve relayOriginFor(request) -- the live request's
+    // own host -- instead of what the client signed. A relay reachable under
+    // more than one hostname (self-hosted, a reverse proxy, local dev) then
+    // serves a record whose relay_origin never matches what was signed, and
+    // every caller's first contact fails signature verification. Publish
+    // under one relay_origin and read back from a *different* request host to
+    // prove the served value tracks what was signed, not the connection.
+    const SIGNED_ORIGIN = "self-hosted.example.internal";
+    const handle = "kp-origin-mismatch";
+    const address = `@acme/${handle}`;
+    const token = await registerHandle(handle);
+    const idKp = await generateIdentityKeyPair();
+    const identity = {
+      v: 1 as const, relay_origin: SIGNED_ORIGIN, address,
+      identity_pub: await exportPublicKey(idKp.publicKey),
+    };
+    const headers = {
+      "content-type": "application/json",
+      Authorization: `Bearer ${token}`,
+      "X-AgentCall-Org": "acme",
+      "X-AgentCall-Handle": handle,
+    };
+
+    const putId = await SELF.fetch(`https://${HOST}/v1/keys/identity`, {
+      method: "PUT", headers,
+      body: JSON.stringify({
+        record: identity,
+        signature: await signTranscript(idKp.privateKey, identityTranscript(identity)),
+      }),
+    });
+    expect(putId.status).toBe(200);
+
+    const encKp = await generateEncryptionKeyPair();
+    const pub = await exportPublicKey(encKp.publicKey);
+    const encryption = {
+      v: 1 as const, relay_origin: SIGNED_ORIGIN, address,
+      key_id: await keyIdFor(pub), suite: HPKE_SUITE, pub,
+      epoch: 1, not_before: 1_754_000_000_000, not_after: 1_754_000_000_000 + 86_400_000,
+      prev: null,
+    };
+    const putEnc = await SELF.fetch(`https://${HOST}/v1/keys/encryption`, {
+      method: "PUT", headers,
+      body: JSON.stringify({
+        record: encryption,
+        signature: await signTranscript(idKp.privateKey, encryptionKeyTranscript(encryption)),
+      }),
+    });
+    expect(putEnc.status).toBe(200);
+
+    // Read back from a request host that has nothing to do with what was signed.
+    const got = await SELF.fetch(`https://a-totally-different-host.example/v1/keys/${handle}`, { headers });
+    expect(got.status).toBe(200);
+    const json = await got.json<{
+      identity: { relay_origin: string; identity_pub: string };
+      encryption: { record: { relay_origin: string }; signature: string };
+    }>();
+
+    expect(json.identity.relay_origin).toBe(SIGNED_ORIGIN);
+    expect(json.encryption.record.relay_origin).toBe(SIGNED_ORIGIN);
+
+    // And the bundle must actually verify -- this is the real failure #345
+    // reproduced: a served relay_origin that silently drifted from what was
+    // signed makes the transcript, and therefore the signature, wrong.
+    const identityKey = await importIdentityPublicKey(json.identity.identity_pub);
+    const verified = await verifyTranscript(
+      identityKey, encryptionKeyTranscript(json.encryption.record as typeof encryption), json.encryption.signature,
+    );
+    expect(verified).toBe(true);
   });
 
   it("serves the org-prefixed apex address, not URL.host verbatim (regression)", async () => {
