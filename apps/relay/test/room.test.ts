@@ -23,9 +23,9 @@ describe("accountless Room capability boundary", () => {
     const created = await createRoom(seats);
     expect(created.room).toMatchObject({ state: "waiting", expected_participants: seats, membership_epoch: 0 });
     expect(created.credential).toMatch(/^acrp\.room_.+\.rp_.+\.[A-Za-z0-9_-]{43}$/);
-    expect(created.invites).toHaveLength(seats - 1);
-    expect(new Set(created.invites.map((entry) => entry.invite)).size).toBe(seats - 1);
-    expect(created.invites.every((entry) => entry.expires_at - created.room.created_at === ROOM_INVITE_TTL_MS)).toBe(true);
+    expect(created.invite.invite).toMatch(/^acri\.room_.+\.ri_.+\.[A-Za-z0-9_-]{43}$/);
+    expect(created.invite.seats_remaining).toBe(seats - 1);
+    expect(created.invite.expires_at - created.room.created_at).toBe(ROOM_INVITE_TTL_MS);
     expect(created.room.expires_at - created.room.created_at).toBe(ROOM_ABSOLUTE_TTL_MS);
     expect(created.room.idle_deadline - created.room.created_at).toBe(ROOM_IDLE_TTL_MS);
     const after = await env.DB.prepare("SELECT COUNT(*) AS n FROM handles").first<{ n: number }>();
@@ -34,26 +34,53 @@ describe("accountless Room capability boundary", () => {
     expect(JSON.stringify(created)).not.toContain("secret_hash");
   });
 
-  it("atomically consumes an invite and makes the same proof idempotent", async () => {
+  it("shares one invite across every remaining seat, then rejects once exhausted", async () => {
+    const created = await createRoom(3);
+    const first = await join(created.invite.invite, "First", "X");
+    const second = await join(created.invite.invite, "Second", "Y");
+    expect(first.status).toBe(201);
+    expect(second.status).toBe(201);
+    expect(first.body.participant.participant_id).not.toBe(second.body.participant.participant_id);
+    const exhausted = await join(created.invite.invite, "Third", "Z");
+    expect(exhausted).toEqual({ status: 404, body: { error: "Room invitation unavailable" } });
+  });
+
+  // Every client renders this list beside the membership fingerprint, so the
+  // order has to survive a denial deleting a row out of the middle.
+  it("lists members in join order with the host first, across a denial", async () => {
+    const created = await createRoom(4);
+    const first = await join(created.invite.invite, "First", "C");
+    const second = await join(created.invite.invite, "Second", "F");
+    expect([first.status, second.status]).toEqual([201, 201]);
+    await mutate(created.credential, "deny", {
+      participant_id: first.body.participant.participant_id,
+    });
+    expect((await join(created.invite.invite, "Third", "I")).status).toBe(201);
+    const listed = (await mutate(created.credential, "heartbeat")).body.participants;
+    expect(listed.map((participant) => participant.display_name)).toEqual(["Host", "Second", "Third"]);
+    expect(listed.some((participant) => "seat" in participant)).toBe(false);
+  });
+
+  it("atomically consumes a seat and makes the same proof idempotent", async () => {
     const created = await createRoom();
-    const forgedBody = await joinBody(created.invites[0]!.invite, "Guest");
+    const forgedBody = await joinBody(created.invite.invite, "Guest");
     forgedBody.signing_proof = `${forgedBody.signing_proof[0] === "A" ? "B" : "A"}${forgedBody.signing_proof.slice(1)}`;
     expect((await json<ErrorBody>(await SELF.fetch("https://relay.test/v1/rooms/join", {
       method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(forgedBody),
     }))).status).toBe(404);
-    const first = await join(created.invites[0]!.invite, "Guest");
-    const duplicate = await join(created.invites[0]!.invite, "Guest");
+    const first = await join(created.invite.invite, "Guest");
+    const duplicate = await join(created.invite.invite, "Guest");
     expect(first.status).toBe(201);
     expect(duplicate.status).toBe(200);
     expect(duplicate.body.participant.participant_id).toBe(first.body.participant.participant_id);
     expect(duplicate.body).not.toHaveProperty("credential");
 
-    const substituted = await joinBody(created.invites[0]!.invite, "Guest", "F", undefined, key("C"));
+    const substituted = await joinBody(created.invite.invite, "Guest", "F", undefined, key("C"));
     expect((await json<ErrorBody>(await SELF.fetch("https://relay.test/v1/rooms/join", {
       method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(substituted),
     }))).status).toBe(404);
 
-    const stolen = await join(created.invites[0]!.invite, "Mallory", "F");
+    const stolen = await join(created.invite.invite, "Mallory", "F");
     expect(stolen).toEqual({ status: 404, body: { error: "Room invitation unavailable" } });
   });
 
@@ -62,7 +89,7 @@ describe("accountless Room capability boundary", () => {
     const res = await SELF.fetch("https://relay.test/v1/rooms/join", {
       method: "POST",
       headers: { "content-type": "application/json" },
-      body: JSON.stringify(await joinBody(created.invites[0]!.invite, "Guest", "C", key("B"))),
+      body: JSON.stringify(await joinBody(created.invite.invite, "Guest", "C", key("B"))),
     });
     expect(res.status).toBe(409);
     expect(await res.json()).toEqual({ error: "Room public key unavailable" });
@@ -70,7 +97,7 @@ describe("accountless Room capability boundary", () => {
 
   it("derives Room and participant identity from the capability, not the body", async () => {
     const created = await createRoom();
-    const guest = await join(created.invites[0]!.invite, "Guest");
+    const guest = await join(created.invite.invite, "Guest");
     const forged = await mutate(guest.body.credential, "admit", {
       participant_id: guest.body.participant.participant_id,
       room_id: created.room.room_id,
@@ -96,7 +123,7 @@ describe("accountless Room capability boundary", () => {
 
   it("admits, locks, and activates only after every member confirms", async () => {
     const created = await createRoom();
-    const guest = await join(created.invites[0]!.invite, "Guest");
+    const guest = await join(created.invite.invite, "Guest");
     const admitted = await mutate(created.credential, "admit", {
       participant_id: guest.body.participant.participant_id,
     });
@@ -110,7 +137,7 @@ describe("accountless Room capability boundary", () => {
   it("closes verification when any locked member rejects or leaves", async () => {
     for (const action of ["reject", "leave"] as const) {
       const created = await createRoom();
-      const guest = await join(created.invites[0]!.invite, `Guest ${action}`, action === "reject" ? "L" : "O");
+      const guest = await join(created.invite.invite, `Guest ${action}`, action === "reject" ? "L" : "O");
       await mutate(created.credential, "admit", { participant_id: guest.body.participant.participant_id });
       const closed = await mutate(guest.body.credential, action);
       expect(closed.body.room).toMatchObject({ state: "closed", close_reason: "verification_failed" });
@@ -118,22 +145,22 @@ describe("accountless Room capability boundary", () => {
     }
   });
 
-  it("supports early host lock, revokes unused invites, and rejects duplicate names", async () => {
+  it("supports early host lock, revokes the unused invite, and rejects duplicate names", async () => {
     const created = await createRoom(3);
-    const duplicateName = await join(created.invites[0]!.invite, "host");
+    const duplicateName = await join(created.invite.invite, "host");
     expect(duplicateName.status).toBe(409);
-    const guest = await join(created.invites[1]!.invite, "Guest", "F");
+    const guest = await join(created.invite.invite, "Guest", "F");
     expect((await mutate(created.credential, "admit", {
       participant_id: guest.body.participant.participant_id,
     })).body.room.state).toBe("waiting");
     expect((await mutate(created.credential, "lock")).body.room.state).toBe("verifying");
-    expect((await join(created.invites[0]!.invite, "Late", "I")).status).toBe(404);
+    expect((await join(created.invite.invite, "Late", "I")).status).toBe(404);
   });
 
   it("enforces host moderation and closes after three denied joins", async () => {
     const created = await createRoom(4);
     for (let index = 0; index < 3; index++) {
-      const guest = await join(created.invites[index]!.invite, `Guest ${index}`, String.fromCharCode(67 + index * 3));
+      const guest = await join(created.invite.invite, `Guest ${index}`, String.fromCharCode(67 + index * 3));
       const denied = await mutate(created.credential, "deny", {
         participant_id: guest.body.participant.participant_id,
       });
@@ -145,7 +172,7 @@ describe("accountless Room capability boundary", () => {
 
   it("supports pause/resume and closes when the host leaves", async () => {
     const created = await createRoom();
-    const guest = await join(created.invites[0]!.invite, "Guest");
+    const guest = await join(created.invite.invite, "Guest");
     await mutate(created.credential, "admit", { participant_id: guest.body.participant.participant_id });
     await mutate(created.credential, "confirm");
     await mutate(guest.body.credential, "confirm");
@@ -157,7 +184,7 @@ describe("accountless Room capability boundary", () => {
 
   it("fails verification on deadline and erases participant credentials", async () => {
     const created = await createRoom();
-    const guest = await join(created.invites[0]!.invite, "Guest");
+    const guest = await join(created.invite.invite, "Guest");
     await mutate(created.credential, "admit", { participant_id: guest.body.participant.participant_id });
     const stub = env.ROOM_DO.get(env.ROOM_DO.idFromName(created.room.room_id));
     await runInDurableObject(stub, async (_instance: RoomDO, state) => {
@@ -178,7 +205,7 @@ describe("accountless Room capability boundary", () => {
     const created = await createRoom(4);
     for (let index = 0; index < 3; index++) {
       expect((await join(
-        created.invites[index]!.invite, `Pending ${index}`, String.fromCharCode(67 + index * 3),
+        created.invite.invite, `Pending ${index}`, String.fromCharCode(67 + index * 3),
       )).status).toBe(201);
     }
     const stub = env.ROOM_DO.get(env.ROOM_DO.idFromName(created.room.room_id));
@@ -225,8 +252,8 @@ describe("accountless Room capability boundary", () => {
     });
 
     const created = await createRoom(3);
-    const first = await join(created.invites[0]!.invite, "First", "R");
-    const second = await join(created.invites[1]!.invite, "Second", "U");
+    const first = await join(created.invite.invite, "First", "R");
+    const second = await join(created.invite.invite, "Second", "U");
     await mutate(created.credential, "admit", { participant_id: first.body.participant.participant_id });
     await mutate(created.credential, "admit", { participant_id: second.body.participant.participant_id });
     await mutate(created.credential, "confirm");
@@ -258,7 +285,7 @@ describe("accountless Room capability boundary", () => {
     const guests: JoinBody[] = [];
     const labels = ["X", "Y", "Z", "a", "b"];
     for (let index = 0; index < 5; index++) {
-      const guest = await join(created.invites[index]!.invite, `Member ${index + 2}`, labels[index]!);
+      const guest = await join(created.invite.invite, `Member ${index + 2}`, labels[index]!);
       guests.push(guest.body);
       const admitted = await mutate(created.credential, "admit", {
         participant_id: guest.body.participant.participant_id,

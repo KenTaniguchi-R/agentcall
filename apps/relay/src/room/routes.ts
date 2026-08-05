@@ -42,7 +42,6 @@ export function mountRooms(app: Hono<RelayAppEnv>): void {
     const host: RoomParticipantRecordType = {
       participant_id: participantId,
       room_id: roomId,
-      seat: 1,
       state: "admitted",
       display_name: parsed.display_name,
       credential_hash: await sha256Hex(hostSecret),
@@ -54,31 +53,29 @@ export function mountRooms(app: Hono<RelayAppEnv>): void {
       last_seen_at: now,
       calls_charged: 0,
     };
-    const publicInvites: RoomPublicInviteType[] = [];
-    const records: RoomInviteRecordType[] = [];
-    for (let seat = 2; seat <= parsed.expected_participants; seat++) {
-      const inviteId = newInviteId();
-      const secret = newRoomSecret();
-      publicInvites.push({
-        seat: seat as 2 | 3 | 4 | 5 | 6,
-        invite: formatRoomInvite(roomId, inviteId, secret),
-        expires_at: room.invite_deadline,
-      });
-      records.push({
-        invite_id: inviteId, room_id: roomId, seat: seat as 2 | 3 | 4 | 5 | 6,
-        secret_hash: await sha256Hex(secret), expires_at: room.invite_deadline,
-      });
-    }
+    const inviteId = newInviteId();
+    const inviteSecret = newRoomSecret();
+    const seatsRemaining = parsed.expected_participants - 1;
+    const inviteRecord: RoomInviteRecordType = {
+      invite_id: inviteId, room_id: roomId,
+      secret_hash: await sha256Hex(inviteSecret), expires_at: room.invite_deadline,
+      seats_remaining: seatsRemaining,
+    };
+    const publicInvite: RoomPublicInviteType = {
+      invite: formatRoomInvite(roomId, inviteId, inviteSecret),
+      expires_at: room.invite_deadline,
+      seats_remaining: seatsRemaining,
+    };
     const stub = c.env.ROOM_DO.get(c.env.ROOM_DO.idFromName(roomId));
     const response = await stub.fetch("https://room.internal/create", {
-      method: "POST", body: JSON.stringify({ room, host, invites: records }),
+      method: "POST", body: JSON.stringify({ room, host, invite: inviteRecord }),
     });
     if (!response.ok) return c.json({ error: "Room unavailable" }, 503);
     const snapshot = RoomSnapshot.parse(await response.json());
     return c.json(RoomCreateResponse.parse({
       ...snapshot,
       credential: formatRoomCapability(roomId, participantId, hostSecret),
-      invites: publicInvites,
+      invite: publicInvite,
     }), 201);
   });
 
@@ -95,7 +92,6 @@ export function mountRooms(app: Hono<RelayAppEnv>): void {
     const participant: RoomParticipantRecordType = {
       participant_id: participantId,
       room_id: invite.roomId,
-      seat: 2,
       state: "pending",
       display_name: parsed.display_name,
       credential_hash: await sha256Hex(parsed.participant_secret),
