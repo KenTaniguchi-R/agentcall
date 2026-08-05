@@ -79,7 +79,6 @@ export function registerCard(program: Command): void {
         process.exitCode = 1;
         return;
       }
-      if (parsed.warning) console.error(parsed.warning);
       try {
         const card = await fetchCard(
           relayUrl(cfg), parsed.handle,

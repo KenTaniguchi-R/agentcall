@@ -210,7 +210,7 @@ describe("listener attach + status", () => {
     const acmeCaller = await registerHandle("caller", "claude", "acme-do");
     const incoming = nextFrame(acmeListener);
     const caller = await openWs("/v1/ws?role=call&to=same-person", wsAuth("caller", acmeCaller, "acme-do"));
-    caller.send(JSON.stringify(encryptedCallRequest("caller", "same-person")));
+    caller.send(JSON.stringify(encryptedCallRequest("caller", "same-person", { org: "acme-do" })));
     expect(await incoming).toMatchObject({ type: "incoming_call", from: "caller" });
     expect(await incoming).not.toHaveProperty("message");
   });

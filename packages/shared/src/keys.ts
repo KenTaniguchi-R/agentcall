@@ -1,5 +1,6 @@
 import { z } from "zod";
 import { canonicalEncode } from "./canonical.js";
+import { ADDRESS_RE } from "./protocol.js";
 
 /** The one HPKE suite this protocol version implements. Exact string, no spaces. */
 export const HPKE_SUITE = "DHKEM(P-256,HKDF-SHA256)/HKDF-SHA256/AES-128-GCM" as const;
@@ -7,16 +8,10 @@ export const HPKE_SUITE = "DHKEM(P-256,HKDF-SHA256)/HKDF-SHA256/AES-128-GCM" as 
 /** 30 days. A record claiming a longer window is rejected, not clamped. */
 export const MAX_ENCRYPTION_KEY_VALIDITY_MS = 2_592_000_000;
 
-// handle@host, for now. The relay binding no longer depends on this shape:
-// `relay_origin` below is a signed field of its own, so the address is free to
-// become a bare registry key (`@org/handle`) without dropping the property.
-// See docs/superpowers/specs/2026-08-05-address-as-registry-key.md.
-export const ADDRESS_RE = /^[a-z0-9][a-z0-9-]{1,30}@[a-z0-9.-]{1,253}$/;
+export { ADDRESS_RE };
 
-// Which relay a record was published on. Lives here rather than in e2ee.ts
-// because both signed key records and the envelopes need it, and e2ee.ts
-// already imports from this module — defining it the other way round would be
-// a cycle.
+// Which relay a record was published on. The address is a registry key and
+// names no host, so this field is the entire cross-relay binding.
 export const RELAY_ORIGIN_RE = /^[a-z0-9.-]{1,253}$/;
 const KEY_ID_RE = /^[0-9a-f]{32}$/;
 // Same width as a key id but a different quantity: the digest of the previous

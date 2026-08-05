@@ -22,21 +22,20 @@ import { openE2EERequest, sealE2EEResponse } from "../src/e2ee.js";
 import type { StoredKeys } from "../src/keys.js";
 import { tempDir } from "./helpers.js";
 
-// The "local-sota" contact stands in for an address on whichever relay the
-// current test spun up. pickOutboundLine (src/outbound.ts) now matches the
-// destination's host against a LINE's own configured relay before placing a
-// call, so a fixed placeholder host could never match a real seeded line.
-// routing.host lets each test point the mocked resolution at its own
-// ephemeral relay's host; vi.hoisted keeps the mutable ref safe against
-// vi.mock's hoisting to the top of the module.
-const routing = vi.hoisted(() => ({ host: "local.test" }));
+// The "local-sota" contact stands in for a colleague in the caller's own
+// organization. pickOutboundLine (src/outbound.ts) matches the destination's
+// ORG against a LINE's configured org — it used to match relay hosts, which is
+// why this stub used to carry one. routing.org lets a test point the mocked
+// resolution at whatever org it seeded; vi.hoisted keeps the mutable ref safe
+// against vi.mock's hoisting to the top of the module.
+const routing = vi.hoisted(() => ({ host: "local.test", org: "acme" }));
 vi.mock("../src/contacts.js", async (importOriginal) => {
   const actual = await importOriginal<typeof import("../src/contacts.js")>();
   return {
     ...actual,
     resolveAddress: (...args: Parameters<typeof actual.resolveAddress>) =>
       args[1] === "local-sota"
-        ? { ok: true as const, handle: "sota", host: routing.host, address: `sota@${routing.host}` }
+        ? { ok: true as const, org: routing.org, handle: "sota", address: `@${routing.org}/sota` }
         : actual.resolveAddress(...args),
   };
 });
@@ -114,13 +113,13 @@ describe("trust CLI", () => {
     const machine = getMachinePaths(testHome, testHome);
     writeJsonAtomic(machine.knownPeersFile, { peers: [{
       relay_origin: "relay.example",
-      address: "peer@relay.example", identity_pub: "abc",
+      address: "@acme/peer", identity_pub: "abc",
       fingerprint: "SHA256:0123456789abcdef0123456789abcdef",
       first_seen_at: 1, highest_encryption_epoch: 1, call_count: 1,
     }] });
-    const result = await runCommand(testHome, ["trust", "--reset", "peer@relay.example"]);
+    const result = await runCommand(testHome, ["trust", "--reset", "@acme/peer"]);
     expect(result.code, result.stderr).toBe(0);
-    expect(result.stdout).toContain("Removed the identity pin for peer@relay.example");
+    expect(result.stdout).toContain("Removed the identity pin for @acme/peer");
     expect(loadKnownPeers(machine)).toEqual([]);
   });
 
@@ -131,12 +130,12 @@ describe("trust CLI", () => {
       const encryption = await generateEncryptionKeyPair();
       const pub = await exportPublicKey(encryption.publicKey);
       const record = {
-        v: 2 as const, relay_origin: address.slice(address.indexOf("@") + 1),
+        v: 2 as const, relay_origin: "relay.test",
         address, key_id: await keyIdFor(pub), suite: HPKE_SUITE, pub,
         epoch: 1, not_before: Date.now() - 1_000, not_after: Date.now() + 60_000, prev: null,
       };
       const identityRecord = {
-        v: 2 as const, relay_origin: address.slice(address.indexOf("@") + 1),
+        v: 2 as const, relay_origin: "relay.test",
         address, identity_pub: identityPub,
       };
       return {
@@ -151,7 +150,7 @@ describe("trust CLI", () => {
     const relay = "https://local.test";
     routing.host = "local.test";
     vi.stubGlobal("fetch", vi.fn(async () => new Response(JSON.stringify(response), { status: 200 })));
-    const address = "sota@local.test";
+    const address = "@acme/sota";
     const firstIdentity = await identityBundle(address);
     response = firstIdentity.response;
     const testHome = home();
@@ -216,13 +215,13 @@ async function startCallRelay(
 ): Promise<{ relay: string; connections: () => number }> {
   const remote = await testKeys();
   const relayOrigin = "127.0.0.1";
-  const remoteAddress = `sota@${relayOrigin}`;
+  const remoteAddress = "@acme/sota";
   const identity = {
-    v: 2 as const, relay_origin: remoteAddress.slice(remoteAddress.indexOf("@") + 1),
+    v: 2 as const, relay_origin: relayOrigin,
     address: remoteAddress, identity_pub: remote.identity_pub,
   };
   const record = {
-    v: 2 as const, relay_origin: remoteAddress.slice(remoteAddress.indexOf("@") + 1),
+    v: 2 as const, relay_origin: relayOrigin,
     address: remoteAddress, key_id: await keyIdFor(remote.encryption_pub),
     suite: HPKE_SUITE, pub: remote.encryption_pub, epoch: 1,
     not_before: Date.now() - 1_000, not_after: Date.now() + 60_000, prev: null,
@@ -262,7 +261,7 @@ async function startCallRelay(
         const request = await openE2EERequest(
           outer.envelope, remote.encryption_pkcs8, local.identity_pub,
           {
-            relay_origin: relayOrigin, from: `ken@${relayOrigin}`, to: remoteAddress,
+            relay_origin: relayOrigin, from: "@acme/ken", to: remoteAddress,
             key_id: record.key_id, epoch: record.epoch,
           },
         );
@@ -270,7 +269,7 @@ async function startCallRelay(
           const issuedAt = Date.now();
           const response: E2EEResponsePayloadType = {
             v: 1, direction: "response", relay_origin: relayOrigin,
-            from: remoteAddress, to: `ken@${relayOrigin}`, request_id: request.request_id,
+            from: remoteAddress, to: "@acme/ken", request_id: request.request_id,
             sender_identity_key_id: await keyIdFor(remote.identity_pub),
             recipient_encryption_key_id: await keyIdFor(local.encryption_pub),
             recipient_epoch: local.epoch, issued_at: issuedAt,
@@ -481,7 +480,7 @@ describe.sequential("CLI command actions", () => {
   });
 
   it("requires setup before fetching another agent's card", async () => {
-    const out = await runCommand(home(), ["card", "ken@acme.agentcall.benree.tech"]);
+    const out = await runCommand(home(), ["card", "@acme/ken"]);
     expect(out.code).toBe(1);
     expect(out.stderr).toMatch(/agentcall setup/);
   });

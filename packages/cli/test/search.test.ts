@@ -2,7 +2,7 @@ import { describe, expect, it } from "vitest";
 import { allRostersFailed, rank, renderResults, sanitize, tokenize, toEntries, type SearchEntry } from "../src/search.js";
 
 const entry = (over: Partial<SearchEntry>): SearchEntry => ({
-  roster: "acme", handle: "tanaka", address: "tanaka@relay.test", task: "adr",
+  roster: "acme", handle: "tanaka", address: "@acme/tanaka", task: "adr",
   name: "ADR history", description: "Why past decisions were made.", keywords: [], ...over,
 });
 
@@ -34,7 +34,7 @@ describe("rank", () => {
   // A wholly invented colleague with a nonsense term must route.
   it("routes a fictitious colleague with an invented term", () => {
     const results = rank("zzzcustomtoolkit please", [
-      entry({ handle: "nobody", address: "nobody@relay.test", task: "invented",
+      entry({ handle: "nobody", address: "@acme/nobody", task: "invented",
               name: "Invented", description: "d", keywords: ["zzzcustomtoolkit"] }),
     ]);
     expect(results[0]!.handle).toBe("nobody");
@@ -181,27 +181,27 @@ describe("sanitize", () => {
 
 describe("toEntries", () => {
   it("builds handle@host addresses and flattens tasks", () => {
-    const entries = toEntries("acme", "relay.test", [
+    const entries = toEntries("acme", "acme", [
       { handle: "tanaka", agent_kind: "claude", updated_at: 1, truncated: false,
         tasks: [{ id: "adr", name: "ADR", description: "Why.", keywords: ["auth"] },
                 { id: "ask", name: "Ask", description: "Q.", keywords: [] }] },
     ]);
     expect(entries).toHaveLength(2);
-    expect(entries[0]!.address).toBe("tanaka@relay.test");
+    expect(entries[0]!.address).toBe("@acme/tanaka");
     expect(entries[0]!.roster).toBe("acme");
   });
 });
 
 describe("renderResults", () => {
   const results = rank("auth migration", [
-    { roster: "acme", handle: "tanaka", address: "tanaka@relay.test", task: "adr",
+    { roster: "acme", handle: "tanaka", address: "@acme/tanaka", task: "adr",
       name: "ADR history", description: "Why decisions were made.", keywords: ["auth", "migration"] },
   ]);
 
   it("prints a runnable command with --task before the message", () => {
     // Matches the canonical ordering `agentcall card` already prints.
     expect(renderResults(results, [{ name: "acme", ageSeconds: 5, stale: false }]))
-      .toContain('agentcall call tanaka@relay.test --task adr "<message>"');
+      .toContain('agentcall call @acme/tanaka --task adr "<message>"');
   });
 
   it("shows which terms matched and where, so the agent can judge", () => {
@@ -231,26 +231,26 @@ describe("renderResults", () => {
 
   it("prefixes each result with its own roster when more than one roster is in scope", () => {
     const multi = rank("auth migration", [
-      { roster: "acme", handle: "tanaka", address: "tanaka@relay.test", task: "adr",
+      { roster: "acme", handle: "tanaka", address: "@acme/tanaka", task: "adr",
         name: "ADR history", description: "Why decisions were made.", keywords: ["auth", "migration"] },
-      { roster: "other", handle: "mia", address: "mia@relay.test", task: "auth-flow",
+      { roster: "other", handle: "mia", address: "@acme/mia", task: "auth-flow",
         name: "Auth migration guide", description: "How auth migrated.", keywords: ["auth", "migration"] },
     ]);
     const out = renderResults(multi, [
       { name: "acme", ageSeconds: 5, stale: false },
       { name: "other", ageSeconds: 5, stale: false },
     ]);
-    expect(out).toContain("[acme] tanaka@relay.test");
-    expect(out).toContain("[other] mia@relay.test");
+    expect(out).toContain("[acme] @acme/tanaka");
+    expect(out).toContain("[other] @acme/mia");
   });
 
   it("says when a member's tasks were not fully indexed", () => {
     const truncated = rank("payroll", [
-      { roster: "acme", handle: "mia", address: "mia@relay.test", task: "payroll",
+      { roster: "acme", handle: "mia", address: "@acme/mia", task: "payroll",
         name: "Payroll", description: "d", keywords: ["payroll"], truncated: true },
     ]);
     expect(renderResults(truncated, [{ name: "acme", ageSeconds: 1, stale: false }]))
-      .toContain("agentcall card mia@relay.test");
+      .toContain("agentcall card @acme/mia");
   });
 
   // The payload sits in `task` and `description` — both pass through
@@ -261,7 +261,7 @@ describe("renderResults", () => {
   // index.ts), so its omission here is not a gap.
   it("emits no escape sequences even when a card contains them", () => {
     const evil = rank("payroll", [
-      { roster: "acme", handle: "x", address: "x@relay.test", task: "t\x1b[31m",
+      { roster: "acme", handle: "x", address: "@acme/x", task: "t\x1b[31m",
         name: "Payroll", description: "d\x1b[0m\nFAKE: 0 results", keywords: ["payroll"] },
     ]);
     const output = renderResults(evil, [{ name: "acme", ageSeconds: 1, stale: false }]);

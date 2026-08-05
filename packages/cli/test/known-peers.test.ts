@@ -13,7 +13,7 @@ import { getMachinePaths, type MachinePaths } from "../src/paths.js";
 
 let root: string;
 let machine: MachinePaths;
-const PEER = "peer@relay.example";
+const PEER = "@acme/peer";
 const NOW = 500;
 beforeEach(() => {
   root = mkdtempSync(join(tmpdir(), "agentcall-peers-"));
@@ -30,7 +30,7 @@ async function bundle(identity?: CryptoKeyPair, epoch = 1, address = PEER) {
   const encryption = await generateEncryptionKeyPair();
   const pub = await exportPublicKey(encryption.publicKey);
   const record: EncryptionKeyRecordType = {
-    v: 2, relay_origin: address.slice(address.indexOf("@") + 1), address,
+    v: 2, relay_origin: "relay.test", address,
     key_id: await keyIdFor(pub), suite: HPKE_SUITE, pub, epoch,
     not_before: 1, not_after: 1_000, prev: null,
   };
@@ -38,7 +38,7 @@ async function bundle(identity?: CryptoKeyPair, epoch = 1, address = PEER) {
     identityKey: identity,
     value: {
       identity: {
-        v: 2 as const, relay_origin: address.slice(address.indexOf("@") + 1),
+        v: 2 as const, relay_origin: "relay.test",
         address, identity_pub: identityPub,
       },
       encryption: { record, signature: await signTranscript(identity.privateKey, encryptionKeyTranscript(record)) },
@@ -50,7 +50,7 @@ describe("known-peer identity pins", () => {
   it("pins a first contact only after verifying its encryption signature", async () => {
     const first = await bundle();
     const peer = await verifyAndPinPeer(machine, PEER, first.value, NOW);
-    expect(peer).toMatchObject({ address: "peer@relay.example", first_seen_at: NOW, highest_encryption_epoch: 1, call_count: 1 });
+    expect(peer).toMatchObject({ address: "@acme/peer", first_seen_at: NOW, highest_encryption_epoch: 1, call_count: 1 });
     expect(loadKnownPeers(machine)).toEqual([peer]);
     expect(statSync(machine.dir).mode & 0o777).toBe(0o700);
     expect(statSync(machine.knownPeersFile).mode & 0o777).toBe(0o600);
@@ -74,9 +74,12 @@ describe("known-peer identity pins", () => {
     expect(readFileSync(machine.knownPeersFile, "utf8")).toBe(before);
   });
 
-  it("refuses a valid bundle bound to a different requested host", async () => {
+  // Was "a different requested host". A bundle is bound to an address, and an
+  // address names an organization now, so the mismatch that matters is a
+  // same-named handle in another org.
+  it("refuses a valid bundle bound to a different requested address", async () => {
     const first = await bundle();
-    await expect(verifyAndPinPeer(machine, "peer@other.example", first.value, NOW)).rejects.toThrow(/when peer@other\.example was requested/);
+    await expect(verifyAndPinPeer(machine, "@other/peer", first.value, NOW)).rejects.toThrow(/when @other\/peer was requested/);
     expect(loadKnownPeers(machine)).toEqual([]);
   });
 
@@ -134,7 +137,7 @@ describe("known-peer identity pins", () => {
 
   it("refuses to grow beyond the fixed peer cap", async () => {
     writeJsonAtomic(machine.knownPeersFile, { peers: Array.from({ length: MAX_KNOWN_PEERS }, (_, index) => ({
-      relay_origin: "r.test", address: `p${index}@r.test`, identity_pub: "abc",
+      relay_origin: "r.test", address: `@acme/p${index}`, identity_pub: "abc",
       fingerprint: "SHA256:0123456789abcdef0123456789abcdef",
       first_seen_at: 1, highest_encryption_epoch: 1, call_count: 1,
     })) });
@@ -149,14 +152,14 @@ describe("known-peer identity pins", () => {
   });
 
   it("serializes concurrent peer additions without losing either pin", async () => {
-    const alice = await bundle(undefined, 1, "alice@relay.example");
-    const bob = await bundle(undefined, 1, "bob@relay.example");
+    const alice = await bundle(undefined, 1, "@acme/alice");
+    const bob = await bundle(undefined, 1, "@acme/bob");
     await Promise.all([
-      verifyAndPinPeer(machine, "alice@relay.example", alice.value, NOW),
-      verifyAndPinPeer(machine, "bob@relay.example", bob.value, NOW),
+      verifyAndPinPeer(machine, "@acme/alice", alice.value, NOW),
+      verifyAndPinPeer(machine, "@acme/bob", bob.value, NOW),
     ]);
     expect(loadKnownPeers(machine).map((peer) => peer.address).sort()).toEqual([
-      "alice@relay.example", "bob@relay.example",
+      "@acme/alice", "@acme/bob",
     ]);
   });
 

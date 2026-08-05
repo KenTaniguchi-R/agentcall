@@ -8,6 +8,7 @@
 // what makes "the query never leaves your machine" true rather than aspirational;
 // all network lives in searchRefresh.ts/api.ts instead.
 
+import { formatAddress } from "@benree/agentcall-shared";
 import type { BundleEntryType } from "@benree/agentcall-shared";
 
 type SearchField = "keywords" | "name" | "description";
@@ -127,12 +128,12 @@ export function sanitize(text: string, max = 200): string {
   return stripped.length > max ? stripped.slice(0, max) : stripped;
 }
 
-export function toEntries(roster: string, host: string, entries: BundleEntryType[]): SearchEntry[] {
+export function toEntries(roster: string, org: string, entries: BundleEntryType[]): SearchEntry[] {
   return entries.flatMap((e) =>
     e.tasks.map((t) => ({
       roster,
       handle: e.handle,
-      address: `${e.handle}@${host}`,
+      address: formatAddress(org, e.handle),
       task: t.id,
       name: t.name,
       description: t.description,

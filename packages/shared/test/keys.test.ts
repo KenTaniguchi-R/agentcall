@@ -7,14 +7,14 @@ import {
 const identity = {
   v: 2 as const,
   relay_origin: "agentcall.benree.tech",
-  address: "ken@agentcall.benree.tech",
+  address: "@acme/ken",
   identity_pub: "BASE64URLPUBLICKEY",
 };
 
 const encKey = {
   v: 2 as const,
   relay_origin: "agentcall.benree.tech",
-  address: "ken@agentcall.benree.tech",
+  address: "@acme/ken",
   key_id: "0123456789abcdef0123456789abcdef",
   suite: HPKE_SUITE,
   pub: "BASE64URLENCRYPTIONKEY",
@@ -92,7 +92,7 @@ describe("EncryptionKeyRecord", () => {
 describe("transcripts", () => {
   it("changes when any identity field changes", () => {
     const a = identityTranscript(identity);
-    const b = identityTranscript({ ...identity, address: "sarah@agentcall.benree.tech" });
+    const b = identityTranscript({ ...identity, address: "@acme/sarah" });
     expect(Array.from(a)).not.toEqual(Array.from(b));
   });
 

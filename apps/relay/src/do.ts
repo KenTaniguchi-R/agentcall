@@ -1,5 +1,5 @@
 import { DurableObject } from "cloudflare:workers";
-import {
+import { formatAddress,
   a2aError, E2EECallerFrame, E2EEListenerToRelayFrame, MAX_E2EE_WIRE_BYTES,
   RATE_LIMIT_PER_HOUR, RELAY_CALL_TIMEOUT_MS, safeParseFrame, standardError,
   type CallStatusType, type OrgAuditEvent, type RelayOperationalErrorCodeType,
@@ -499,8 +499,8 @@ export class HandleDO extends DurableObject {
       if (
         !att.relayOrigin || !att.to ||
         frame.envelope.relay_origin !== att.relayOrigin ||
-        frame.envelope.from !== `${att.from}@${att.relayOrigin}` ||
-        frame.envelope.to !== `${att.to}@${att.relayOrigin}`
+        frame.envelope.from !== formatAddress(att.org, att.from) ||
+        frame.envelope.to !== formatAddress(att.org, att.to)
       ) return this.fail(ws, "protocol_error");
       const correlation_id = frame.correlation_id!;
 
@@ -593,10 +593,10 @@ export class HandleDO extends DurableObject {
     }
     if (frame.type === "call_outcome") {
       if (
-        !att.relayOrigin || !att.handle ||
+        !att.relayOrigin || !att.handle || !att.org ||
         frame.envelope.relay_origin !== att.relayOrigin ||
-        frame.envelope.from !== `${att.handle}@${att.relayOrigin}` ||
-        frame.envelope.to !== `${record.from}@${att.relayOrigin}`
+        frame.envelope.from !== formatAddress(att.org, att.handle) ||
+        frame.envelope.to !== formatAddress(att.org, record.from)
       ) return;
       const terminal = frame.terminal === "completed"
         ? "TASK_STATE_COMPLETED" as const

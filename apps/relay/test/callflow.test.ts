@@ -61,12 +61,12 @@ describe("call flow", () => {
       ...wsAuth("audit-caller", callerToken, org),
       "cf-connecting-ip": "203.0.113.10",
     });
-    caller.send(JSON.stringify(encryptedCallRequest("audit-caller", "audit-callee")));
+    caller.send(JSON.stringify(encryptedCallRequest("audit-caller", "audit-callee", { org })));
     const ringing = await nextFrame(caller);
     const incoming = await nextFrame(listener);
     listener.send(JSON.stringify({ type: "call_accepted", call_id: incoming.call_id }));
     await nextFrame(caller);
-    listener.send(JSON.stringify(encryptedCallOutcome(incoming.call_id, "audit-callee", "audit-caller")));
+    listener.send(JSON.stringify(encryptedCallOutcome(incoming.call_id, "audit-callee", "audit-caller", "completed", org)));
     await nextFrame(caller);
 
     const { results } = await env.DB.prepare(
@@ -114,7 +114,7 @@ describe("call flow", () => {
         "/v1/ws?role=call&to=retry-callee",
         wsAuth("retry-caller", callerToken, org),
       );
-      caller.send(JSON.stringify(encryptedCallRequest("retry-caller", "retry-callee")));
+      caller.send(JSON.stringify(encryptedCallRequest("retry-caller", "retry-callee", { org })));
       const ringing = await nextFrame(caller);
       const incoming = await nextFrame(listener);
       expect(ringing).toMatchObject({ type: "call_status", state: "ringing" });
@@ -130,7 +130,7 @@ describe("call flow", () => {
       }
       expect(delivered).toEqual({ event: "call.submit" });
 
-      const outcome = encryptedCallOutcome(incoming.call_id, "retry-callee", "retry-caller");
+      const outcome = encryptedCallOutcome(incoming.call_id, "retry-callee", "retry-caller", "completed", org);
       listener.send(JSON.stringify(outcome));
       expect(await nextFrame(caller)).toEqual(outcome);
     } finally {
@@ -157,10 +157,10 @@ describe("call flow", () => {
           `/v1/ws?role=call&to=${callee}`,
           wsAuth(callerHandle, callerToken, org),
         );
-        caller.send(JSON.stringify(encryptedCallRequest(callerHandle, callee)));
+        caller.send(JSON.stringify(encryptedCallRequest(callerHandle, callee, { org })));
         await nextFrame(caller);
         const incoming = await nextFrame(listener);
-        listener.send(JSON.stringify(encryptedCallOutcome(incoming.call_id, callee, callerHandle)));
+        listener.send(JSON.stringify(encryptedCallOutcome(incoming.call_id, callee, callerHandle, "completed", org)));
         await nextFrame(caller);
       }
       await env.DB.exec("DROP TRIGGER fail_backlog_call_audit");

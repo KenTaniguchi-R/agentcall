@@ -16,14 +16,14 @@ export function register(program: { command(name: string): any }): void {
       try {
         const first = resolveAddress(machine, address);
         if (!first.ok) throw new Error(first.error);
-        const ctx = pickOutboundLine(machine, `https://${first.host}`, { as: o.as });
+        const ctx = pickOutboundLine(machine, first.org, { as: o.as });
         const cfg = ctx.config;
         const resolved = resolveAddress(machine, address, relayUrl(cfg), cfg.org);
         if (!resolved.ok) throw new Error(resolved.error);
         const bundle = await fetchKeys(
           relayUrl(cfg), { org: cfg.org, handle: cfg.handle, token: cfg.token }, resolved.handle,
         );
-        const peer = await verifyAndPinPeer(machine, `${resolved.handle}@${resolved.host}`, bundle);
+        const peer = await verifyAndPinPeer(machine, resolved.address, bundle);
         console.log(`${peer.address}\nPinned fingerprint: ${peer.fingerprint}\nServed fingerprint: ${peer.fingerprint}`);
       } catch (error) {
         console.error(error instanceof Error ? error.message : String(error));
@@ -40,7 +40,7 @@ export function register(program: { command(name: string): any }): void {
         const machine = getMachinePaths();
         const resolved = resolveAddress(machine, o.reset);
         if (!resolved.ok) throw new Error(resolved.error);
-        const address = `${resolved.handle}@${resolved.host}`;
+        const address = resolved.address;
         await resetPeerTrust(machine, address);
         console.log(`Removed the identity pin for ${address}. The next verified contact will establish a new pin.`);
       } catch (error) {

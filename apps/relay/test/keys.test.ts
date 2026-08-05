@@ -20,7 +20,7 @@ async function newIdentity(handle: string) {
   const record = {
     v: 2 as const,
     relay_origin: HOST,
-    address: `${handle}@${HOST}`,
+    address: `@acme/${handle}`,
     identity_pub: await exportPublicKey(idKp.publicKey),
   };
   const signature = await signTranscript(idKp.privateKey, identityTranscript(record));
@@ -49,8 +49,8 @@ async function encRecord(who: Awaited<ReturnType<typeof newIdentity>>, epoch: nu
   const pub = await exportPublicKey(encKp.publicKey);
   const record = {
     v: 2 as const,
-    relay_origin: (address ?? `${who.handle}@${HOST}`).split("@")[1]!,
-    address: address ?? `${who.handle}@${HOST}`,
+    relay_origin: HOST,
+    address: address ?? `@acme/${who.handle}`,
     key_id: await keyIdFor(pub),
     suite: HPKE_SUITE,
     pub,
@@ -85,7 +85,7 @@ describe("key publication endpoints", () => {
 
   it("rejects an identity record whose address is not the caller", async () => {
     const who = await newIdentity("kp-two");
-    const record = { ...who.identity, address: `someone-else@${HOST}` };
+    const record = { ...who.identity, address: "@acme/someone-else" };
     const res = await putIdentity(who, {
       record, signature: await signTranscript(who.idKp.privateKey, identityTranscript(record)),
     });
@@ -97,7 +97,7 @@ describe("key publication endpoints", () => {
     // another. Accepting this would store a record whose address the GET below
     // rewrites to this host — permanently unverifiable against its signature.
     const who = await newIdentity("kp-foreign-id");
-    const record = { ...who.identity, address: `${who.handle}@evil.example` };
+    const record = { ...who.identity, address: `@evil/${who.handle}` };
     const res = await putIdentity(who, {
       record, signature: await signTranscript(who.idKp.privateKey, identityTranscript(record)),
     });
@@ -207,20 +207,17 @@ describe("key publication endpoints", () => {
   });
 
   it("serves the org-prefixed apex address, not URL.host verbatim (regression)", async () => {
-    // The test above uses relay.test, where registrationAddressHost and a
-    // naive `new URL(url).host` reconstruction happen to agree — org and host
-    // collapse to the same string, so a reverted fix still passes it. They
-    // diverge on the real hosted relay's apex host: registrationAddressHost
-    // prefixes the org (`acme.agentcall.benree.tech`) while `new
-    // URL(url).host` does not (`agentcall.benree.tech`). This is the case the
-    // bug actually shipped in.
+    // Was: the served address must be org-prefixed rather than URL.host
+    // verbatim. Addresses no longer contain a host at all, so the stronger
+    // invariant this becomes is that the served address does not vary with the
+    // request URL — the apex, a port, or a subdomain all yield `@acme/<handle>`.
     const APEX = "agentcall.benree.tech";
     const handle = "kp-apex2";
-    const address = `${handle}@acme.${APEX}`;
+    const address = `@acme/${handle}`;
     const token = await registerHandle(handle);
     const idKp = await generateIdentityKeyPair();
     const identity = {
-      v: 2 as const, relay_origin: address.split("@")[1]!,
+      v: 2 as const, relay_origin: HOST,
       address, identity_pub: await exportPublicKey(idKp.publicKey),
     };
     const headers = {
@@ -244,7 +241,7 @@ describe("key publication endpoints", () => {
     const pub = await exportPublicKey(encKp.publicKey);
     const encryption = {
       v: 2 as const,
-      relay_origin: address.split("@")[1]!,
+      relay_origin: HOST,
       address,
       key_id: await keyIdFor(pub),
       suite: HPKE_SUITE,
@@ -280,12 +277,12 @@ describe("key publication endpoints", () => {
     // so neither exercises this half of the divergence.
     const APEX = "agentcall.benree.tech";
     const handle = "kp-apex-port";
-    const address = `${handle}@acme.${APEX}`;
+    const address = `@acme/${handle}`;
     const origin = `https://${APEX}:8443`;
     const token = await registerHandle(handle);
     const idKp = await generateIdentityKeyPair();
     const identity = {
-      v: 2 as const, relay_origin: address.split("@")[1]!,
+      v: 2 as const, relay_origin: HOST,
       address, identity_pub: await exportPublicKey(idKp.publicKey),
     };
     const headers = {
@@ -309,7 +306,7 @@ describe("key publication endpoints", () => {
     const pub = await exportPublicKey(encKp.publicKey);
     const encryption = {
       v: 2 as const,
-      relay_origin: address.split("@")[1]!,
+      relay_origin: HOST,
       address,
       key_id: await keyIdFor(pub),
       suite: HPKE_SUITE,

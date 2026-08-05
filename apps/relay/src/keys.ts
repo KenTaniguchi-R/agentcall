@@ -4,7 +4,7 @@ import {
   importIdentityPublicKey, verifyTranscript,
 } from "@benree/agentcall-shared";
 import type { Env } from "./index.js";
-import { registrationAddressHost } from "./tenant.js";
+import { formatAddress } from "@benree/agentcall-shared";
 import { NATIVE_CARD, NATIVE_READ } from "./ratelimit/index.js";
 import { rateLimit, type RelayAppEnv } from "./middleware.js";
 
@@ -25,8 +25,14 @@ async function storedIdentity(
  * address a CLI has ever seen — deriving it any other way here would sign one
  * address and serve another, and these records are permanent.
  */
-function addressFor(c: Context<RelayAppEnv>, org: string, handle: string): string {
-  return `${handle}@${registrationAddressHost(org, c.req.url)}`;
+// The relay's own hostname. The org used to be glued on as a subdomain; it now
+// travels in the address, so this names only the relay.
+function relayOriginFor(c: Context<RelayAppEnv>): string {
+  return new URL(c.req.url).hostname;
+}
+
+function addressFor(_c: Context<RelayAppEnv>, org: string, handle: string): string {
+  return formatAddress(org, handle);
 }
 
 export function mountKeys(app: Hono<RelayAppEnv>): void {
@@ -178,10 +184,10 @@ export function mountKeys(app: Hono<RelayAppEnv>): void {
     // reconstructing at all.)
     const address = addressFor(c, identity.org, target);
     return c.json({
-      identity: { v: 2, relay_origin: address.slice(address.indexOf("@") + 1), address, identity_pub: identityPub },
+      identity: { v: 2, relay_origin: relayOriginFor(c), address, identity_pub: identityPub },
       encryption: {
         record: {
-          v: 2, relay_origin: address.slice(address.indexOf("@") + 1), address,
+          v: 2, relay_origin: relayOriginFor(c), address,
           key_id: row.key_id, suite: row.suite, pub: row.pub,
           epoch: row.epoch, not_before: row.not_before, not_after: row.not_after, prev: row.prev,
         },

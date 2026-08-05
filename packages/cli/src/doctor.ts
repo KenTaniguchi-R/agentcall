@@ -3,7 +3,7 @@ import { lstatSync, readFileSync, realpathSync } from "node:fs";
 import { execFileSync } from "node:child_process";
 import { encryptionKeyTranscript, importIdentityPublicKey, keyIdFor, verifyTranscript } from "@benree/agentcall-shared";
 import { callAgent } from "./call-client.js";
-import { addressHost, relayUrl, resolveLineWorkdir, type LineConfig, type Workdir } from "./config.js";
+import { lineAddress, relayUrl, resolveLineWorkdir, type LineConfig, type Workdir } from "./config.js";
 import {
   inspectListenerService,
   type ListenerServiceStatus,
@@ -184,7 +184,7 @@ export async function checkLineKeyHealth(
     const remote = await fetchFn(
       relayUrl(cfg), { org: cfg.org, handle: cfg.handle, token: cfg.token }, cfg.handle,
     );
-    const expectedAddress = `${cfg.handle}@${addressHost(cfg)}`;
+    const expectedAddress = lineAddress(cfg);
     const signatureValid = await verifyTranscript(
       await importIdentityPublicKey(remote.identity.identity_pub),
       encryptionKeyTranscript(remote.encryption.record),

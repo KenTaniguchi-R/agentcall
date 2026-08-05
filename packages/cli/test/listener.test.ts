@@ -109,7 +109,7 @@ async function sendIncoming(
   const issuedAt = Date.now();
   const request: E2EERequestPayloadType = {
     v: 1, direction: "request", relay_origin: "127.0.0.1",
-    from: `${frame.from}@127.0.0.1`, to: "ken@127.0.0.1",
+    from: `@acme/${frame.from}`, to: "@acme/ken",
     request_id: crypto.randomUUID().replaceAll("-", ""),
     sender_identity_key_id: await keyIdFor(callerKeys.identity_pub),
     recipient_encryption_key_id: await keyIdFor(listenerKeys.encryption_pub),
@@ -170,7 +170,7 @@ function baseDeps(relay: string) {
       };
     },
     verifyAndPinPeer: async (_machine: MachinePaths, address: string) => ({
-      relay_origin: address.slice(address.indexOf("@") + 1),
+      relay_origin: "relay.test",
       address, identity_pub: callerKeys.identity_pub, fingerprint: `SHA256:${"a".repeat(32)}`,
       first_seen_at: 1, highest_encryption_epoch: callerKeys.epoch, call_count: 1,
     }),

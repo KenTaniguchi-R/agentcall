@@ -21,7 +21,7 @@ export function register(program: { command(name: string): any }): void {
       }
       let ctx: LineContext;
       try {
-        ctx = pickOutboundLine(machine, `https://${firstPass.host}`, { as: o.as });
+        ctx = pickOutboundLine(machine, firstPass.org, { as: o.as });
       } catch (e) {
         console.error(String(e instanceof Error ? e.message : e));
         process.exitCode = 1;
@@ -35,7 +35,6 @@ export function register(program: { command(name: string): any }): void {
         process.exitCode = 1;
         return;
       }
-      if (parsed.warning) console.error(parsed.warning);
       try {
         const { online } = await getStatus(cfgRelay, parsed.handle, { org: cfg.org, handle: cfg.handle, token: cfg.token });
         console.log(online ? "online" : "offline");

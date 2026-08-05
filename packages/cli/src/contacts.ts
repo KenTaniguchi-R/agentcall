@@ -1,11 +1,11 @@
 import { mkdirSync, writeFileSync, chmodSync } from "node:fs";
 import { z } from "zod";
-import { HOSTED_RELAY_HOST, parseAddress } from "@benree/agentcall-shared";
+import { parseAddress } from "@benree/agentcall-shared";
 import type { MachinePaths } from "./paths.js";
 import { readJsonStore } from "./json-store.js";
 
-// Never matches anything containing "@", so a contact name can never be
-// mistaken for a handle@host address during resolution.
+// Never matches "@" or "/", so a contact name can never be mistaken for an
+// `@org/handle` address during resolution.
 export const NAME_RE = /^[a-z0-9][a-z0-9._-]*$/i;
 
 const ContactSchema = z.object({
@@ -73,52 +73,8 @@ export function removeContact(p: MachinePaths, name: string): void {
 }
 
 export type Resolved =
-  | { ok: true; handle: string; host: string; address: string; warning?: string }
+  | { ok: true; org: string; handle: string; address: string }
   | { ok: false; error: string };
-
-// An address names a relay, but a call is dialled on the calling LINE's relay
-// and only the handle travels — so calling a hosted address from a line
-// registered elsewhere actually reaches whichever "ken" is on that other
-// relay. This surfaces the divergence instead of letting it happen silently.
-//
-// A WARNING rather than a rejection, deliberately. The relay builds every
-// address from HOSTED_RELAY_HOST (packages/shared/src/protocol.ts), so a
-// self-hosted or `wrangler dev` relay hands out hosted-host addresses that can
-// never match its own host; refusing those breaks local development and
-// self-hosting for a mismatch that is currently normal. The merge of
-// origin/main briefly reinstated the rejection — main had never made this
-// change — which would have re-broken both. Note this is distinct from the
-// cross-tenant check below, which stays a hard REJECTION: that one is a
-// security boundary (#66), this one is a diagnostic.
-//
-// `org` still participates, from main: on the hosted relay a tenant's addresses
-// are `<handle>@<org>.${HOSTED_RELAY_HOST}`, so naming the expected host without
-// the org prefix would make the warning itself wrong.
-//
-// An unparseable relay URL yields no warning — a diagnostic must not become a
-// second failure mode.
-function relayHostWarning(address: string, host: string, relay?: string, org?: string): string | undefined {
-  if (!relay) return;
-  let relayHost: string;
-  try {
-    relayHost = new URL(relay).host;
-  } catch {
-    return;
-  }
-  const expected = relayHost === HOSTED_RELAY_HOST && org ? `${org}.${relayHost}` : relayHost;
-  if (!expected || expected === host) return;
-  return (
-    `Warning: ${address} names the relay ${host}, but this line is registered on ${expected}. ` +
-    `The call goes to "${address.slice(0, address.indexOf("@"))}" on ${expected}, which may be a different agent.`
-  );
-}
-
-function addressTenant(host: string): string | undefined {
-  const suffix = `.${HOSTED_RELAY_HOST}`;
-  if (!host.endsWith(suffix)) return undefined;
-  const org = host.slice(0, -suffix.length);
-  return org && !org.includes(".") ? org : undefined;
-}
 
 // The single resolution path shared by `call`, `status`, and `card`, so the
 // three commands cannot drift: "@" means a literal address, anything else is
@@ -127,33 +83,30 @@ function addressTenant(host: string): string | undefined {
 // `org` is the calling LINE's tenant, not the machine's: the contact book is
 // shared across lines (person-scoped) but the tenant check is per-call, so the
 // caller passes the org of whichever line is placing this call.
-export function resolveAddress(p: MachinePaths, arg: string, relay?: string, org?: string): Resolved {
-  if (arg.includes("@")) {
-    const parsed = parseAddress(arg);
-    if (!parsed) return { ok: false, error: `Invalid address: ${arg} (expected handle@host)` };
-    const targetOrg = addressTenant(parsed.host);
-    if (org && targetOrg && targetOrg !== org) {
-      return { ok: false, error: `Address ${arg} belongs to organization "${targetOrg}", but this install belongs to "${org}".` };
+export function resolveAddress(p: MachinePaths, arg: string, _relay?: string, org?: string): Resolved {
+  const check = (address: string, label?: string): Resolved => {
+    const parsed = parseAddress(address);
+    if (!parsed) {
+      return label
+        ? { ok: false, error: `Contact "${label}" has an invalid address: ${address}` }
+        : { ok: false, error: `Invalid address: ${address} (expected @org/handle)` };
     }
-    const warning = relayHostWarning(arg, parsed.host, relay, org);
-    return warning ? { ok: true, ...parsed, address: arg, warning } : { ok: true, ...parsed, address: arg };
-  }
+    // The cross-tenant boundary (#66). It used to derive the target org by
+    // string-matching a DNS suffix; the org is now a field of the address, so
+    // this reads it instead of parsing it out of a hostname.
+    if (org && parsed.org !== org) {
+      const who = label ? `Contact "${label}"` : `Address ${address}`;
+      return { ok: false, error: `${who} belongs to organization "${parsed.org}", but this install belongs to "${org}".` };
+    }
+    return { ok: true, ...parsed, address };
+  };
+
+  if (arg.includes("/") || arg.startsWith("@")) return check(arg);
+
   const { contacts } = loadContacts(p);
   const hit = contacts.find((c) => c.name.toLowerCase() === arg.toLowerCase());
   if (!hit) {
-    return { ok: false, error: `No contact named "${arg}" — run \`agentcall contacts list\`, or use a full handle@host address.` };
+    return { ok: false, error: `No contact named "${arg}" — run \`agentcall contacts list\`, or use a full @org/handle address.` };
   }
-  const parsed = parseAddress(hit.address);
-  if (!parsed) return { ok: false, error: `Contact "${hit.name}" has an invalid address: ${hit.address}` };
-  const targetOrg = addressTenant(parsed.host);
-  if (org && targetOrg && targetOrg !== org) {
-    return {
-      ok: false,
-      error: `Contact "${hit.name}" belongs to organization "${targetOrg}", but this install belongs to "${org}".`,
-    };
-  }
-  const warning = relayHostWarning(hit.address, parsed.host, relay, org);
-  return warning
-    ? { ok: true, ...parsed, address: hit.address, warning: `Contact "${hit.name}": ${warning}` }
-    : { ok: true, ...parsed, address: hit.address };
+  return check(hit.address, hit.name);
 }

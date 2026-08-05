@@ -1,6 +1,6 @@
 import { chmodSync, existsSync, mkdirSync } from "node:fs";
 import { z } from "zod";
-import {
+import { ADDRESS_RE,
   encryptionKeyTranscript, fingerprint, identityTranscript, importIdentityPublicKey,
   verifyTranscript, type EncryptionKeyRecordType, type IdentityRecordType,
 } from "@benree/agentcall-shared";
@@ -16,7 +16,7 @@ const KnownPeerSchema = z.object({
   // its origin — and the identity transcript covers it, so a stored peer
   // without it cannot have its fingerprint recomputed.
   relay_origin: z.string().regex(/^[a-z0-9.-]{1,253}$/),
-  address: z.string().regex(/^[a-z0-9][a-z0-9-]{1,30}@[a-z0-9.-]{1,253}$/),
+  address: z.string().regex(ADDRESS_RE),
   identity_pub: z.string().regex(/^[A-Za-z0-9_-]+$/).max(256),
   fingerprint: z.string().regex(/^SHA256:[0-9a-f]{32}$/),
   first_seen_at: z.number().int().nonnegative(),

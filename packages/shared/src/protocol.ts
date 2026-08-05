@@ -21,12 +21,10 @@ export const ORG_RE = new RegExp(`^${ORG_BODY}$`);
 // oversight — nothing resolves an AgentCall address, and a key dressed as a
 // locator invites tooling to try.
 //
-// Not exported. `keys.ts` still owns a separate, host-shaped `ADDRESS_RE` for
-// signed identity and encryption-key records, where the host currently carries
-// the cross-relay binding. Exporting a second name-alike from here would
-// collide, and worse, would invite a caller to validate a signed record against
-// the wrong grammar. Use `parseAddress`/`formatAddress`.
-const ADDRESS_RE = new RegExp(`^@(${ORG_BODY})/(${HANDLE_BODY})$`);
+// The single address grammar. `keys.ts` imports it rather than keeping its own
+// so a signed record and a dialled address can never disagree about what an
+// address is.
+export const ADDRESS_RE = new RegExp(`^@(${ORG_BODY})/(${HANDLE_BODY})$`);
 
 // The hosted deployment's DNS host, and the single place it is written. It is
 // the relay *endpoint* only: the CLI derives its default relay URL from it.
@@ -170,7 +168,10 @@ export const RegisterRequest = z.object({
   // Absent = caller-only: the handle can call others but is not callable.
   agent_kind: AgentKindSchema.optional(),
 });
-export const RegisterResponse = z.object({ org: z.string().regex(ORG_RE), token: z.string(), address: z.string() });
+// No `address`: it is `formatAddress(org, handle)` and the caller already knows
+// both. Shipping the composed string is what forced the relay to build one, and
+// the client to parse a host back out of it.
+export const RegisterResponse = z.object({ org: z.string().regex(ORG_RE), token: z.string() });
 
 export const SHA256_HEX_RE = /^[0-9a-f]{64}$/;
 export const CREDENTIAL_PUBLIC_ID_RE = /^(?:act|agr)_[0-9a-f]{16}$/;
@@ -239,24 +240,9 @@ export function formatAddress(org: string, handle: string): string {
 // Returns the pair, not a host. Callers that need to know which relay to dial
 // read `cfg.relay`; an address never carried that information usefully, because
 // a caller only ever reaches its own organization's relay.
-export function parseKeyAddress(addr: string): { org: string; handle: string } | null {
+export function parseAddress(addr: string): { org: string; handle: string } | null {
   const m = ADDRESS_RE.exec(addr);
   return m ? { org: m[1]!, handle: m[2]! } : null;
-}
-
-// The outgoing `handle@host` grammar. Still live because signed identity and
-// encryption-key records currently carry the relay binding inside the address
-// (see keys.ts), so the cutover cannot happen in the CLI alone — it needs
-// `relay_origin` to become an explicit signed field first. Deleted in that
-// slice; until then both grammars exist and only this one is wired up.
-export function parseAddress(addr: string): { handle: string; host: string } | null {
-  const at = addr.indexOf("@");
-  if (at <= 0) return null;
-  const handle = addr.slice(0, at);
-  const host = addr.slice(at + 1);
-  if (!HANDLE_RE.test(handle)) return null;
-  if (!/^[a-z0-9][a-z0-9.-]*\.[a-z]{2,}$/.test(host)) return null;
-  return { handle, host };
 }
 
 // Peer-controlled free-form text has two display paths. Human-readable output

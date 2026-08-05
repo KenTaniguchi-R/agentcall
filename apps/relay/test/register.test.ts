@@ -138,13 +138,15 @@ describe("POST /v1/register", () => {
     });
   });
 
-  it("registers a handle and returns token + address", async () => {
+  it("registers a handle and returns org + token", async () => {
     const invite = await issueInvite("acme", "successful-registration");
     const res = await register({ invite, handle: "ken", agent_kind: "claude" }, "203.0.113.10");
     expect(res.status).toBe(200);
-    const json = await res.json<{ token: string; address: string }>();
+    const json = await res.json<{ org: string; token: string }>();
     expect(json.token.length).toBeGreaterThanOrEqual(40);
-    expect(json.address).toBe("ken@relay.test");
+    // No address on the wire: it is formatAddress(org, handle) and the caller
+    // already holds both.
+    expect(json).not.toHaveProperty("address");
     const inviteRow = await env.DB.prepare("SELECT used_at, used_by FROM invites WHERE org = ? AND used_by = ?")
       .bind("acme", "ken").first<{ used_at: number | null; used_by: string | null }>();
     expect(inviteRow?.used_at).toEqual(expect.any(Number));
@@ -160,7 +162,7 @@ describe("POST /v1/register", () => {
     const invite = await issueInvite("invite-org", "tenant-proof");
     const first = await register({ invite, org: "attacker-choice", handle: "invited" }, "203.0.113.161");
     expect(first.status).toBe(200);
-    expect(await first.json()).toMatchObject({ org: "invite-org", address: "invited@relay.test" });
+    expect(await first.json()).toMatchObject({ org: "invite-org" });
     const replay = await register({ invite, handle: "replay" }, "203.0.113.162");
     expect(replay.status).toBe(404);
   });
@@ -257,9 +259,9 @@ describe("POST /v1/register", () => {
   it("registers caller-only (no agent_kind) and stores NULL", async () => {
     const res = await register({ org: "acme", handle: "solo" }, "203.0.113.13");
     expect(res.status).toBe(200);
-    const json = await res.json<{ token: string; address: string }>();
+    const json = await res.json<{ org: string; token: string }>();
     expect(json.token.length).toBeGreaterThanOrEqual(40);
-    expect(json.address).toBe("solo@relay.test");
+    
     const row = await env.DB.prepare("SELECT agent_kind FROM handles WHERE org = ? AND handle = ?")
       .bind("acme", "solo").first<{ agent_kind: string | null }>();
     expect(row?.agent_kind).toBeNull();
@@ -299,14 +301,17 @@ describe("POST /v1/register", () => {
     })).status).toBe(401);
   });
 
-  it("returns the tenant hostname on the hosted relay", async () => {
+  // Was: the response carries `person@hosted.agentcall.benree.tech`. There is
+  // no address on the wire now, and the tenant comes from the invite rather
+  // than from any hostname, so what is asserted is the org.
+  it("returns the invite's tenant on the hosted relay", async () => {
     const invite = await issueInvite("hosted", "hosted-address");
     const res = await SELF.fetch("https://agentcall.benree.tech/v1/register", {
       method: "POST",
       headers: { "content-type": "application/json", "cf-connecting-ip": "203.0.113.153" },
       body: JSON.stringify({ invite, handle: "person", agent_kind: "claude" }),
     });
-    expect((await res.json<{ address: string }>()).address).toBe("person@hosted.agentcall.benree.tech");
+    expect(await res.json()).toMatchObject({ org: "hosted" });
   });
 
   it("uses the invite tenant rather than a conflicting hosted tenant subdomain", async () => {
@@ -316,7 +321,7 @@ describe("POST /v1/register", () => {
       headers: { "content-type": "application/json", "cf-connecting-ip": "203.0.113.213" },
       body: JSON.stringify({ invite, handle: "person" }),
     });
-    expect((await res.json<{ address: string }>()).address).toBe("person@bob.agentcall.benree.tech");
+    expect(await res.json()).toMatchObject({ org: "bob" });
   });
 });
 

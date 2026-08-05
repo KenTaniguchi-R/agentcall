@@ -258,11 +258,11 @@ describe("doctor key health", () => {
     const now = Date.now();
     const record: EncryptionKeyRecordType = {
       v: 2, relay_origin: "relay.example",
-      address: "ken@relay.example", key_id: await keyIdFor(local.encryption_pub), suite: HPKE_SUITE,
+      address: "@acme/ken", key_id: await keyIdFor(local.encryption_pub), suite: HPKE_SUITE,
       pub: local.encryption_pub, epoch: local.epoch, not_before: now - 1_000, not_after: now + 60_000, prev: null,
     };
     const checks = await checkLineKeyHealth(cfg, paths, async () => ({
-      identity: { v: 2, relay_origin: "relay.example", address: "ken@relay.example", identity_pub: local.identity_pub },
+      identity: { v: 2, relay_origin: "relay.example", address: "@acme/ken", identity_pub: local.identity_pub },
       encryption: { record, signature: await signed(local, record) },
     }));
     expect(checks).toEqual([
@@ -279,11 +279,11 @@ describe("doctor key health", () => {
     const now = Date.now();
     const record: EncryptionKeyRecordType = {
       v: 2, relay_origin: "relay.example",
-      address: "ken@relay.example", key_id: await keyIdFor(local.encryption_pub), suite: HPKE_SUITE,
+      address: "@acme/ken", key_id: await keyIdFor(local.encryption_pub), suite: HPKE_SUITE,
       pub: local.encryption_pub, epoch: local.epoch + 1, not_before: now - 1_000, not_after: now + 60_000, prev: null,
     };
     const checks = await checkLineKeyHealth(cfg, paths, async () => ({
-      identity: { v: 2, relay_origin: "relay.example", address: "ken@relay.example", identity_pub: local.identity_pub },
+      identity: { v: 2, relay_origin: "relay.example", address: "@acme/ken", identity_pub: local.identity_pub },
       encryption: { record, signature: await signed(local, record) },
     }));
     expect(checks.at(-1)).toMatchObject({ name: "published identity keys", ok: false });
@@ -311,13 +311,13 @@ describe("doctor key health", () => {
     const now = Date.now();
     const record: EncryptionKeyRecordType = {
       v: 2, relay_origin: "relay.example",
-      address: "ken@relay.example", key_id: await keyIdFor(local.encryption_pub), suite: HPKE_SUITE,
+      address: "@acme/ken", key_id: await keyIdFor(local.encryption_pub), suite: HPKE_SUITE,
       pub: local.encryption_pub, epoch: local.epoch, not_before: now - 1_000, not_after: now + 60_000, prev: null,
     };
     const checks = await checkLineKeyHealth(
       { org: "acme", handle: "ken", token: "t", relay: "https://relay.example" }, paths,
       async () => ({
-        identity: { v: 2, relay_origin: "relay.example", address: "ken@relay.example", identity_pub: local.identity_pub },
+        identity: { v: 2, relay_origin: "relay.example", address: "@acme/ken", identity_pub: local.identity_pub },
         encryption: { record, signature: "invalid" },
       }),
     );
@@ -337,13 +337,13 @@ describe("doctor key health", () => {
     const local = await generateIdentityKeys(paths);
     const values = await fields(local);
     const record: EncryptionKeyRecordType = {
-      v: 2, relay_origin: "ken@relay.example".slice("ken@relay.example".indexOf("@") + 1), address: "ken@relay.example", suite: HPKE_SUITE, pub: local.encryption_pub,
+      v: 2, relay_origin: "@acme/ken".slice("@acme/ken".indexOf("@") + 1), address: "@acme/ken", suite: HPKE_SUITE, pub: local.encryption_pub,
       epoch: local.epoch, prev: null, ...values,
     };
     const checks = await checkLineKeyHealth(
       { org: "acme", handle: "ken", token: "t", relay: "https://relay.example" }, paths,
       async () => ({
-        identity: { v: 2, relay_origin: "relay.example", address: "ken@relay.example", identity_pub: local.identity_pub },
+        identity: { v: 2, relay_origin: "relay.example", address: "@acme/ken", identity_pub: local.identity_pub },
         encryption: { record, signature: await signed(local, record) },
       }),
     );

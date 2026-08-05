@@ -68,7 +68,7 @@ async function callerBundleFor(handle: string) {
 
 function fakePeer(address: string) {
   return {
-    relay_origin: address.slice(address.indexOf("@") + 1),
+    relay_origin: "relay.test",
     address, identity_pub: callerKeys.identity_pub, fingerprint: `SHA256:${"a".repeat(32)}`,
     first_seen_at: 1, highest_encryption_epoch: callerKeys.epoch, call_count: 1,
   };
@@ -78,7 +78,7 @@ async function buildEnvelope(opts: { from: string; to: string; message: string }
   const issuedAt = Date.now();
   const request = {
     v: 1 as const, direction: "request" as const, relay_origin: "127.0.0.1",
-    from: `${opts.from}@127.0.0.1`, to: `${opts.to}@127.0.0.1`,
+    from: `@acme/${opts.from}`, to: `@acme/${opts.to}`,
     request_id: crypto.randomUUID().replaceAll("-", ""),
     sender_identity_key_id: await keyIdFor(callerKeys.identity_pub),
     recipient_encryption_key_id: await keyIdFor(listenerKeys.encryption_pub),
@@ -134,8 +134,8 @@ describe("openInboundEnvelope", () => {
     if (!result.ok) throw new Error("expected ok");
     expect(result.envelope.request.message).toBe("hi");
     expect(result.envelope.relayOrigin).toBe("127.0.0.1");
-    expect(result.envelope.fromAddress).toBe("shusaku@127.0.0.1");
-    expect(result.envelope.toAddress).toBe("ken@127.0.0.1");
+    expect(result.envelope.fromAddress).toBe("@acme/shusaku");
+    expect(result.envelope.toAddress).toBe("@acme/ken");
     expect(reserved).toMatchObject({ sender_fingerprint: `SHA256:${"a".repeat(32)}` });
   });
 
@@ -205,7 +205,7 @@ describe("makeOutcomeSender", () => {
     let sealedPayload: E2EEResponsePayloadType | undefined;
     const trySendOutcome = makeOutcomeSender(
       {
-        callId: "c1", relayOrigin: "127.0.0.1", fromAddress: "shusaku@127.0.0.1", toAddress: "ken@127.0.0.1",
+        callId: "c1", relayOrigin: "127.0.0.1", fromAddress: "@acme/shusaku", toAddress: "@acme/ken",
         request, requestHash: await transcriptHash(requestTranscript(request)),
         localKeys: listenerKeys, callerBundle: bundle, send: (obj) => sent.push(obj),
       },
@@ -227,7 +227,7 @@ describe("makeOutcomeSender", () => {
     const sent: unknown[] = [];
     const trySendOutcome = makeOutcomeSender(
       {
-        callId: "c1", relayOrigin: "127.0.0.1", fromAddress: "shusaku@127.0.0.1", toAddress: "ken@127.0.0.1",
+        callId: "c1", relayOrigin: "127.0.0.1", fromAddress: "@acme/shusaku", toAddress: "@acme/ken",
         request, requestHash: await transcriptHash(requestTranscript(request)),
         localKeys: listenerKeys, callerBundle: bundle, send: (obj) => sent.push(obj),
       },
@@ -245,7 +245,7 @@ describe("makeOutcomeSender", () => {
       const sent: unknown[] = [];
       const trySendOutcome = makeOutcomeSender(
         {
-          callId: "c1", relayOrigin: "127.0.0.1", fromAddress: "shusaku@127.0.0.1", toAddress: "ken@127.0.0.1",
+          callId: "c1", relayOrigin: "127.0.0.1", fromAddress: "@acme/shusaku", toAddress: "@acme/ken",
           request, requestHash: await transcriptHash(requestTranscript(request)),
           localKeys: listenerKeys, callerBundle: bundle, send: (obj) => sent.push(obj),
         },
