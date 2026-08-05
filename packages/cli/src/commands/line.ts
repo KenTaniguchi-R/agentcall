@@ -2,7 +2,7 @@ import { existsSync, mkdirSync, renameSync, rmSync } from "node:fs";
 import { join } from "node:path";
 import { writeJsonAtomic } from "../json-store.js";
 import { formatAddress, type AgentKind } from "@benree/agentcall-shared";
-import { publishEncryptionKey, publishIdentityKey, registerHandle } from "../api.js";
+import { authOf, publishEncryptionKey, publishIdentityKey, registerHandle } from "../api.js";
 import { publishCard } from "../card.js";
 import { lineAddress, resolveLineWorkdir, type LineConfig } from "../config.js";
 import { assertValidLineName, listLines, readyLines, saveLineConfig } from "../lines.js";
@@ -63,7 +63,7 @@ export async function publishStoredKeys(
   paths: LinePaths,
   fns: { identity?: typeof publishIdentityKey; encryption?: typeof publishEncryptionKey } = {},
 ): Promise<void> {
-  const auth = { org: line.org, handle: line.handle, token: line.token };
+  const auth = authOf(line);
   await (fns.identity ?? publishIdentityKey)(line.relay, auth, stored);
   await (fns.encryption ?? publishEncryptionKey)(line.relay, auth, paths);
 }

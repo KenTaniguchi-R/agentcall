@@ -8,6 +8,7 @@ import { pickOutboundLine } from "../outbound.js";
 import { findOutbound, loadOutbound, rememberOutbound } from "../contexts-out.js";
 import { getTelemetry, shutdownTelemetry, telemetrySafely } from "../telemetry.js";
 import type { LineContext } from "../line-context.js";
+import { fail } from "../errors.js";
 
 export function register(program: Command): void {
   program
@@ -22,30 +23,26 @@ export function register(program: Command): void {
     .option("--context <id>", "continue a specific conversation by id")
     .action(async (address: string, messageParts: string[], o: { json?: boolean; task?: string; as?: string; continue?: boolean; context?: string }) => {
       if (process.env.AGENTCALL_CALL_ID !== undefined) {
-        console.error("Nested agentcall calls are disabled until relay-attested chains and secret-isolated per-run credentials exist.");
-        process.exitCode = 1;
+        fail("Nested agentcall calls are disabled until relay-attested chains and secret-isolated per-run credentials exist.");
         return;
       }
       const machine = getMachinePaths();
       const firstPass = resolveAddress(machine, address);
       if (!firstPass.ok) {
-        console.error(firstPass.error);
-        process.exitCode = 1;
+        fail(firstPass.error);
         return;
       }
       let ctx: LineContext;
       try {
         ctx = pickOutboundLine(machine, firstPass.org, { as: o.as });
       } catch (e) {
-        console.error(String(e instanceof Error ? e.message : e));
-        process.exitCode = 1;
+        fail(e);
         return;
       }
       const cfg = ctx.config;
       const parsed = resolveAddress(machine, address, relayUrl(cfg), cfg.org);
       if (!parsed.ok) {
-        console.error(parsed.error);
-        process.exitCode = 1;
+        fail(parsed.error);
         return;
       }
       const message = messageParts.join(" ");
@@ -53,21 +50,18 @@ export function register(program: Command): void {
       let task = o.task;
       if (o.continue) {
         if (contextId) {
-          console.error("Use --continue or --context, not both.");
-          process.exitCode = 1;
+          fail("Use --continue or --context, not both.");
           return;
         }
         const prev = findOutbound(loadOutbound(ctx.paths), {
           relay: relayUrl(cfg), from: cfg.handle, to: parsed.handle,
         });
         if (!prev) {
-          console.error(`No open conversation with ${address}. Call without --continue to start one.`);
-          process.exitCode = 1;
+          fail(`No open conversation with ${address}. Call without --continue to start one.`);
           return;
         }
         if (task !== undefined && task !== prev.task) {
-          console.error(`That conversation is on task "${prev.task}", not "${task}".`);
-          process.exitCode = 1;
+          fail(`That conversation is on task "${prev.task}", not "${task}".`);
           return;
         }
         contextId = prev.context_id;
@@ -93,8 +87,7 @@ export function register(program: Command): void {
         console.log(o.json ? stringifyTerminalSafeJson(reply) : sanitizeTerminalOutput(reply.text));
       } catch (e) {
         telemetrySafely(() => callerSpan?.endError(e instanceof CallError ? e.code : "agent_error", e instanceof CallError ? e.callId : undefined));
-        console.error(e instanceof CallError ? `Call failed (${e.code}): ${e.message}` : String(e));
-        process.exitCode = 1;
+        fail(e instanceof CallError ? `Call failed (${e.code}): ${e.message}` : String(e));
       } finally {
         await shutdownTelemetry();
       }

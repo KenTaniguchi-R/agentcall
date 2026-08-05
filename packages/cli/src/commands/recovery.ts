@@ -6,7 +6,7 @@ import {
   ORG_RE, HANDLE_RE, RecoveryReceipt, type RecoveryIssueRequestType,
   type RecoveryIssueResponseType, type RecoveryRedeemRequestType, type RecoveryReceiptType,
 } from "@benree/agentcall-shared";
-import { getRecoveryStatus, issueRecovery, redeemRecovery } from "../api.js";
+import { authOf, getRecoveryStatus, issueRecovery, redeemRecovery } from "../api.js";
 import { normalizeRelay, type LineConfig } from "../config.js";
 import { removeFileDurable, writeJsonDurable } from "../json-store.js";
 import { loadLineConfig } from "../lines.js";
@@ -111,7 +111,7 @@ export async function runRecoveryIssue(
 ): Promise<{ generation: number }> {
   if (!target.config) throw new Error("Recovery proof issue/reissue requires a working line credential.");
   const relay = normalizeRelay(target.config.relay);
-  const auth = { org: target.config.org, handle: target.config.handle, token: target.config.token };
+  const auth = authOf(target.config);
   const current = await (deps.status ?? getRecoveryStatus)(relay, auth);
   const randomSecret = deps.randomSecret ?? generatedSecret;
   const proof = randomSecret();

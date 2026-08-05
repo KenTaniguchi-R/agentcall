@@ -1,8 +1,9 @@
-import { publishEncryptionKey, publishIdentityKey } from "../api.js";
+import { authOf, publishEncryptionKey, publishIdentityKey } from "../api.js";
 import { lineAddress, relayUrl } from "../config.js";
 import { getMachinePaths } from "../paths.js";
 import { resolveLine } from "../line-context.js";
 import { loadKeys } from "../keys.js";
+import { fail } from "../errors.js";
 
 export function register(program: { command(name: string): any }): void {
   const keys = program.command("keys").description("manage this line's end-to-end encryption keys");
@@ -15,13 +16,12 @@ export function register(program: { command(name: string): any }): void {
         const ctx = resolveLine(getMachinePaths(), o);
         const cfg = ctx.config;
         const stored = loadKeys(ctx.paths);
-        const auth = { org: cfg.org, handle: cfg.handle, token: cfg.token };
+        const auth = authOf(cfg);
         await publishIdentityKey(relayUrl(cfg), auth, stored);
         await publishEncryptionKey(relayUrl(cfg), auth, ctx.paths);
         console.log(`Published identity and encryption key for ${lineAddress(cfg)}.`);
       } catch (error) {
-        console.error(error instanceof Error ? error.message : String(error));
-        process.exitCode = 1;
+        fail(error);
       }
     });
 }

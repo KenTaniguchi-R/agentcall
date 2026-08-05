@@ -33,6 +33,17 @@ export class ApiError extends Error {
 }
 
 export type Auth = { org: string; handle: string; token: string };
+
+// Callers hold a LineConfig, which carries more than these three fields.
+// Copying the three out — rather than passing the config straight through —
+// is the point: TypeScript's excess-property check only fires on object
+// literals, so a whole config would be accepted structurally and every field
+// on it would be in reach of the request layer. This narrows deliberately,
+// and now does it in one place instead of at 25 call sites.
+export function authOf(source: Auth): Auth {
+  return { org: source.org, handle: source.handle, token: source.token };
+}
+
 const CREDENTIALS_REJECTED = "Your credentials were rejected. Re-run `agentcall setup`.";
 
 function authHeaders(auth: Auth): Record<string, string> {

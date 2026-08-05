@@ -5,6 +5,7 @@ import { renderPolicyReport } from "../policy-report.js";
 import { resolveLine, type LineContext } from "../line-context.js";
 import { assertCallableLine, resolveLineWorkdir } from "../config.js";
 import { getMachinePaths } from "../paths.js";
+import { fail } from "../errors.js";
 
 export function register(program: { command(name: string): any }): void {
   program
@@ -17,8 +18,7 @@ export function register(program: { command(name: string): any }): void {
         ctx = resolveLine(getMachinePaths(), { line: o.line });
         assertCallableLine(ctx.config);
       } catch (e) {
-        console.error(String(e instanceof Error ? e.message : e));
-        process.exitCode = 1;
+        fail(e);
         return;
       }
       const cfg = ctx.config;
@@ -32,8 +32,7 @@ export function register(program: { command(name: string): any }): void {
         });
         console.log(report.trimEnd());
       } catch (e) {
-        console.error(String(e instanceof Error ? e.message : e));
-        process.exitCode = 1;
+        fail(e);
       }
     });
 }

@@ -1,9 +1,9 @@
 import { existsSync } from "node:fs";
-import { ApiError } from "../api.js";
 import { assertValidLineName, loadLineConfig } from "../lines.js";
 import { getLinePaths, getMachinePaths } from "../paths.js";
 import { resolveLine } from "../line-context.js";
 import { runRecoveryIssue, runRecoveryRedeem } from "./recovery.js";
+import { fail } from "../errors.js";
 
 export function register(program: { command(name: string): any }): void {
   const recovery = program.command("recovery").description("manage the out-of-band identity recovery proof");
@@ -11,7 +11,7 @@ export function register(program: { command(name: string): any }): void {
     .option("--line <name>", "line to protect (defaults to the primary line)")
     .action(async (o: { line?: string }) => {
       try { await runRecoveryIssue(resolveLine(getMachinePaths(), { line: o.line })); }
-      catch (e) { console.error(e instanceof ApiError ? e.message : String(e instanceof Error ? e.message : e)); process.exitCode = 1; }
+      catch (e) { fail(e); }
     });
   recovery.command("redeem").description("recover one line using an out-of-band proof")
     .requiredOption("--line <name>", "local line name to recover")
@@ -31,6 +31,6 @@ export function register(program: { command(name: string): any }): void {
           if (!Number.isSafeInteger(generation) || generation < 1) throw new Error("--generation must be a positive integer.");
         }
         await runRecoveryRedeem({ name: o.line, paths, config, org: o.org, handle: o.handle, relay: o.relay, generation, resume: o.resume });
-      } catch (e) { console.error(e instanceof ApiError ? e.message : String(e instanceof Error ? e.message : e)); process.exitCode = 1; }
+      } catch (e) { fail(e); }
     });
 }

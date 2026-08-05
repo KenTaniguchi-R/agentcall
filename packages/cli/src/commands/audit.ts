@@ -1,8 +1,9 @@
 import type { AuditCheckpointType } from "@benree/agentcall-shared";
-import { fetchAuditExportPage, ApiError } from "../api.js";
+import { authOf, fetchAuditExportPage } from "../api.js";
 import { relayUrl } from "../config.js";
 import type { LineContext } from "../line-context.js";
 import { AUDIT_CSV_COLUMNS, auditCsvRow, parseAuditFilter, parseAuditTime } from "./audit-export.js";
+import { fail } from "../errors.js";
 
 type LineFor = (line: string | undefined) => LineContext | undefined;
 
@@ -43,7 +44,7 @@ export function register(program: { command(name: string): any }, lineFor: LineF
         let checkpoint: AuditCheckpointType | undefined;
         do {
           const page = await fetchAuditExportPage(
-            relayUrl(cfg), { org: cfg.org, handle: cfg.handle, token: cfg.token },
+            relayUrl(cfg), authOf(cfg),
             { after, before, actor, event, actor_ip: actorIp, page_size: pageSize, page_token: pageToken },
             { retryRateLimit: true },
           );
@@ -53,8 +54,7 @@ export function register(program: { command(name: string): any }, lineFor: LineF
         } while (pageToken);
         console.error(`Checkpoint org=${checkpoint?.org_event_id ?? 0} roster=${checkpoint?.roster_event_id ?? 0}`);
       } catch (e) {
-        console.error(e instanceof ApiError || e instanceof Error ? e.message : String(e));
-        process.exitCode = 1;
+        fail(e);
       }
     });
 }

@@ -9,7 +9,7 @@ import type { AgentKind, E2EEOutcomeType, E2EEResponsePayloadType, E2EERequestPa
 import { formatAddress, keyIdFor } from "@benree/agentcall-shared";
 import { relayHostOf, type Workdir } from "./config.js";
 import { openE2EERequest, sealE2EEResponse } from "./e2ee.js";
-import { fetchKeys } from "./api.js";
+import { authOf, fetchKeys } from "./api.js";
 import { verifyAndPinPeer, type KnownPeer } from "./known-peers.js";
 import { loadKeys, type StoredKeys } from "./keys.js";
 import { reserveReplay } from "./replay-store.js";
@@ -85,7 +85,7 @@ export async function openInboundEnvelope(
   const toAddress = formatAddress(input.org, input.handle);
   try {
     const callerBundle = await io.fetchKeys(
-      input.relay, { org: input.org, handle: input.handle, token: input.token }, input.from,
+      input.relay, authOf(input), input.from,
     );
     const callerPeer = await io.verifyAndPinPeer(input.machine, fromAddress, callerBundle);
     const localKeys = io.loadKeys(input.paths);

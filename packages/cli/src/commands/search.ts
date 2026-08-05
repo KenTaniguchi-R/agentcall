@@ -4,6 +4,8 @@ import { loadMemberships } from "../rosters.js";
 import { refreshRoster } from "../search-refresh.js";
 import { allRostersFailed, DEFAULT_SEARCH_LIMIT, rank, renderResults, sanitize, toEntries, type RosterStatus, type SearchEntry } from "../search.js";
 import type { LineContext } from "../line-context.js";
+import { fail } from "../errors.js";
+import { authOf } from "../api.js";
 
 type LineResolver = (line: string | undefined) => LineContext | undefined;
 
@@ -28,12 +30,11 @@ export function register(program: Command, lineFor: LineResolver): void {
         .filter((m) => !o.roster || m.name.toLowerCase() === o.roster.toLowerCase());
 
       if (memberships.length === 0) {
-        console.error(
+        fail(
           o.roster
             ? `No roster named "${o.roster}" on ${relay} — run \`agentcall roster list\`.`
             : `No rosters joined on ${relay}. Ask a colleague for a roster id and join key, then:\n  agentcall roster join <id> --key <key> --as <name>`,
         );
-        process.exitCode = 1;
         return;
       }
 
@@ -41,7 +42,7 @@ export function register(program: Command, lineFor: LineResolver): void {
       const statuses: RosterStatus[] = [];
       for (const m of memberships) {
         try {
-          const out = await refreshRoster(ctx.paths, m.name, m.roster_id, identity, { org: cfg.org, handle: cfg.handle, token: cfg.token }, { offline: o.offline });
+          const out = await refreshRoster(ctx.paths, m.name, m.roster_id, identity, authOf(cfg), { offline: o.offline });
           entries.push(...toEntries(m.name, cfg.org, out.entries));
           statuses.push({ name: m.name, ageSeconds: out.ageSeconds, stale: out.stale });
         } catch (e) {
