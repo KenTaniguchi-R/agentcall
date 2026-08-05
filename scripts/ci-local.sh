@@ -63,13 +63,16 @@ epoch_of_date() {
 # verify job
 # ---------------------------------------------------------------------------
 run_verify() {
-  step "verify — build, docs, typecheck, test, bundle"
+  step "verify — lint, build, docs, typecheck, test, bundle"
   # Step order mirrors the verify job in ci.yml exactly, and the order is
-  # load-bearing twice over. Build first: packages/cli typechecks against
-  # packages/shared's built dist, so a build after typecheck would check the
-  # previous run's types. docs:check before typecheck: it reads the built CLI,
-  # and failing there first keeps a docs drift from being reported as a test
-  # failure three minutes later.
+  # load-bearing three times over. Lint first: it reads source directly, needs
+  # nothing built, and finishes in well under a second, so the cheapest class of
+  # error is reported before the build spends thirty. Build second: packages/cli
+  # typechecks against packages/shared's built dist, so a build after typecheck
+  # would check the previous run's types. docs:check before typecheck: it reads
+  # the built CLI, and failing there first keeps a docs drift from being
+  # reported as a test failure three minutes later.
+  run_step lint       "pnpm lint"          pnpm lint
   run_step build      "pnpm -r build"      pnpm -r build
   run_step docs       "pnpm docs:check"    pnpm docs:check
   run_step typecheck  "pnpm -r typecheck"  pnpm -r typecheck
@@ -285,6 +288,7 @@ inv_gate_mirrors_ci() {
   ' .github/workflows/ci.yml)
 
   mirrored=$(printf '%s\n' \
+    'pnpm lint' \
     'pnpm -r build' \
     'pnpm docs:check' \
     'pnpm -r typecheck' \

@@ -1,0 +1,24 @@
+{
+  "$schema": "./node_modules/oxlint/configuration_schema.json",
+
+  // Two rules in oxlint's default set are wrong for this codebase rather than
+  // occasionally inconvenient, so they are answered once here instead of with a
+  // disable comment at every site. Everything else in the default set is on.
+  "rules": {
+    // Neutralizing terminal control sequences is a thing this codebase does on
+    // purpose: sanitizeTerminalOutput, UNSAFE_DISPLAY_CHARACTERS, the systemd
+    // unit-value guard, and the tests asserting none of those characters
+    // survive. Every one already spells its range as a Unicode escape, which is
+    // the remedy the rule suggests, so it reports them anyway and has no true
+    // positive left to find here. Do not loosen a validator to quiet it.
+    "no-control-regex": "off",
+
+    // Reports `[...typedArray.slice(...)]` on the belief that `.slice` returned
+    // an array. On a Uint8Array it returns a Uint8Array, and the spread is what
+    // makes `toEqual([1, 2, 3])` compare against a plain array at all -- taking
+    // it out changes what the transcript assertions in room.test.ts mean.
+    "unicorn/no-useless-spread": "off"
+  },
+
+  "ignorePatterns": ["**/dist/**"]
+}
