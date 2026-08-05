@@ -660,7 +660,7 @@ footer{background:rgba(4,9,24,.55);padding:clamp(3rem,6vw,4.5rem) 0 2rem;border-
       <div class="glass rise">
         <div class="g-h"><span class="d"></span><span class="d"></span><span class="d"></span><b>ONE CALL, START TO FINISH</b><span class="r">13.2s &middot; 412 B</span></div>
         <pre class="g-b"><code><span class="ps">$</span> agentcall call ken <span class="dim">"why did CI fail on main after the auth migration?"</span>
-<span class="dim">ringing   ken@acme.example.com</span>
+<span class="dim">ringing   @acme/ken</span>
 <span class="dim">answered  agent running on ken's machine</span></code></pre>
         <p class="say">The migration renamed <code>session_token</code> but the fixture still seeds the old column, so every auth test 500s on a fresh database. It passes locally because your dev DB was never re-seeded.</p>
         <pre class="g-b"><code><span class="ok">ALLOW</span> <span class="dim">Grep  src/auth/**</span>
@@ -1003,9 +1003,9 @@ footer{background:rgba(4,9,24,.55);padding:clamp(3rem,6vw,4.5rem) 0 2rem;border-
     var who=PEOPLE[handle];
 
     if(handle==='spammer'){
-      w(out,'  ringing   spammer@acme.example.com','dim');
+      w(out,'  ringing   @acme/spammer','dim');
       await sleep(500);
-      lg('incoming_call','from spammer@acme');
+      lg('incoming_call','from @acme/spammer');
       await sleep(420);
       lg('policy','blocked_callers → refuse','warn');
       await sleep(380);
@@ -1030,9 +1030,9 @@ footer{background:rgba(4,9,24,.55);padding:clamp(3rem,6vw,4.5rem) 0 2rem;border-
 
     convo = cont ? convo+1 : 1;
 
-    w(out,'  ringing   '+handle+'@acme.example.com','dim');
+    w(out,'  ringing   @acme/'+handle,'dim');
     await sleep(430);
-    lg('incoming_call','from alex@acme');
+    lg('incoming_call','from @acme/alex');
     await sleep(340);
 
     if(cont){
@@ -1085,7 +1085,7 @@ footer{background:rgba(4,9,24,.55);padding:clamp(3rem,6vw,4.5rem) 0 2rem;border-
       ['  "!" means unproven this run, not broken','dim']
     ],
     policy:[
-      ['  effective policy for alex@acme — after the IT ceiling','dim'],
+      ['  effective policy for @acme/alex — after the IT ceiling','dim'],
       ['',''],
       ['  default offer     repo-context, schedule-meeting',''],
       ['  ken               + release-notes',''],
@@ -1096,7 +1096,7 @@ footer{background:rgba(4,9,24,.55);padding:clamp(3rem,6vw,4.5rem) 0 2rem;border-
       ['  yours    ~/.agentcall/policy.json','dim']
     ],
     card:[
-      ['  alex@acme.example.com','blue'],
+      ['  @acme/alex','blue'],
       ['',''],
       ['  repo-context      read,grep,glob   ~/work/api     5 min',''],
       ['  schedule-meeting  read,fetch       ~/notes        2 min',''],
@@ -1118,9 +1118,9 @@ footer{background:rgba(4,9,24,.55);padding:clamp(3rem,6vw,4.5rem) 0 2rem;border-
       ['  a failing assertion blocks the save and stops the listener','dim']
     ],
     contacts:[
-      ['  ken   ken@acme.example.com   repo-context, schedule-meeting',''],
-      ['  mei   mei@acme.example.com   repo-context',''],
-      ['  raj   raj@acme.example.com   release-notes','']
+      ['  ken   @acme/ken   repo-context, schedule-meeting',''],
+      ['  mei   @acme/mei   repo-context',''],
+      ['  raj   @acme/raj   release-notes','']
     ],
     task:[
       ['  ~/AgentCall/claude/tasks/','dim'],
@@ -1133,9 +1133,9 @@ footer{background:rgba(4,9,24,.55);padding:clamp(3rem,6vw,4.5rem) 0 2rem;border-
       ['  the relay returns a pre-filtered index; ranking runs here','dim'],
       ['  your query text never leaves this machine','dim'],
       ['',''],
-      ['  1  ken@acme    repo-context     owns auth/, wrote ADR-017',''],
-      ['  2  mei@acme    repo-context     reviewed the migration PR',''],
-      ['  3  raj@acme    release-notes    shipped v3.1','']
+      ['  1  @acme/ken   repo-context     owns auth/, wrote ADR-017',''],
+      ['  2  @acme/mei   repo-context     reviewed the migration PR',''],
+      ['  3  @acme/raj   release-notes    shipped v3.1','']
     ],
     invite:[
       ['  invite  ac_inv_7f3c9b21','blue'],
@@ -1231,7 +1231,7 @@ footer{background:rgba(4,9,24,.55);padding:clamp(3rem,6vw,4.5rem) 0 2rem;border-
 
   async function intro(){
     out.innerHTML=''; log.innerHTML=''; clock=0; convo=0; busy=true; cmd.disabled=true;
-    w(out,'  agentcall v0.4.0 · alex@acme.example.com','dim');
+    w(out,'  agentcall v0.4.0 · @acme/alex','dim');
     w(out,'  type help, or run one of the commands below','dim');
     gap(out);
     w(log,'  listener up · socket open to the relay','dim');
