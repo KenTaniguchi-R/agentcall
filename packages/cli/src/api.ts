@@ -141,7 +141,17 @@ export async function registerHandle(
           `${DEFAULT_ORG_INVITE_EXPIRY_DAYS} days by default.`,
         "invite_invalid",
       ),
-      409: relayError(`Handle "${handle}" is already taken.`, "handle_taken"),
+      // The reassurance is the point. Registration is one D1 batch: the
+      // invite's used_at UPDATE is guarded by an EXISTS on the handles row
+      // this request just tried to insert (apps/relay/src/index.ts), so a
+      // handle collision consumes nothing. Without saying so, the owner's
+      // reasonable reading of "already taken" at the end of a failed setup is
+      // that they burned their one-time invite on a name they cannot have.
+      409: relayError(
+        `Handle "${handle}" is already taken.\n` +
+          "Your invite was not used — run `agentcall setup` again with a different handle.",
+        "handle_taken",
+      ),
       503: relayError("Registration is temporarily unavailable. Try again shortly."),
       401: relayError("Registration failed (401).", "invalid"),
     }, failed: "Registration", failedCode: "invalid" });
