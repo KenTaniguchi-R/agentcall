@@ -8,7 +8,6 @@ import {
   type AuditExportEventType, type AuditExportPageType,
   type AuditRetentionPolicyType, type OrgAuditEvent,
 } from "@benree/agentcall-shared";
-import type { Env } from "./index.js";
 import { sha256Hex } from "./auth.js";
 import { AUDIT_READ, AUDIT_WRITE } from "./ratelimit/index.js";
 import { jsonBody, rateLimit, requireAdmin, type RelayAppEnv } from "./middleware.js";

@@ -8,7 +8,6 @@ import {
   type RoomInviteRecordType, type RoomParticipantRecordType, type RoomRecordType,
 } from "@benree/agentcall-shared";
 import { sha256Hex } from "../auth.js";
-import type { Env } from "../index.js";
 import type { RelayAppEnv } from "../middleware.js";
 import { jsonBody } from "../middleware.js";
 import {

@@ -154,7 +154,7 @@ app.post("/v1/token/rotate", rateLimit(REGISTER, "identity", "rotate:"), async (
 
 app.put("/v1/card", rateLimit(NATIVE_CARD, "identity"), async (c) => {
   const identity = c.var.identity;
-  const { org, handle } = identity;
+  const { org } = identity;
   // Deliberately NOT routed through jsonBody: the `inv_stored_cards` gate
   // whitelists every direct parse of the card schema in the relay, and that is
   // how it proves uploads validate here while stored reads go through

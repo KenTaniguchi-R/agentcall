@@ -35,6 +35,11 @@ jobs:
 
       - run: pnpm install --frozen-lockfile
 
+      # The cheapest rung, and it needs nothing built: unused imports, dead
+      # declarations, and the correctness rules types cannot express. Runs at
+      # --max-warnings 0, because a warning nobody has to fix is not a gate.
+      - run: pnpm lint
+
       # Build first: packages/cli typechecks against packages/shared's built
       # dist, so a build after typecheck would check the previous run's types.
       - run: pnpm -r build

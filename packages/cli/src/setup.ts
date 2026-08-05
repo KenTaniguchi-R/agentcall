@@ -6,7 +6,7 @@ import { listLines } from "./lines.js";
 import { resolveLine } from "./line-context.js";
 import { getMachinePaths } from "./paths.js";
 import { canPrompt, ask as ttyAsk } from "./tty.js";
-import { lineAddress, relayUrl, resolveLineWorkdir, type LineConfig } from "./config.js";
+import { relayUrl, resolveLineWorkdir, type LineConfig } from "./config.js";
 import { defaultResolveBin, listenerPathDirs } from "./listener-path.js";
 import { isEphemeralDir } from "./bin.js";
 import { host } from "./outbound.js";

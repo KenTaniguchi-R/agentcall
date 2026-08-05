@@ -159,7 +159,6 @@ export function savePolicy(p: LinePaths, policy: Policy): void {
 export const stripPlus = (id: string) => id.replace(/^\+/, "");
 
 type CallerEntry = Policy["callers"][string];
-type GroupEntry = Policy["groups"][string];
 
 // `policy.callers` comes from JSON.parse + zod's z.record, whose output object
 // inherits Object.prototype — and HANDLE_RE happily accepts "constructor".

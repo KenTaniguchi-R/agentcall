@@ -1,5 +1,5 @@
 import { z } from "zod";
-import { HANDLE_RE, TASK_ID_RE, MAX_TASK_ID_LENGTH } from "./protocol.js";
+import { HANDLE_RE, TASK_ID_RE } from "./protocol.js";
 import { MAX_TASK_KEYWORDS, MAX_KEYWORD_LENGTH } from "./card.js";
 
 // A roster id is relay-generated and opaque. Deliberately NOT a memorable
