@@ -3,7 +3,7 @@ import {
   AuditLegalHoldCreateRequest, AuditLegalHoldReleaseRequest,
   AuditExportAcknowledgement, AuditExportAcknowledgementRequest, AuditExportPage,
   AuditRetentionPolicy, AuditRetentionPolicyUpdateRequest,
-  AUDIT_HOLD_ID_RE,
+  AUDIT_HOLD_ID_RE, decodeSignedToken, encodeSignedToken, toBase64Url,
   type AuditCheckpointType, type AuditExportAcknowledgementType,
   type AuditExportEventType, type AuditExportPageType,
   type AuditRetentionPolicyType, type OrgAuditEvent,
@@ -104,27 +104,6 @@ function ifNoneMatchMatches(value: string | undefined, current: string): boolean
   return parsed === "*" || (parsed !== null && parsed.some((tag) => tag === current));
 }
 
-function base64Url(bytes: Uint8Array): string {
-  let binary = "";
-  for (const byte of bytes) binary += String.fromCharCode(byte);
-  return btoa(binary).replaceAll("+", "-").replaceAll("/", "_").replace(/=+$/, "");
-}
-
-function fromBase64Url(value: string): Uint8Array | null {
-  if (!/^[A-Za-z0-9_-]+$/.test(value)) return null;
-  try {
-    const padded = value.replaceAll("-", "+").replaceAll("_", "/")
-      .padEnd(Math.ceil(value.length / 4) * 4, "=");
-    const bytes = Uint8Array.from(atob(padded), (character) => character.charCodeAt(0));
-    // Different nonzero unused pad bits can decode to the same bytes. Requiring
-    // the canonical round trip prevents a textually modified signed token from
-    // verifying as an alias of the token the relay actually issued.
-    return base64Url(bytes) === value ? bytes : null;
-  } catch {
-    return null;
-  }
-}
-
 async function tokenKey(secret: string, purpose: "cursor" | "completion"): Promise<CryptoKey> {
   // Keep the original cursor domain stable so an in-progress export survives
   // this deployment. Completion receipts use a separate key domain and cannot
@@ -136,9 +115,7 @@ async function tokenKey(secret: string, purpose: "cursor" | "completion"): Promi
 }
 
 async function encodeCursor(payload: CursorPayload, secret: string): Promise<string> {
-  const encoded = new TextEncoder().encode(JSON.stringify(payload));
-  const signature = new Uint8Array(await crypto.subtle.sign("HMAC", await tokenKey(secret, "cursor"), encoded));
-  return `${base64Url(encoded)}.${base64Url(signature)}`;
+  return encodeSignedToken(payload, await tokenKey(secret, "cursor"));
 }
 
 async function filterDigest(query: ExportQuery): Promise<string> {
@@ -147,39 +124,30 @@ async function filterDigest(query: ExportQuery): Promise<string> {
     query.event ?? null,
     query.actorIp ?? null,
   ]));
-  return base64Url(new Uint8Array(await crypto.subtle.digest("SHA-256", encoded)));
+  return toBase64Url(new Uint8Array(await crypto.subtle.digest("SHA-256", encoded)));
 }
 
 async function decodeCursor(
   token: string, secret: string, org: string, handle: string, query: ExportQuery,
 ): Promise<CursorPayload | null> {
-  if (token.length > MAX_PAGE_TOKEN_LENGTH) return null;
-  const [payloadValue, signatureValue, extra] = token.split(".");
-  if (!payloadValue || !signatureValue || extra !== undefined) return null;
-  const payloadBytes = fromBase64Url(payloadValue);
-  const signature = fromBase64Url(signatureValue);
-  if (!payloadBytes || !signature) return null;
-  try {
-    const valid = await crypto.subtle.verify(
-      "HMAC", await tokenKey(secret, "cursor"),
-      signature as Uint8Array<ArrayBuffer>, payloadBytes as Uint8Array<ArrayBuffer>,
-    );
-    if (!valid) return null;
-    const payload = JSON.parse(new TextDecoder().decode(payloadBytes)) as CursorPayload;
-    if (
-      payload.org !== org || payload.handle !== handle ||
-      payload.after !== (query.after ?? null) || payload.before !== (query.before ?? null) ||
-      payload.filterDigest !== await filterDigest(query) ||
-      payload.pageSize !== query.pageSize ||
-      !validCheckpoint(payload.checkpoint) ||
-      !Number.isSafeInteger(payload.position?.at) || payload.position.at < 0 ||
-      (payload.position.ledger !== "org" && payload.position.ledger !== "roster") ||
-      !Number.isSafeInteger(payload.position.id) || payload.position.id < 1
-    ) return null;
-    return payload;
-  } catch {
-    return null;
-  }
+  const payload = await decodeSignedToken<CursorPayload>(
+    token, await tokenKey(secret, "cursor"), MAX_PAGE_TOKEN_LENGTH,
+  );
+  if (!payload) return null;
+  // A valid signature proves the relay issued these bytes, not that they still
+  // describe THIS request. Re-check every claim against the current query so a
+  // cursor cannot be replayed across orgs, handles, filters, or page sizes.
+  if (
+    payload.org !== org || payload.handle !== handle ||
+    payload.after !== (query.after ?? null) || payload.before !== (query.before ?? null) ||
+    payload.filterDigest !== await filterDigest(query) ||
+    payload.pageSize !== query.pageSize ||
+    !validCheckpoint(payload.checkpoint) ||
+    !Number.isSafeInteger(payload.position?.at) || payload.position.at < 0 ||
+    (payload.position.ledger !== "org" && payload.position.ledger !== "roster") ||
+    !Number.isSafeInteger(payload.position.id) || payload.position.id < 1
+  ) return null;
+  return payload;
 }
 
 function validCheckpoint(value: Checkpoint): boolean {
@@ -192,34 +160,18 @@ function validCheckpoint(value: Checkpoint): boolean {
 async function encodeCompletionReceipt(
   org: string, checkpoint: Checkpoint, secret: string,
 ): Promise<string> {
-  const encoded = new TextEncoder().encode(JSON.stringify({ version: 1, org, checkpoint }));
-  const signature = new Uint8Array(await crypto.subtle.sign(
-    "HMAC", await tokenKey(secret, "completion"), encoded,
-  ));
-  return `${base64Url(encoded)}.${base64Url(signature)}`;
+  return encodeSignedToken({ version: 1, org, checkpoint }, await tokenKey(secret, "completion"));
 }
 
 async function decodeCompletionReceipt(
   token: string, secret: string, org: string,
 ): Promise<CompletionReceiptPayload | null> {
-  if (token.length > MAX_COMPLETION_RECEIPT_LENGTH) return null;
-  const [payloadValue, signatureValue, extra] = token.split(".");
-  if (!payloadValue || !signatureValue || extra !== undefined) return null;
-  const payloadBytes = fromBase64Url(payloadValue);
-  const signature = fromBase64Url(signatureValue);
-  if (!payloadBytes || !signature) return null;
-  try {
-    const valid = await crypto.subtle.verify(
-      "HMAC", await tokenKey(secret, "completion"),
-      signature as Uint8Array<ArrayBuffer>, payloadBytes as Uint8Array<ArrayBuffer>,
-    );
-    if (!valid) return null;
-    const payload = JSON.parse(new TextDecoder().decode(payloadBytes)) as CompletionReceiptPayload;
-    if (payload.version !== 1 || payload.org !== org || !validCheckpoint(payload.checkpoint)) return null;
-    return payload;
-  } catch {
-    return null;
-  }
+  const payload = await decodeSignedToken<CompletionReceiptPayload>(
+    token, await tokenKey(secret, "completion"), MAX_COMPLETION_RECEIPT_LENGTH,
+  );
+  if (!payload) return null;
+  if (payload.version !== 1 || payload.org !== org || !validCheckpoint(payload.checkpoint)) return null;
+  return payload;
 }
 
 function parseInteger(value: string | null): number | undefined | null {

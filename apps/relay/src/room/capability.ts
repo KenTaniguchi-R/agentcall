@@ -1,28 +1,23 @@
 import {
+  randomBase64Url,
   RoomCapability, RoomInviteCapability, RoomParticipantId, RoomSecret, RoomId, RoomInviteId,
   type RoomIdType, type RoomInviteIdType, type RoomParticipantIdType,
 } from "@benree/agentcall-shared";
 
-function randomBase64url(byteLength: number): string {
-  const bytes = crypto.getRandomValues(new Uint8Array(byteLength));
-  return btoa(String.fromCharCode(...bytes))
-    .replaceAll("+", "-").replaceAll("/", "_").replaceAll("=", "");
-}
-
 export function newRoomId(): RoomIdType {
-  return RoomId.parse(`room_${randomBase64url(16)}`);
+  return RoomId.parse(`room_${randomBase64Url(16)}`);
 }
 
 export function newParticipantId(): RoomParticipantIdType {
-  return RoomParticipantId.parse(`rp_${randomBase64url(16)}`);
+  return RoomParticipantId.parse(`rp_${randomBase64Url(16)}`);
 }
 
 export function newInviteId(): RoomInviteIdType {
-  return RoomInviteId.parse(`ri_${randomBase64url(16)}`);
+  return RoomInviteId.parse(`ri_${randomBase64Url(16)}`);
 }
 
 export function newRoomSecret(): string {
-  return RoomSecret.parse(randomBase64url(32));
+  return RoomSecret.parse(randomBase64Url(32));
 }
 
 export function formatRoomCapability(

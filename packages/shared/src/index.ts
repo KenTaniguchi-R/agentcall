@@ -11,5 +11,6 @@ export * from "./a2a/task.js";
 export * from "./canonical.js";
 export * from "./keys.js";
 export * from "./signing.js";
+export * from "./signed-token.js";
 export * from "./e2ee.js";
 export * from "./room.js";
