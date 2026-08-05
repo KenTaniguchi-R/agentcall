@@ -1,4 +1,4 @@
-import { existsSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
+import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
@@ -116,6 +116,23 @@ describe("recovery redeem", () => {
     expect(candidateSeen).toMatch(/^[0-9a-f]{64}$/);
     expect(loadLineConfig(paths).token).toBe(candidate);
     expect(existsSync(paths.recoveryPendingFile)).toBe(false);
+  });
+
+  it("rejects a pending file whose operation_id is in-length but out-of-charset, without contacting the relay", async () => {
+    const { paths, config } = fixture();
+    writeFileSync(paths.recoveryPendingFile, JSON.stringify({
+      org: "acme", handle: "alice", relay: "https://relay.test", generation: 1,
+      operation_id: "invalid.op.id.with.dots", // 24 chars: in-bounds, but "." is outside RECOVERY_OPERATION_ID_RE
+      candidate_token: "candidate-" + "t".repeat(40),
+      candidate_token_digest: "a".repeat(64),
+      client_public_id: "act_" + "a".repeat(16),
+      successor_recovery_digest: "b".repeat(64),
+      successor_recovery_public_id: "agr_" + "b".repeat(16),
+    }));
+    await expect(runRecoveryRedeem({ name: "main", paths, config, resume: true }, {
+      ask: async () => { throw new Error("must reject before prompting"); },
+      redeem: async () => { throw new Error("must not contact relay"); }, log: () => {},
+    })).rejects.toThrow(/corrupt/);
   });
 
   it("refuses to resume a pending operation from a different relay", async () => {
