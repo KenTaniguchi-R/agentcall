@@ -99,7 +99,7 @@ export async function drainRecoveryEvictions(env: EvictionEnv): Promise<void> {
   }
 }
 
-function receiptJson(row: StoredReceipt, evictionConfirmed: boolean) {
+function receiptJson(row: StoredReceipt, evictionConfirmed: boolean, agentKind: string | null) {
   return {
     org: row.org,
     handle: row.handle,
@@ -110,7 +110,20 @@ function receiptJson(row: StoredReceipt, evictionConfirmed: boolean) {
     recovery_public_id: row.successor_recovery_public_id,
     committed_at: row.committed_at,
     eviction_confirmed: evictionConfirmed,
+    agent_kind: agentKind,
   };
+}
+
+// #346: agent_kind never changes after registration, so it is safe to read
+// once regardless of which path below produces the response (fresh redemption,
+// a replayed receipt, or a concurrent-writer's receipt). A recovering client
+// with no local config.json to preserve it from has no other way to learn
+// whether the line it is restoring was ever callable.
+async function agentKindFor(env: Env, org: string, handle: string): Promise<string | null> {
+  const row = await env.DB.prepare(
+    "SELECT agent_kind FROM handles WHERE org = ? AND handle = ?",
+  ).bind(org, handle).first<{ agent_kind: string | null }>();
+  return row?.agent_kind ?? null;
 }
 
 async function findReceipt(
@@ -198,7 +211,10 @@ export function mountRecovery(app: Hono<RelayAppEnv>): void {
     const replay = await findReceipt(c.env, request, now);
     if (replay) {
       if (!exactReceipt(replay, request, currentHash)) return c.json({ error: "unauthorized" }, 401);
-      return c.json(receiptJson(replay, await evict(c.env, request.org, request.handle, request.generation + 1)));
+      return c.json(receiptJson(
+        replay, await evict(c.env, request.org, request.handle, request.generation + 1),
+        await agentKindFor(c.env, request.org, request.handle),
+      ));
     }
 
     const live = await c.env.DB.prepare(
@@ -265,7 +281,10 @@ export function mountRecovery(app: Hono<RelayAppEnv>): void {
       // instead of surfacing the uniqueness race as a server error.
       const concurrent = await findReceipt(c.env, request, now);
       if (concurrent && exactReceipt(concurrent, request, currentHash)) {
-        return c.json(receiptJson(concurrent, await evict(c.env, request.org, request.handle, request.generation + 1)));
+        return c.json(receiptJson(
+          concurrent, await evict(c.env, request.org, request.handle, request.generation + 1),
+          await agentKindFor(c.env, request.org, request.handle),
+        ));
       }
       console.error("recovery transaction failure", {
         name: error instanceof Error ? error.name : "UnknownError",
@@ -275,7 +294,10 @@ export function mountRecovery(app: Hono<RelayAppEnv>): void {
     if ((results[0].meta.changes ?? 0) !== 1 || (results[1].meta.changes ?? 0) !== 1) {
       const concurrent = await findReceipt(c.env, request, now);
       if (concurrent && exactReceipt(concurrent, request, currentHash)) {
-        return c.json(receiptJson(concurrent, await evict(c.env, request.org, request.handle, request.generation + 1)));
+        return c.json(receiptJson(
+          concurrent, await evict(c.env, request.org, request.handle, request.generation + 1),
+          await agentKindFor(c.env, request.org, request.handle),
+        ));
       }
       return c.json({ error: "unauthorized" }, 401);
     }
@@ -286,6 +308,9 @@ export function mountRecovery(app: Hono<RelayAppEnv>): void {
       successor_recovery_hash: request.successor_recovery_digest,
       successor_recovery_public_id: request.successor_recovery_public_id, committed_at: now,
     };
-    return c.json(receiptJson(stored, await evict(c.env, request.org, request.handle, request.generation + 1)));
+    return c.json(receiptJson(
+      stored, await evict(c.env, request.org, request.handle, request.generation + 1),
+      await agentKindFor(c.env, request.org, request.handle),
+    ));
   });
 }
