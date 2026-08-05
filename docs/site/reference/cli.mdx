@@ -487,6 +487,10 @@ Usage: agentcall roster expel [options] <name> <handle>
 
 remove a member using the roster admin secret
 
+Arguments:
+  name                     local roster name
+  handle                   member handle to remove
+
 Options:
   --admin-secret <secret>  admin secret (prefer AGENTCALL_ADMIN_SECRET to avoid
                            shell history)
@@ -521,6 +525,9 @@ Usage: agentcall roster key issue [options] <name>
 
 issue a one-off join key (use --reusable for a shared key)
 
+Arguments:
+  name                     local roster name
+
 Options:
   --admin-secret <secret>  admin secret (prefer AGENTCALL_ADMIN_SECRET to avoid
                            shell history)
@@ -538,6 +545,9 @@ Usage: agentcall roster key list [options] <name>
 
 list join-key metadata without revealing secrets
 
+Arguments:
+  name                     local roster name
+
 Options:
   --admin-secret <secret>  admin secret (prefer AGENTCALL_ADMIN_SECRET to avoid
                            shell history)
@@ -551,6 +561,11 @@ Options:
 Usage: agentcall roster key revoke [options] <name> <prefix>
 
 revoke one join key; --evict removes only members admitted by it
+
+Arguments:
+  name                     local roster name
+  prefix                   12-character public key prefix from `roster key
+                           list`
 
 Options:
   --admin-secret <secret>  admin secret (prefer AGENTCALL_ADMIN_SECRET to avoid
@@ -568,6 +583,9 @@ Usage: agentcall roster delete [options] <name>
 
 permanently delete a roster while retaining its relay audit events
 
+Arguments:
+  name                     local roster name
+
 Options:
   --admin-secret <secret>  admin secret (prefer AGENTCALL_ADMIN_SECRET to avoid
                            shell history)
@@ -583,6 +601,9 @@ Usage: agentcall roster forget [options] <name>
 
 drop only the local roster record; use `roster leave` to remove relay
 membership
+
+Arguments:
+  name           local roster name
 
 Options:
   --line <name>  line to forget it for (defaults to the primary line)
