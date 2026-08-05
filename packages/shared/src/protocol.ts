@@ -174,7 +174,6 @@ export const RegisterRequest = z.object({
 export const RegisterResponse = z.object({ org: z.string().regex(ORG_RE), token: z.string() });
 
 export const SHA256_HEX_RE = /^[0-9a-f]{64}$/;
-export const CREDENTIAL_PUBLIC_ID_RE = /^(?:act|agr)_[0-9a-f]{16}$/;
 export const RECOVERY_OPERATION_ID_RE = /^[A-Za-z0-9_-]{22,64}$/;
 
 export const RecoveryIssueRequest = z.object({
@@ -218,15 +217,7 @@ export const RecoveryReceipt = z.object({
 
 export type ErrorCodeType = z.infer<typeof ErrorCode>;
 export type RelayOperationalErrorCodeType = z.infer<typeof RelayOperationalErrorCode>;
-export type PeerFailureCodeType = z.infer<typeof PeerFailureCode>;
 export type CallStatusType = z.infer<typeof CallStatus>;
-export type CallAcceptedType = z.infer<typeof CallAccepted>;
-export type CallStartedType = z.infer<typeof CallStarted>;
-export type CancelCallType = z.infer<typeof CancelCall>;
-export type CallCancelledType = z.infer<typeof CallCancelled>;
-export type CallNotCancelledType = z.infer<typeof CallNotCancelled>;
-export type RegisterRequestType = z.infer<typeof RegisterRequest>;
-export type RegisterResponseType = z.infer<typeof RegisterResponse>;
 export type RecoveryIssueRequestType = z.infer<typeof RecoveryIssueRequest>;
 export type RecoveryIssueResponseType = z.infer<typeof RecoveryIssueResponse>;
 export type RecoveryStatusResponseType = z.infer<typeof RecoveryStatusResponse>;

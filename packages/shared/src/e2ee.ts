@@ -150,9 +150,7 @@ export const E2EERelayToCallerFrame = z.discriminatedUnion("type", [
 ]);
 export const E2EERelayToListenerFrame = z.union([EncryptedIncomingCall, CancelCall]);
 
-export type EncryptedCallRequestType = z.infer<typeof EncryptedCallRequest>;
 export type EncryptedIncomingCallType = z.infer<typeof EncryptedIncomingCall>;
-export type EncryptedCallOutcomeType = z.infer<typeof EncryptedCallOutcome>;
 
 export const SignedE2EERequest = z.object({ payload: E2EERequestPayload, signature: z.string().regex(BASE64URL_RE).max(256) }).strict();
 export const SignedE2EEResponse = z.object({ payload: E2EEResponsePayload, signature: z.string().regex(BASE64URL_RE).max(256) }).strict();
