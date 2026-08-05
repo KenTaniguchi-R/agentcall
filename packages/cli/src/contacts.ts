@@ -42,10 +42,10 @@ const byName = (contacts: Contact[], name: string) =>
 
 export function addContact(p: MachinePaths, name: string, address: string, note?: string): "added" | "updated" {
   if (!NAME_RE.test(name)) {
-    throw new Error(`Invalid contact name "${name}" — start with a letter or digit, then letters, digits, ".", "_", "-" (no @).`);
+    throw new Error(`Invalid contact name "${name}" — start with a letter or digit, then letters, digits, ".", "_", "-" (no @ or /).`);
   }
   if (!parseAddress(address)) {
-    throw new Error(`Invalid address: ${address} (expected handle@host)`);
+    throw new Error(`Invalid address: ${address} (expected @org/handle)`);
   }
   const file = loadContacts(p);
   const idx = byName(file.contacts, name);

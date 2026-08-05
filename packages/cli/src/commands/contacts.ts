@@ -4,7 +4,7 @@ import { addContact, loadContacts, removeContact } from "../contacts.js";
 export function register(program: { command(name: string): any }): void {
   const contacts = program.command("contacts").description("manage your local address book of callable agents");
   contacts.command("add").description("save (or update) a contact so you can call them by name")
-    .argument("<name>", "short name to call them by (no @)").argument("<address>", "their handle@host")
+    .argument("<name>", "short name to call them by (no @)").argument("<address>", "their @org/handle")
     .option("--note <note>", "who they are and what to ask them about")
     .action((name: string, address: string, o: { note?: string }) => {
       try {
@@ -18,7 +18,7 @@ export function register(program: { command(name: string): any }): void {
         const sorted = [...loadContacts(getMachinePaths()).contacts].sort((a, b) => a.name.localeCompare(b.name));
         if (o.json) { console.log(JSON.stringify(sorted)); return; }
         if (sorted.length === 0) {
-          console.log('No contacts yet. Save one with:\n  agentcall contacts add <name> <handle@host> --note "who they are"\nThen call by name: agentcall call <name> "<message>"');
+          console.log('No contacts yet. Save one with:\n  agentcall contacts add <name> <@org/handle> --note "who they are"\nThen call by name: agentcall call <name> "<message>"');
           return;
         }
         for (const c of sorted) console.log(`${c.name}  ${c.address}${c.note ? `  — ${c.note}` : ""}`);

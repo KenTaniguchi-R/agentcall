@@ -13,7 +13,7 @@ export function register(program: Command): void {
   program
     .command("call")
     .description("call another handle's agent with a message and print its reply")
-    .argument("<address>", "contact name or handle@host to call")
+    .argument("<address>", "contact name or @org/handle to call")
     .argument("<message...>", "message to send")
     .option("--json", "print the full reply envelope instead of just the text")
     .option("--task <id>", "task from the callee's card to perform (see: agentcall card <address>)")

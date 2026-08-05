@@ -42,7 +42,7 @@ export function registerCard(program: Command): void {
   program
     .command("card")
     .description("show your own card with problems, another agent's menu, or publish yours (push)")
-    .argument("[target]", "contact name or handle@host to fetch, 'push' to publish, or omit to review your own card")
+    .argument("[target]", "contact name or @org/handle to fetch, 'push' to publish, or omit to review your own card")
     .option("--line <name>", "line to use (defaults to the primary line)")
     .action(async (target: string | undefined, o: { line?: string }) => {
       const machine = getMachinePaths();

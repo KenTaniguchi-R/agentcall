@@ -9,7 +9,7 @@ export function register(program: { command(name: string): any }): void {
   program
     .command("verify")
     .description("fetch and verify a peer's pinned identity fingerprint")
-    .argument("<address>", "contact name or handle@host to verify")
+    .argument("<address>", "contact name or @org/handle to verify")
     .option("--as <line>", "line whose relay credentials to use")
     .action(async (address: string, o: { as?: string }) => {
       const machine = getMachinePaths();

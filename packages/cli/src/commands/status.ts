@@ -9,7 +9,7 @@ export function register(program: { command(name: string): any }): void {
   program
     .command("status")
     .description("check whether a handle's agent is currently online")
-    .argument("<address>", "contact name or handle@host to check")
+    .argument("<address>", "contact name or @org/handle to check")
     .option("--as <line>", "line to check from (defaults to the primary line on the destination's relay)")
     .action(async (address: string, o: { as?: string }) => {
       const machine = getMachinePaths();

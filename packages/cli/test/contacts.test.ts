@@ -51,7 +51,7 @@ describe("contacts store", () => {
     const p = getMachinePaths(tempHome());
     expect(() => addContact(p, "ken@home", "@acme/ken")).toThrow(/Invalid contact name/);
     expect(() => addContact(p, "-ken", "@acme/ken")).toThrow(/Invalid contact name/);
-    expect(() => addContact(p, "ken", "not-an-address")).toThrow(/handle@host/);
+    expect(() => addContact(p, "ken", "not-an-address")).toThrow(/@org\/handle/);
     expect(loadContacts(p)).toEqual({ contacts: [] });
   });
 
