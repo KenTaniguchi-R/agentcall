@@ -13,7 +13,7 @@ export function register(program: Command): void {
   program
     .command("call")
     .description("call another handle's agent with a message and print its reply")
-    .argument("<address>", "contact name or handle@host to call")
+    .argument("<address>", "contact name or @org/handle to call")
     .argument("<message...>", "message to send")
     .option("--json", "print the full reply envelope instead of just the text")
     .option("--task <id>", "task from the callee's card to perform (see: agentcall card <address>)")
@@ -35,7 +35,7 @@ export function register(program: Command): void {
       }
       let ctx: LineContext;
       try {
-        ctx = pickOutboundLine(machine, `https://${firstPass.host}`, { as: o.as });
+        ctx = pickOutboundLine(machine, firstPass.org, { as: o.as });
       } catch (e) {
         console.error(String(e instanceof Error ? e.message : e));
         process.exitCode = 1;
@@ -48,7 +48,6 @@ export function register(program: Command): void {
         process.exitCode = 1;
         return;
       }
-      if (parsed.warning) console.error(parsed.warning);
       const message = messageParts.join(" ");
       let contextId = o.context;
       let task = o.task;

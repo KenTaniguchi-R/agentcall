@@ -14,7 +14,7 @@ export function execVerb(
 ): { policy: Policy; lines: string[] } {
   const requireHandle = (h: string) => {
     if (!HANDLE_RE.test(h)) {
-      throw new Error(`"${h}" is not a valid handle. Use the bare handle (e.g. ken), not handle@host.`);
+      throw new Error(`"${h}" is not a valid handle. Use the bare handle (e.g. ken), not @org/handle.`);
     }
     return h;
   };

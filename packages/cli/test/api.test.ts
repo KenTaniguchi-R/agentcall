@@ -72,8 +72,8 @@ function serveCapturing(status: number, body: unknown, captured: unknown[]): Pro
 
 describe("api client", () => {
   it("registers", async () => {
-    const relay = await serve(200, { org: "acme", token: "tok", address: "ken@acme.agentcall.benree.tech" });
-    expect(await registerHandle(relay, "valid-invite", "ken", "claude")).toEqual({ org: "acme", token: "tok", address: "ken@acme.agentcall.benree.tech" });
+    const relay = await serve(200, { org: "acme", token: "tok" });
+    expect(await registerHandle(relay, "valid-invite", "ken", "claude")).toEqual({ org: "acme", token: "tok" });
   });
   it("rejects a malformed handle locally, without hitting the relay", async () => {
     // Point at a port nothing is listening on: if validation didn't run
@@ -197,8 +197,8 @@ describe("api client", () => {
 
   it("registers caller-only: omits agent_kind from the request body entirely", async () => {
     const captured: unknown[] = [];
-    const relay = await serveCapturing(200, { org: "acme", token: "tok", address: "solo@acme.agentcall.benree.tech" }, captured);
-    expect(await registerHandle(relay, "valid-invite", "solo")).toEqual({ org: "acme", token: "tok", address: "solo@acme.agentcall.benree.tech" });
+    const relay = await serveCapturing(200, { org: "acme", token: "tok" }, captured);
+    expect(await registerHandle(relay, "valid-invite", "solo")).toEqual({ org: "acme", token: "tok" });
     expect(captured).toEqual([{ invite: "valid-invite", handle: "solo" }]);
   });
   it("creates an invite with tenant credentials", async () => {
@@ -469,10 +469,14 @@ async function previousTranscriptHash(record: EncryptionKeyRecordType): Promise<
 async function buildValidKeysResponse(
   keys: StoredKeys, address: string,
 ): Promise<{ identity: IdentityRecordType; encryption: { record: EncryptionKeyRecordType; signature: string } }> {
-  const identity: IdentityRecordType = { v: 1, address, identity_pub: keys.identity_pub };
+  const identity: IdentityRecordType = {
+    v: 1, relay_origin: "relay.test", address,
+    identity_pub: keys.identity_pub,
+  };
   const now = 1_754_000_000_000;
   const record: EncryptionKeyRecordType = {
     v: 1,
+    relay_origin: "relay.test",
     address,
     key_id: await keyIdFor(keys.encryption_pub),
     suite: HPKE_SUITE,
@@ -506,11 +510,11 @@ describe("key publication", () => {
       });
       vi.stubGlobal("fetch", fetchMock);
 
-      await publishIdentityKey("https://relay.test", auth, keys, "relay.test");
+      await publishIdentityKey("https://relay.test", auth, keys);
 
       expect(seen?.url).toBe("https://relay.test/v1/keys/identity");
       const body = JSON.parse(seen!.body) as { record: IdentityRecordType; signature: string };
-      expect(body.record.address).toBe("ken@relay.test");
+      expect(body.record.address).toBe("@acme/ken");
       expect(body.record.identity_pub).toBe(keys.identity_pub);
 
       // The record must be self-signed by the very key it publishes — that is
@@ -538,7 +542,7 @@ describe("key publication", () => {
         return new Response(JSON.stringify({ ok: true }), { status: 200 });
       }));
 
-      await publishEncryptionKey("https://relay.test", auth, linePaths(home), "relay.test", 1_754_000_000_000);
+      await publishEncryptionKey("https://relay.test", auth, linePaths(home), 1_754_000_000_000);
 
       const body = JSON.parse(seen!) as { record: EncryptionKeyRecordType; signature: string };
       expect(body.record.epoch).toBe(keys.epoch);
@@ -574,11 +578,11 @@ describe("key publication", () => {
         return new Response(JSON.stringify({ ok: true }), { status: 200 });
       }));
 
-      await publishEncryptionKey("https://relay.test", auth, paths, "relay.test", 1_754_000_000_000);
+      await publishEncryptionKey("https://relay.test", auth, paths, 1_754_000_000_000);
       keys = await rotateEncryptionKey(paths);
-      await publishEncryptionKey("https://relay.test", auth, paths, "relay.test", 1_754_001_000_000);
+      await publishEncryptionKey("https://relay.test", auth, paths, 1_754_001_000_000);
       keys = await rotateEncryptionKey(paths);
-      await publishEncryptionKey("https://relay.test", auth, paths, "relay.test", 1_754_002_000_000);
+      await publishEncryptionKey("https://relay.test", auth, paths, 1_754_002_000_000);
 
       const records = publications.map(({ record }) => record);
       expect(records.map((record) => record.epoch)).toEqual([1, 2, 3]);
@@ -608,7 +612,7 @@ describe("key publication", () => {
       await generateIdentityKeys(paths);
       vi.stubGlobal("fetch", vi.fn(async () => new Response("{}", { status: 503 })));
       await expect(publishEncryptionKey(
-        "https://relay.test", auth, paths, "relay.test", 1_754_000_000_000,
+        "https://relay.test", auth, paths, 1_754_000_000_000,
       )).rejects.toThrow(/could not publish/i);
       await expect(rotateEncryptionKey(paths)).rejects.toThrow(/not been published/i);
     } finally {
@@ -631,14 +635,14 @@ describe("key publication", () => {
       }));
 
       await expect(publishEncryptionKey(
-        "https://relay.test", auth, paths, "relay.test", 1_754_000_000_000,
+        "https://relay.test", auth, paths, 1_754_000_000_000,
       )).rejects.toMatchObject({ code: "network" });
       expect(loadPendingEncryptionPublication(paths)).toBeDefined();
 
       // A different `now` proves retry reuses persisted signed bytes rather
       // than constructing a conflicting record at the same epoch.
       await publishEncryptionKey(
-        "https://relay.test", auth, paths, "relay.test", 1_755_000_000_000,
+        "https://relay.test", auth, paths, 1_755_000_000_000,
       );
       expect(bodies[1]).toBe(bodies[0]);
       expect(loadPendingEncryptionPublication(paths)).toBeDefined();
@@ -672,8 +676,8 @@ describe("key publication", () => {
       }));
 
       const results = await Promise.allSettled([
-        publishEncryptionKey("https://relay.test", auth, paths, "relay.test", 1_754_000_000_000),
-        publishEncryptionKey("https://relay.test", auth, paths, "relay.test", 1_755_000_000_000),
+        publishEncryptionKey("https://relay.test", auth, paths, 1_754_000_000_000),
+        publishEncryptionKey("https://relay.test", auth, paths, 1_755_000_000_000),
       ]);
 
       expect(results.map(({ status }) => status).sort()).toEqual(["fulfilled", "rejected"]);
@@ -710,17 +714,17 @@ describe("key publication", () => {
       }));
 
       const oldPublisher = publishEncryptionKey(
-        "https://relay.test", auth, paths, "relay.test", 1_754_000_000_000,
+        "https://relay.test", auth, paths, 1_754_000_000_000,
       );
       await started;
       // An exact concurrent publisher receives the acknowledgement and records
       // epoch 1 while the first process remains paused after its PUT.
       await publishEncryptionKey(
-        "https://relay.test", auth, paths, "relay.test", 1_755_000_000_000,
+        "https://relay.test", auth, paths, 1_755_000_000_000,
       );
       const second = await rotateEncryptionKey(paths);
       await publishEncryptionKey(
-        "https://relay.test", auth, paths, "relay.test", 1_756_000_000_000,
+        "https://relay.test", auth, paths, 1_756_000_000_000,
       );
       const third = await rotateEncryptionKey(paths);
       expect(second.epoch).toBe(2);
@@ -749,7 +753,7 @@ describe("key publication", () => {
     const home = mkdtempSync(join(tmpdir(), "agentcall-api-"));
     try {
       const keys = await generateIdentityKeys(linePaths(home));
-      const response = await buildValidKeysResponse(keys, "ken@relay.test");
+      const response = await buildValidKeysResponse(keys, "@acme/ken");
       vi.stubGlobal("fetch", vi.fn(async () => new Response(JSON.stringify(response), { status: 200 })));
 
       const result = await fetchKeys("https://relay.test", auth, "ken");
@@ -767,7 +771,7 @@ describe("key publication", () => {
     const home = mkdtempSync(join(tmpdir(), "agentcall-api-"));
     try {
       const keys = await generateIdentityKeys(linePaths(home));
-      const response = await buildValidKeysResponse(keys, "ken@relay.test");
+      const response = await buildValidKeysResponse(keys, "@acme/ken");
       const brokenIdentity: Record<string, unknown> = { ...response.identity };
       delete brokenIdentity.identity_pub;
       const malformed = { ...response, identity: brokenIdentity };
@@ -784,7 +788,7 @@ describe("key publication", () => {
     const home = mkdtempSync(join(tmpdir(), "agentcall-api-"));
     try {
       const keys = await generateIdentityKeys(linePaths(home));
-      const response = await buildValidKeysResponse(keys, "ken@relay.test");
+      const response = await buildValidKeysResponse(keys, "@acme/ken");
       const malformed = {
         ...response,
         encryption: { ...response.encryption, record: { ...response.encryption.record, key_id: "not-32-hex-chars" } },
@@ -806,7 +810,7 @@ describe("key publication", () => {
     const home = mkdtempSync(join(tmpdir(), "agentcall-api-"));
     try {
       const keys = await generateIdentityKeys(linePaths(home));
-      const response = await buildValidKeysResponse(keys, "sarah@relay.test");
+      const response = await buildValidKeysResponse(keys, "@acme/sarah");
       vi.stubGlobal("fetch", vi.fn(async () => new Response(JSON.stringify(response), { status: 200 })));
 
       await expect(fetchKeys("https://relay.test", auth, "ken")).rejects.toMatchObject({ code: "invalid" });
@@ -823,8 +827,8 @@ describe("key publication", () => {
     const home = mkdtempSync(join(tmpdir(), "agentcall-api-"));
     try {
       const keys = await generateIdentityKeys(linePaths(home));
-      const response = await buildValidKeysResponse(keys, "ken@relay.test");
-      const other = await buildValidKeysResponse(keys, "sarah@relay.test");
+      const response = await buildValidKeysResponse(keys, "@acme/ken");
+      const other = await buildValidKeysResponse(keys, "@acme/sarah");
       const mixed = { identity: response.identity, encryption: other.encryption };
       vi.stubGlobal("fetch", vi.fn(async () => new Response(JSON.stringify(mixed), { status: 200 })));
 
@@ -839,7 +843,7 @@ describe("key publication", () => {
     const home = mkdtempSync(join(tmpdir(), "agentcall-api-"));
     try {
       const keys = await generateIdentityKeys(linePaths(home));
-      const response = await buildValidKeysResponse(keys, "ken@relay.test");
+      const response = await buildValidKeysResponse(keys, "@acme/ken");
       const malformed = { ...response, encryption: { ...response.encryption, signature: 12345 } };
       vi.stubGlobal("fetch", vi.fn(async () => new Response(JSON.stringify(malformed), { status: 200 })));
 

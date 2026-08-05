@@ -18,21 +18,24 @@ export function host(relay: string): string {
 // (callClient.ts:36), so "one identity outbound" can only mean one identity
 // per relay. With every line on the same relay — the common case — this is
 // always the primary and the user never sees it.
+// Selects by organization, not by relay host. The address used to name a relay
+// and this matched against it; an address is a registry key now and names an
+// org instead. That is the rule this was always approximating — a line may only
+// call inside its own organization, so the relay host was a proxy for the org.
 export function pickOutboundLine(
-  m: MachinePaths, destinationRelay: string, opts: { as?: string } = {},
+  m: MachinePaths, want: string, opts: { as?: string } = {},
 ): LineContext {
   const lines = readyLines(m);
-  const want = host(destinationRelay);
 
   if (opts.as !== undefined && opts.as !== "") {
     const chosen = lines.find((l) => l.name === opts.as);
     if (!chosen) {
       throw new Error(`No line named "${opts.as}". This machine has: ${lines.map((l) => l.name).join(", ") || "none"}.`);
     }
-    if (host(chosen.config.relay) !== want) {
+    if (chosen.config.org !== want) {
       throw new Error(
-        `Line "${opts.as}" is registered on ${host(chosen.config.relay)}, but that address is on ${want}. ` +
-          `A line can only call within its own relay.`,
+        `Line "${opts.as}" belongs to organization "${chosen.config.org}", but that address is in "${want}". ` +
+          `A line can only call within its own organization.`,
       );
     }
     return { machine: m, ...chosen };
@@ -46,11 +49,11 @@ export function pickOutboundLine(
   if (lines.length === 0) {
     throw new Error("No agentcall config found. Run `agentcall setup` first.");
   }
-  const candidates = lines.filter((l) => host(l.config.relay) === want);
+  const candidates = lines.filter((l) => l.config.org === want);
   if (candidates.length === 0) {
-    const relays = [...new Set(lines.map((l) => host(l.config.relay)))];
+    const orgs = [...new Set(lines.map((l) => l.config.org))];
     throw new Error(
-      `No line on ${want}. This machine has lines on: ${relays.join(", ") || "no relays"}. ` +
+      `No line in organization "${want}". This machine has lines in: ${orgs.join(", ") || "no organizations"}. ` +
         `Add one with \`agentcall line add <name> --relay <url>\`.`,
     );
   }
@@ -66,7 +69,7 @@ export function pickOutboundLine(
   if (chosen) return { machine: m, ...chosen };
 
   throw new Error(
-    `Several lines can call ${want} (${candidates.map((l) => l.name).join(", ")}) and the primary is not among them. ` +
+    `Several lines can call into "${want}" (${candidates.map((l) => l.name).join(", ")}) and the primary is not among them. ` +
       `Pick one with --as <line>.`,
   );
 }

@@ -1,4 +1,4 @@
-import { HOSTED_RELAY_HOST, ORG_RE, type OrgRoleType } from "@benree/agentcall-shared";
+import { ORG_RE, type OrgRoleType } from "@benree/agentcall-shared";
 import { authenticatedHandle } from "./auth.js";
 
 type RequestLike = { header(name: string): string | undefined; url: string };
@@ -28,13 +28,12 @@ export function requestOrg(req: RequestLike, mode?: string, configuredOrg?: stri
     return configuredOrg;
   }
   if (mode !== "hosted" || configuredOrg !== undefined) return "";
-  if (ORG_RE.test(header)) return header;
-
-  const host = new URL(req.url).hostname;
-  const suffix = `.${HOSTED_RELAY_HOST}`;
-  if (!host.endsWith(suffix)) return "";
-  const org = host.slice(0, -suffix.length);
-  return ORG_RE.test(org) ? org : "";
+  // Header only. The hostname used to be a fallback source of the org, which
+  // made the tenant boundary depend on two things that could disagree; the
+  // credential settles it either way, because `authenticatedHandle` scopes its
+  // lookup by (org, handle) and a token from one org cannot authenticate
+  // against another. One source, and it is the one that is actually proven.
+  return ORG_RE.test(header) ? header : "";
 }
 
 export async function authenticateRequest(
@@ -67,9 +66,3 @@ export function identityObjectName(identity: { org: string; agentId: string }): 
   return `${identity.org}:${identity.agentId}`;
 }
 
-export function registrationAddressHost(org: string, requestUrl: string): string {
-  const host = new URL(requestUrl).hostname;
-  return host === HOSTED_RELAY_HOST || host.endsWith(`.${HOSTED_RELAY_HOST}`)
-    ? `${org}.${HOSTED_RELAY_HOST}`
-    : host;
-}

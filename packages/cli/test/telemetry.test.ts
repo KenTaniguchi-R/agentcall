@@ -22,7 +22,7 @@ import { tempDir } from "./helpers.js";
 
 const encryptedRequest = {
   v: 1 as const, direction: "request" as const, relay_origin: "relay.example",
-  from: "caller@relay.example", to: "callee@relay.example", key_id: "a".repeat(32),
+  from: "@acme/caller", to: "@acme/callee", key_id: "a".repeat(32),
   epoch: 1, enc: "A", ct: "B",
 };
 

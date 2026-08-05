@@ -4,7 +4,7 @@ import {
   ListOrgInvitesResponse, ListRosterJoinKeysResponse, RegisterResponse, RevokeOrgInviteResponse,
   RecoveryIssueResponse, RecoveryReceipt, RecoveryStatusResponse,
   RevokeRosterJoinKeyResponse, RosterBundle,
-  EncryptionKeyRecord, IdentityRecord, HPKE_SUITE, MAX_ENCRYPTION_KEY_VALIDITY_MS,
+  EncryptionKeyRecord, formatAddress, IdentityRecord, HPKE_SUITE, MAX_ENCRYPTION_KEY_VALIDITY_MS, parseAddress,
   encryptionKeyTranscript, encryptionKeyTranscriptHash, fromBase64Url, identityTranscript, keyIdFor, signTranscript,
   // AgentKind is ours: registerHandle takes it, and it is the shared type that
   // replaced the inline "claude" | "codex" unions.
@@ -113,7 +113,7 @@ const relayError = (message: string, code: ApiError["code"] = "network"): RelayE
 
 export async function registerHandle(
   relay: string, invite: string, handle: string, agentKind?: AgentKind, opts: { timeoutMs?: number } = {},
-): Promise<{ org: string; token: string; address: string }> {
+): Promise<{ org: string; token: string }> {
   if (!invite) throw new ApiError("An organization invite is required.", "invite_invalid");
   assertValidHandle(handle);
   return relayCall({ relay, path: "/v1/register", method: "POST",
@@ -383,10 +383,14 @@ async function importIdentityPrivateKey(pkcs8B64url: string): Promise<CryptoKey>
 }
 
 export async function publishIdentityKey(
-  relay: string, auth: Auth, keys: StoredKeys, host: string,
+  relay: string, auth: Auth, keys: StoredKeys,
 ): Promise<void> {
   const record: IdentityRecordType = IdentityRecord.parse({
-    v: 1, address: `${auth.handle}@${host}`, identity_pub: keys.identity_pub,
+    // Both bindings are derived, never passed in pre-composed: the address is
+    // a registry key over (org, handle), and the relay origin is the endpoint.
+    v: 1, relay_origin: new URL(relay).hostname,
+    address: formatAddress(auth.org, auth.handle),
+    identity_pub: keys.identity_pub,
   });
   // Self-signed: the record is signed by the very key it publishes. The relay
   // has no way to check an identity key against anything else, so possession of
@@ -401,7 +405,7 @@ export async function publishIdentityKey(
 }
 
 export async function publishEncryptionKey(
-  relay: string, auth: Auth, paths: LinePaths, host: string, now: number = Date.now(),
+  relay: string, auth: Auth, paths: LinePaths, now: number = Date.now(),
 ): Promise<void> {
   let keys = loadKeys(paths);
   let publication = loadPendingEncryptionPublication(paths, keys);
@@ -419,7 +423,8 @@ export async function publishEncryptionKey(
     const pub = keys.encryption_pub;
     const record: EncryptionKeyRecordType = EncryptionKeyRecord.parse({
       v: 1,
-      address: `${auth.handle}@${host}`,
+      relay_origin: new URL(relay).hostname,
+      address: formatAddress(auth.org, auth.handle),
       key_id: await keyIdFor(pub),
       suite: HPKE_SUITE,
       pub,
@@ -479,9 +484,13 @@ export async function fetchKeys(
       "invalid",
     );
   }
-  if (identity.data.address.split("@")[0] !== handle) {
+  // Was `address.split("@")[0]`, which only worked while an address was
+  // `handle@host`. Parsing it also binds the organization, so a relay cannot
+  // answer with a same-named handle from another tenant.
+  const served = parseAddress(identity.data.address);
+  if (!served || served.handle !== handle || served.org !== auth.org) {
     throw new ApiError(
-      `The relay returned keys for ${identity.data.address} when asked for ${handle}.`,
+      `The relay returned keys for ${identity.data.address} when asked for ${formatAddress(auth.org, handle)}.`,
       "invalid",
     );
   }

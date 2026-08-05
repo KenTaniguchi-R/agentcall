@@ -1,5 +1,5 @@
 import type { Command } from "commander";
-import { addressHost, relayUrl } from "../config.js";
+import { relayUrl } from "../config.js";
 import { loadMemberships } from "../rosters.js";
 import { refreshRoster } from "../search-refresh.js";
 import { allRostersFailed, DEFAULT_SEARCH_LIMIT, rank, renderResults, sanitize, toEntries, type RosterStatus, type SearchEntry } from "../search.js";
@@ -37,13 +37,12 @@ export function register(program: Command, lineFor: LineResolver): void {
         return;
       }
 
-      const host = addressHost(cfg);
       const entries: SearchEntry[] = [];
       const statuses: RosterStatus[] = [];
       for (const m of memberships) {
         try {
           const out = await refreshRoster(ctx.paths, m.name, m.roster_id, identity, { org: cfg.org, handle: cfg.handle, token: cfg.token }, { offline: o.offline });
-          entries.push(...toEntries(m.name, host, out.entries));
+          entries.push(...toEntries(m.name, cfg.org, out.entries));
           statuses.push({ name: m.name, ageSeconds: out.ageSeconds, stale: out.stale });
         } catch (e) {
           console.error(`${m.name}: ${e instanceof Error ? e.message : String(e)}`);

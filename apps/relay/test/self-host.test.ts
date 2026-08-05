@@ -34,8 +34,11 @@ describe("single-organization self-host boundary", () => {
     expect(deploymentOrgAllows("self-hosted", "Not Valid", "Not Valid")).toBe(false);
   });
 
-  it("preserves hosted tenant-subdomain routing when self-host mode is absent", () => {
-    expect(requestOrg(requestLike("acme.agentcall.benree.tech"), "hosted")).toBe("acme");
+  // Was: a hosted request derives its org from the tenant subdomain. That
+  // fallback is deleted — the org comes only from the credential path, so a
+  // hostname that names a tenant and carries no org header resolves to nothing.
+  it("no longer derives the org from a tenant subdomain", () => {
+    expect(requestOrg(requestLike("acme.agentcall.benree.tech"), "hosted")).toBe("");
     expect(requestOrg(requestLike("relay.example.com"), "hosted")).toBe("");
   });
 
@@ -58,9 +61,11 @@ describe("single-organization self-host boundary", () => {
       headers: { "content-type": "application/json", "cf-connecting-ip": "203.0.113.231" },
       body: JSON.stringify({ invite, handle: "customer-user" }),
     }, selfHostEnv("acme"));
-    const body = await registered.json<{ token: string; address: string }>();
+    const body = await registered.json<{ org: string; token: string }>();
     expect(registered.status).toBe(200);
-    expect(body.address).toBe("customer-user@agents.acme.example");
+    // Self-hosted or hosted, the org is the same value and the address is
+    // rendered from it: the customer hostname does not appear.
+    expect(body.org).toBe("acme");
 
     const firstRotation = await app.request("https://agents.acme.example/v1/token/rotate", {
       method: "POST", headers: wsAuth("customer-user", body.token, "acme"),

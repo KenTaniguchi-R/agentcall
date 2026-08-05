@@ -442,7 +442,7 @@ describe("A2A task store", () => {
       `/v1/ws?role=call&to=${callee}`,
       wsAuth(caller, alphaCallerToken, "alpha-org"),
     );
-    socket.send(JSON.stringify(encryptedCallRequest(caller, callee)));
+    socket.send(JSON.stringify(encryptedCallRequest(caller, callee, { org: "alpha-org" })));
     const ringing = await nextFrame(socket);
     await nextFrame(listener);
 

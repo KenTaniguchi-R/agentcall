@@ -9,7 +9,7 @@ import { mountPresence } from "./presence.js";
 import { mountRoster } from "./roster.js";
 import { generateToken, sha256Hex } from "./auth.js";
 import { generateAgentId, resolveAgentId } from "./identity.js";
-import { deploymentOrgAllows, identityObjectName, registrationAddressHost,
+import { deploymentOrgAllows, identityObjectName,
   type DeploymentMode } from "./tenant.js";
 import { sharedRosterIds } from "./groups.js";
 import { checkLimit, NATIVE_CARD, NATIVE_READ, REGISTER, type RateLimitEnv } from "./ratelimit/index.js";
@@ -124,7 +124,7 @@ app.post("/v1/register", async (c) => {
       { "Retry-After": "5" },
     );
   }
-  return c.json({ org, token, address: `${handle}@${registrationAddressHost(org, c.req.url)}` });
+  return c.json({ org, token });
 });
 
 // Until this existed, a leaked token was permanent: register was the only
@@ -239,7 +239,7 @@ app.get("/v1/ws", async (c) => {
   fwd.headers.set("X-Verified-Org", org);
   fwd.headers.set("X-Verified-Target", target);
   fwd.headers.set("X-Verified-Credential-Generation", String(identity.recoveryGeneration));
-  fwd.headers.set("X-Verified-Relay-Origin", registrationAddressHost(org, c.req.url));
+  fwd.headers.set("X-Verified-Relay-Origin", new URL(c.req.url).hostname);
   fwd.headers.set("X-Verified-Groups", JSON.stringify(groups));
   fwd.headers.set("X-Verified-Actor-IP", c.req.header("cf-connecting-ip") ?? "");
   const country = c.req.raw.cf?.country;

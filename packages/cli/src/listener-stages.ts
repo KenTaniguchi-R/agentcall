@@ -6,8 +6,8 @@
 // handler for the sequencing: envelope opened and peer verified BEFORE
 // policy resolution; policy resolved BEFORE any agent spawn.
 import type { AgentKind, E2EEOutcomeType, E2EEResponsePayloadType, E2EERequestPayloadType } from "@benree/agentcall-shared";
-import { keyIdFor } from "@benree/agentcall-shared";
-import { relayAddressHost, type Workdir } from "./config.js";
+import { formatAddress, keyIdFor } from "@benree/agentcall-shared";
+import { relayHostOf, type Workdir } from "./config.js";
 import { openE2EERequest, sealE2EEResponse } from "./e2ee.js";
 import { fetchKeys } from "./api.js";
 import { verifyAndPinPeer, type KnownPeer } from "./known-peers.js";
@@ -80,9 +80,9 @@ export async function openInboundEnvelope(
   },
   io: OpenEnvelopeIo,
 ): Promise<OpenEnvelopeResult> {
-  const relayOrigin = relayAddressHost(input.relay, input.org);
-  const fromAddress = `${input.from}@${relayOrigin}`;
-  const toAddress = `${input.handle}@${relayOrigin}`;
+  const relayOrigin = relayHostOf(input.relay);
+  const fromAddress = formatAddress(input.org, input.from);
+  const toAddress = formatAddress(input.org, input.handle);
   try {
     const callerBundle = await io.fetchKeys(
       input.relay, { org: input.org, handle: input.handle, token: input.token }, input.from,

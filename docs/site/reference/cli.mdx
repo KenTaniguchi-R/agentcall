@@ -181,7 +181,7 @@ Usage: agentcall call [options] <address> <message...>
 call another handle's agent with a message and print its reply
 
 Arguments:
-  address         contact name or handle@host to call
+  address         contact name or @org/handle to call
   message         message to send
 
 Options:
@@ -203,7 +203,7 @@ Usage: agentcall status [options] <address>
 check whether a handle's agent is currently online
 
 Arguments:
-  address      contact name or handle@host to check
+  address      contact name or @org/handle to check
 
 Options:
   --as <line>  line to check from (defaults to the primary line on the
@@ -219,7 +219,7 @@ Usage: agentcall verify [options] <address>
 fetch and verify a peer's pinned identity fingerprint
 
 Arguments:
-  address      contact name or handle@host to verify
+  address      contact name or @org/handle to verify
 
 Options:
   --as <line>  line whose relay credentials to use
@@ -325,7 +325,7 @@ Usage: agentcall card [options] [target]
 show your own card with problems, another agent's menu, or publish yours (push)
 
 Arguments:
-  target         contact name or handle@host to fetch, 'push' to publish, or
+  target         contact name or @org/handle to fetch, 'push' to publish, or
                  omit to review your own card
 
 Options:
@@ -361,7 +361,7 @@ save (or update) a contact so you can call them by name
 
 Arguments:
   name           short name to call them by (no @)
-  address        their handle@host
+  address        their @org/handle
 
 Options:
   --note <note>  who they are and what to ask them about

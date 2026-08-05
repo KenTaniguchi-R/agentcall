@@ -2,7 +2,7 @@ import { describe, expect, it } from "vitest";
 import {
   E2EECallerFrame, E2EEListenerToRelayFrame, E2EERelayToCallerFrame, E2EERelayToListenerFrame,
   E2EERequestPayload, E2EEOutcome,
-  HANDLE_RE, MAX_MESSAGE_BYTES, parseAddress, safeParseFrame,
+  formatAddress, HANDLE_RE, MAX_MESSAGE_BYTES, parseAddress, safeParseFrame,
   RegisterRequest, MAX_DETAIL_LENGTH, sanitizeDetail, sanitizeTerminalOutput,
   sanitizeTerminalCell, stringifyTerminalSafeJson,
   CallAccepted, CallStarted, CancelCall, CallCancelled, CallNotCancelled,
@@ -16,13 +16,13 @@ import {
 
 const requestEnvelope = {
   v: 1 as const, direction: "request" as const, relay_origin: "relay.test",
-  from: "alice@relay.test", to: "ken@relay.test", key_id: "a".repeat(32),
+  from: "@acme/alice", to: "@acme/ken", key_id: "a".repeat(32),
   epoch: 1, enc: "A", ct: "B",
 };
 
 const innerRequest = {
   v: 1 as const, direction: "request" as const, relay_origin: "relay.test",
-  from: "alice@relay.test", to: "ken@relay.test", request_id: "1".repeat(32),
+  from: "@acme/alice", to: "@acme/ken", request_id: "1".repeat(32),
   sender_identity_key_id: "2".repeat(32), recipient_encryption_key_id: "3".repeat(32),
   recipient_epoch: 1, issued_at: 1, expires_at: 2, message: "hi",
 };
@@ -78,14 +78,49 @@ describe("task id bounds", () => {
   });
 });
 
-describe("parseAddress", () => {
-  it("splits handle@host", () => {
-    expect(parseAddress("ken@agentcall.benree.tech")).toEqual({ handle: "ken", host: "agentcall.benree.tech" });
+describe("address grammar", () => {
+  it("splits @org/handle", () => {
+    expect(parseAddress("@acme/ken")).toEqual({ org: "acme", handle: "ken" });
   });
+
+  it("round-trips through formatAddress", () => {
+    expect(parseAddress(formatAddress("acme", "ken"))).toEqual({ org: "acme", handle: "ken" });
+    expect(formatAddress("acme", "ken")).toBe("@acme/ken");
+  });
+
+  // The whole point of the format: an address is a registry key, so nothing
+  // that looks like a host may parse. A DNS-shaped address promises resolution
+  // this system does not implement.
+  it("rejects every host-shaped form", () => {
+    expect(parseAddress("ken@agentcall.benree.tech")).toBeNull();
+    expect(parseAddress("ken@acme.agentcall.agent-call.app")).toBeNull();
+    expect(parseAddress("ken@acme")).toBeNull();
+    expect(parseAddress("@acme.corp/ken")).toBeNull();
+    expect(parseAddress("@acme/ken.tech")).toBeNull();
+  });
+
   it("rejects garbage", () => {
     expect(parseAddress("ken")).toBeNull();
-    expect(parseAddress("KEN@x.y")).toBeNull();
-    expect(parseAddress("ken@")).toBeNull();
+    expect(parseAddress("@acme/")).toBeNull();
+    expect(parseAddress("@/ken")).toBeNull();
+    expect(parseAddress("acme/ken")).toBeNull();
+    expect(parseAddress("@ACME/ken")).toBeNull();
+    expect(parseAddress("@acme/KEN")).toBeNull();
+    expect(parseAddress("@acme/ken/extra")).toBeNull();
+    expect(parseAddress("")).toBeNull();
+  });
+
+  // Leading and trailing whitespace is the paste hazard: addresses are copied
+  // out of chat and docs. Reject rather than trim, so a mis-scoped address can
+  // never be silently normalised into a valid one.
+  it("rejects surrounding whitespace rather than trimming", () => {
+    expect(parseAddress(" @acme/ken")).toBeNull();
+    expect(parseAddress("@acme/ken ")).toBeNull();
+  });
+
+  it("enforces the org length cap so the address stays short", () => {
+    expect(parseAddress(`@${"a".repeat(20)}/ken`)).not.toBeNull();
+    expect(parseAddress(`@${"a".repeat(21)}/ken`)).toBeNull();
   });
 });
 

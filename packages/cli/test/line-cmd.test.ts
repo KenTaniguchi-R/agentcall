@@ -39,7 +39,7 @@ beforeEach(() => {
   mkdirSync(m.linesDir, { recursive: true });
 });
 
-const ok = async () => ({ org: "acme", token: "tok", address: "ken-cdx@r.example" });
+const ok = async () => ({ org: "acme", token: "tok" });
 const base = { org: "acme", handle: "ken", token: "t", relay: "https://r.example", agent_kind: "claude" as const };
 
 // listenerPathDirs (addLine's/removeLine's extraPathDirs default — see
@@ -64,20 +64,23 @@ function removeLine(m: MachinePaths, name: string, opts: RemoveLineOpts = {}): v
 }
 
 describe("addLine", () => {
-  it("publishes through the canonical organization-qualified public address", async () => {
+  // Was: asserts both helpers receive the org-prefixed address host. The host
+  // is no longer part of an address, so the invariant that remains is that both
+  // publish against the same relay for the same line.
+  it("publishes identity and encryption against the same relay", async () => {
     const paths = getLinePaths(m, "caller");
     const keys = await generateIdentityKeys(paths);
-    const hosts: string[] = [];
+    const relays: string[] = [];
     await publishStoredKeys(
       { org: "acme", handle: "ken", token: "t", relay: "https://agentcall.benree.tech" },
       keys,
       paths,
       {
-        identity: async (_relay, _auth, _keys, relayHost) => { hosts.push(relayHost); },
-        encryption: async (_relay, _auth, _paths, relayHost) => { hosts.push(relayHost); },
+        identity: async (relay) => { relays.push(relay); },
+        encryption: async (relay) => { relays.push(relay); },
       },
     );
-    expect(hosts).toEqual(["acme.agentcall.benree.tech", "acme.agentcall.benree.tech"]);
+    expect(relays).toEqual(["https://agentcall.benree.tech", "https://agentcall.benree.tech"]);
   });
   it("persists identity keys before registration and config immediately after", async () => {
     let keysExistedAtRegistration = false;
@@ -142,7 +145,7 @@ describe("addLine", () => {
   it("rejects an invalid line name before registering", async () => {
     let called = false;
     await expect(addLine(m, { name: "../evil", handle: "x", agent: "codex", relay: "https://r.example",
-      register: async () => { called = true; return { org: "acme", token: "t", address: "a" }; },
+      register: async () => { called = true; return { org: "acme", token: "t" }; },
       installListenerServiceFn: () => {}, publishCardFn: async () => undefined, verify: false }))
       .rejects.toThrow(/line name/i);
     expect(called).toBe(false);
@@ -152,7 +155,7 @@ describe("addLine", () => {
     saveLineConfig(getLinePaths(m, "codex"), base);
     let called = false;
     await expect(addLine(m, { name: "codex", handle: "other", agent: "codex", relay: "https://r.example",
-      register: async () => { called = true; return { org: "acme", token: "t", address: "a" }; },
+      register: async () => { called = true; return { org: "acme", token: "t" }; },
       installListenerServiceFn: () => {}, publishCardFn: async () => undefined, verify: false }))
       .rejects.toThrow(/already/);
     expect(called).toBe(false);
@@ -162,7 +165,7 @@ describe("addLine", () => {
     saveLineConfig(getLinePaths(m, "claude"), { ...base, handle: "ken-cdx" });
     let called = false;
     await expect(addLine(m, { name: "codex", handle: "ken-cdx", agent: "codex", relay: "https://r.example",
-      register: async () => { called = true; return { org: "acme", token: "t", address: "a" }; },
+      register: async () => { called = true; return { org: "acme", token: "t" }; },
       installListenerServiceFn: () => {}, publishCardFn: async () => undefined, verify: false }))
       .rejects.toThrow(/ken-cdx/);
     expect(called).toBe(false);
@@ -386,11 +389,11 @@ describe("listLinesReport", () => {
     savePerson(m, { primary_line: "claude" });
     const rows = listLinesReport(m);
     expect(rows.map((r) => r.name)).toEqual(["broken", "claude"]);
-    expect(rows.find((r) => r.name === "broken")!.address).toBe("ken-b@not-a-url");
+    expect(rows.find((r) => r.name === "broken")!.address).toBe("@acme/ken-b");
     // The happy-path formatting ("<handle>@<relay host>") had no assertion of
     // its own — only the broken row did, above. `base.relay` is
     // "https://r.example", so this pins the host-only, scheme-stripped form.
-    expect(rows.find((r) => r.name === "claude")!.address).toBe("ken@r.example");
+    expect(rows.find((r) => r.name === "claude")!.address).toBe("@acme/ken");
   });
 });
 

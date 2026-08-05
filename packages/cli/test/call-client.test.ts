@@ -77,7 +77,8 @@ async function identity(name: string): Promise<{ keys: StoredKeys; paths: Return
 
 async function encryptionRecord(address: string, keys: StoredKeys): Promise<EncryptionKeyRecordType> {
   return {
-    v: 1, address, key_id: await keyIdFor(keys.encryption_pub), suite: HPKE_SUITE,
+    v: 1, relay_origin: "relay.test",
+    address, key_id: await keyIdFor(keys.encryption_pub), suite: HPKE_SUITE,
     pub: keys.encryption_pub, epoch: keys.epoch, not_before: 1, not_after: Date.now() + 1_000_000,
     prev: null,
   };
@@ -89,18 +90,22 @@ async function fixture(relay: string, overrides: Partial<CallOpts> = {}) {
   const origin = new URL(relay).hostname;
   const from = overrides.from ?? "me";
   const to = overrides.to ?? "ken";
-  const fromAddress = `${from}@${origin}`;
-  const toAddress = `${to}@${origin}`;
+  const fromAddress = `@acme/${from}`;
+  const toAddress = `@acme/${to}`;
   const recipientRecord = await encryptionRecord(toAddress, recipient.keys);
   const opts: CallOpts = {
     relay, org: "acme", from, token: "tok", to, message: "hi", paths: sender.paths,
     ...overrides,
     keyDeps: {
       fetchKeys: async () => ({
-        identity: { v: 1, address: toAddress, identity_pub: recipient.keys.identity_pub },
+        identity: {
+          v: 1, relay_origin: origin,
+          address: toAddress, identity_pub: recipient.keys.identity_pub,
+        },
         encryption: { record: recipientRecord, signature: "unused" },
       }),
       verifyAndPinPeer: async () => ({
+        relay_origin: origin,
         address: toAddress, identity_pub: recipient.keys.identity_pub,
         fingerprint: `SHA256:${"a".repeat(32)}`, first_seen_at: 1,
         highest_encryption_epoch: recipient.keys.epoch, call_count: 1,

@@ -13,81 +13,80 @@ beforeEach(() => {
   mkdirSync(m.linesDir, { recursive: true });
 });
 
-const A = "https://a.example";
-const B = "https://b.example";
+const RELAY = "https://relay.example";
+const ACME = "acme";
+const BETA = "beta";
 
+// Selection is by ORGANIZATION now, not by relay host. A line may only call
+// inside its own organization, which is the rule the old host match was
+// approximating — and with the host gone from addresses there is nothing else
+// it could match on.
 describe("pickOutboundLine", () => {
-  it("uses the only line on the destination's relay", () => {
-    saveLineConfig(getLinePaths(m, "work"), { org: "acme", handle: "ken-w", token: "t", relay: B });
-    saveLineConfig(getLinePaths(m, "home"), { org: "acme", handle: "ken", token: "t", relay: A });
-    expect(pickOutboundLine(m, B).name).toBe("work");
+  it("uses the only line in the destination's organization", () => {
+    saveLineConfig(getLinePaths(m, "work"), { org: BETA, handle: "ken-w", token: "t", relay: RELAY });
+    saveLineConfig(getLinePaths(m, "home"), { org: ACME, handle: "ken", token: "t", relay: RELAY });
+    expect(pickOutboundLine(m, BETA).name).toBe("work");
   });
 
-  it("uses the primary when several lines share the destination relay", () => {
-    saveLineConfig(getLinePaths(m, "claude"), { org: "acme", handle: "ken", token: "t", relay: A });
-    saveLineConfig(getLinePaths(m, "codex"), { org: "acme", handle: "ken-cdx", token: "t", relay: A });
+  it("uses the primary when several lines share the destination organization", () => {
+    saveLineConfig(getLinePaths(m, "claude"), { org: ACME, handle: "ken", token: "t", relay: RELAY });
+    saveLineConfig(getLinePaths(m, "codex"), { org: ACME, handle: "ken-cdx", token: "t", relay: RELAY });
     savePerson(m, { primary_line: "codex" });
-    expect(pickOutboundLine(m, A).name).toBe("codex");
+    expect(pickOutboundLine(m, ACME).name).toBe("codex");
   });
 
-  it("refuses when the primary is on another relay and several candidates tie", () => {
-    saveLineConfig(getLinePaths(m, "w1"), { org: "acme", handle: "k1", token: "t", relay: B });
-    saveLineConfig(getLinePaths(m, "w2"), { org: "acme", handle: "k2", token: "t", relay: B });
-    saveLineConfig(getLinePaths(m, "home"), { org: "acme", handle: "ken", token: "t", relay: A });
+  it("refuses when the primary is in another organization and several candidates tie", () => {
+    saveLineConfig(getLinePaths(m, "w1"), { org: BETA, handle: "k1", token: "t", relay: RELAY });
+    saveLineConfig(getLinePaths(m, "w2"), { org: BETA, handle: "k2", token: "t", relay: RELAY });
+    saveLineConfig(getLinePaths(m, "home"), { org: ACME, handle: "ken", token: "t", relay: RELAY });
     savePerson(m, { primary_line: "home" });
-    expect(() => pickOutboundLine(m, B)).toThrow(/--as/);
+    expect(() => pickOutboundLine(m, BETA)).toThrow(/--as/);
   });
 
-  it("names the relays this machine holds lines on when none match", () => {
-    saveLineConfig(getLinePaths(m, "home"), { org: "acme", handle: "ken", token: "t", relay: A });
-    expect(() => pickOutboundLine(m, B)).toThrow(/a\.example/);
+  it("names the organizations this machine holds lines in when none match", () => {
+    saveLineConfig(getLinePaths(m, "home"), { org: ACME, handle: "ken", token: "t", relay: RELAY });
+    expect(() => pickOutboundLine(m, BETA)).toThrow(/acme/);
   });
 
-  it("honours --as, even across relays, but rejects a mismatch", () => {
-    saveLineConfig(getLinePaths(m, "home"), { org: "acme", handle: "ken", token: "t", relay: A });
-    saveLineConfig(getLinePaths(m, "work"), { org: "acme", handle: "ken-w", token: "t", relay: B });
-    expect(pickOutboundLine(m, B, { as: "work" }).name).toBe("work");
-    expect(() => pickOutboundLine(m, B, { as: "home" })).toThrow(/a\.example/);
-  });
-
-  it("matches on relay host, ignoring a trailing slash", () => {
-    saveLineConfig(getLinePaths(m, "home"), { org: "acme", handle: "ken", token: "t", relay: "https://a.example/" });
-    expect(pickOutboundLine(m, A).name).toBe("home");
+  it("honours --as, but rejects a line from another organization", () => {
+    saveLineConfig(getLinePaths(m, "home"), { org: ACME, handle: "ken", token: "t", relay: RELAY });
+    saveLineConfig(getLinePaths(m, "work"), { org: BETA, handle: "ken-w", token: "t", relay: RELAY });
+    expect(pickOutboundLine(m, BETA, { as: "work" }).name).toBe("work");
+    expect(() => pickOutboundLine(m, BETA, { as: "home" })).toThrow(/acme/);
   });
 
   it("gracefully degrades when resolvePrimary throws: several candidates, no primary recorded", () => {
-    saveLineConfig(getLinePaths(m, "w1"), { org: "acme", handle: "k1", token: "t", relay: B });
-    saveLineConfig(getLinePaths(m, "w2"), { org: "acme", handle: "k2", token: "t", relay: B });
+    saveLineConfig(getLinePaths(m, "w1"), { org: BETA, handle: "k1", token: "t", relay: RELAY });
+    saveLineConfig(getLinePaths(m, "w2"), { org: BETA, handle: "k2", token: "t", relay: RELAY });
     // deliberately NOT calling savePerson(), so resolvePrimary will throw
-    expect(() => pickOutboundLine(m, B)).toThrow(/--as/);
+    expect(() => pickOutboundLine(m, BETA)).toThrow(/--as/);
   });
 
-  it("rejects --as with mismatched relay, naming both hosts", () => {
-    saveLineConfig(getLinePaths(m, "home"), { org: "acme", handle: "ken", token: "t", relay: A });
-    saveLineConfig(getLinePaths(m, "work"), { org: "acme", handle: "ken-w", token: "t", relay: B });
+  it("rejects --as with a mismatched organization, naming both", () => {
+    saveLineConfig(getLinePaths(m, "home"), { org: ACME, handle: "ken", token: "t", relay: RELAY });
+    saveLineConfig(getLinePaths(m, "work"), { org: BETA, handle: "ken-w", token: "t", relay: RELAY });
     let error: Error | undefined;
     try {
-      pickOutboundLine(m, B, { as: "home" });
+      pickOutboundLine(m, BETA, { as: "home" });
     } catch (e) {
       error = e as Error;
     }
     expect(error).toBeDefined();
-    // Check that error message names BOTH the line's relay (a.example) AND the destination relay (b.example)
-    expect(error!.message).toMatch(/a\.example/);
-    expect(error!.message).toMatch(/b\.example/);
+    expect(error!.message).toMatch(/acme/);
+    expect(error!.message).toMatch(/beta/);
   });
 
   it("rejects --as when the named line doesn't exist", () => {
-    saveLineConfig(getLinePaths(m, "home"), { org: "acme", handle: "ken", token: "t", relay: A });
-    expect(() => pickOutboundLine(m, A, { as: "nonexistent" })).toThrow(/No line named "nonexistent"/);
+    saveLineConfig(getLinePaths(m, "home"), { org: "acme", handle: "ken", token: "t", relay: RELAY });
+    expect(() => pickOutboundLine(m, ACME, { as: "nonexistent" })).toThrow(/No line named "nonexistent"/);
   });
 
   // Wiring guard for `index.ts`'s `call`/`status`: proves the same function
   // this file already exercises above is what selects a line from the
   // destination's relay, not some fixed per-process config.
   it("call resolves its line from the destination address, not from a fixed config", () => {
-    saveLineConfig(getLinePaths(m, "home"), { org: "acme", handle: "ken", token: "t", relay: A });
-    const ctx = pickOutboundLine(m, A);
+    saveLineConfig(getLinePaths(m, "home"), { org: "acme", handle: "ken", token: "t", relay: RELAY });
+    const ctx = pickOutboundLine(m, ACME);
     expect(ctx.config.handle).toBe("ken");
     expect(ctx.config.token).toBe("t");
   });

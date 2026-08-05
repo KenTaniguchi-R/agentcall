@@ -1,5 +1,5 @@
 import { publishEncryptionKey, publishIdentityKey } from "../api.js";
-import { addressHost, relayUrl } from "../config.js";
+import { lineAddress, relayUrl } from "../config.js";
 import { getMachinePaths } from "../paths.js";
 import { resolveLine } from "../line-context.js";
 import { loadKeys } from "../keys.js";
@@ -16,10 +16,9 @@ export function register(program: { command(name: string): any }): void {
         const cfg = ctx.config;
         const stored = loadKeys(ctx.paths);
         const auth = { org: cfg.org, handle: cfg.handle, token: cfg.token };
-        const relayHost = addressHost(cfg);
-        await publishIdentityKey(relayUrl(cfg), auth, stored, relayHost);
-        await publishEncryptionKey(relayUrl(cfg), auth, ctx.paths, relayHost);
-        console.log(`Published identity and encryption key for ${cfg.handle}@${relayHost}.`);
+        await publishIdentityKey(relayUrl(cfg), auth, stored);
+        await publishEncryptionKey(relayUrl(cfg), auth, ctx.paths);
+        console.log(`Published identity and encryption key for ${lineAddress(cfg)}.`);
       } catch (error) {
         console.error(error instanceof Error ? error.message : String(error));
         process.exitCode = 1;

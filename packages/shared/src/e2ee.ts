@@ -1,6 +1,6 @@
 import { z } from "zod";
 import { canonicalEncode } from "./canonical.js";
-import { ADDRESS_RE } from "./keys.js";
+import { ADDRESS_RE, RELAY_ORIGIN_RE } from "./keys.js";
 import {
   CallAccepted, CallCancelled, CallNotCancelled, CallRejected, CallStarted, CallStatus,
   CancelCall, CorrelationId, CONTEXT_ID_RE, MAX_DETAIL_LENGTH, MAX_MESSAGE_BYTES,
@@ -12,7 +12,6 @@ const BASE64URL_RE = /^[A-Za-z0-9_-]+$/;
 const KEY_ID_RE = /^[0-9a-f]{32}$/;
 const HASH_RE = /^[0-9a-f]{64}$/;
 const REQUEST_ID_RE = /^[0-9a-f]{32}$/;
-const RELAY_ORIGIN_RE = /^[a-z0-9.-]{1,253}$/;
 function isWellFormedUnicode(value: string): boolean {
   for (let index = 0; index < value.length; index += 1) {
     const unit = value.charCodeAt(index);

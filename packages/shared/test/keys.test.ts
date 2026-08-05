@@ -6,13 +6,15 @@ import {
 
 const identity = {
   v: 1 as const,
-  address: "ken@agentcall.benree.tech",
+  relay_origin: "agentcall.benree.tech",
+  address: "@acme/ken",
   identity_pub: "BASE64URLPUBLICKEY",
 };
 
 const encKey = {
   v: 1 as const,
-  address: "ken@agentcall.benree.tech",
+  relay_origin: "agentcall.benree.tech",
+  address: "@acme/ken",
   key_id: "0123456789abcdef0123456789abcdef",
   suite: HPKE_SUITE,
   pub: "BASE64URLENCRYPTIONKEY",
@@ -90,8 +92,31 @@ describe("EncryptionKeyRecord", () => {
 describe("transcripts", () => {
   it("changes when any identity field changes", () => {
     const a = identityTranscript(identity);
-    const b = identityTranscript({ ...identity, address: "sarah@agentcall.benree.tech" });
+    const b = identityTranscript({ ...identity, address: "@acme/sarah" });
     expect(Array.from(a)).not.toEqual(Array.from(b));
+  });
+
+  // The cross-relay binding. It used to ride inside `address` as the host part,
+  // which meant it survived only as long as addresses were DNS-shaped. It is an
+  // explicit signed field now, so a record published on one relay still cannot
+  // be presented as valid on another once the address is a bare registry key.
+  it("binds an identity record to its relay", () => {
+    const a = identityTranscript(identity);
+    const b = identityTranscript({ ...identity, relay_origin: "relay.other.example" });
+    expect(Array.from(a)).not.toEqual(Array.from(b));
+  });
+
+  it("binds an encryption key record to its relay", () => {
+    const a = encryptionKeyTranscript(encKey);
+    const b = encryptionKeyTranscript({ ...encKey, relay_origin: "relay.other.example" });
+    expect(Array.from(a)).not.toEqual(Array.from(b));
+  });
+
+  it("requires relay_origin on both records", () => {
+    const { relay_origin: _i, ...identityWithout } = identity;
+    const { relay_origin: _e, ...encWithout } = encKey;
+    expect(IdentityRecord.safeParse(identityWithout).success).toBe(false);
+    expect(EncryptionKeyRecord.safeParse(encWithout).success).toBe(false);
   });
 
   it("changes when the encryption epoch changes", () => {

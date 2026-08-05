@@ -6,7 +6,7 @@ import {
 
 const request = {
   v: 1 as const, direction: "request" as const, relay_origin: "relay.test",
-  from: "alice@relay.test", to: "ken@relay.test", request_id: "1".repeat(32),
+  from: "@acme/alice", to: "@acme/ken", request_id: "1".repeat(32),
   sender_identity_key_id: "2".repeat(32), recipient_encryption_key_id: "3".repeat(32),
   recipient_epoch: 1, issued_at: 1, expires_at: 2, message: "hi",
 };

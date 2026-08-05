@@ -98,7 +98,7 @@ jobs:
             exit 1
           fi
           grep -F "No agentcall config found" "$RUNNER_TEMP/doctor-output"
-          if "$agentcall_bin" status nobody@example.invalid >"$RUNNER_TEMP/status-output" 2>&1; then
+          if "$agentcall_bin" status @acme/nobody >"$RUNNER_TEMP/status-output" 2>&1; then
             echo "status unexpectedly succeeded without a configured identity"
             exit 1
           fi

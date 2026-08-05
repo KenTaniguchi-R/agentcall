@@ -180,11 +180,15 @@ describe("GET /v1/a2a/:handle/agent-card.json", () => {
     expect(res.status).toBe(200);
   });
 
-  it("derives the tenant from the hosted request hostname", async () => {
+  // Was: the hostname derives the tenant. That fallback is gone — the org now
+  // comes only from the authenticated credential path, so a request that names
+  // the tenant in its hostname and nowhere else must not authenticate. Two
+  // sources for one boundary is the hazard this removes.
+  it("refuses to derive the tenant from the request hostname", async () => {
     const res = await SELF.fetch("https://acme.agentcall.benree.tech/v1/a2a/ken/agent-card.json", {
       headers: { Authorization: `Bearer ${viewerToken}`, "X-AgentCall-Handle": "viewer" },
     });
-    expect(res.status).toBe(200);
+    expect(res.status).toBe(401);
   });
 
   it("401s an anonymous per-agent card read", async () => {
