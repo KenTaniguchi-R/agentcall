@@ -8,7 +8,7 @@ import {
   AdminSecretRequest, DEFAULT_ROSTER_JOIN_KEY_EXPIRY_DAYS, ExpelRosterRequest,
   IssueRosterJoinKeyRequest, JoinRosterRequest, MAX_ACTIVE_ROSTER_JOIN_KEYS,
   MAX_BUNDLE_TASKS_PER_CARD, MAX_CALLER_GROUPS, MAX_LISTED_ROSTER_JOIN_KEYS, MAX_ROSTER_MEMBERS,
-  RevokeRosterJoinKeyRequest, ROSTER_ID_RE, visibleTasks,
+  randomBase64Url, RevokeRosterJoinKeyRequest, ROSTER_ID_RE, visibleTasks,
 } from "@benree/agentcall-shared";
 import { rateLimit, type RelayAppEnv } from "./middleware.js";
 import { NATIVE_ROSTER_READ, REGISTER, ROSTER_WRITE } from "./ratelimit/index.js";
@@ -18,8 +18,7 @@ import { MAX_ROSTER_AUDIT_EVENTS, rosterAuditStatement } from "./events.js";
 // 16 random bytes, base64url — 22 chars, inside ROSTER_ID_RE's 16..64 window.
 // Unguessable but not secret: it travels in URL paths and will be logged.
 function generateRosterId(): string {
-  const bytes = crypto.getRandomValues(new Uint8Array(16));
-  return btoa(String.fromCharCode(...bytes)).replaceAll("+", "-").replaceAll("/", "_").replaceAll("=", "");
+  return randomBase64Url(16);
 }
 
 function generateJoinKey(): { joinKey: string; prefix: string; secret: string } {

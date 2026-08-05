@@ -1,5 +1,6 @@
-import { existsSync, mkdirSync, renameSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, renameSync, rmSync } from "node:fs";
 import { join } from "node:path";
+import { writeJsonAtomic } from "../json-store.js";
 import { formatAddress, type AgentKind } from "@benree/agentcall-shared";
 import { publishEncryptionKey, publishIdentityKey, registerHandle } from "../api.js";
 import { publishCard } from "../card.js";
@@ -161,7 +162,7 @@ export async function addLine(m: MachinePaths, opts: AddLineOpts): Promise<{ add
     mkdirSync(paths.shareDir, { recursive: true });
     mkdirSync(paths.tasksDir, { recursive: true });
     if (!existsSync(paths.policyFile)) {
-      writeFileSync(paths.policyFile, JSON.stringify(DEFAULT_POLICY, null, 2) + "\n", { mode: 0o600 });
+      writeJsonAtomic(paths.policyFile, DEFAULT_POLICY);
     }
     try {
       await (opts.publishCardFn ?? publishCard)(cfg, paths);

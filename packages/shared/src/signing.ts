@@ -18,6 +18,28 @@ function fromBase64Url(value: string): Uint8Array {
   return out;
 }
 
+/**
+ * Canonical unpadded base64url, or null. `atob` ignores the unused low bits of
+ * a final sextet, so several spellings decode to the same bytes; requiring the
+ * round trip means a signed token has exactly one textual form. Use this, not
+ * `fromBase64Url`, whenever the input is attacker-supplied — that one throws on
+ * malformed input and accepts non-canonical spellings.
+ */
+export function fromBase64UrlStrict(value: string): Uint8Array | null {
+  if (!/^[A-Za-z0-9_-]+$/.test(value)) return null;
+  try {
+    const bytes = fromBase64Url(value);
+    return toBase64Url(bytes) === value ? bytes : null;
+  } catch {
+    return null;
+  }
+}
+
+/** `byteLength` CSPRNG bytes as canonical unpadded base64url. */
+export function randomBase64Url(byteLength: number): string {
+  return toBase64Url(crypto.getRandomValues(new Uint8Array(byteLength)));
+}
+
 export function generateIdentityKeyPair(): Promise<CryptoKeyPair> {
   return crypto.subtle.generateKey(ECDSA_PARAMS, true, ["sign", "verify"]) as Promise<CryptoKeyPair>;
 }

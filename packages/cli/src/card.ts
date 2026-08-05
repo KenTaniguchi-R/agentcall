@@ -1,4 +1,4 @@
-import { writeFileSync } from "node:fs";
+import { writeJsonAtomic } from "./json-store.js";
 import type { CardUploadType } from "@benree/agentcall-shared";
 import { pushCard } from "./api.js";
 import { relayUrl } from "./config.js";
@@ -74,6 +74,6 @@ export async function publishCard(
 ): Promise<CardUploadType> {
   const upload = buildCardUpload(cfg, loadPolicy(p), loadTasks(p));
   await push(relayUrl(cfg), { org: cfg.org, handle: cfg.handle, token: cfg.token }, upload);
-  writeFileSync(p.cardSnapshotFile, JSON.stringify(upload, null, 2) + "\n");
+  writeJsonAtomic(p.cardSnapshotFile, upload);
   return upload;
 }

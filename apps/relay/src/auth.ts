@@ -1,11 +1,12 @@
+import { randomBase64Url } from "@benree/agentcall-shared";
+
 export async function sha256Hex(s: string): Promise<string> {
   const digest = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(s));
   return [...new Uint8Array(digest)].map((b) => b.toString(16).padStart(2, "0")).join("");
 }
 
 export function generateToken(): string {
-  const bytes = crypto.getRandomValues(new Uint8Array(32));
-  return btoa(String.fromCharCode(...bytes)).replaceAll("+", "-").replaceAll("/", "_").replaceAll("=", "");
+  return randomBase64Url(32);
 }
 
 // Workers runtime doesn't expose Node's crypto.timingSafeEqual, so this
