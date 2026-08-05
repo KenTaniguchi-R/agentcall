@@ -1,15 +1,39 @@
 import { z } from "zod";
 
-export const HANDLE_RE = /^[a-z0-9][a-z0-9-]{1,30}$/;
-export const ORG_RE = /^[a-z0-9][a-z0-9-]{1,62}$/;
-// The hosted deployment's DNS host, and the single place it is written. The
-// relay derives tenant orgs and registration addresses from it, and the CLI
-// derives its default relay URL and expected address host — each of those used
-// to be its own string literal, in four files.
+// One source of truth for the three patterns, because they must agree: an org
+// that registers must also be spellable in an address, and a drifting copy
+// would let one be created that the other cannot name.
+const ORG_BODY = "[a-z0-9][a-z0-9-]{1,19}";
+const HANDLE_BODY = "[a-z0-9][a-z0-9-]{1,30}";
+
+export const HANDLE_RE = new RegExp(`^${HANDLE_BODY}$`);
+// 20 characters, not the 63 this allowed while orgs were DNS labels. The
+// address is meant to be short enough to say out loud, and
+// `@acme-corporation-platform-engineering/ken` would trade a vendor domain for
+// a self-inflicted one.
+export const ORG_RE = new RegExp(`^${ORG_BODY}$`);
+
+// `@<org>/<handle>` — a registry key, not a locator. See
+// docs/superpowers/specs/2026-08-05-address-as-registry-key.md.
+//
+// Deliberately unable to express a hostname: dots are absent from both bodies,
+// so no DNS-shaped address can parse. That is the point rather than an
+// oversight — nothing resolves an AgentCall address, and a key dressed as a
+// locator invites tooling to try.
+//
+// Not exported. `keys.ts` still owns a separate, host-shaped `ADDRESS_RE` for
+// signed identity and encryption-key records, where the host currently carries
+// the cross-relay binding. Exporting a second name-alike from here would
+// collide, and worse, would invite a caller to validate a signed record against
+// the wrong grammar. Use `parseAddress`/`formatAddress`.
+const ADDRESS_RE = new RegExp(`^@(${ORG_BODY})/(${HANDLE_BODY})$`);
+
+// The hosted deployment's DNS host, and the single place it is written. It is
+// the relay *endpoint* only: the CLI derives its default relay URL from it.
+// Addresses no longer contain it, so nothing parses it back out.
 //
 // This is deployment configuration, not protocol: a self-hosted relay sets its
-// own host and never reads this. It lives here because both sides must agree
-// on how a hosted address is spelled. Notably NOT the source of
+// own host and never reads this. Notably NOT the source of
 // AGENTCALL_POLICY_EXT — see the comment there.
 export const HOSTED_RELAY_HOST = "agentcall.benree.tech";
 export const TASK_ID_RE = /^[a-z0-9][a-z0-9-]{0,63}$/;
@@ -208,6 +232,23 @@ export type RecoveryStatusResponseType = z.infer<typeof RecoveryStatusResponse>;
 export type RecoveryRedeemRequestType = z.infer<typeof RecoveryRedeemRequest>;
 export type RecoveryReceiptType = z.infer<typeof RecoveryReceipt>;
 
+export function formatAddress(org: string, handle: string): string {
+  return `@${org}/${handle}`;
+}
+
+// Returns the pair, not a host. Callers that need to know which relay to dial
+// read `cfg.relay`; an address never carried that information usefully, because
+// a caller only ever reaches its own organization's relay.
+export function parseKeyAddress(addr: string): { org: string; handle: string } | null {
+  const m = ADDRESS_RE.exec(addr);
+  return m ? { org: m[1]!, handle: m[2]! } : null;
+}
+
+// The outgoing `handle@host` grammar. Still live because signed identity and
+// encryption-key records currently carry the relay binding inside the address
+// (see keys.ts), so the cutover cannot happen in the CLI alone — it needs
+// `relay_origin` to become an explicit signed field first. Deleted in that
+// slice; until then both grammars exist and only this one is wired up.
 export function parseAddress(addr: string): { handle: string; host: string } | null {
   const at = addr.indexOf("@");
   if (at <= 0) return null;
