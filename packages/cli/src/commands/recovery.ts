@@ -3,7 +3,8 @@ import { createHash, randomBytes } from "node:crypto";
 import { ReadStream, WriteStream } from "node:tty";
 import { z } from "zod";
 import {
-  ORG_RE, HANDLE_RE, RecoveryReceipt, type RecoveryIssueRequestType,
+  ORG_RE, HANDLE_RE, CLIENT_PUBLIC_ID_RE, RECOVERY_PUBLIC_ID_RE, SHA256_HEX_RE,
+  RecoveryReceipt, type RecoveryIssueRequestType,
   type RecoveryIssueResponseType, type RecoveryRedeemRequestType, type RecoveryReceiptType,
 } from "@benree/agentcall-shared";
 import { authOf, getRecoveryStatus, issueRecovery, redeemRecovery } from "../api.js";
@@ -17,10 +18,10 @@ import { withFileLock } from "../file-lock.js";
 const PendingRecovery = z.object({
   org: z.string().regex(ORG_RE), handle: z.string().regex(HANDLE_RE), relay: z.string().url(),
   generation: z.number().int().positive(), operation_id: z.string().min(22).max(64),
-  candidate_token: z.string().min(32), candidate_token_digest: z.string().regex(/^[0-9a-f]{64}$/),
-  client_public_id: z.string().regex(/^act_[0-9a-f]{16}$/),
-  successor_recovery_digest: z.string().regex(/^[0-9a-f]{64}$/),
-  successor_recovery_public_id: z.string().regex(/^agr_[0-9a-f]{16}$/),
+  candidate_token: z.string().min(32), candidate_token_digest: z.string().regex(SHA256_HEX_RE),
+  client_public_id: z.string().regex(CLIENT_PUBLIC_ID_RE),
+  successor_recovery_digest: z.string().regex(SHA256_HEX_RE),
+  successor_recovery_public_id: z.string().regex(RECOVERY_PUBLIC_ID_RE),
 }).strict();
 type PendingRecoveryType = z.infer<typeof PendingRecovery>;
 

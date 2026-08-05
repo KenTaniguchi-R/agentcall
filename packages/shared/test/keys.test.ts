@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
   EncryptionKeyRecord, HPKE_SUITE, IdentityRecord,
-  encryptionKeyTranscript, encryptionKeyTranscriptHash, fingerprint, identityTranscript,
+  encryptionKeyTranscript, encryptionKeyTranscriptHash, FINGERPRINT_RE, fingerprint, identityTranscript,
 } from "../src/keys.js";
 
 const identity = {
@@ -136,9 +136,12 @@ describe("transcripts", () => {
 });
 
 describe("fingerprint", () => {
+  // Asserted against the exported constant rather than a copy of the literal,
+  // so this also pins that FINGERPRINT_RE — which the CLI's trust store and
+  // replay store validate against — still accepts what this function emits.
   it("formats as SHA256: plus 32 lowercase hex characters", async () => {
     const fp = await fingerprint(identityTranscript(identity));
-    expect(fp).toMatch(/^SHA256:[0-9a-f]{32}$/);
+    expect(fp).toMatch(FINGERPRINT_RE);
   });
 
   it("is stable for the same input", async () => {

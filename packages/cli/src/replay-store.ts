@@ -1,6 +1,6 @@
 import { chmodSync, existsSync, mkdirSync } from "node:fs";
 import { z } from "zod";
-import { RELAY_CALL_TIMEOUT_MS } from "@benree/agentcall-shared";
+import { FINGERPRINT_RE, RELAY_CALL_TIMEOUT_MS } from "@benree/agentcall-shared";
 import { withFileLock, type FileLockOptions } from "./file-lock.js";
 import { assertPrivateFile, readJsonStore, writeJsonAtomic } from "./json-store.js";
 import type { MachinePaths } from "./paths.js";
@@ -10,7 +10,10 @@ export const REPLAY_RETENTION_SKEW_MS = 120_000;
 const MAX_RESERVATION_FUTURE_MS = RELAY_CALL_TIMEOUT_MS + REPLAY_RETENTION_SKEW_MS;
 
 const ReplayReservationSchema = z.object({
-  sender_fingerprint: z.string().regex(/^SHA256:[0-9a-f]{32}$/),
+  sender_fingerprint: z.string().regex(FINGERPRINT_RE),
+  // Deliberately its own literal, not folded in with the key-id patterns that
+  // share its width: a request id is a distinct quantity, and shared/keys.ts
+  // already documents why identical widths stay on separate patterns.
   request_id: z.string().regex(/^[0-9a-f]{32}$/),
   expires_at: z.number().int().nonnegative().max(Number.MAX_SAFE_INTEGER - REPLAY_RETENTION_SKEW_MS),
 }).strict();

@@ -88,6 +88,12 @@ export async function encryptionKeyTranscriptHash(r: EncryptionKeyRecordType): P
     .join("");
 }
 
+// Lives next to the function that emits it, not next to the stores that check
+// it: the CLI's trust store and replay store each validated this shape with
+// their own copy of the literal, so a change to fingerprint()'s output would
+// have had to be chased into two unrelated files. Same quantity, one pattern.
+export const FINGERPRINT_RE = /^SHA256:[0-9a-f]{32}$/;
+
 /** Truncated to 128 bits: short enough to read aloud, long enough to pin. */
 export async function fingerprint(bytes: Uint8Array): Promise<string> {
   const digest = await crypto.subtle.digest("SHA-256", bytes as BufferSource);

@@ -176,19 +176,27 @@ export const RegisterResponse = z.object({ org: z.string().regex(ORG_RE), token:
 export const SHA256_HEX_RE = /^[0-9a-f]{64}$/;
 export const RECOVERY_OPERATION_ID_RE = /^[A-Za-z0-9_-]{22,64}$/;
 
+// Two quantities, two patterns — deliberately not one loose `(?:act|agr)_`
+// alternation. Each field admits exactly one prefix, and a shared pattern
+// would let a client public id satisfy a recovery public id field. The
+// prefixes come from publicId() in the relay, which mints them from the
+// first 16 hex characters of the corresponding digest.
+export const CLIENT_PUBLIC_ID_RE = /^act_[0-9a-f]{16}$/;
+export const RECOVERY_PUBLIC_ID_RE = /^agr_[0-9a-f]{16}$/;
+
 export const RecoveryIssueRequest = z.object({
   expected_generation: z.number().int().nonnegative(),
   successor_recovery_digest: z.string().regex(SHA256_HEX_RE),
-  successor_recovery_public_id: z.string().regex(/^agr_[0-9a-f]{16}$/),
+  successor_recovery_public_id: z.string().regex(RECOVERY_PUBLIC_ID_RE),
 }).strict();
 export const RecoveryIssueResponse = z.object({
   generation: z.number().int().positive(),
-  recovery_public_id: z.string().regex(/^agr_[0-9a-f]{16}$/),
+  recovery_public_id: z.string().regex(RECOVERY_PUBLIC_ID_RE),
 }).strict();
 export const RecoveryStatusResponse = z.object({
   issued: z.boolean(),
   generation: z.number().int().nonnegative(),
-  recovery_public_id: z.string().regex(/^agr_[0-9a-f]{16}$/).optional(),
+  recovery_public_id: z.string().regex(RECOVERY_PUBLIC_ID_RE).optional(),
 }).strict();
 export const RecoveryRedeemRequest = z.object({
   org: z.string().regex(ORG_RE),
@@ -197,9 +205,9 @@ export const RecoveryRedeemRequest = z.object({
   current_recovery_proof: z.string().min(32).max(200),
   operation_id: z.string().regex(RECOVERY_OPERATION_ID_RE),
   client_token_digest: z.string().regex(SHA256_HEX_RE),
-  client_public_id: z.string().regex(/^act_[0-9a-f]{16}$/),
+  client_public_id: z.string().regex(CLIENT_PUBLIC_ID_RE),
   successor_recovery_digest: z.string().regex(SHA256_HEX_RE),
-  successor_recovery_public_id: z.string().regex(/^agr_[0-9a-f]{16}$/),
+  successor_recovery_public_id: z.string().regex(RECOVERY_PUBLIC_ID_RE),
 }).strict();
 export const RecoveryReceipt = z.object({
   org: z.string().regex(ORG_RE),
@@ -207,8 +215,8 @@ export const RecoveryReceipt = z.object({
   operation_id: z.string().regex(RECOVERY_OPERATION_ID_RE),
   consumed_generation: z.number().int().positive(),
   recovery_generation: z.number().int().positive(),
-  client_public_id: z.string().regex(/^act_[0-9a-f]{16}$/),
-  recovery_public_id: z.string().regex(/^agr_[0-9a-f]{16}$/),
+  client_public_id: z.string().regex(CLIENT_PUBLIC_ID_RE),
+  recovery_public_id: z.string().regex(RECOVERY_PUBLIC_ID_RE),
   committed_at: z.number().int().nonnegative(),
   // Confirms the recovered identity's current DO applied its tombstone. Before
   // #154, this is not a claim that caller sockets housed in remote DOs closed.
