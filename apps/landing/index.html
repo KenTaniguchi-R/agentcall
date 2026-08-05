@@ -213,9 +213,10 @@ body.menu-open{overflow:hidden}
 }
 .hero .eyebrow{letter-spacing:.16em}
 .hero h1{
-  max-width:15ch;margin:1.4rem auto 0;
+  max-width:26ch;margin:1.4rem auto 0;
   text-shadow:0 2px 40px rgba(0,10,30,.5);
 }
+.hero h1 .accent{color:#FF6656;font-style:normal;font-weight:inherit}
 .hero-sub{
   max-width:60ch;margin:1.5rem auto 0;color:rgba(255,255,255,.84);
   font-weight:300;font-size:1.03rem;line-height:1.72;
@@ -594,8 +595,8 @@ footer{background:rgba(4,9,24,.55);padding:clamp(3rem,6vw,4.5rem) 0 2rem;border-
   <div class="hero-grain"></div>
   <div class="wrap">
     <span class="eyebrow mono">Architecture brief v0.4.0 · monorepo overview</span>
-    <h1>Your agents should know who to <em>call</em>.</h1>
-    <p class="hero-sub">AgentCall turns coworkers' coding agents into a connected team. Ask for context, recover decisions, and resolve blockers directly — under permissions you and IT control.</p>
+    <h1>I got a question,<br>let me ask <em class="accent">your</em> Claude.</h1>
+    <p class="hero-sub">Half of what your team knows lives in one person's head — and nobody else can reach it. Your agent asks theirs, and gets the real answer, under permissions you and IT control.</p>
     <div class="hero-cta">
       <a class="btn btn-primary" href="#waitlist" data-track="hero_waitlist">Join the waitlist</a>
       <a class="btn btn-ghost" href="https://agentcall.mintlify.app/get-started/install" data-track="hero_install">Install now</a>
@@ -654,7 +655,7 @@ footer{background:rgba(4,9,24,.55);padding:clamp(3rem,6vw,4.5rem) 0 2rem;border-
   <main class="main" id="main">
     <section id="why">
       <h2 class="rise">The answer is on someone <em>else's</em> machine.</h2>
-      <p class="lede rise">Half of what your team knows was never written down. Instead of interrupting a colleague, your agent asks theirs, and gets the answer from their real setup.</p>
+      <p class="lede rise">Instead of interrupting a colleague, your agent asks theirs — and gets the answer from their real, current setup.</p>
 
       <div class="glass rise">
         <div class="g-h"><span class="d"></span><span class="d"></span><span class="d"></span><b>ONE CALL, START TO FINISH</b><span class="r">13.2s &middot; 412 B</span></div>
@@ -667,6 +668,12 @@ footer{background:rgba(4,9,24,.55);padding:clamp(3rem,6vw,4.5rem) 0 2rem;border-
 <span class="bad">DENY</span>  <span class="dim">Read  ~/.ssh/id_ed25519</span>  <span class="wa">&larr; refused by the guard, logged</span></code></pre>
       </div>
       <p class="caption rise">Real commands, representative output. Timing is from one recorded call.</p>
+
+      <ul class="facts rise">
+        <li>The person who wrote the migration left the company — their agent still remembers why.</li>
+        <li>The one engineer who knows why the workaround exists is on PTO.</li>
+        <li>Nobody wrote down why staging uses a different flag. Their agent does.</li>
+      </ul>
     </section>
 
     <section id="control">
@@ -726,7 +733,7 @@ footer{background:rgba(4,9,24,.55);padding:clamp(3rem,6vw,4.5rem) 0 2rem;border-
   <div class="ghost">agentcall</div>
   <div class="wrap">
     <span class="eyebrow">Early access</span>
-    <h2>Give your agents each other's number.</h2>
+    <h2>Give your team someone else's memory to ask.</h2>
     <p>Join the waitlist for launch updates and early team access.</p>
     <form class="waitlist-form" id="waitlist-form" action="https://submit-form.com/36DfpcI7U" method="POST">
       <label class="hp" for="waitlist-honeypot">Leave this field empty</label>
@@ -745,13 +752,13 @@ footer{background:rgba(4,9,24,.55);padding:clamp(3rem,6vw,4.5rem) 0 2rem;border-
     <div class="foot">
       <div>
         <a class="brand" href="#top"><span class="brand-mark">⌁</span> agentcall</a>
-        <p>A permissioned phone line between coworkers' coding agents. Built for real context, explicit control, and honest boundaries.</p>
+        <p>A permissioned way to ask a coworker's agent what only they'd know. Built for real context, explicit control, and honest boundaries.</p>
       </div>
       <div>
         <h4>Product</h4>
         <ul>
           <li><a href="https://agentcall.mintlify.app/overview/how-it-works">How it works</a></li>
-          <li><a href="#control">Use cases</a></li>
+          <li><a href="#why">Use cases</a></li>
           <li><a href="https://agentcall.mintlify.app/security/overview">Security</a></li>
           <li><a href="#status">Status</a></li>
         </ul>
