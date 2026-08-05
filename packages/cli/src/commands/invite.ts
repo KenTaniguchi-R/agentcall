@@ -1,9 +1,10 @@
 import {
   sanitizeTerminalCell, stringifyTerminalSafeJson, type OrgInviteMetadataType,
 } from "@benree/agentcall-shared";
-import { ApiError, createInvite, listInvites, revokeInvite } from "../api.js";
+import { authOf, createInvite, listInvites, revokeInvite } from "../api.js";
 import { relayUrl } from "../config.js";
 import type { LineContext } from "../line-context.js";
+import { fail } from "../errors.js";
 
 type LineFor = (line: string | undefined) => LineContext | undefined;
 
@@ -101,7 +102,7 @@ export function register(program: { command(name: string): any }, lineFor: LineF
           throw new Error("--role must be member or admin");
         }
         const created = await createInvite(
-          relayUrl(cfg), { org: cfg.org, handle: cfg.handle, token: cfg.token },
+          relayUrl(cfg), authOf(cfg),
           {
             description: o.description, expires_in_days: Number(o.expiresInDays),
             ...(o.role ? { role: o.role } : {}),
@@ -116,8 +117,7 @@ export function register(program: { command(name: string): any }, lineFor: LineF
           console.error(`Expires ${new Date(created.metadata.expires_at).toISOString()}`);
         }
       } catch (e) {
-        console.error(e instanceof ApiError ? e.message : String(e));
-        process.exitCode = 1;
+        fail(e);
       }
     });
 
@@ -131,7 +131,7 @@ export function register(program: { command(name: string): any }, lineFor: LineF
       if (!ctx) return;
       const cfg = ctx.config;
       try {
-        const invites = await listInvites(relayUrl(cfg), { org: cfg.org, handle: cfg.handle, token: cfg.token });
+        const invites = await listInvites(relayUrl(cfg), authOf(cfg));
         // stringifyTerminalSafeJson, not JSON.stringify: JSON escapes C0
         // controls but passes C1 and bidi through literally, and `--json`
         // still lands in a terminal often enough to matter.
@@ -142,8 +142,7 @@ export function register(program: { command(name: string): any }, lineFor: LineF
         }
         for (const row of inviteRows(invites, Date.now())) console.log(row);
       } catch (e) {
-        console.error(e instanceof ApiError ? e.message : String(e));
-        process.exitCode = 1;
+        fail(e);
       }
     });
 
@@ -158,12 +157,11 @@ export function register(program: { command(name: string): any }, lineFor: LineF
       const cfg = ctx.config;
       try {
         const revoked = await revokeInvite(
-          relayUrl(cfg), { org: cfg.org, handle: cfg.handle, token: cfg.token }, id,
+          relayUrl(cfg), authOf(cfg), id,
         );
         console.log(`Revoked ${revoked.id} at ${new Date(revoked.revoked_at).toISOString()}`);
       } catch (e) {
-        console.error(e instanceof ApiError ? e.message : String(e));
-        process.exitCode = 1;
+        fail(e);
       }
     });
 }

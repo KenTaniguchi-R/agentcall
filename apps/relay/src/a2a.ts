@@ -12,7 +12,7 @@ import { sharedRosterIds } from "./groups.js";
 import { NATIVE_READ } from "./ratelimit/index.js";
 import { parseStoredCard } from "./stored-card.js";
 import type { RelayAppEnv } from "./middleware.js";
-import { rateLimit } from "./middleware.js";
+import { jsonBody, rateLimit } from "./middleware.js";
 
 // The card endpoint is public and cheap; a short TTL keeps the TCK's
 // Cache-Control/ETag checks satisfied without making policy edits slow to
@@ -200,8 +200,8 @@ export function mountA2A(app: Hono<RelayAppEnv>): void {
       const { status, body } = a2aError("ContentTypeNotSupported", "expected application/a2a+json");
       return c.json(body, status as 415, A2A_HEADERS);
     }
-    const body = A2ACancelTaskRequest.safeParse(await c.req.json().catch(() => null));
-    if (!body.success) {
+    const body = await jsonBody(c, A2ACancelTaskRequest);
+    if (!body) {
       const { status, body: error } = standardError(400, "invalid cancel request");
       return c.json(error, status as 400, A2A_HEADERS);
     }

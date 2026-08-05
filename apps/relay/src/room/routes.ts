@@ -10,6 +10,7 @@ import {
 import { sha256Hex } from "../auth.js";
 import type { Env } from "../index.js";
 import type { RelayAppEnv } from "../middleware.js";
+import { jsonBody } from "../middleware.js";
 import {
   formatRoomCapability, formatRoomInvite, newInviteId, newParticipantId, newRoomId,
   newRoomSecret, parseRoomCapability, parseRoomInvite,
@@ -22,8 +23,8 @@ function bearer(header: string | undefined): string {
 
 export function mountRooms(app: Hono<RelayAppEnv>): void {
   app.post("/v1/rooms", async (c) => {
-    const parsed = RoomCreateRequest.safeParse(await c.req.json().catch(() => null));
-    if (!parsed.success) return c.json({ error: "invalid Room request" }, 400);
+    const parsed = await jsonBody(c, RoomCreateRequest);
+    if (!parsed) return c.json({ error: "invalid Room request" }, 400);
     const now = Date.now();
     const roomId = newRoomId();
     const participantId = newParticipantId();
@@ -32,7 +33,7 @@ export function mountRooms(app: Hono<RelayAppEnv>): void {
       room_id: roomId,
       state: "waiting",
       moderator_participant_id: participantId,
-      expected_participants: parsed.data.expected_participants,
+      expected_participants: parsed.expected_participants,
       membership_epoch: 0,
       created_at: now,
       invite_deadline: now + ROOM_INVITE_TTL_MS,
@@ -44,11 +45,11 @@ export function mountRooms(app: Hono<RelayAppEnv>): void {
       room_id: roomId,
       seat: 1,
       state: "admitted",
-      display_name: parsed.data.display_name,
+      display_name: parsed.display_name,
       credential_hash: await sha256Hex(hostSecret),
-      signing_public_key: parsed.data.signing_public_key,
-      encryption_public_key: parsed.data.encryption_public_key,
-      agent_adapter: parsed.data.agent_adapter,
+      signing_public_key: parsed.signing_public_key,
+      encryption_public_key: parsed.encryption_public_key,
+      agent_adapter: parsed.agent_adapter,
       joined_at: now,
       admitted_at: now,
       last_seen_at: now,
@@ -56,7 +57,7 @@ export function mountRooms(app: Hono<RelayAppEnv>): void {
     };
     const publicInvites: RoomPublicInviteType[] = [];
     const records: RoomInviteRecordType[] = [];
-    for (let seat = 2; seat <= parsed.data.expected_participants; seat++) {
+    for (let seat = 2; seat <= parsed.expected_participants; seat++) {
       const inviteId = newInviteId();
       const secret = newRoomSecret();
       publicInvites.push({
@@ -83,12 +84,12 @@ export function mountRooms(app: Hono<RelayAppEnv>): void {
   });
 
   app.post("/v1/rooms/join", async (c) => {
-    const parsed = RoomJoinRequest.safeParse(await c.req.json().catch(() => null));
-    if (!parsed.success) return c.json({ error: "invalid Room join" }, 400);
-    if (!(await verifyRoomJoinProof(parsed.data))) {
+    const parsed = await jsonBody(c, RoomJoinRequest);
+    if (!parsed) return c.json({ error: "invalid Room join" }, 400);
+    if (!(await verifyRoomJoinProof(parsed))) {
       return c.json({ error: "Room invitation unavailable" }, 404);
     }
-    const invite = parseRoomInvite(parsed.data.invite);
+    const invite = parseRoomInvite(parsed.invite);
     if (!invite) return c.json({ error: "Room invitation unavailable" }, 404);
     const participantId = newParticipantId();
     const now = Date.now();
@@ -97,11 +98,11 @@ export function mountRooms(app: Hono<RelayAppEnv>): void {
       room_id: invite.roomId,
       seat: 2,
       state: "pending",
-      display_name: parsed.data.display_name,
-      credential_hash: await sha256Hex(parsed.data.participant_secret),
-      signing_public_key: parsed.data.signing_public_key,
-      encryption_public_key: parsed.data.encryption_public_key,
-      agent_adapter: parsed.data.agent_adapter,
+      display_name: parsed.display_name,
+      credential_hash: await sha256Hex(parsed.participant_secret),
+      signing_public_key: parsed.signing_public_key,
+      encryption_public_key: parsed.encryption_public_key,
+      agent_adapter: parsed.agent_adapter,
       joined_at: now,
       last_seen_at: now,
       calls_charged: 0,
@@ -122,7 +123,7 @@ export function mountRooms(app: Hono<RelayAppEnv>): void {
     return response.status === 201
       ? c.json(RoomJoinResponse.parse({
         ...body,
-        credential: formatRoomCapability(invite.roomId, returnedId, parsed.data.participant_secret),
+        credential: formatRoomCapability(invite.roomId, returnedId, parsed.participant_secret),
       }), 201)
       : c.json(RoomJoinResponse.parse(body), 200);
   });
@@ -145,9 +146,9 @@ export function mountRooms(app: Hono<RelayAppEnv>): void {
   });
   for (const action of RoomAction.options) {
     app.post(`/v1/room/${action}`, async (c) => {
-      const parsed = RoomMutationRequest.safeParse(await c.req.json().catch(() => null));
-      if (!parsed.success) return c.json({ error: "invalid Room action" }, 400);
-      return forwardRoom(c, action, "POST", parsed.data);
+      const parsed = await jsonBody(c, RoomMutationRequest);
+      if (!parsed) return c.json({ error: "invalid Room action" }, 400);
+      return forwardRoom(c, action, "POST", parsed);
     });
   }
 }

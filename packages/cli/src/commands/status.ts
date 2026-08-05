@@ -1,9 +1,10 @@
-import { ApiError, getStatus } from "../api.js";
+import { authOf, getStatus } from "../api.js";
 import { relayUrl } from "../config.js";
 import { resolveAddress } from "../contacts.js";
 import type { LineContext } from "../line-context.js";
 import { pickOutboundLine } from "../outbound.js";
 import { getMachinePaths } from "../paths.js";
+import { fail } from "../errors.js";
 
 export function register(program: { command(name: string): any }): void {
   program
@@ -15,33 +16,29 @@ export function register(program: { command(name: string): any }): void {
       const machine = getMachinePaths();
       const firstPass = resolveAddress(machine, address);
       if (!firstPass.ok) {
-        console.error(firstPass.error);
-        process.exitCode = 1;
+        fail(firstPass.error);
         return;
       }
       let ctx: LineContext;
       try {
         ctx = pickOutboundLine(machine, firstPass.org, { as: o.as });
       } catch (e) {
-        console.error(String(e instanceof Error ? e.message : e));
-        process.exitCode = 1;
+        fail(e);
         return;
       }
       const cfg = ctx.config;
       const cfgRelay = relayUrl(cfg);
       const parsed = resolveAddress(machine, address, cfgRelay, cfg.org);
       if (!parsed.ok) {
-        console.error(parsed.error);
-        process.exitCode = 1;
+        fail(parsed.error);
         return;
       }
       try {
-        const { online } = await getStatus(cfgRelay, parsed.handle, { org: cfg.org, handle: cfg.handle, token: cfg.token });
+        const { online } = await getStatus(cfgRelay, parsed.handle, authOf(cfg));
         console.log(online ? "online" : "offline");
         process.exitCode = online ? 0 : 2;
       } catch (e) {
-        console.error(e instanceof ApiError ? e.message : String(e));
-        process.exitCode = 1;
+        fail(e);
       }
     });
 }

@@ -1,6 +1,6 @@
 import { chmodSync, existsSync, mkdirSync } from "node:fs";
 import { z } from "zod";
-import { ADDRESS_RE,
+import { ADDRESS_RE, BASE64URL_RE, FINGERPRINT_RE, RELAY_ORIGIN_RE,
   encryptionKeyTranscript, fingerprint, identityTranscript, importIdentityPublicKey,
   verifyTranscript, type EncryptionKeyRecordType, type IdentityRecordType,
 } from "@benree/agentcall-shared";
@@ -15,10 +15,10 @@ const KnownPeerSchema = z.object({
   // the trust store is per-machine, so the pin is only meaningful together with
   // its origin — and the identity transcript covers it, so a stored peer
   // without it cannot have its fingerprint recomputed.
-  relay_origin: z.string().regex(/^[a-z0-9.-]{1,253}$/),
+  relay_origin: z.string().regex(RELAY_ORIGIN_RE),
   address: z.string().regex(ADDRESS_RE),
-  identity_pub: z.string().regex(/^[A-Za-z0-9_-]+$/).max(256),
-  fingerprint: z.string().regex(/^SHA256:[0-9a-f]{32}$/),
+  identity_pub: z.string().regex(BASE64URL_RE).max(256),
+  fingerprint: z.string().regex(FINGERPRINT_RE),
   first_seen_at: z.number().int().nonnegative(),
   highest_encryption_epoch: z.number().int().positive(),
   call_count: z.number().int().nonnegative(),

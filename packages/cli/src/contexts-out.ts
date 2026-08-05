@@ -1,8 +1,7 @@
-import { existsSync, readFileSync } from "node:fs";
 import { z } from "zod";
 import { CONTEXT_ID_RE } from "@benree/agentcall-shared";
 import type { LinePaths } from "./paths.js";
-import { writeJsonAtomic } from "./json-store.js";
+import { readJsonStore, writeJsonAtomic } from "./json-store.js";
 
 // The caller's half, and deliberately a separate file from contexts.ts: this
 // holds only opaque tokens the callee issued us, so losing it costs one
@@ -30,13 +29,10 @@ const sameTarget = (a: OutboundContext, k: OutboundKey) =>
 // yields no entries, so --continue reports "nothing stored" instead of
 // resuming against garbage.
 export function loadOutbound(p: LinePaths): OutboundContext[] {
-  if (!existsSync(p.contextsOutFile)) return [];
-  try {
-    const parsed = z.array(OutboundContextSchema).safeParse(JSON.parse(readFileSync(p.contextsOutFile, "utf8")));
-    return parsed.success ? parsed.data : [];
-  } catch {
-    return [];
-  }
+  return readJsonStore(p.contextsOutFile, z.array(OutboundContextSchema), {
+    missing: () => [],
+    corrupt: () => [],
+  });
 }
 
 export function findOutbound(list: OutboundContext[], key: OutboundKey): OutboundContext | undefined {

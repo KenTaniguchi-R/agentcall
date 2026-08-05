@@ -1,9 +1,10 @@
-import { fetchKeys } from "../api.js";
+import { authOf, fetchKeys } from "../api.js";
 import { relayUrl } from "../config.js";
 import { resolveAddress } from "../contacts.js";
 import { getMachinePaths } from "../paths.js";
 import { pickOutboundLine } from "../outbound.js";
 import { resetPeerTrust, verifyAndPinPeer } from "../known-peers.js";
+import { fail } from "../errors.js";
 
 export function register(program: { command(name: string): any }): void {
   program
@@ -21,13 +22,12 @@ export function register(program: { command(name: string): any }): void {
         const resolved = resolveAddress(machine, address, relayUrl(cfg), cfg.org);
         if (!resolved.ok) throw new Error(resolved.error);
         const bundle = await fetchKeys(
-          relayUrl(cfg), { org: cfg.org, handle: cfg.handle, token: cfg.token }, resolved.handle,
+          relayUrl(cfg), authOf(cfg), resolved.handle,
         );
         const peer = await verifyAndPinPeer(machine, resolved.address, bundle);
         console.log(`${peer.address}\nPinned fingerprint: ${peer.fingerprint}\nServed fingerprint: ${peer.fingerprint}`);
       } catch (error) {
-        console.error(error instanceof Error ? error.message : String(error));
-        process.exitCode = 1;
+        fail(error);
       }
     });
 
@@ -44,8 +44,7 @@ export function register(program: { command(name: string): any }): void {
         await resetPeerTrust(machine, address);
         console.log(`Removed the identity pin for ${address}. The next verified contact will establish a new pin.`);
       } catch (error) {
-        console.error(error instanceof Error ? error.message : String(error));
-        process.exitCode = 1;
+        fail(error);
       }
     });
 }

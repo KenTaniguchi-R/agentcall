@@ -111,7 +111,6 @@ export const RosterBundle = z.object({
   skipped: z.number().int().nonnegative(),
 }).strict();
 
-export type BundleTaskType = z.infer<typeof BundleTask>;
 export type BundleEntryType = z.infer<typeof BundleEntry>;
 export type RosterBundleType = z.infer<typeof RosterBundle>;
 export type RosterJoinKeyMetadataType = z.infer<typeof RosterJoinKeyMetadata>;

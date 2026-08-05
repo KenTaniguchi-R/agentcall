@@ -49,4 +49,3 @@ export const A2ACancelTaskRequest = z.object({
 export type A2ATaskStateType = z.infer<typeof A2ATaskState>;
 export type A2ATaskType = z.infer<typeof A2ATask>;
 export type A2AListTasksResponseType = z.infer<typeof A2AListTasksResponse>;
-export type A2ACancelTaskRequestType = z.infer<typeof A2ACancelTaskRequest>;

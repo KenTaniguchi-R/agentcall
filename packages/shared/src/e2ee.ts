@@ -1,6 +1,7 @@
 import { z } from "zod";
 import { canonicalEncode } from "./canonical.js";
 import { ADDRESS_RE, RELAY_ORIGIN_RE } from "./keys.js";
+import { BASE64URL_RE } from "./signing.js";
 import {
   CallAccepted, CallCancelled, CallNotCancelled, CallRejected, CallStarted, CallStatus,
   CancelCall, CorrelationId, CONTEXT_ID_RE, MAX_DETAIL_LENGTH, MAX_MESSAGE_BYTES,
@@ -8,7 +9,6 @@ import {
   normalizeTraceContext, PeerFailureCode, RELAY_CALL_TIMEOUT_MS, RelayCallError, TASK_ID_RE,
 } from "./protocol.js";
 
-const BASE64URL_RE = /^[A-Za-z0-9_-]+$/;
 const KEY_ID_RE = /^[0-9a-f]{32}$/;
 const HASH_RE = /^[0-9a-f]{64}$/;
 const REQUEST_ID_RE = /^[0-9a-f]{32}$/;
@@ -150,9 +150,7 @@ export const E2EERelayToCallerFrame = z.discriminatedUnion("type", [
 ]);
 export const E2EERelayToListenerFrame = z.union([EncryptedIncomingCall, CancelCall]);
 
-export type EncryptedCallRequestType = z.infer<typeof EncryptedCallRequest>;
 export type EncryptedIncomingCallType = z.infer<typeof EncryptedIncomingCall>;
-export type EncryptedCallOutcomeType = z.infer<typeof EncryptedCallOutcome>;
 
 export const SignedE2EERequest = z.object({ payload: E2EERequestPayload, signature: z.string().regex(BASE64URL_RE).max(256) }).strict();
 export const SignedE2EEResponse = z.object({ payload: E2EEResponsePayload, signature: z.string().regex(BASE64URL_RE).max(256) }).strict();

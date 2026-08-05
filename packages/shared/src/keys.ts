@@ -1,6 +1,7 @@
 import { z } from "zod";
 import { canonicalEncode } from "./canonical.js";
 import { ADDRESS_RE } from "./protocol.js";
+import { BASE64URL_RE } from "./signing.js";
 
 /** The one HPKE suite this protocol version implements. Exact string, no spaces. */
 export const HPKE_SUITE = "DHKEM(P-256,HKDF-SHA256)/HKDF-SHA256/AES-128-GCM" as const;
@@ -18,7 +19,6 @@ const KEY_ID_RE = /^[0-9a-f]{32}$/;
 // epoch's transcript. It gets its own pattern so that widening one can never
 // silently widen the other.
 const PREV_RE = /^[0-9a-f]{32}$/;
-const BASE64URL_RE = /^[A-Za-z0-9_-]+$/;
 
 export const IdentityRecord = z.object({
   v: z.literal(1),
@@ -87,6 +87,12 @@ export async function encryptionKeyTranscriptHash(r: EncryptionKeyRecordType): P
     .map((byte) => byte.toString(16).padStart(2, "0"))
     .join("");
 }
+
+// Lives next to the function that emits it, not next to the stores that check
+// it: the CLI's trust store and replay store each validated this shape with
+// their own copy of the literal, so a change to fingerprint()'s output would
+// have had to be chased into two unrelated files. Same quantity, one pattern.
+export const FINGERPRINT_RE = /^SHA256:[0-9a-f]{32}$/;
 
 /** Truncated to 128 bits: short enough to read aloud, long enough to pin. */
 export async function fingerprint(bytes: Uint8Array): Promise<string> {

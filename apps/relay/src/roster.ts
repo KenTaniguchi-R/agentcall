@@ -10,10 +10,16 @@ import {
   MAX_BUNDLE_TASKS_PER_CARD, MAX_CALLER_GROUPS, MAX_LISTED_ROSTER_JOIN_KEYS, MAX_ROSTER_MEMBERS,
   randomBase64Url, RevokeRosterJoinKeyRequest, ROSTER_ID_RE, visibleTasks,
 } from "@benree/agentcall-shared";
-import { rateLimit, type RelayAppEnv } from "./middleware.js";
+import { jsonBody, rateLimit, type RelayAppEnv } from "./middleware.js";
 import { NATIVE_ROSTER_READ, REGISTER, ROSTER_WRITE } from "./ratelimit/index.js";
 import { parseStoredCard } from "./stored-card.js";
 import { MAX_ROSTER_AUDIT_EVENTS, rosterAuditStatement } from "./events.js";
+
+// Every roster write is rate-limited per (org, roster), not per caller: the
+// resource being protected is the roster's row, and one member hammering it
+// should not be able to spend another org's budget. Written out at each of
+// the eight write routes it made the shared bucket look like a coincidence.
+const byRoster = (c: Context<RelayAppEnv>) => `${c.var.identity.org}:${c.req.param("id")}`;
 
 // 16 random bytes, base64url — 22 chars, inside ROSTER_ID_RE's 16..64 window.
 // Unguessable but not secret: it travels in URL paths and will be logged.
@@ -98,9 +104,7 @@ export function mountRoster(app: Hono<RelayAppEnv>): void {
   // an enumerable namespace. Declared once so the two call sites cannot drift.
   const NOT_FOUND = { error: "not found" } as const;
 
-  app.post("/v1/roster/:id/join", rateLimit(ROSTER_WRITE, (c) => {
-    const i = c.var.identity; return `${i.org}:${c.req.param("id")}`;
-  }), async (c) => {
+  app.post("/v1/roster/:id/join", rateLimit(ROSTER_WRITE, byRoster), async (c) => {
     const identity = c.var.identity;
     const { org, handle } = identity;
 
@@ -110,10 +114,10 @@ export function mountRoster(app: Hono<RelayAppEnv>): void {
     if (!ROSTER_ID_RE.test(id)) return c.json({ error: "invalid roster id" }, 400);
 
 
-    const body = JoinRosterRequest.safeParse(await c.req.json().catch(() => null));
-    if (!body.success) return c.json(NOT_FOUND, 404);
+    const body = await jsonBody(c, JoinRosterRequest);
+    if (!body) return c.json(NOT_FOUND, 404);
 
-    const { prefix, secret } = joinKeyParts(body.data.join_key);
+    const { prefix, secret } = joinKeyParts(body.join_key);
     const supplied = await sha256Hex(secret);
     // Authorization and capacity are evaluated by SQLite at INSERT time, not
     // by Worker reads that concurrent joins or a key revocation can straddle.
@@ -202,7 +206,7 @@ export function mountRoster(app: Hono<RelayAppEnv>): void {
     return row;
   }
 
-  app.post("/v1/roster/:id/leave", rateLimit(ROSTER_WRITE, (c) => `${c.var.identity.org}:${c.req.param("id")}`), async (c) => {
+  app.post("/v1/roster/:id/leave", rateLimit(ROSTER_WRITE, byRoster), async (c) => {
     const identity = c.var.identity;
     const id = c.req.param("id");
     if (!ROSTER_ID_RE.test(id)) return c.json({ error: "invalid roster id" }, 400);
@@ -225,13 +229,13 @@ export function mountRoster(app: Hono<RelayAppEnv>): void {
     return c.json({ ok: true });
   });
 
-  app.post("/v1/roster/:id/audit-budget/reset", rateLimit(ROSTER_WRITE, (c) => `${c.var.identity.org}:${c.req.param("id")}`), async (c) => {
+  app.post("/v1/roster/:id/audit-budget/reset", rateLimit(ROSTER_WRITE, byRoster), async (c) => {
     const identity = c.var.identity;
     const id = c.req.param("id");
     if (!ROSTER_ID_RE.test(id)) return c.json({ error: "invalid roster id" }, 400);
-    const body = AdminSecretRequest.safeParse(await c.req.json().catch(() => null));
-    if (!body.success) return c.json(NOT_FOUND, 404);
-    const roster = await adminRoster(c, id, body.data.admin_secret);
+    const body = await jsonBody(c, AdminSecretRequest);
+    if (!body) return c.json(NOT_FOUND, 404);
+    const roster = await adminRoster(c, id, body.admin_secret);
     if (!roster || roster.org !== identity.org) return c.json(NOT_FOUND, 404);
 
     const now = Date.now();
@@ -254,43 +258,43 @@ export function mountRoster(app: Hono<RelayAppEnv>): void {
     return c.json({ ok: true, reset, audit_budget_used: state?.audit_budget_used ?? 0 });
   });
 
-  app.post("/v1/roster/:id/expel", rateLimit(ROSTER_WRITE, (c) => `${c.var.identity.org}:${c.req.param("id")}`), async (c) => {
+  app.post("/v1/roster/:id/expel", rateLimit(ROSTER_WRITE, byRoster), async (c) => {
     const identity = c.var.identity;
     const id = c.req.param("id");
     if (!ROSTER_ID_RE.test(id)) return c.json({ error: "invalid roster id" }, 400);
-    const body = ExpelRosterRequest.safeParse(await c.req.json().catch(() => null));
-    if (!body.success) return c.json(NOT_FOUND, 404);
-    const roster = await adminRoster(c, id, body.data.admin_secret);
+    const body = await jsonBody(c, ExpelRosterRequest);
+    if (!body) return c.json(NOT_FOUND, 404);
+    const roster = await adminRoster(c, id, body.admin_secret);
     if (!roster || roster.org !== identity.org) return c.json(NOT_FOUND, 404);
     const member = await c.env.DB.prepare(
       "SELECT 1 FROM roster_members WHERE roster_id = ? AND org = ? AND handle = ?",
-    ).bind(id, identity.org, body.data.handle).first();
+    ).bind(id, identity.org, body.handle).first();
     if (!member) return c.json({ error: "member not found" }, 404);
     const now = Date.now();
     const [deleted] = await c.env.DB.batch([
       c.env.DB.prepare("DELETE FROM roster_members WHERE roster_id = ? AND org = ? AND handle = ?")
-        .bind(id, identity.org, body.data.handle),
+        .bind(id, identity.org, body.handle),
       rosterAuditStatement(c, {
         event: "roster.expel", action: "D", rosterId: id, org: identity.org,
-        actor: identity.handle, actorType: "admin_secret", targetType: "handle", targetId: body.data.handle,
-        description: `${identity.handle} expelled ${body.data.handle} from roster ${id}`, at: now,
+        actor: identity.handle, actorType: "admin_secret", targetType: "handle", targetId: body.handle,
+        description: `${identity.handle} expelled ${body.handle} from roster ${id}`, at: now,
       }, "previous-change"),
     ]);
     if ((deleted.meta.changes ?? 0) !== 1) return c.json({ error: "member not found" }, 404);
     return c.json({ ok: true });
   });
 
-  app.post("/v1/roster/:id/keys", rateLimit(ROSTER_WRITE, (c) => `${c.var.identity.org}:${c.req.param("id")}`), async (c) => {
+  app.post("/v1/roster/:id/keys", rateLimit(ROSTER_WRITE, byRoster), async (c) => {
     const identity = c.var.identity;
     const id = c.req.param("id");
     if (!ROSTER_ID_RE.test(id)) return c.json({ error: "invalid roster id" }, 400);
-    const body = IssueRosterJoinKeyRequest.safeParse(await c.req.json().catch(() => null));
-    if (!body.success) return c.json(NOT_FOUND, 404);
-    const roster = await adminRoster(c, id, body.data.admin_secret);
+    const body = await jsonBody(c, IssueRosterJoinKeyRequest);
+    if (!body) return c.json(NOT_FOUND, 404);
+    const roster = await adminRoster(c, id, body.admin_secret);
     if (!roster || roster.org !== identity.org) return c.json(NOT_FOUND, 404);
     const { joinKey, prefix, secret } = generateJoinKey();
     const now = Date.now();
-    const expiresAt = now + body.data.expires_in_days * 86_400_000;
+    const expiresAt = now + body.expires_in_days * 86_400_000;
     const [inserted] = await c.env.DB.batch([
       c.env.DB.prepare(
         "INSERT INTO roster_join_keys " +
@@ -300,8 +304,8 @@ export function mountRoster(app: Hono<RelayAppEnv>): void {
           "(SELECT COUNT(*) FROM roster_join_keys WHERE roster_id = ? AND org = ? " +
             "AND revoked_at IS NULL AND expires_at > ? AND (reusable = 1 OR used = 0)) < ?",
       ).bind(
-        prefix, id, identity.org, await sha256Hex(secret), body.data.description, identity.handle,
-        now, expiresAt, body.data.reusable ? 1 : 0,
+        prefix, id, identity.org, await sha256Hex(secret), body.description, identity.handle,
+        now, expiresAt, body.reusable ? 1 : 0,
         id, identity.org, id, identity.org, now, MAX_ACTIVE_ROSTER_JOIN_KEYS,
       ),
       rosterAuditStatement(c, {
@@ -316,19 +320,19 @@ export function mountRoster(app: Hono<RelayAppEnv>): void {
       return stillExists ? c.json({ error: "active join key limit reached" }, 409) : c.json(NOT_FOUND, 404);
     }
     return c.json({ join_key: joinKey, key: publicJoinKey({
-      prefix, description: body.data.description, created_at: now, expires_at: expiresAt,
+      prefix, description: body.description, created_at: now, expires_at: expiresAt,
       created_by: identity.handle,
-      reusable: body.data.reusable ? 1 : 0, used: 0, revoked_at: null,
+      reusable: body.reusable ? 1 : 0, used: 0, revoked_at: null,
     }) });
   });
 
-  app.post("/v1/roster/:id/keys/list", rateLimit(ROSTER_WRITE, (c) => `${c.var.identity.org}:${c.req.param("id")}`), async (c) => {
+  app.post("/v1/roster/:id/keys/list", rateLimit(ROSTER_WRITE, byRoster), async (c) => {
     const identity = c.var.identity;
     const id = c.req.param("id");
     if (!ROSTER_ID_RE.test(id)) return c.json({ error: "invalid roster id" }, 400);
-    const body = AdminSecretRequest.safeParse(await c.req.json().catch(() => null));
-    if (!body.success) return c.json(NOT_FOUND, 404);
-    const roster = await adminRoster(c, id, body.data.admin_secret);
+    const body = await jsonBody(c, AdminSecretRequest);
+    if (!body) return c.json(NOT_FOUND, 404);
+    const roster = await adminRoster(c, id, body.admin_secret);
     if (!roster || roster.org !== identity.org) return c.json(NOT_FOUND, 404);
     const { results } = await c.env.DB.prepare(
       "SELECT prefix, description, created_by, created_at, expires_at, reusable, used, revoked_at " +
@@ -337,56 +341,55 @@ export function mountRoster(app: Hono<RelayAppEnv>): void {
     return c.json({ keys: (results ?? []).map(publicJoinKey) });
   });
 
-  app.post("/v1/roster/:id/keys/:prefix/revoke", rateLimit(ROSTER_WRITE, (c) => `${c.var.identity.org}:${c.req.param("id")}`), async (c) => {
+  app.post("/v1/roster/:id/keys/:prefix/revoke", rateLimit(ROSTER_WRITE, byRoster), async (c) => {
     const identity = c.var.identity;
     const id = c.req.param("id");
     if (!ROSTER_ID_RE.test(id)) return c.json({ error: "invalid roster id" }, 400);
-    const raw = await c.req.json().catch(() => null);
-    const body = RevokeRosterJoinKeyRequest.safeParse({ ...(typeof raw === "object" && raw ? raw : {}), prefix: c.req.param("prefix") });
-    if (!body.success) return c.json(NOT_FOUND, 404);
-    const roster = await adminRoster(c, id, body.data.admin_secret);
+    const body = await jsonBody(c, RevokeRosterJoinKeyRequest, { prefix: c.req.param("prefix") });
+    if (!body) return c.json(NOT_FOUND, 404);
+    const roster = await adminRoster(c, id, body.admin_secret);
     if (!roster || roster.org !== identity.org) return c.json(NOT_FOUND, 404);
     const key = await c.env.DB.prepare(
       "SELECT revoked_at FROM roster_join_keys WHERE prefix = ? AND roster_id = ? AND org = ?",
-    ).bind(body.data.prefix, id, identity.org).first<{ revoked_at: number | null }>();
+    ).bind(body.prefix, id, identity.org).first<{ revoked_at: number | null }>();
     if (!key) return c.json(NOT_FOUND, 404);
     const now = Date.now();
     const statements = [
       c.env.DB.prepare(
         "UPDATE roster_join_keys SET revoked_at = ? WHERE prefix = ? AND roster_id = ? AND org = ? AND revoked_at IS NULL",
-      ).bind(now, body.data.prefix, id, identity.org),
+      ).bind(now, body.prefix, id, identity.org),
       rosterAuditStatement(c, {
         event: "roster.join_key.revoke", action: "U", rosterId: id, org: identity.org,
-        actor: identity.handle, actorType: "admin_secret", targetType: "join_key", targetId: body.data.prefix,
-        description: `${identity.handle} revoked join key ${body.data.prefix} for roster ${id}`, at: now,
+        actor: identity.handle, actorType: "admin_secret", targetType: "join_key", targetId: body.prefix,
+        description: `${identity.handle} revoked join key ${body.prefix} for roster ${id}`, at: now,
       }, "previous-change"),
     ];
-    if (body.data.evict) statements.push(
+    if (body.evict) statements.push(
       c.env.DB.prepare(
         "DELETE FROM roster_members WHERE roster_id = ? AND org = ? AND joined_via_prefix = ?",
-      ).bind(id, identity.org, body.data.prefix),
+      ).bind(id, identity.org, body.prefix),
       rosterAuditStatement(c, {
         event: "roster.join_key.evict", action: "D", rosterId: id, org: identity.org,
-        actor: identity.handle, actorType: "admin_secret", targetType: "join_key", targetId: body.data.prefix,
-        description: `${identity.handle} evicted members admitted by join key ${body.data.prefix}`, at: now,
+        actor: identity.handle, actorType: "admin_secret", targetType: "join_key", targetId: body.prefix,
+        description: `${identity.handle} evicted members admitted by join key ${body.prefix}`, at: now,
       }, "previous-change"),
     );
     const results = await c.env.DB.batch(statements);
-    const evicted = body.data.evict ? (results[2]?.meta.changes ?? 0) : 0;
+    const evicted = body.evict ? (results[2]?.meta.changes ?? 0) : 0;
     const persisted = await c.env.DB.prepare(
       "SELECT revoked_at FROM roster_join_keys WHERE prefix = ? AND roster_id = ? AND org = ?",
-    ).bind(body.data.prefix, id, identity.org).first<{ revoked_at: number | null }>();
+    ).bind(body.prefix, id, identity.org).first<{ revoked_at: number | null }>();
     if (persisted?.revoked_at == null) return c.json(NOT_FOUND, 404);
-    return c.json({ prefix: body.data.prefix, revoked_at: persisted.revoked_at, evicted });
+    return c.json({ prefix: body.prefix, revoked_at: persisted.revoked_at, evicted });
   });
 
-  app.post("/v1/roster/:id/delete", rateLimit(ROSTER_WRITE, (c) => `${c.var.identity.org}:${c.req.param("id")}`), async (c) => {
+  app.post("/v1/roster/:id/delete", rateLimit(ROSTER_WRITE, byRoster), async (c) => {
     const identity = c.var.identity;
     const id = c.req.param("id");
     if (!ROSTER_ID_RE.test(id)) return c.json({ error: "invalid roster id" }, 400);
-    const body = AdminSecretRequest.safeParse(await c.req.json().catch(() => null));
-    if (!body.success) return c.json(NOT_FOUND, 404);
-    const roster = await adminRoster(c, id, body.data.admin_secret);
+    const body = await jsonBody(c, AdminSecretRequest);
+    if (!body) return c.json(NOT_FOUND, 404);
+    const roster = await adminRoster(c, id, body.admin_secret);
     if (!roster || roster.org !== identity.org) return c.json(NOT_FOUND, 404);
     const now = Date.now();
     const [, , deleted] = await c.env.DB.batch([

@@ -6,6 +6,7 @@ import { loadTasks } from "../tasks.js";
 import { execVerb, type Verb } from "../verbs.js";
 import { loadUserPolicy, savePolicy, validatePolicy } from "../policy.js";
 import { publishCard } from "../card.js";
+import { fail } from "../errors.js";
 
 async function runPolicyVerb(verb: Verb, a: string, b: string | undefined, opts: { line?: string }): Promise<void> {
   const machine = getMachinePaths();
@@ -14,8 +15,7 @@ async function runPolicyVerb(verb: Verb, a: string, b: string | undefined, opts:
     ctx = resolveLine(machine, { line: opts.line });
     assertCallableLine(ctx.config);
   } catch (e) {
-    console.error(String(e instanceof Error ? e.message : e));
-    process.exitCode = 1;
+    fail(e);
     return;
   }
   try {
@@ -30,8 +30,7 @@ async function runPolicyVerb(verb: Verb, a: string, b: string | undefined, opts:
       console.error(`Warning: policy saved locally, but the card push failed (${String(e)}). Run \`agentcall card push\` later.`);
     }
   } catch (e) {
-    console.error(String(e instanceof Error ? e.message : e));
-    process.exitCode = 1;
+    fail(e);
   }
 }
 

@@ -1,6 +1,7 @@
 import { loadLocalHistory, renderLocalHistory } from "../history.js";
 import type { LineContext } from "../line-context.js";
 import { sanitizeTerminalOutput, stringifyTerminalSafeJson } from "@benree/agentcall-shared";
+import { fail } from "../errors.js";
 
 type LineFor = (line: string | undefined) => LineContext | undefined;
 
@@ -16,8 +17,7 @@ export function register(program: { command(name: string): any }, lineFor: LineF
     .action((o: { limit: string; flagged?: boolean; json?: boolean; line?: string }) => {
       const limit = Number(o.limit);
       if (!Number.isInteger(limit) || limit < 1 || limit > 100) {
-        console.error("History limit must be an integer from 1 to 100.");
-        process.exitCode = 1;
+        fail("History limit must be an integer from 1 to 100.");
         return;
       }
       const ctx = lineFor(o.line);

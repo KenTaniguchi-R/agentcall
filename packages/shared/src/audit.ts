@@ -89,10 +89,6 @@ export const AuditLegalHold = z.union([z.object({
   released_at: z.number().int().nonnegative(),
 }).strict()]);
 
-export const AuditLegalHoldState = z.object({
-  active_hold: AuditLegalHold.nullable(),
-}).strict();
-
 export const AuditLegalHoldCreateRequest = z.object({
   reason: z.string().trim().min(1).max(500),
   request_id: z.string().regex(AUDIT_CONTROL_REQUEST_ID_RE),
@@ -153,5 +149,4 @@ export type AuditCheckpointType = z.infer<typeof AuditCheckpoint>;
 export type AuditExportPageType = z.infer<typeof AuditExportPage>;
 export type AuditExportAcknowledgementType = z.infer<typeof AuditExportAcknowledgement>;
 export type AuditRetentionPolicyType = z.infer<typeof AuditRetentionPolicy>;
-export type AuditLegalHoldType = z.infer<typeof AuditLegalHold>;
 export type AuditRetentionReadinessType = z.infer<typeof AuditRetentionReadiness>;

@@ -1,5 +1,6 @@
 import { getMachinePaths } from "../paths.js";
 import { addContact, loadContacts, removeContact } from "../contacts.js";
+import { fail } from "../errors.js";
 
 export function register(program: { command(name: string): any }): void {
   const contacts = program.command("contacts").description("manage your local address book of callable agents");
@@ -10,7 +11,7 @@ export function register(program: { command(name: string): any }): void {
       try {
         const result = addContact(getMachinePaths(), name, address, o.note);
         console.log(`${result === "added" ? "Added" : "Updated"} ${name} -> ${address}`);
-      } catch (e) { console.error(String(e instanceof Error ? e.message : e)); process.exitCode = 1; }
+      } catch (e) { fail(e); }
     });
   contacts.command("list").description("list saved contacts (name, address, who they are)").option("--json", "print the raw contacts array")
     .action((o: { json?: boolean }) => {
@@ -22,11 +23,11 @@ export function register(program: { command(name: string): any }): void {
           return;
         }
         for (const c of sorted) console.log(`${c.name}  ${c.address}${c.note ? `  — ${c.note}` : ""}`);
-      } catch (e) { console.error(String(e instanceof Error ? e.message : e)); process.exitCode = 1; }
+      } catch (e) { fail(e); }
     });
   contacts.command("remove").description("delete a contact").argument("<name>", "contact name to delete")
     .action((name: string) => {
       try { removeContact(getMachinePaths(), name); console.log(`Removed ${name}.`); }
-      catch (e) { console.error(String(e instanceof Error ? e.message : e)); process.exitCode = 1; }
+      catch (e) { fail(e); }
     });
 }
