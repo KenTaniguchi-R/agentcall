@@ -159,12 +159,7 @@ const ActiveMembershipEpoch = z.number().int().min(1).max(0xffff_ffff);
 const ParticipantCount = z.union([
   z.literal(2), z.literal(3), z.literal(4), z.literal(5), z.literal(6),
 ]);
-const Seat = z.union([
-  z.literal(1), z.literal(2), z.literal(3), z.literal(4), z.literal(5), z.literal(6),
-]);
-const InviteSeat = z.union([
-  z.literal(2), z.literal(3), z.literal(4), z.literal(5), z.literal(6),
-]);
+const RemainingSeats = z.number().int().min(0).max(ROOM_MAX_PARTICIPANTS - 1);
 
 export const RoomState = z.enum(["waiting", "verifying", "active", "closed"]);
 export const RoomCloseReason = z.enum([
@@ -216,19 +211,10 @@ export const RoomRecord = z.object({
 export const RoomInviteRecord = z.object({
   invite_id: RoomInviteId,
   room_id: RoomId,
-  seat: InviteSeat,
   secret_hash: RoomSecretHash,
   expires_at: Timestamp,
-  consumed_at: Timestamp.optional(),
-  participant_id: RoomParticipantId.optional(),
-}).strict().superRefine((record, ctx) => {
-  if ((record.consumed_at !== undefined) !== (record.participant_id !== undefined)) {
-    ctx.addIssue({ code: "custom", path: ["consumed_at"], message: "invite consumption fields must appear together" });
-  }
-  if (record.consumed_at !== undefined && record.consumed_at > record.expires_at) {
-    ctx.addIssue({ code: "custom", path: ["consumed_at"], message: "invite cannot be consumed after expiry" });
-  }
-});
+  seats_remaining: RemainingSeats,
+}).strict();
 
 function validParticipantHistory(record: {
   state: z.infer<typeof RoomParticipantState>;
@@ -248,7 +234,6 @@ function validParticipantHistory(record: {
 const RoomParticipantRecordBase = z.object({
   participant_id: RoomParticipantId,
   room_id: RoomId,
-  seat: Seat,
   state: RoomParticipantState,
   display_name: RoomDisplayName,
   credential_hash: RoomSecretHash,
@@ -281,13 +266,13 @@ export const RoomSnapshot = z.object({
   participant: RoomPublicParticipant.optional(),
 }).strict();
 export const RoomPublicInvite = z.object({
-  seat: InviteSeat,
   invite: RoomInviteCapability,
   expires_at: Timestamp,
+  seats_remaining: RemainingSeats,
 }).strict();
 export const RoomCreateResponse = RoomSnapshot.extend({
   credential: RoomCapability,
-  invites: z.array(RoomPublicInvite).min(1).max(ROOM_MAX_PARTICIPANTS - 1),
+  invite: RoomPublicInvite,
 }).strict();
 export const RoomJoinResponse = RoomSnapshot.extend({
   participant: RoomPublicParticipant,

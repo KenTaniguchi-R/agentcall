@@ -55,7 +55,6 @@ describe("Room HTTP protocol schemas", () => {
     const participantRecord = {
       participant_id: participant,
       room_id: room,
-      seat: 1,
       state: "admitted",
       display_name: "Host",
       signing_public_key: key,
@@ -85,9 +84,15 @@ describe("Room HTTP protocol schemas", () => {
     expect(RoomCreateResponse.safeParse({
       ...snapshot,
       credential: `acrp.${room}.${participant}.${secret}`,
-      invites: [{ seat: 2, invite: `acri.${room}.${invite}.${secret}`, expires_at: 2 }],
+      invite: { invite: `acri.${room}.${invite}.${secret}`, expires_at: 2, seats_remaining: 1 },
     }).success)
       .toBe(true);
+    expect(RoomCreateResponse.safeParse({
+      ...snapshot,
+      credential: `acrp.${room}.${participant}.${secret}`,
+      invites: [{ seat: 2, invite: `acri.${room}.${invite}.${secret}`, expires_at: 2 }],
+    }).success)
+      .toBe(false);
     expect(RoomJoinResponse.safeParse({ ...snapshot, credential: `acrp.${room}.${participant}.${secret}` }).success).toBe(true);
   });
 });
