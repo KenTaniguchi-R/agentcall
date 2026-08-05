@@ -16,7 +16,7 @@ import { checkLimit, NATIVE_CARD, NATIVE_READ, REGISTER, type RateLimitEnv } fro
 import { parseStoredCard } from "./stored-card.js";
 import { drainRecoveryEvictions, mountRecovery } from "./recovery.js";
 import { mountRooms } from "./room/routes.js";
-import { rateLimit, requireIdentity, type RelayAppEnv } from "./middleware.js";
+import { jsonBody, rateLimit, requireIdentity, type RelayAppEnv } from "./middleware.js";
 
 export { HandleDO } from "./do.js";
 export { RateLimiterDO } from "./ratelimit/do.js";
@@ -65,9 +65,9 @@ function registrationDatabaseFailure(error: unknown) {
 app.post("/v1/register", async (c) => {
   const ip = c.req.header("cf-connecting-ip") ?? "unknown";
   if (!(await checkLimit(c.env, ip, REGISTER))) return c.json({ error: "rate limited" }, 429);
-  const body = RegisterRequest.safeParse(await c.req.json().catch(() => null));
-  if (!body.success) return c.json({ error: "invalid request" }, 400);
-  const { invite, handle, agent_kind } = body.data;
+  const body = await jsonBody(c, RegisterRequest);
+  if (!body) return c.json({ error: "invalid request" }, 400);
+  const { invite, handle, agent_kind } = body;
   const inviteHash = await sha256Hex(invite);
   let inviteRow: { org: string; org_role: OrgRoleType } | null;
   try {
@@ -155,14 +155,21 @@ app.post("/v1/token/rotate", rateLimit(REGISTER, "identity", "rotate:"), async (
 app.put("/v1/card", rateLimit(NATIVE_CARD, "identity"), async (c) => {
   const identity = c.var.identity;
   const { org, handle } = identity;
-  const body = CardUpload.safeParse(await c.req.json().catch(() => null));
-  if (!body.success) return c.json({ error: "invalid card" }, 400);
+  // Deliberately NOT routed through jsonBody: the `inv_stored_cards` gate
+  // whitelists every direct parse of the card schema in the relay, and that is
+  // how it proves uploads validate here while stored reads go through
+  // parseStoredCard. Hiding this call behind a schema-generic helper would
+  // erase it from that grep and leave the gate blind to the upload path.
+  // (The gate greps for the schema name, so do not spell it out above.)
+  const parsed = CardUpload.safeParse(await c.req.json().catch(() => null));
+  if (!parsed.success) return c.json({ error: "invalid card" }, 400);
+  const body = parsed.data;
   // The publisher's own identity, taken from the authenticated request rather
   // than resolved from its address (#154 slice 5).
   await c.env.DB.prepare(
     "INSERT INTO cards (org, agent_id, card_json, updated_at) VALUES (?, ?, ?, ?) " +
       "ON CONFLICT(org, agent_id) DO UPDATE SET card_json = excluded.card_json, updated_at = excluded.updated_at",
-  ).bind(org, identity.agentId, JSON.stringify(body.data), Date.now()).run();
+  ).bind(org, identity.agentId, JSON.stringify(body), Date.now()).run();
   return c.json({ ok: true });
 });
 

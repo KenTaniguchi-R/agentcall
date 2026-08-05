@@ -4,7 +4,7 @@ import {
 } from "@benree/agentcall-shared";
 import { constantTimeEqual, sha256Hex } from "./auth.js";
 import { checkLimit, REGISTER } from "./ratelimit/index.js";
-import { rateLimit, type RelayAppEnv } from "./middleware.js";
+import { jsonBody, rateLimit, type RelayAppEnv } from "./middleware.js";
 import type { Env } from "./index.js";
 import { orgAuditStatement, orgAuditTrimStatement } from "./events.js";
 import {
@@ -148,9 +148,9 @@ export function mountRecovery(app: Hono<RelayAppEnv>): void {
 
   app.post("/v1/recovery/issue", rateLimit(REGISTER, "identity", "recovery-issue:"), async (c) => {
     const identity = c.var.identity;
-    const body = RecoveryIssueRequest.safeParse(await c.req.json().catch(() => null));
-    if (!body.success || body.data.successor_recovery_public_id !==
-      publicId("agr", body.data.successor_recovery_digest)) {
+    const body = await jsonBody(c, RecoveryIssueRequest);
+    if (!body || body.successor_recovery_public_id !==
+      publicId("agr", body.successor_recovery_digest)) {
       return c.json({ error: "invalid request" }, 400);
     }
     const presented = (c.req.header("Authorization") ?? "").replace(/^Bearer\s+/i, "");
@@ -161,8 +161,8 @@ export function mountRecovery(app: Hono<RelayAppEnv>): void {
           "recovery_redeemed_at = NULL WHERE org = ? AND handle = ? AND token_hash = ? " +
           "AND recovery_generation = ?",
       ).bind(
-        body.data.successor_recovery_digest, identity.org, identity.handle, await sha256Hex(presented),
-        body.data.expected_generation,
+        body.successor_recovery_digest, identity.org, identity.handle, await sha256Hex(presented),
+        body.expected_generation,
       ),
       orgAuditStatement(c, {
         event: "credential.recovery.issue", action: "U", org: identity.org,
@@ -173,8 +173,8 @@ export function mountRecovery(app: Hono<RelayAppEnv>): void {
     ]);
     if ((result[0].meta.changes ?? 0) !== 1) return c.json({ error: "credential changed" }, 409);
     return c.json({
-      generation: body.data.expected_generation + 1,
-      recovery_public_id: body.data.successor_recovery_public_id,
+      generation: body.expected_generation + 1,
+      recovery_public_id: body.successor_recovery_public_id,
     });
   });
 
@@ -183,12 +183,12 @@ export function mountRecovery(app: Hono<RelayAppEnv>): void {
     if (!(await checkLimit(c.env, `recovery-ip:${ip}`, REGISTER))) {
       return c.json({ error: "rate limited" }, 429);
     }
-    const body = RecoveryRedeemRequest.safeParse(await c.req.json().catch(() => null));
-    if (!body.success || !validPublicIds(body.data) ||
-      !deploymentOrgAllows(c.env.DEPLOYMENT_MODE, c.env.SELF_HOSTED_ORG, body.success ? body.data.org : "")) {
+    const body = await jsonBody(c, RecoveryRedeemRequest);
+    if (!body || !validPublicIds(body) ||
+      !deploymentOrgAllows(c.env.DEPLOYMENT_MODE, c.env.SELF_HOSTED_ORG, body.org)) {
       return c.json({ error: "unauthorized" }, 401);
     }
-    const request = body.data;
+    const request = body;
     const currentHash = await sha256Hex(request.current_recovery_proof);
     if (!(await checkLimit(c.env, `recovery-proof:${currentHash.slice(0, 16)}`, REGISTER))) {
       return c.json({ error: "rate limited" }, 429);

@@ -11,7 +11,7 @@ import {
 import type { Env } from "./index.js";
 import { sha256Hex } from "./auth.js";
 import { AUDIT_READ, AUDIT_WRITE } from "./ratelimit/index.js";
-import { rateLimit, requireAdmin, type RelayAppEnv } from "./middleware.js";
+import { jsonBody, rateLimit, requireAdmin, type RelayAppEnv } from "./middleware.js";
 import { auditLocation, orgAuditTrimStatement } from "./events.js";
 import {
   AUDIT_HOLD_COLUMNS,
@@ -392,20 +392,20 @@ export function mountAudit(app: Hono<RelayAppEnv>): void {
 
   app.put("/v1/audit/retention-policy", rateLimit(AUDIT_WRITE, "identity", "audit-retention-write:"), requireAdmin, async (c) => {
     const identity = c.var.identity;
-    const body = AuditRetentionPolicyUpdateRequest.safeParse(await c.req.json().catch(() => null));
-    if (!body.success) return c.json({ error: "invalid request" }, 400);
-    const existingRequest = await readPolicyRequest(c.env.DB, identity.org, body.data.request_id);
+    const body = await jsonBody(c, AuditRetentionPolicyUpdateRequest);
+    if (!body) return c.json({ error: "invalid request" }, 400);
+    const existingRequest = await readPolicyRequest(c.env.DB, identity.org, body.request_id);
     if (existingRequest) {
       if (!policyRequestMatches(
-        existingRequest, body.data.event_retention_days, body.data.expected_version,
+        existingRequest, body.event_retention_days, body.expected_version,
       )) return c.json({ error: "request id conflicts with an earlier retention update" }, 409);
       return c.json(policyFromRequest(existingRequest), 200, { "Cache-Control": "no-store" });
     }
     const current = await readPolicy(c.env.DB, identity.org);
-    if (current.version !== body.data.expected_version) {
+    if (current.version !== body.expected_version) {
       return c.json({ error: "retention policy version changed", current }, 409);
     }
-    const resultingVersion = body.data.expected_version + 1;
+    const resultingVersion = body.expected_version + 1;
     const now = Date.now();
     const [actorIp, actorCountry] = auditLocation(c);
     try {
@@ -419,8 +419,8 @@ export function mountAudit(app: Hono<RelayAppEnv>): void {
             "updated_at = excluded.updated_at, last_request_id = excluded.last_request_id " +
             "WHERE audit_retention_policies.version = ?",
         ).bind(
-          identity.org, body.data.event_retention_days, resultingVersion, identity.handle, now,
-          body.data.request_id, body.data.expected_version, body.data.expected_version,
+          identity.org, body.event_retention_days, resultingVersion, identity.handle, now,
+          body.request_id, body.expected_version, body.expected_version,
         ),
         c.env.DB.prepare(
           "INSERT INTO audit_retention_policy_requests " +
@@ -429,10 +429,10 @@ export function mountAudit(app: Hono<RelayAppEnv>): void {
             "SELECT 1 FROM audit_retention_policies WHERE org = ? AND version = ? AND last_request_id = ?) " +
             "AND NOT EXISTS (SELECT 1 FROM audit_retention_policy_requests WHERE org = ? AND request_id = ?)",
         ).bind(
-          identity.org, body.data.request_id, body.data.event_retention_days, body.data.expected_version,
+          identity.org, body.request_id, body.event_retention_days, body.expected_version,
           resultingVersion, identity.handle, now,
-          identity.org, resultingVersion, body.data.request_id,
-          identity.org, body.data.request_id,
+          identity.org, resultingVersion, body.request_id,
+          identity.org, body.request_id,
         ),
         c.env.DB.prepare(
           "INSERT INTO org_events " +
@@ -442,13 +442,13 @@ export function mountAudit(app: Hono<RelayAppEnv>): void {
             "WHERE EXISTS (SELECT 1 FROM audit_retention_policy_requests WHERE org = ? AND request_id = ?) " +
             "AND NOT EXISTS (SELECT 1 FROM org_events WHERE event_key = ?)",
         ).bind(
-          `audit-retention:${identity.org}:${body.data.request_id}`,
+          `audit-retention:${identity.org}:${body.request_id}`,
           AUDIT_RETENTION_UPDATE_EVENT,
           identity.org, identity.handle, "event-retention",
           actorIp, actorCountry,
-          `${identity.handle} set audit event retention to ${body.data.event_retention_days} days`, now,
-          identity.org, body.data.request_id,
-          `audit-retention:${identity.org}:${body.data.request_id}`,
+          `${identity.handle} set audit event retention to ${body.event_retention_days} days`, now,
+          identity.org, body.request_id,
+          `audit-retention:${identity.org}:${body.request_id}`,
         ),
         orgAuditTrimStatement(c.env.DB, identity.org),
       ]);
@@ -456,7 +456,7 @@ export function mountAudit(app: Hono<RelayAppEnv>): void {
       retentionMutationFailed(error);
       return c.json({ error: "audit retention update unavailable" }, 503);
     }
-    const storedRequest = await readPolicyRequest(c.env.DB, identity.org, body.data.request_id);
+    const storedRequest = await readPolicyRequest(c.env.DB, identity.org, body.request_id);
     if (!storedRequest) {
       return c.json({
         error: "retention policy version changed",
@@ -464,7 +464,7 @@ export function mountAudit(app: Hono<RelayAppEnv>): void {
       }, 409);
     }
     if (!policyRequestMatches(
-      storedRequest, body.data.event_retention_days, body.data.expected_version,
+      storedRequest, body.event_retention_days, body.expected_version,
     )) return c.json({ error: "request id conflicts with an earlier retention update" }, 409);
     return c.json(policyFromRequest(storedRequest), 200, { "Cache-Control": "no-store" });
   });
@@ -487,11 +487,11 @@ export function mountAudit(app: Hono<RelayAppEnv>): void {
 
   app.post("/v1/audit/legal-holds", rateLimit(AUDIT_WRITE, "identity", "audit-hold-write:"), requireAdmin, async (c) => {
     const identity = c.var.identity;
-    const body = AuditLegalHoldCreateRequest.safeParse(await c.req.json().catch(() => null));
-    if (!body.success) return c.json({ error: "invalid request" }, 400);
-    const existingRequest = await readHoldByCreateRequest(c.env.DB, identity.org, body.data.request_id);
+    const body = await jsonBody(c, AuditLegalHoldCreateRequest);
+    if (!body) return c.json({ error: "invalid request" }, 400);
+    const existingRequest = await readHoldByCreateRequest(c.env.DB, identity.org, body.request_id);
     if (existingRequest) {
-      if (existingRequest.reason !== body.data.reason) {
+      if (existingRequest.reason !== body.reason) {
         return c.json({ error: "request id conflicts with an earlier hold" }, 409);
       }
       return c.json(publicAuditHold(existingRequest), 200, { "Cache-Control": "no-store" });
@@ -507,7 +507,7 @@ export function mountAudit(app: Hono<RelayAppEnv>): void {
         c.env.DB.prepare(
           "INSERT INTO audit_legal_holds " +
             "(org, hold_id, reason, created_by, created_at, create_request_id) VALUES (?, ?, ?, ?, ?, ?)",
-        ).bind(identity.org, holdId, body.data.reason, identity.handle, now, body.data.request_id),
+        ).bind(identity.org, holdId, body.reason, identity.handle, now, body.request_id),
         c.env.DB.prepare(
           "INSERT INTO org_events " +
             "(event_key, event, action_type, org, actor, actor_type, target_type, target_id, target_role, " +
@@ -515,17 +515,17 @@ export function mountAudit(app: Hono<RelayAppEnv>): void {
             "SELECT ?, ?, 'C', ?, ?, 'handle', 'legal_hold', ?, NULL, ?, ?, ?, ? " +
             "WHERE NOT EXISTS (SELECT 1 FROM org_events WHERE event_key = ?)",
         ).bind(
-          `audit-hold-create:${identity.org}:${body.data.request_id}`,
+          `audit-hold-create:${identity.org}:${body.request_id}`,
           AUDIT_HOLD_CREATE_EVENT,
           identity.org, identity.handle, holdId, actorIp, actorCountry,
           `${identity.handle} created audit legal hold ${holdId}`, now,
-          `audit-hold-create:${identity.org}:${body.data.request_id}`,
+          `audit-hold-create:${identity.org}:${body.request_id}`,
         ),
         orgAuditTrimStatement(c.env.DB, identity.org),
       ]);
     } catch (error) {
-      const racedRequest = await readHoldByCreateRequest(c.env.DB, identity.org, body.data.request_id);
-      if (racedRequest && racedRequest.reason === body.data.reason) {
+      const racedRequest = await readHoldByCreateRequest(c.env.DB, identity.org, body.request_id);
+      if (racedRequest && racedRequest.reason === body.reason) {
         return c.json(publicAuditHold(racedRequest), 200, { "Cache-Control": "no-store" });
       }
       if (await readActiveHold(c.env.DB, identity.org)) {
@@ -541,11 +541,11 @@ export function mountAudit(app: Hono<RelayAppEnv>): void {
 
   app.post("/v1/audit/legal-holds/:holdId/release", rateLimit(AUDIT_WRITE, "identity", "audit-hold-write:"), requireAdmin, async (c) => {
     const identity = c.var.identity;
-    const body = AuditLegalHoldReleaseRequest.safeParse(await c.req.json().catch(() => null));
-    if (!body.success) return c.json({ error: "invalid request" }, 400);
+    const body = await jsonBody(c, AuditLegalHoldReleaseRequest);
+    if (!body) return c.json({ error: "invalid request" }, 400);
     const holdId = c.req.param("holdId");
     if (!AUDIT_HOLD_ID_RE.test(holdId)) return c.json({ error: "audit legal hold not found" }, 404);
-    const requestReplay = await readHoldByReleaseRequest(c.env.DB, identity.org, body.data.request_id);
+    const requestReplay = await readHoldByReleaseRequest(c.env.DB, identity.org, body.request_id);
     if (requestReplay) {
       if (requestReplay.hold_id !== holdId) {
         return c.json({ error: "request id conflicts with an earlier hold release" }, 409);
@@ -555,7 +555,7 @@ export function mountAudit(app: Hono<RelayAppEnv>): void {
     const existing = await readHold(c.env.DB, identity.org, holdId);
     if (!existing) return c.json({ error: "audit legal hold not found" }, 404);
     if (existing.released_at !== null) {
-      if (existing.release_request_id !== body.data.request_id) {
+      if (existing.release_request_id !== body.request_id) {
         return c.json({ error: "audit legal hold was already released" }, 409);
       }
       return c.json(publicAuditHold(existing), 200, { "Cache-Control": "no-store" });
@@ -567,7 +567,7 @@ export function mountAudit(app: Hono<RelayAppEnv>): void {
         c.env.DB.prepare(
           "UPDATE audit_legal_holds SET released_by = ?, released_at = ?, release_request_id = ? " +
             "WHERE org = ? AND hold_id = ? AND released_at IS NULL",
-        ).bind(identity.handle, now, body.data.request_id, identity.org, holdId),
+        ).bind(identity.handle, now, body.request_id, identity.org, holdId),
         c.env.DB.prepare(
           "INSERT INTO org_events " +
             "(event_key, event, action_type, org, actor, actor_type, target_type, target_id, target_role, " +
@@ -575,7 +575,7 @@ export function mountAudit(app: Hono<RelayAppEnv>): void {
             "SELECT ?, ?, 'U', ?, ?, 'handle', 'legal_hold', ?, NULL, ?, ?, ?, ? " +
             "WHERE changes() > 0",
         ).bind(
-          `audit-hold-release:${identity.org}:${body.data.request_id}`,
+          `audit-hold-release:${identity.org}:${body.request_id}`,
           AUDIT_HOLD_RELEASE_EVENT,
           identity.org, identity.handle, holdId, actorIp, actorCountry,
           `${identity.handle} released audit legal hold ${holdId}`, now,
@@ -583,7 +583,7 @@ export function mountAudit(app: Hono<RelayAppEnv>): void {
         orgAuditTrimStatement(c.env.DB, identity.org),
       ]);
     } catch (error) {
-      const racedRequest = await readHoldByReleaseRequest(c.env.DB, identity.org, body.data.request_id);
+      const racedRequest = await readHoldByReleaseRequest(c.env.DB, identity.org, body.request_id);
       if (racedRequest) {
         if (racedRequest.hold_id !== holdId) {
           return c.json({ error: "request id conflicts with an earlier hold release" }, 409);
@@ -594,7 +594,7 @@ export function mountAudit(app: Hono<RelayAppEnv>): void {
       return c.json({ error: "audit legal hold release unavailable" }, 503);
     }
     const released = await readHold(c.env.DB, identity.org, holdId);
-    if (!released || released.release_request_id !== body.data.request_id) {
+    if (!released || released.release_request_id !== body.request_id) {
       return c.json({ error: "audit legal hold was already released" }, 409);
     }
     return c.json(publicAuditHold(released), 200, { "Cache-Control": "no-store" });
@@ -655,11 +655,11 @@ export function mountAudit(app: Hono<RelayAppEnv>): void {
 
   app.post("/v1/audit/export-acknowledgements", rateLimit(AUDIT_WRITE, "identity", "audit-ack:"), requireAdmin, async (c) => {
     const identity = c.var.identity;
-    const body = AuditExportAcknowledgementRequest.safeParse(await c.req.json().catch(() => null));
-    if (!body.success) return c.json({ error: "invalid request" }, 400);
+    const body = await jsonBody(c, AuditExportAcknowledgementRequest);
+    if (!body) return c.json({ error: "invalid request" }, 400);
     const secret = c.env.BOOTSTRAP_TOKEN;
     if (!secret) return c.json({ error: "audit export unavailable" }, 503);
-    const receipt = await decodeCompletionReceipt(body.data.completion_receipt, secret, identity.org);
+    const receipt = await decodeCompletionReceipt(body.completion_receipt, secret, identity.org);
     if (!receipt) return c.json({ error: "invalid completion receipt" }, 400);
     const checkpoint = receipt.checkpoint;
     const now = Date.now();
