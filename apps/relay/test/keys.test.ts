@@ -18,7 +18,7 @@ async function newIdentity(handle: string) {
   const token = await registerHandle(handle);
   const idKp = await generateIdentityKeyPair();
   const record = {
-    v: 2 as const,
+    v: 1 as const,
     relay_origin: HOST,
     address: `@acme/${handle}`,
     identity_pub: await exportPublicKey(idKp.publicKey),
@@ -48,7 +48,7 @@ async function encRecord(who: Awaited<ReturnType<typeof newIdentity>>, epoch: nu
   const encKp = await generateEncryptionKeyPair();
   const pub = await exportPublicKey(encKp.publicKey);
   const record = {
-    v: 2 as const,
+    v: 1 as const,
     relay_origin: HOST,
     address: address ?? `@acme/${who.handle}`,
     key_id: await keyIdFor(pub),
@@ -217,7 +217,7 @@ describe("key publication endpoints", () => {
     const token = await registerHandle(handle);
     const idKp = await generateIdentityKeyPair();
     const identity = {
-      v: 2 as const, relay_origin: HOST,
+      v: 1 as const, relay_origin: HOST,
       address, identity_pub: await exportPublicKey(idKp.publicKey),
     };
     const headers = {
@@ -240,7 +240,7 @@ describe("key publication endpoints", () => {
     const encKp = await generateEncryptionKeyPair();
     const pub = await exportPublicKey(encKp.publicKey);
     const encryption = {
-      v: 2 as const,
+      v: 1 as const,
       relay_origin: HOST,
       address,
       key_id: await keyIdFor(pub),
@@ -282,7 +282,7 @@ describe("key publication endpoints", () => {
     const token = await registerHandle(handle);
     const idKp = await generateIdentityKeyPair();
     const identity = {
-      v: 2 as const, relay_origin: HOST,
+      v: 1 as const, relay_origin: HOST,
       address, identity_pub: await exportPublicKey(idKp.publicKey),
     };
     const headers = {
@@ -305,7 +305,7 @@ describe("key publication endpoints", () => {
     const encKp = await generateEncryptionKeyPair();
     const pub = await exportPublicKey(encKp.publicKey);
     const encryption = {
-      v: 2 as const,
+      v: 1 as const,
       relay_origin: HOST,
       address,
       key_id: await keyIdFor(pub),

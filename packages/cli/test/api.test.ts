@@ -470,12 +470,12 @@ async function buildValidKeysResponse(
   keys: StoredKeys, address: string,
 ): Promise<{ identity: IdentityRecordType; encryption: { record: EncryptionKeyRecordType; signature: string } }> {
   const identity: IdentityRecordType = {
-    v: 2, relay_origin: "relay.test", address,
+    v: 1, relay_origin: "relay.test", address,
     identity_pub: keys.identity_pub,
   };
   const now = 1_754_000_000_000;
   const record: EncryptionKeyRecordType = {
-    v: 2,
+    v: 1,
     relay_origin: "relay.test",
     address,
     key_id: await keyIdFor(keys.encryption_pub),

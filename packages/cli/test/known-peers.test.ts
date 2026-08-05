@@ -30,7 +30,7 @@ async function bundle(identity?: CryptoKeyPair, epoch = 1, address = PEER) {
   const encryption = await generateEncryptionKeyPair();
   const pub = await exportPublicKey(encryption.publicKey);
   const record: EncryptionKeyRecordType = {
-    v: 2, relay_origin: "relay.test", address,
+    v: 1, relay_origin: "relay.test", address,
     key_id: await keyIdFor(pub), suite: HPKE_SUITE, pub, epoch,
     not_before: 1, not_after: 1_000, prev: null,
   };
@@ -38,7 +38,7 @@ async function bundle(identity?: CryptoKeyPair, epoch = 1, address = PEER) {
     identityKey: identity,
     value: {
       identity: {
-        v: 2 as const, relay_origin: "relay.test",
+        v: 1 as const, relay_origin: "relay.test",
         address, identity_pub: identityPub,
       },
       encryption: { record, signature: await signTranscript(identity.privateKey, encryptionKeyTranscript(record)) },

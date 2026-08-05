@@ -184,10 +184,10 @@ export function mountKeys(app: Hono<RelayAppEnv>): void {
     // reconstructing at all.)
     const address = addressFor(c, identity.org, target);
     return c.json({
-      identity: { v: 2, relay_origin: relayOriginFor(c), address, identity_pub: identityPub },
+      identity: { v: 1, relay_origin: relayOriginFor(c), address, identity_pub: identityPub },
       encryption: {
         record: {
-          v: 2, relay_origin: relayOriginFor(c), address,
+          v: 1, relay_origin: relayOriginFor(c), address,
           key_id: row.key_id, suite: row.suite, pub: row.pub,
           epoch: row.epoch, not_before: row.not_before, not_after: row.not_after, prev: row.prev,
         },

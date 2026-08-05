@@ -77,7 +77,7 @@ async function identity(name: string): Promise<{ keys: StoredKeys; paths: Return
 
 async function encryptionRecord(address: string, keys: StoredKeys): Promise<EncryptionKeyRecordType> {
   return {
-    v: 2, relay_origin: "relay.test",
+    v: 1, relay_origin: "relay.test",
     address, key_id: await keyIdFor(keys.encryption_pub), suite: HPKE_SUITE,
     pub: keys.encryption_pub, epoch: keys.epoch, not_before: 1, not_after: Date.now() + 1_000_000,
     prev: null,
@@ -99,7 +99,7 @@ async function fixture(relay: string, overrides: Partial<CallOpts> = {}) {
     keyDeps: {
       fetchKeys: async () => ({
         identity: {
-          v: 2, relay_origin: origin,
+          v: 1, relay_origin: origin,
           address: toAddress, identity_pub: recipient.keys.identity_pub,
         },
         encryption: { record: recipientRecord, signature: "unused" },

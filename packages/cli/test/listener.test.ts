@@ -160,12 +160,12 @@ function baseDeps(relay: string) {
     codexToolTelemetryEnabled: () => true,
     fetchKeys: async (_relay: string, _auth: unknown, handle: string) => {
       const record: EncryptionKeyRecordType = {
-        v: 2, relay_origin: `${handle}@127.0.0.1`.slice(`${handle}@127.0.0.1`.indexOf("@") + 1), address: `${handle}@127.0.0.1`, key_id: await keyIdFor(callerKeys.encryption_pub),
+        v: 1, relay_origin: `${handle}@127.0.0.1`.slice(`${handle}@127.0.0.1`.indexOf("@") + 1), address: `${handle}@127.0.0.1`, key_id: await keyIdFor(callerKeys.encryption_pub),
         suite: HPKE_SUITE, pub: callerKeys.encryption_pub, epoch: callerKeys.epoch,
         not_before: 1, not_after: Date.now() + RELAY_CALL_TIMEOUT_MS, prev: null,
       };
       return {
-        identity: { v: 2 as const, relay_origin: `${handle}@127.0.0.1`.slice(`${handle}@127.0.0.1`.indexOf("@") + 1), address: `${handle}@127.0.0.1`, identity_pub: callerKeys.identity_pub },
+        identity: { v: 1 as const, relay_origin: `${handle}@127.0.0.1`.slice(`${handle}@127.0.0.1`.indexOf("@") + 1), address: `${handle}@127.0.0.1`, identity_pub: callerKeys.identity_pub },
         encryption: { record, signature: "unused" },
       };
     },

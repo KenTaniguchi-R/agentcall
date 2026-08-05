@@ -81,7 +81,7 @@ export async function verifyAndPinPeer(
     const existing = peers.find((peer) => peer.address === address);
     const servedFingerprint = await fingerprint(identityTranscript(bundle.identity));
     const storedIdentity = existing && {
-      v: 2 as const, relay_origin: existing.relay_origin,
+      v: 1 as const, relay_origin: existing.relay_origin,
       address: existing.address, identity_pub: existing.identity_pub,
     };
     const storedFingerprint = storedIdentity && await fingerprint(identityTranscript(storedIdentity));

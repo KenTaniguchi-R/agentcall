@@ -130,12 +130,12 @@ describe("trust CLI", () => {
       const encryption = await generateEncryptionKeyPair();
       const pub = await exportPublicKey(encryption.publicKey);
       const record = {
-        v: 2 as const, relay_origin: "relay.test",
+        v: 1 as const, relay_origin: "relay.test",
         address, key_id: await keyIdFor(pub), suite: HPKE_SUITE, pub,
         epoch: 1, not_before: Date.now() - 1_000, not_after: Date.now() + 60_000, prev: null,
       };
       const identityRecord = {
-        v: 2 as const, relay_origin: "relay.test",
+        v: 1 as const, relay_origin: "relay.test",
         address, identity_pub: identityPub,
       };
       return {
@@ -217,11 +217,11 @@ async function startCallRelay(
   const relayOrigin = "127.0.0.1";
   const remoteAddress = "@acme/sota";
   const identity = {
-    v: 2 as const, relay_origin: relayOrigin,
+    v: 1 as const, relay_origin: relayOrigin,
     address: remoteAddress, identity_pub: remote.identity_pub,
   };
   const record = {
-    v: 2 as const, relay_origin: relayOrigin,
+    v: 1 as const, relay_origin: relayOrigin,
     address: remoteAddress, key_id: await keyIdFor(remote.encryption_pub),
     suite: HPKE_SUITE, pub: remote.encryption_pub, epoch: 1,
     not_before: Date.now() - 1_000, not_after: Date.now() + 60_000, prev: null,

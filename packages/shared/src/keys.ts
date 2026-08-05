@@ -21,10 +21,7 @@ const PREV_RE = /^[0-9a-f]{32}$/;
 const BASE64URL_RE = /^[A-Za-z0-9_-]+$/;
 
 export const IdentityRecord = z.object({
-  // v2: `relay_origin` became an explicit signed field. It previously rode
-  // inside `address` as the host part, which tied the cross-relay binding to
-  // addresses being DNS-shaped.
-  v: z.literal(2),
+  v: z.literal(1),
   relay_origin: z.string().regex(RELAY_ORIGIN_RE),
   address: z.string().regex(ADDRESS_RE),
   identity_pub: z.string().regex(BASE64URL_RE).max(256),
@@ -32,8 +29,7 @@ export const IdentityRecord = z.object({
 export type IdentityRecordType = z.infer<typeof IdentityRecord>;
 
 export const EncryptionKeyRecord = z.object({
-  // v2: see IdentityRecord.
-  v: z.literal(2),
+  v: z.literal(1),
   relay_origin: z.string().regex(RELAY_ORIGIN_RE),
   address: z.string().regex(ADDRESS_RE),
   key_id: z.string().regex(KEY_ID_RE),
@@ -64,15 +60,20 @@ export type EncryptionKeyRecordType = z.infer<typeof EncryptionKeyRecord>;
 
 // Field order is part of the signature. Never reorder these lists; adding a
 // field means a new record version.
+//
+// That rule starts applying now. `relay_origin` was added to both records while
+// nothing had ever published one, so v1 is this shape rather than the shape
+// before it — there is no earlier v1 in the world to be compatible with, and
+// minting a v2 for it would have implied one forever.
 export function identityTranscript(r: IdentityRecordType): Uint8Array {
   return canonicalEncode([
-    "agentcall/identity/v2", r.v, r.relay_origin, r.address, r.identity_pub,
+    "agentcall/identity/v1", r.v, r.relay_origin, r.address, r.identity_pub,
   ]);
 }
 
 export function encryptionKeyTranscript(r: EncryptionKeyRecordType): Uint8Array {
   return canonicalEncode([
-    "agentcall/encryption-key/v2", r.v, r.relay_origin, r.address, r.key_id, r.suite, r.pub,
+    "agentcall/encryption-key/v1", r.v, r.relay_origin, r.address, r.key_id, r.suite, r.pub,
     r.epoch, r.not_before, r.not_after, r.prev,
   ]);
 }

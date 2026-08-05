@@ -388,7 +388,7 @@ export async function publishIdentityKey(
   const record: IdentityRecordType = IdentityRecord.parse({
     // Both bindings are derived, never passed in pre-composed: the address is
     // a registry key over (org, handle), and the relay origin is the endpoint.
-    v: 2, relay_origin: new URL(relay).hostname,
+    v: 1, relay_origin: new URL(relay).hostname,
     address: formatAddress(auth.org, auth.handle),
     identity_pub: keys.identity_pub,
   });
@@ -422,7 +422,7 @@ export async function publishEncryptionKey(
   if (!publication) {
     const pub = keys.encryption_pub;
     const record: EncryptionKeyRecordType = EncryptionKeyRecord.parse({
-      v: 2,
+      v: 1,
       relay_origin: new URL(relay).hostname,
       address: formatAddress(auth.org, auth.handle),
       key_id: await keyIdFor(pub),
