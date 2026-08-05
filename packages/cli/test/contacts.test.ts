@@ -24,6 +24,30 @@ describe("contacts store", () => {
     expect(statSync(p.dir).mode & 0o777).toBe(0o700);
   });
 
+  // An in-place rewrite opens the destination with O_TRUNC, so a crash or a
+  // full disk mid-write leaves a truncated contact book — which loadContacts
+  // treats as corrupt and refuses to read, losing every saved contact. An
+  // atomic replace writes a sibling temp file and renames over the target, so
+  // the destination goes from old bytes to new with nothing in between. A new
+  // inode is the observable evidence that a rename, not a rewrite, happened.
+  it("replaces the file rather than rewriting it in place", () => {
+    const p = getMachinePaths(tempHome());
+    saveContacts(p, { contacts: [{ name: "ken", address: "@acme/ken" }] });
+    const before = statSync(p.contactsFile).ino;
+    saveContacts(p, { contacts: [{ name: "sota", address: "@acme/sota" }] });
+    expect(statSync(p.contactsFile).ino).not.toBe(before);
+    expect(loadContacts(p).contacts[0]!.name).toBe("sota");
+  });
+
+  it("leaves the previous book intact when serialization fails", () => {
+    const p = getMachinePaths(tempHome());
+    saveContacts(p, { contacts: [{ name: "ken", address: "@acme/ken" }] });
+    const circular: { self?: unknown } = {};
+    circular.self = circular;
+    expect(() => saveContacts(p, { contacts: [circular] } as never)).toThrow(/circular/i);
+    expect(loadContacts(p).contacts[0]!.name).toBe("ken");
+  });
+
   it("corrupt file throws an error naming the path", () => {
     const p = getMachinePaths(tempHome());
     mkdirSync(p.dir, { recursive: true });

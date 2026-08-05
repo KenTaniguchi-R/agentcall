@@ -1,8 +1,7 @@
-import { mkdirSync, writeFileSync, chmodSync } from "node:fs";
 import { z } from "zod";
 import { parseAddress } from "@benree/agentcall-shared";
 import type { MachinePaths } from "./paths.js";
-import { readJsonStore } from "./json-store.js";
+import { readJsonStore, writeJsonAtomic } from "./json-store.js";
 
 // Never matches "@" or "/", so a contact name can never be mistaken for an
 // `@org/handle` address during resolution.
@@ -29,12 +28,13 @@ export function loadContacts(p: MachinePaths): ContactsFile {
   });
 }
 
-// 0600/0700 like saveLineConfig: notes are personal data.
+// Through writeJsonAtomic like saveLineConfig, which gets the 0600/0700 posture
+// (notes are personal data) and the atomic replace in one call. This used to
+// hand-roll the mkdir/chmod/write and rewrite the file in place, which left a
+// truncation window: a crash mid-write produced a half-written book, and
+// loadContacts throws on a malformed one rather than resetting it.
 export function saveContacts(p: MachinePaths, file: ContactsFile): void {
-  mkdirSync(p.dir, { recursive: true, mode: 0o700 });
-  chmodSync(p.dir, 0o700);
-  writeFileSync(p.contactsFile, JSON.stringify(file, null, 2) + "\n", { mode: 0o600 });
-  chmodSync(p.contactsFile, 0o600);
+  writeJsonAtomic(p.contactsFile, file);
 }
 
 const byName = (contacts: Contact[], name: string) =>
