@@ -1,6 +1,6 @@
 import { execFile, execFileSync } from "node:child_process";
 import { mkdirSync, readFileSync, statSync, writeFileSync } from "node:fs";
-import { join } from "node:path";
+import { dirname, join, resolve, sep } from "node:path";
 import { describe, expect, it } from "vitest";
 import { GUARD_TIMEOUT_S } from "../src/runner.js";
 import { tempDir } from "./helpers.js";
@@ -215,6 +215,54 @@ describe("guard-entry as a real process", () => {
     // Interleaved appends must still parse: a torn line means the audit trail
     // cannot be trusted, which is the whole point of the second stream.
     for (const l of lines) expect(() => JSON.parse(l)).not.toThrow();
+  });
+});
+
+// #377. guard-entry.ts's header defends a minimal import graph, and #372 grew
+// that graph by a third-party package without anything noticing — the header
+// was still describing a constraint the file had stopped honouring. A comment
+// cannot catch that; this can.
+//
+// Measured 2026-08-06 (see docs/research/2026-08-06-guard-entry-import-cost.md):
+// zod costs 13ms of guard-entry's 48ms, against a 25ms bare-node floor. That was
+// accepted, because the alternative is a second parser on the sensitivity map.
+// A SECOND package would not be, and this is what makes adding one a decision
+// rather than an accident.
+describe("guard-entry import budget", () => {
+  // Walks the built graph rather than src, because dist is what the hook
+  // actually loads — a dependency reachable only through a transitive re-export
+  // costs the same as a direct one and must be visible here.
+  function thirdPartyImports(entry: string): Map<string, Set<string>> {
+    const seen = new Set<string>();
+    const bare = new Map<string, Set<string>>();
+    const walk = (file: string) => {
+      if (seen.has(file)) return;
+      seen.add(file);
+      let src: string;
+      try {
+        src = readFileSync(file, "utf8");
+      } catch {
+        return; // a .d.ts-only or type-erased specifier resolves to nothing at runtime
+      }
+      for (const m of src.matchAll(/(?:^|[\s;}])(?:import|export)[^;]*?from\s*"([^"]+)"/g)) {
+        const spec = m[1]!;
+        if (spec.startsWith(".")) walk(resolve(dirname(file), spec));
+        // node: builtins are already resident; only packages cost load time.
+        else if (!spec.startsWith("node:")) {
+          bare.set(spec, (bare.get(spec) ?? new Set()).add(file.split(`dist${sep}`)[1] ?? file));
+        }
+      }
+    };
+    walk(entry);
+    return bare;
+  }
+
+  it("pulls in exactly one third-party package, and only where the boundary is parsed", () => {
+    const bare = thirdPartyImports(ENTRY);
+    expect([...bare.keys()].sort()).toEqual(["zod"]);
+    // Named, not just counted. zod arriving through a second module would mean
+    // a new module in the hot graph, which is the thing being bounded.
+    expect([...bare.get("zod")!]).toEqual(["sensitivity.js"]);
   });
 });
 
