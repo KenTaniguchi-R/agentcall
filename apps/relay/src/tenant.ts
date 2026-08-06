@@ -25,20 +25,25 @@ export function deploymentOrgAllows(
     ORG_RE.test(configuredOrg) && configuredOrg === org;
 }
 
+// Which org this request is claiming, or "" if the deployment does not permit
+// that claim. Deciding *which* org is claimed is the only thing this adds; the
+// hosted/self-hosted rule itself is `deploymentOrgAllows` and is not restated
+// here, so the two cannot drift apart.
+//
+// Header only. The hostname used to be a fallback source of the org, which
+// made the tenant boundary depend on two things that could disagree; the
+// credential settles it either way, because `authenticatedHandle` scopes its
+// lookup by (org, handle) and a token from one org cannot authenticate
+// against another. One source, and it is the one that is actually proven.
+//
+// A self-hosted request may omit the header — the relay serves exactly one
+// org, so silence claims that org. Sending a *different* one is a claim on
+// another org, which `deploymentOrgAllows` rejects via `configuredOrg === org`
+// rather than by a separate mismatch test. The fallback is inert under hosted,
+// where `configuredOrg` is required to be undefined anyway.
 export function requestOrg(req: RequestLike, mode?: string, configuredOrg?: string): string {
-  const header = req.header("X-AgentCall-Org") ?? "";
-  if (mode === "self-hosted") {
-    if (configuredOrg === undefined || !ORG_RE.test(configuredOrg) ||
-      (header !== "" && header !== configuredOrg)) return "";
-    return configuredOrg;
-  }
-  if (mode !== "hosted" || configuredOrg !== undefined) return "";
-  // Header only. The hostname used to be a fallback source of the org, which
-  // made the tenant boundary depend on two things that could disagree; the
-  // credential settles it either way, because `authenticatedHandle` scopes its
-  // lookup by (org, handle) and a token from one org cannot authenticate
-  // against another. One source, and it is the one that is actually proven.
-  return ORG_RE.test(header) ? header : "";
+  const claimed = req.header("X-AgentCall-Org") || configuredOrg || "";
+  return deploymentOrgAllows(mode, configuredOrg, claimed) ? claimed : "";
 }
 
 export async function authenticateRequest(
