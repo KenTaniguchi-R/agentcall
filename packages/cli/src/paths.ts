@@ -44,6 +44,8 @@ export interface LinePaths {
   // encryption-key path.
   identityKeyFile: string;
   policyFile: string;
+  /** Source sensitivity map (#372). Absent means every source is `secret`. */
+  sensitivityFile: string;
   cardSnapshotFile: string;
   callsLog: string;
   toolsLog: string;
@@ -105,6 +107,7 @@ export function getLinePaths(machine: MachinePaths, name: string): LinePaths {
     configFile: join(dir, "config.json"),
     identityKeyFile: join(dir, "identity.key.json"),
     policyFile: join(dir, "policy.json"),
+    sensitivityFile: join(dir, "sensitivity.json"),
     cardSnapshotFile: join(dir, "card.pushed.json"),
     callsLog: join(dir, "calls.log"),
     toolsLog: join(dir, "tools.log"),

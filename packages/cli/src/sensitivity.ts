@@ -6,9 +6,11 @@
 // every source: how sensitive is it. Everything not named is `secret`, so the
 // failure mode of an unconfigured or half-configured line is a refusal to
 // answer rather than a leak — which is what makes a generous default safe.
+import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import { z } from "zod";
 import { canonical, expandHome, isInside } from "./path-canon.js";
+import type { LinePaths } from "./paths.js";
 
 export const SENSITIVITIES = ["public", "internal", "secret"] as const;
 export type Sensitivity = (typeof SENSITIVITIES)[number];
@@ -32,6 +34,31 @@ export const SensitivityMapSchema = z.object({
 }).strict();
 
 export type SensitivityMap = z.infer<typeof SensitivityMapSchema>;
+
+/** A fresh install: no sources named, so everything classifies `secret`. */
+export const DEFAULT_SENSITIVITY_MAP: SensitivityMap = { sources: [], mcp: {}, skills: {} };
+
+// Missing file -> safe default (fresh install). Malformed file -> THROW.
+//
+// Same contract as loadUserPolicy, for the mirrored reason: there, a silent
+// fallback would grant `ask` to a caller the owner blocked. Here the default is
+// the restrictive end, so a fallback fails closed — but it would still mean the
+// owner's map silently stopped applying, and a boundary that can disappear
+// through a typo is not a boundary.
+export function loadSensitivityMap(p: LinePaths): SensitivityMap {
+  let raw: string;
+  try {
+    raw = readFileSync(p.sensitivityFile, "utf8");
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === "ENOENT") return DEFAULT_SENSITIVITY_MAP;
+    throw new Error(`sensitivity map is unreadable: ${String(error)}`, { cause: error });
+  }
+  try {
+    return SensitivityMapSchema.parse(JSON.parse(raw));
+  } catch (error) {
+    throw new Error(`sensitivity map is invalid: ${String(error)}`, { cause: error });
+  }
+}
 
 /** Most restrictive of the inputs. No inputs is `public` — an untouched run starts clean. */
 export function combine(...values: Sensitivity[]): Sensitivity {
