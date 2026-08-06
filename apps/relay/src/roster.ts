@@ -1,4 +1,5 @@
 import type { Context, Hono } from "hono";
+import { createMiddleware } from "hono/factory";
 // Type-only, so the index -> roster -> index cycle is erased at compile time
 // and never exists at runtime. Do not turn this into a value import — the
 // same rule a2a.ts follows.
@@ -61,6 +62,73 @@ function publicJoinKey(row: JoinKeyRow) {
   };
 }
 
+// One shared body for "unknown roster" and "wrong secret". They MUST be
+// byte-identical: a distinct response for either one turns roster ids into
+// an enumerable namespace. Declared once so the two call sites cannot drift.
+const NOT_FOUND = { error: "not found" } as const;
+
+async function recordAuditBudgetExhaustion(
+  c: Context<RelayAppEnv>, id: string, org: string, actor: string,
+  actorType: "handle" | "admin_secret",
+) {
+  const now = Date.now();
+  await c.env.DB.batch([
+    c.env.DB.prepare(
+      "UPDATE rosters SET audit_budget_exhausted_at = ? " +
+        "WHERE id = ? AND org = ? AND audit_budget_exhausted_at IS NULL",
+    ).bind(now, id, org),
+    rosterAuditStatement(c, {
+      event: "roster.audit_budget_exhausted", action: "U", rosterId: id, org, actor, actorType,
+      targetType: "roster", targetId: null,
+      description: `Roster ${id} exhausted its membership audit event budget`, at: now,
+    }, "previous-change"),
+  ]);
+}
+
+async function adminRoster(c: Context<RelayAppEnv>, id: string, supplied: string) {
+  const row = await c.env.DB.prepare(
+    "SELECT org, admin_secret_hash FROM rosters WHERE id = ?",
+  ).bind(id).first<{ org: string; admin_secret_hash: string }>();
+  const digest = await sha256Hex(supplied);
+  // Always perform the fixed-length comparison, including for a missing
+  // roster, so absence does not skip work that a wrong secret performs.
+  const matches = constantTimeEqual(row?.admin_secret_hash ?? "0".repeat(64), digest);
+  if (!row || !matches) return null;
+  return row;
+}
+
+// Roster admin routes authenticate with the roster's own admin secret, not the
+// caller's org role, so requireAdmin does not cover them. Six handlers pasted
+// this check by hand, which made "admin-only" a property of whoever wrote the
+// handler remembering to paste it rather than a property of the route — the
+// same argument requireAdmin makes at middleware.ts:44-52, applied to the one
+// admin surface #276 did not reach. A roster route either lists this in its
+// chain or it does not, and that is visible in the route table.
+//
+// Deliberately kept in roster.ts rather than middleware.ts: it needs
+// adminRoster, and middleware.ts is imported *by* roster.ts. Exporting it from
+// there for a single consumer would buy an import cycle and nothing else.
+//
+// Mount it AFTER rateLimit. A failed secret must still spend the per-(org,
+// roster) budget, which is what stops this route from being an oracle you can
+// grind — roster-lifecycle.test.ts pins that behaviour.
+const requireRosterAdmin = createMiddleware<RelayAppEnv>(async (c, next) => {
+  const id = c.req.param("id");
+  // Shape-check before touching D1: a malformed id can never match a row.
+  // `id` is optional to the type checker because a standalone middleware is not
+  // bound to a path. Mounting this on a route without an `:id` is a mistake, so
+  // treat a missing param the same as a malformed one and fail closed.
+  if (!id || !ROSTER_ID_RE.test(id)) return c.json({ error: "invalid roster id" }, 400);
+  // Only the credential is read here. Each route still parses its own schema,
+  // so a body that is valid here can still be rejected by the handler — with
+  // the same 404, because both use NOT_FOUND.
+  const body = await jsonBody(c, AdminSecretRequest);
+  if (!body) return c.json(NOT_FOUND, 404);
+  const roster = await adminRoster(c, id, body.admin_secret);
+  if (!roster || roster.org !== c.var.identity.org) return c.json(NOT_FOUND, 404);
+  await next();
+});
+
 export function mountRoster(app: Hono<RelayAppEnv>): void {
   app.post("/v1/roster", rateLimit(REGISTER, "identity", "roster:"), async (c) => {
     const identity = c.var.identity;
@@ -97,11 +165,6 @@ export function mountRoster(app: Hono<RelayAppEnv>): void {
     // Both credentials are returned exactly once and only their digests persist.
     return c.json({ roster_id, join_key: joinKey, admin_secret });
   });
-
-  // One shared body for "unknown roster" and "wrong secret". They MUST be
-  // byte-identical: a distinct response for either one turns roster ids into
-  // an enumerable namespace. Declared once so the two call sites cannot drift.
-  const NOT_FOUND = { error: "not found" } as const;
 
   app.post("/v1/roster/:id/join", rateLimit(ROSTER_WRITE, byRoster), async (c) => {
     const identity = c.var.identity;
@@ -175,36 +238,6 @@ export function mountRoster(app: Hono<RelayAppEnv>): void {
     return c.json({ error: "roster full" }, 409);
   });
 
-  async function recordAuditBudgetExhaustion(
-    c: Context<RelayAppEnv>, id: string, org: string, actor: string,
-    actorType: "handle" | "admin_secret",
-  ) {
-    const now = Date.now();
-    await c.env.DB.batch([
-      c.env.DB.prepare(
-        "UPDATE rosters SET audit_budget_exhausted_at = ? " +
-          "WHERE id = ? AND org = ? AND audit_budget_exhausted_at IS NULL",
-      ).bind(now, id, org),
-      rosterAuditStatement(c, {
-        event: "roster.audit_budget_exhausted", action: "U", rosterId: id, org, actor, actorType,
-        targetType: "roster", targetId: null,
-        description: `Roster ${id} exhausted its membership audit event budget`, at: now,
-      }, "previous-change"),
-    ]);
-  }
-
-  async function adminRoster(c: Context<RelayAppEnv>, id: string, supplied: string) {
-    const row = await c.env.DB.prepare(
-      "SELECT org, admin_secret_hash FROM rosters WHERE id = ?",
-    ).bind(id).first<{ org: string; admin_secret_hash: string }>();
-    const digest = await sha256Hex(supplied);
-    // Always perform the fixed-length comparison, including for a missing
-    // roster, so absence does not skip work that a wrong secret performs.
-    const matches = constantTimeEqual(row?.admin_secret_hash ?? "0".repeat(64), digest);
-    if (!row || !matches) return null;
-    return row;
-  }
-
   app.post("/v1/roster/:id/leave", rateLimit(ROSTER_WRITE, byRoster), async (c) => {
     const identity = c.var.identity;
     const id = c.req.param("id");
@@ -228,15 +261,9 @@ export function mountRoster(app: Hono<RelayAppEnv>): void {
     return c.json({ ok: true });
   });
 
-  app.post("/v1/roster/:id/audit-budget/reset", rateLimit(ROSTER_WRITE, byRoster), async (c) => {
+  app.post("/v1/roster/:id/audit-budget/reset", rateLimit(ROSTER_WRITE, byRoster), requireRosterAdmin, async (c) => {
     const identity = c.var.identity;
     const id = c.req.param("id");
-    if (!ROSTER_ID_RE.test(id)) return c.json({ error: "invalid roster id" }, 400);
-    const body = await jsonBody(c, AdminSecretRequest);
-    if (!body) return c.json(NOT_FOUND, 404);
-    const roster = await adminRoster(c, id, body.admin_secret);
-    if (!roster || roster.org !== identity.org) return c.json(NOT_FOUND, 404);
-
     const now = Date.now();
     const [updated] = await c.env.DB.batch([
       c.env.DB.prepare(
@@ -257,14 +284,11 @@ export function mountRoster(app: Hono<RelayAppEnv>): void {
     return c.json({ ok: true, reset, audit_budget_used: state?.audit_budget_used ?? 0 });
   });
 
-  app.post("/v1/roster/:id/expel", rateLimit(ROSTER_WRITE, byRoster), async (c) => {
+  app.post("/v1/roster/:id/expel", rateLimit(ROSTER_WRITE, byRoster), requireRosterAdmin, async (c) => {
     const identity = c.var.identity;
     const id = c.req.param("id");
-    if (!ROSTER_ID_RE.test(id)) return c.json({ error: "invalid roster id" }, 400);
     const body = await jsonBody(c, ExpelRosterRequest);
     if (!body) return c.json(NOT_FOUND, 404);
-    const roster = await adminRoster(c, id, body.admin_secret);
-    if (!roster || roster.org !== identity.org) return c.json(NOT_FOUND, 404);
     const member = await c.env.DB.prepare(
       "SELECT 1 FROM roster_members WHERE roster_id = ? AND org = ? AND handle = ?",
     ).bind(id, identity.org, body.handle).first();
@@ -283,14 +307,11 @@ export function mountRoster(app: Hono<RelayAppEnv>): void {
     return c.json({ ok: true });
   });
 
-  app.post("/v1/roster/:id/keys", rateLimit(ROSTER_WRITE, byRoster), async (c) => {
+  app.post("/v1/roster/:id/keys", rateLimit(ROSTER_WRITE, byRoster), requireRosterAdmin, async (c) => {
     const identity = c.var.identity;
     const id = c.req.param("id");
-    if (!ROSTER_ID_RE.test(id)) return c.json({ error: "invalid roster id" }, 400);
     const body = await jsonBody(c, IssueRosterJoinKeyRequest);
     if (!body) return c.json(NOT_FOUND, 404);
-    const roster = await adminRoster(c, id, body.admin_secret);
-    if (!roster || roster.org !== identity.org) return c.json(NOT_FOUND, 404);
     const { joinKey, prefix, secret } = generateJoinKey();
     const now = Date.now();
     const expiresAt = now + body.expires_in_days * 86_400_000;
@@ -325,14 +346,9 @@ export function mountRoster(app: Hono<RelayAppEnv>): void {
     }) });
   });
 
-  app.post("/v1/roster/:id/keys/list", rateLimit(ROSTER_WRITE, byRoster), async (c) => {
+  app.post("/v1/roster/:id/keys/list", rateLimit(ROSTER_WRITE, byRoster), requireRosterAdmin, async (c) => {
     const identity = c.var.identity;
     const id = c.req.param("id");
-    if (!ROSTER_ID_RE.test(id)) return c.json({ error: "invalid roster id" }, 400);
-    const body = await jsonBody(c, AdminSecretRequest);
-    if (!body) return c.json(NOT_FOUND, 404);
-    const roster = await adminRoster(c, id, body.admin_secret);
-    if (!roster || roster.org !== identity.org) return c.json(NOT_FOUND, 404);
     const { results } = await c.env.DB.prepare(
       "SELECT prefix, description, created_by, created_at, expires_at, reusable, used, revoked_at " +
         "FROM roster_join_keys WHERE roster_id = ? AND org = ? ORDER BY created_at DESC LIMIT ?",
@@ -340,14 +356,11 @@ export function mountRoster(app: Hono<RelayAppEnv>): void {
     return c.json({ keys: (results ?? []).map(publicJoinKey) });
   });
 
-  app.post("/v1/roster/:id/keys/:prefix/revoke", rateLimit(ROSTER_WRITE, byRoster), async (c) => {
+  app.post("/v1/roster/:id/keys/:prefix/revoke", rateLimit(ROSTER_WRITE, byRoster), requireRosterAdmin, async (c) => {
     const identity = c.var.identity;
     const id = c.req.param("id");
-    if (!ROSTER_ID_RE.test(id)) return c.json({ error: "invalid roster id" }, 400);
     const body = await jsonBody(c, RevokeRosterJoinKeyRequest, { prefix: c.req.param("prefix") });
     if (!body) return c.json(NOT_FOUND, 404);
-    const roster = await adminRoster(c, id, body.admin_secret);
-    if (!roster || roster.org !== identity.org) return c.json(NOT_FOUND, 404);
     const key = await c.env.DB.prepare(
       "SELECT revoked_at FROM roster_join_keys WHERE prefix = ? AND roster_id = ? AND org = ?",
     ).bind(body.prefix, id, identity.org).first<{ revoked_at: number | null }>();
@@ -382,14 +395,9 @@ export function mountRoster(app: Hono<RelayAppEnv>): void {
     return c.json({ prefix: body.prefix, revoked_at: persisted.revoked_at, evicted });
   });
 
-  app.post("/v1/roster/:id/delete", rateLimit(ROSTER_WRITE, byRoster), async (c) => {
+  app.post("/v1/roster/:id/delete", rateLimit(ROSTER_WRITE, byRoster), requireRosterAdmin, async (c) => {
     const identity = c.var.identity;
     const id = c.req.param("id");
-    if (!ROSTER_ID_RE.test(id)) return c.json({ error: "invalid roster id" }, 400);
-    const body = await jsonBody(c, AdminSecretRequest);
-    if (!body) return c.json(NOT_FOUND, 404);
-    const roster = await adminRoster(c, id, body.admin_secret);
-    if (!roster || roster.org !== identity.org) return c.json(NOT_FOUND, 404);
     const now = Date.now();
     const [, , deleted] = await c.env.DB.batch([
       c.env.DB.prepare("DELETE FROM roster_join_keys WHERE roster_id = ? AND org = ?").bind(id, identity.org),
