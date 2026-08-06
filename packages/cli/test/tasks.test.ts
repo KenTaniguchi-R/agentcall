@@ -163,6 +163,10 @@ describe("loadTasks threadable", () => {
     expect(loadTasks(linePaths(home)).find((t) => t.id === "plain")!.threadable).toBe(true);
   });
 
+  it("makes the built-in ask task threadable", () => {
+    expect(loadTasks(linePaths(tempHome())).find((t) => t.id === "ask")!.threadable).toBe(true);
+  });
+
   it("honours an explicit false", () => {
     const home = tempHome();
     writeSkill(home, "opt-out", "---\ndescription: d\nthreadable: false\n---\nbody");

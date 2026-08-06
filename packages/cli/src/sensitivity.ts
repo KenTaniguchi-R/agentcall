@@ -6,8 +6,8 @@
 // every source: how sensitive is it. Everything not named is `secret`, so the
 // failure mode of an unconfigured or half-configured line is a refusal to
 // answer rather than a leak — which is what makes a generous default safe.
-import { readFileSync } from "node:fs";
-import { join } from "node:path";
+import { existsSync, readFileSync } from "node:fs";
+import { dirname, join, resolve } from "node:path";
 import { z } from "zod";
 import { canonical, expandHome, isInside } from "./path-canon.js";
 import type { LinePaths } from "./paths.js";
@@ -167,4 +167,31 @@ export function withFloor(map: SensitivityMap, home: string): SensitivityMap {
 
 export function classifySkill(map: SensitivityMap, skill: string): Sensitivity {
   return lookup(map.skills, skill);
+}
+
+/**
+ * The map `setup` writes for a new line.
+ *
+ * Labels the git repository setup ran inside, walking up from cwd so running it
+ * deep in a monorepo still names the root. If there is no repository, names
+ * NOTHING — an empty map means every source is `secret`, the line answers "I
+ * can't share that", and `doctor` tells the owner to label something. A wrong
+ * guess here would be a silent leak, which is the one failure this model exists
+ * to make impossible.
+ *
+ * $HOME is never labelled even when it contains a .git: that is a dotfiles
+ * repository, not a project, and labelling it would hand a caller the whole
+ * home tree minus the floor.
+ */
+export function defaultSensitivityMap(cwd: string, home?: string): SensitivityMap {
+  const stop = home === undefined ? undefined : resolve(home);
+  let dir = resolve(cwd);
+  for (;;) {
+    if (dir !== stop && existsSync(join(dir, ".git"))) {
+      return { ...DEFAULT_SENSITIVITY_MAP, sources: [{ path: dir, sensitivity: "internal" }] };
+    }
+    const parent = dirname(dir);
+    if (parent === dir) return DEFAULT_SENSITIVITY_MAP;
+    dir = parent;
+  }
 }

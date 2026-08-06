@@ -1,8 +1,8 @@
 import { mkdirSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
-import { DEFAULT_SENSITIVITY_MAP, loadSensitivityMap } from "../src/sensitivity.js";
-import { tempLine } from "./helpers.js";
+import { DEFAULT_SENSITIVITY_MAP, defaultSensitivityMap, loadSensitivityMap } from "../src/sensitivity.js";
+import { tempDir, tempLine } from "./helpers.js";
 import type { LinePaths } from "../src/paths.js";
 
 // tempLine builds the paths but does not create the line directory; anything
@@ -48,5 +48,33 @@ describe("loadSensitivityMap", () => {
   it("puts the map beside the line's other config", () => {
     const p = tempLine();
     expect(p.sensitivityFile).toBe(join(p.dir, "sensitivity.json"));
+  });
+});
+
+describe("defaultSensitivityMap", () => {
+  it("labels a git repository internal when setup runs inside one", () => {
+    const repo = tempDir("repo-");
+    mkdirSync(join(repo, ".git"), { recursive: true });
+    const sub = join(repo, "packages", "cli");
+    mkdirSync(sub, { recursive: true });
+    // Found by walking up from cwd, so running setup deep inside the tree
+    // still labels the repository root rather than the subdirectory.
+    expect(defaultSensitivityMap(sub).sources).toEqual([{ path: repo, sensitivity: "internal" }]);
+  });
+
+  it("names nothing when setup does not run inside a repository", () => {
+    // Deliberately empty rather than guessing. Everything is secret, the line
+    // answers "I can't share that", and `agentcall doctor` is what tells the
+    // owner to label something — a wrong guess here would be a silent leak.
+    const plain = tempDir("plain-");
+    expect(defaultSensitivityMap(plain).sources).toEqual([]);
+  });
+
+  it("never labels $HOME itself, even if a stray .git sits there", () => {
+    // A .git in the home directory is a dotfiles repo, not a project. Labelling
+    // it internal would hand a caller the entire home tree minus the floor.
+    const home = tempDir("home-");
+    mkdirSync(join(home, ".git"), { recursive: true });
+    expect(defaultSensitivityMap(home, home).sources).toEqual([]);
   });
 });
