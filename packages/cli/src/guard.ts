@@ -1,6 +1,7 @@
-import { basename, dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
+import { basename, dirname, isAbsolute, join, resolve, sep } from "node:path";
 import { fileURLToPath } from "node:url";
 import { lineTaskDirs } from "./line-task-dirs.js";
+import { canonical, expandHome, fold, isAncestorOf, isInside } from "./path-canon.js";
 import { getMachinePaths, type LinePaths } from "./paths.js";
 
 export type GuardInput = {
@@ -93,11 +94,6 @@ const NO_PATH_SURFACE = new Set(["WebSearch"]);
 // can climb out of that root entirely. LS has no selector.
 const SELECTOR_KEY: Record<string, string> = { Grep: "glob", Glob: "pattern" };
 
-// The default macOS filesystem is case-INsensitive — ~/.SSH opens ~/.ssh.
-// Linux is commonly case-sensitive; folding can over-deny there, which is the
-// safe direction for a security floor shared by both supported platforms.
-const fold = (p: string) => p.toLowerCase();
-
 // Denied roots are canonicalized alongside the targets they get compared with.
 // A denied root can itself be a symlink — ~/.aws onto an encrypted volume — and
 // a canonical target is never "inside" a lexical alias, so comparing the two
@@ -110,48 +106,6 @@ function deniedPaths(home: string, realpath: (p: string) => string, extraRoots: 
   const lexical = [...DENIED_DIRS, ...DENIED_FILES].map((d) => resolve(home, d));
   const roots = [...lexical, ...extraRoots];
   return [...new Set([...roots, ...roots.map((d) => canonical(d, home, home, realpath))])];
-}
-
-function expandHome(p: string, home: string): string {
-  if (p === "~") return home;
-  if (p.startsWith("~/")) return join(home, p.slice(2));
-  return p;
-}
-
-// realpath throws on a path that does not exist yet — a Write target, a
-// dangling symlink. Resolving the longest EXISTING ancestor and re-appending
-// the unresolved tail is what stops `/tmp/link/new_key` (link -> ~/.ssh) from
-// being compared as text and allowed.
-function canonical(p: string, cwd: string, home: string, realpath: (p: string) => string): string {
-  const expanded = expandHome(p, home);
-  const abs = isAbsolute(expanded) ? resolve(expanded) : resolve(cwd, expanded);
-  const tail: string[] = [];
-  let cur = abs;
-  for (;;) {
-    try {
-      return resolve(realpath(cur), ...[...tail].reverse());
-    } catch {
-      const parent = dirname(cur);
-      if (parent === cur) return abs;   // reached the root, nothing resolvable
-      tail.push(basename(cur));
-      cur = parent;
-    }
-  }
-}
-
-// relative() rather than startsWith(): resolve("/") is "/", so "/" + sep is
-// "//", which prefixes nothing — a prefix compare silently permits a search
-// rooted at the filesystem root.
-function isInside(target: string, denied: string): boolean {
-  const rel = relative(fold(denied), fold(target));
-  return rel === "" || (!rel.startsWith("..") && !isAbsolute(rel));
-}
-
-// A search rooted at `target` reaches `denied` when `target` is above it.
-// This is what stops Grep(path: "~") and Grep(path: "/").
-function isAncestorOf(target: string, denied: string): boolean {
-  const rel = relative(fold(target), fold(denied));
-  return rel !== "" && !rel.startsWith("..") && !isAbsolute(rel);
 }
 
 function basenameDenied(p: string): boolean {
