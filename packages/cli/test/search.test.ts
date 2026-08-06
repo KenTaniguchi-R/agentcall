@@ -180,7 +180,7 @@ describe("sanitize", () => {
 });
 
 describe("toEntries", () => {
-  it("builds handle@host addresses and flattens tasks", () => {
+  it("builds @org/handle addresses and flattens tasks", () => {
     const entries = toEntries("acme", "acme", [
       { handle: "tanaka", agent_kind: "claude", updated_at: 1, truncated: false,
         tasks: [{ id: "adr", name: "ADR", description: "Why.", keywords: ["auth"] },

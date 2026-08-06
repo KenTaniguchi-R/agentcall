@@ -117,11 +117,17 @@ Historical designs that explain the current target and planned cutover:
 ### Agent identity: compatible shape, no protocol adoption
 
 The active AI-agent identity proposals are still pre-consensus. Preserve the
-common shape without claiming adoption: `handle@host` is scoped by the host
-trust domain, the identifier is separate from every rotatable credential, and
-a verifier selects public keys by expected host and handle before selecting
-`kid`. A host-wide JWKS without an authenticated handle-to-key binding does not
-prove which handle owns a key.
+common shape without claiming adoption: the address is scoped by a trust
+domain, the identifier is separate from every rotatable credential, and a
+verifier selects public keys by expected trust domain and handle before
+selecting `kid`. A host-wide JWKS without an authenticated handle-to-key
+binding does not prove which handle owns a key.
+
+AgentCall's address (`@org/handle`) names no host, so the scoping host is not
+recoverable from it. `relay_origin` carries that binding instead, as an
+explicit signed field on every key record (`packages/shared/src/keys.ts`); a
+verifier matches on `relay_origin` where this shape would match on the address
+host.
 
 A2A v1.0 defines JWS-signed Agent Cards but does not name Ed25519 directly.
 Ed25519 fits that generic JWS contract through RFC 9864's fully specified
@@ -155,8 +161,9 @@ Applied in AgentCall:
 
 ### XMPP, Matrix, NATS, and SPIFFE: federation
 
-AgentCall's `handle@host` address belongs to the federated-messaging problem
-family. [Matrix federation](https://spec.matrix.org/latest/server-server-api/)
+AgentCall's `@org/handle` address belongs to the federated-messaging problem
+family by shape — an entity scoped by a namespace — though cross-organization
+routing is a [permanent non-goal](../superpowers/specs/2026-08-02-cross-organization-federation-non-goal.md). [Matrix federation](https://spec.matrix.org/latest/server-server-api/)
 shows signed server-to-server requests, key discovery, and the split between
 persistent data and ephemeral presence. [NATS accounts](https://docs.nats.io/running-a-nats-service/configuration/securing_nats/accounts)
 show tenancy as structural isolation with explicit exports and imports. XMPP adds
