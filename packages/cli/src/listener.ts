@@ -1,9 +1,11 @@
+import { readFileSync } from "node:fs";
 import WebSocket, { type RawData } from "ws";
 import {
   AGENT_TIMEOUT_MS, E2EERelayToListenerFrame, MAX_E2EE_WIRE_BYTES,
   requestTranscript, safeParseFrame, transcriptHash,
 } from "@benree/agentcall-shared";
 import { fetchKeys } from "./api.js";
+import { clearanceFor, loadClearancePolicy } from "./clearance.js";
 import { resolveLineWorkdir, type CallableLineConfig } from "./config.js";
 import type { LinePaths } from "./paths.js";
 import { buildPrompt } from "./prompt.js";
@@ -249,6 +251,7 @@ export function startListener(deps: ListenerDeps): { stop(): Promise<void> } {
       // Resolve caller -> task -> envelope BEFORE the message is placed in any
       // prompt (see policy.ts). Refusals never enqueue and never spawn: no
       // tokens are burned by blocked callers or menu probing.
+
       const admission = resolveAdmission({
         paths: deps.paths, from, requestedTask, groups, workdir, agentKind: config.agent_kind,
       });
@@ -330,6 +333,19 @@ export function startListener(deps: ListenerDeps): { stop(): Promise<void> } {
           telemetrySafely(() => invocationSpan?.end(outcome, contextId));
         };
         try {
+          // Resolved from the same relay-verified identity as the task, and on
+          // the same side of the CaMeL line: the caller's message must not be
+          // able to influence what the answering agent may reach.
+          //
+          // Deliberately AFTER resolveAdmission, not before. A corrupt
+          // policy.json has an existing failure path there (policy_error ->
+          // call_failed/agent_error); loading it earlier would throw first and
+          // report the same corruption as a rejection instead.
+          const clearance = clearanceFor(
+            loadClearancePolicy(deps.paths.policyFile, (f) => readFileSync(f, "utf8")),
+            from,
+            groups,
+          );
           const out = await run(
             config.agent_kind,
             buildPrompt(config.handle, from, message, task, taskWorkdir, binding !== undefined),
@@ -346,6 +362,10 @@ export function startListener(deps: ListenerDeps): { stop(): Promise<void> } {
             binding?.agent_session_id,
             correlation_id,
             toolSpool?.file,
+            // A blocked caller never reaches here (resolveAdmission refuses
+            // first), so "blocked" would be unreachable — but narrowing it to
+            // the least-revealing clearance is the safe way to say so.
+            clearance === "blocked" ? "public" : clearance,
           );
 
           // Mint on a fresh threadable call; roll the existing binding forward

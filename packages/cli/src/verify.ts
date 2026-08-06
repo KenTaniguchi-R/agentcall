@@ -359,9 +359,14 @@ export async function checkAgentSpawn(
     // fns.resolveBin through to here for exactly that reason.
     const home = mkdtempSync(join(tmpdir(), "agentcall-doctor-probe-"));
     try {
-      const spec = buildSpawnSpec(kind, VERIFY_PROMPT, workdir, resolveBin, ASK_TASK.envelope, "unknown", GUARD_PROBE_LINE);
+      const spec = buildSpawnSpec(
+        kind, VERIFY_PROMPT, workdir, resolveBin, ASK_TASK.envelope, "unknown", GUARD_PROBE_LINE, "public",
+      );
       spec.env = { ...spec.env, AGENTCALL_HOME: home };
-      await runFn(kind, VERIFY_PROMPT, workdir, VERIFY_TIMEOUT_MS, spec, ASK_TASK.envelope, "unknown", undefined, GUARD_PROBE_LINE);
+      await runFn(
+        kind, VERIFY_PROMPT, workdir, VERIFY_TIMEOUT_MS, spec, ASK_TASK.envelope, "unknown", undefined,
+        GUARD_PROBE_LINE, undefined, undefined, undefined, "public",
+      );
       return { name: "agent run", ok: true };
     } finally {
       // Issue #293: this sits on the shared binary -> codex-auth -> agent-spawn

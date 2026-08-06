@@ -4,6 +4,7 @@ import { fileURLToPath } from "node:url";
 import { AGENT_TIMEOUT_MS, MAX_REPLY_BYTES, type AgentKind } from "@benree/agentcall-shared";
 import { resolveAgentBin } from "./bin.js";
 import { CAPS, FULL_ACCESS_ENVELOPE, type Cap, type Envelope } from "./tasks.js";
+import type { Sensitivity } from "./sensitivity.js";
 import { agentChildEnv } from "./telemetry-env.js";
 
 export type { AgentKind };
@@ -249,6 +250,10 @@ export function claudeAllowedTools(envelope: Envelope): string {
 export function buildSpawnSpec(
   kind: AgentKind, prompt: string, workdir: string, resolveBin: (kind: AgentKind) => string = resolveAgentBin,
   envelope: Envelope = FULL_ACCESS_ENVELOPE, callId: string = "unknown", lineName: string,
+  // What the caller of this run may receive. Resolved from the relay-verified
+  // identity before the message reaches any prompt (the CaMeL invariant), and
+  // handed to the guard hook, which fails closed without it.
+  clearance: Sensitivity = "public",
   // The REAL agent session id, resolved from a context binding by the listener.
   // A caller-supplied context id must never reach this parameter. Sits AFTER
   // lineName so lineName stays the last required parameter — see runAgent.
@@ -270,7 +275,10 @@ export function buildSpawnSpec(
       cwd: workdir,
       env: {
         ...childEnv, ...correlationEnv, AGENTCALL_CALL_ID: callId, AGENTCALL_LINE: lineName,
-        AGENTCALL_ALLOWED_ROOT: workdir,
+        // Replaces AGENTCALL_ALLOWED_ROOT. The guard no longer confines the run
+        // to one directory; it asks whether each path's sensitivity is within
+        // this clearance, which the sensitivity map on disk answers.
+        AGENTCALL_CLEARANCE: clearance,
         ...(toolTelemetryFile ? { AGENTCALL_TOOL_TELEMETRY_FILE: toolTelemetryFile } : {}),
       },
     };
@@ -313,6 +321,10 @@ export function buildSpawnSpec(
       env: {
         ...childEnv, ...correlationEnv, AGENTCALL_CALL_ID: callId,
         AGENTCALL_GUARD_MODE: "observe", AGENTCALL_LINE: lineName,
+        // Set even though codex runs the guard in observe mode: guard-entry fails
+        // closed on a missing clearance BEFORE mode is consulted, since an
+        // unwired env var is a deploy bug, not a decide() failure.
+        AGENTCALL_CLEARANCE: clearance,
         ...(toolTelemetryFile ? { AGENTCALL_TOOL_TELEMETRY_FILE: toolTelemetryFile } : {}),
       },
     };
@@ -336,6 +348,10 @@ export function buildSpawnSpec(
     env: {
       ...childEnv, ...correlationEnv, AGENTCALL_CALL_ID: callId,
       AGENTCALL_GUARD_MODE: "observe", AGENTCALL_LINE: lineName,
+      // Set even though codex runs the guard in observe mode: guard-entry fails
+      // closed on a missing clearance BEFORE mode is consulted, since an
+      // unwired env var is a deploy bug, not a decide() failure.
+      AGENTCALL_CLEARANCE: clearance,
       ...(toolTelemetryFile ? { AGENTCALL_TOOL_TELEMETRY_FILE: toolTelemetryFile } : {}),
     },
   };
@@ -401,14 +417,20 @@ export function runAgent(
   // Note for a later cleanup (not done here): runAgent now takes twelve
   // positional parameters and should become an options object. That belongs
   // with the #49 work in #48 Phase 1, not in this change.
-  resume?: string,
-  correlationId?: string,
-  toolTelemetryFile?: string,
+  // `= undefined` rather than `?`, so the required `clearance` can follow —
+  // the same device lineName above already relies on.
+  resume: string | undefined = undefined,
+  correlationId: string | undefined = undefined,
+  toolTelemetryFile: string | undefined = undefined,
+  // Required, no default, for the reason lineName above is: the guard fails
+  // closed without it, so a caller that forgets it must fail to COMPILE rather
+  // than ship an agent that cannot read anything.
+  clearance: Sensitivity,
 ): Promise<AgentOutput> {
   const spec = specOverride
     ?? buildSpawnSpec(
-      kind, prompt, workdir, resolveAgentBin, envelope, callId, lineName, resume, correlationId,
-      toolTelemetryFile,
+      kind, prompt, workdir, resolveAgentBin, envelope, callId, lineName, clearance, resume,
+      correlationId, toolTelemetryFile,
     );
   return new Promise<AgentOutput>((resolve, reject) => {
     // detached: true makes the child its own process group leader, so any

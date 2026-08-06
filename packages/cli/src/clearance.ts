@@ -85,3 +85,37 @@ export function clearanceFor(
   // this caller may see.
   return grants.reduce((acc, g) => (RANK[g] > RANK[acc] ? g : acc), "public" as Sensitivity);
 }
+
+// Reads clearance out of policy.json.
+//
+// Deliberately lenient where ClearancePolicySchema is strict: policy.json still
+// carries the task-menu keys (default_offer, per-caller offer) that #372 will
+// delete, and a strict parse would reject every existing file. This picks only
+// the clearance-relevant keys and ignores the rest, so both shapes coexist
+// while the menu is being removed. Delete the projection with the menu.
+export function loadClearancePolicy(file: string, read: (f: string) => string): ClearancePolicy {
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(read(file));
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === "ENOENT") {
+      return ClearancePolicySchema.parse({});
+    }
+    throw new Error(`policy is invalid: ${String(error)}`, { cause: error });
+  }
+  const raw = (parsed ?? {}) as Record<string, unknown>;
+  const callers = (raw.callers ?? {}) as Record<string, Record<string, unknown>>;
+  const groups = (raw.groups ?? {}) as Record<string, Record<string, unknown>>;
+  return ClearancePolicySchema.parse({
+    ...(typeof raw.description === "string" ? { description: raw.description } : {}),
+    ...(raw.default_clearance !== undefined ? { default_clearance: raw.default_clearance } : {}),
+    callers: Object.fromEntries(Object.entries(callers).map(([handle, entry]) => [handle, {
+      ...(entry?.clearance !== undefined ? { clearance: entry.clearance } : {}),
+      ...(entry?.block !== undefined ? { block: entry.block } : {}),
+    }])),
+    groups: Object.fromEntries(Object.entries(groups).map(([name, entry]) => [name, {
+      roster_id: entry?.roster_id,
+      ...(entry?.clearance !== undefined ? { clearance: entry.clearance } : {}),
+    }])),
+  });
+}

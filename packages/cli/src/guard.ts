@@ -3,6 +3,7 @@ import { fileURLToPath } from "node:url";
 import { lineTaskDirs } from "./line-task-dirs.js";
 import { canonical, expandHome, fold, isAncestorOf, isInside } from "./path-canon.js";
 import { getMachinePaths, type LinePaths } from "./paths.js";
+import { classifyPath, permits, type Sensitivity, type SensitivityMap } from "./sensitivity.js";
 
 export type GuardInput = {
   tool_name: string;
@@ -34,26 +35,13 @@ export const FAIL_CLOSED_REASON =
 // because command-string inspection cannot provide its filesystem read floor.
 type GuardMode = "enforce" | "observe";
 
-// Home-relative directories. Everything beneath them is denied.
-const DENIED_DIRS = [
-  ".ssh", ".gnupg", ".aws", ".config/gcloud", "Library/Keychains",
-  ".agentcall",   // holds config.json and the relay token
-  ".claude",      // executable configuration; cf. CVE-2025-59536
-  ".codex",       // auth.json, plus a config.toml that routinely holds API keys
-  "Library/LaunchAgents",  // how the listener itself gets launched
-  ".config/systemd/user",  // Linux user units can replace the listener command
-  // AgentCall/<line>/tasks, one directory per line, has no single
-  // home-relative entry that can name them all — see runGuard, which
-  // enumerates every line's tasksDir and passes it in as an extra denied root.
-];
-
-// Home-relative single files.
-const DENIED_FILES = [
-  ".netrc", ".npmrc", ".docker/config.json", ".claude.json",
-  // Shell startup files: sourced on every new shell, so writing one is a
-  // persistence mechanism as durable as a LaunchAgent.
-  ".zshrc", ".zprofile", ".bashrc", ".bash_profile", ".profile",
-];
+// The home-relative paths that used to live here as DENIED_DIRS/DENIED_FILES
+// now live in sensitivity.ts as the non-overridable `secret` floor
+// (builtinSecretSources/withFloor). They are the same paths; expressing them as
+// sensitivity rules rather than a second parallel denylist is what lets
+// longest-prefix-wins protect them even when an owner labels a parent
+// directory. AgentCall/<line>/tasks still has no fixed home-relative form and
+// is passed in per call — see runGuard's extraSecretRoots.
 
 // This module compiles to <package root>/dist/guard.js, one directory below
 // the installed package root — true both for a global npm install and for a
@@ -94,18 +82,22 @@ const NO_PATH_SURFACE = new Set(["WebSearch"]);
 // can climb out of that root entirely. LS has no selector.
 const SELECTOR_KEY: Record<string, string> = { Grep: "glob", Glob: "pattern" };
 
-// Denied roots are canonicalized alongside the targets they get compared with.
-// A denied root can itself be a symlink — ~/.aws onto an encrypted volume — and
-// a canonical target is never "inside" a lexical alias, so comparing the two
-// silently allows the read. Both forms are kept: the Bash branch matches this
-// list as text, where the literal ~/.aws is the form that appears in a command.
-// `extraRoots` are already absolute (the guard's own package root, not
-// home-relative) and are canonicalized the same way as the home-relative
-// table, for the same symlink reason.
-function deniedPaths(home: string, realpath: (p: string) => string, extraRoots: string[]): string[] {
-  const lexical = [...DENIED_DIRS, ...DENIED_FILES].map((d) => resolve(home, d));
-  const roots = [...lexical, ...extraRoots];
-  return [...new Set([...roots, ...roots.map((d) => canonical(d, home, home, realpath))])];
+// Unreachable roots are canonicalized alongside the targets they get compared
+// with. Such a root can itself be a symlink — ~/.aws onto an encrypted volume —
+// and a canonical target is never "inside" a lexical alias, so comparing the
+// two silently allows the read. BOTH forms are kept: the Bash branch matches
+// this list as text, where the literal ~/.aws is the form that appears in a
+// command, while the path branches need the resolved form.
+function unreachableRoots(
+  sources: SensitivityMap["sources"],
+  clearance: Sensitivity,
+  home: string,
+  realpath: (p: string) => string,
+): string[] {
+  const lexical = sources
+    .filter((s) => !permits(clearance, s.sensitivity))
+    .map((s) => resolve(expandHome(s.path, home)));
+  return [...new Set([...lexical, ...lexical.map((d) => canonical(d, home, home, realpath))])];
 }
 
 function basenameDenied(p: string): boolean {
@@ -123,34 +115,62 @@ function globLiteralPrefix(pattern: string): string {
   return cut === -1 ? "" : head.slice(0, cut) || sep;
 }
 
-export function decide(
-  input: GuardInput,
-  userHome: string,
-  realpath: (p: string) => string,
-  guardRoot: string = DEFAULT_PACKAGE_ROOT,
-  // Two orthogonal restrictions, and both apply. `allowedRoot` confines a task
-  // to one workdir (an allow-list); `extraDeniedRoots` adds paths that are
-  // denied wherever they sit (a deny-list). allowedRoot keeps position 5
-  // because its callers pass it positionally in quantity; extraDeniedRoots is
-  // 6th. Do not swap them — allowedRoot is a string and extraDeniedRoots is
-  // spread, so passing one where the other is expected silently explodes a
-  // path into single-character denied roots rather than failing loudly.
-  allowedRoot?: string,
-  extraDeniedRoots: string[] = [],
-): GuardVerdict {
+// A context object rather than positional arguments. The previous signature
+// carried a warning that swapping parameters 5 and 6 "silently explodes a path
+// into single-character denied roots rather than failing loudly" — a hazard
+// that only existed because two differently-shaped restrictions sat adjacent in
+// a positional list. Naming them removes the hazard instead of documenting it.
+export interface DecideContext {
+  /** userHome, never a redirectable state root: AGENTCALL_HOME can move the
+   *  latter, which would have the guard diligently protecting a temp directory
+   *  while the real ~/.ssh stood open. */
+  userHome: string;
+  realpath: (p: string) => string;
+  /** The owner's map with the secret floor already merged (see withFloor). */
+  map: SensitivityMap;
+  /** What this caller may receive. Resolved from identity before the caller's
+   *  message reaches any prompt — the CaMeL invariant. */
+  clearance: Sensitivity;
+  guardRoot?: string;
+  /** Paths that are `secret` for this run regardless of the map — the guard's
+   *  own package root and every line's tasks directory. */
+  extraSecretRoots?: string[];
+}
+
+export function decide(input: GuardInput, ctx: DecideContext): GuardVerdict {
+  const { userHome, realpath, clearance } = ctx;
   const { tool_name: tool, tool_input: args, cwd } = input;
   if (args === null || typeof args !== "object" || Array.isArray(args)) {
     return { allow: false, rule: "unparseable-input", detail: tool };
   }
-  // userHome, never a redirectable state root: AGENTCALL_HOME can move the
-  // latter, which would have the guard diligently protecting a temp directory
-  // while the real ~/.ssh stood open.
-  const denied = deniedPaths(userHome, realpath, [guardRoot, ...extraDeniedRoots]);
   const canon = (p: string) => canonical(p, cwd, userHome, realpath);
-  const allowed = allowedRoot === undefined ? undefined : canon(allowedRoot);
-  const outsideAllowed = (target: string) => allowed !== undefined && !isInside(target, allowed);
-  const reached = (t: string, withAncestors: boolean) =>
-    denied.find((d) => isInside(t, d) || (withAncestors && isAncestorOf(t, d)));
+  const map: SensitivityMap = {
+    ...ctx.map,
+    sources: [
+      ...ctx.map.sources,
+      ...[ctx.guardRoot ?? DEFAULT_PACKAGE_ROOT, ...(ctx.extraSecretRoots ?? [])]
+        .map((path) => ({ path, sensitivity: "secret" as const })),
+    ],
+  };
+
+  // A path is reachable when its sensitivity is within the caller's clearance.
+  // Unlabelled classifies `secret`, so this denies by default rather than
+  // allowing by default — the inversion the whole model rests on.
+  const unreachable = (target: string) =>
+    !permits(clearance, classifyPath(map, target, { home: userHome, cwd, realpath }));
+
+  // Enumerable because it only has to cover rules NARROWER than the root: a
+  // permitted root's subtree inherits its label, so the only way secret content
+  // hides under it is an explicit narrower rule. Unlabelled space cannot be
+  // "inside" a permitted root without such a rule.
+  const denied = unreachableRoots(map.sources, clearance, userHome, realpath);
+
+  // A scan reads every file beneath its root in ONE tool call, so the hook
+  // never sees the individual files. A root that merely contains something
+  // unreachable must therefore be refused outright.
+  const scanReachesSecret = (root: string) =>
+    denied.find((d) => isInside(root, d) || isAncestorOf(root, d));
+  const targetInsideSecret = (target: string) => denied.find((d) => isInside(target, d));
 
   if (tool === "Bash") {
     const command = typeof args.command === "string" ? args.command : "";
@@ -181,10 +201,14 @@ export function decide(
     if (typeof raw !== "string" || raw === "") return { allow: false, rule: "unparseable-target", detail: String(raw) };
     const target = canon(raw);
     if (basenameDenied(target)) return { allow: false, rule: "denied-basename", detail: target };
-    const hit = reached(target, false);
-    if (hit) return { allow: false, rule: "inside-denied-path", detail: target };
-    return outsideAllowed(target)
-      ? { allow: false, rule: "outside-allowed-root", detail: target }
+    const hit = targetInsideSecret(target);
+    // Distinct from `above-clearance` on purpose, and both are audit-only. This
+    // one means "inside a source you labelled above this caller's clearance";
+    // the other means "classified above it", which is usually the unlabelled
+    // default. Debugging a map is far easier when those two read differently.
+    if (hit) return { allow: false, rule: "inside-unreachable-source", detail: target };
+    return unreachable(target)
+      ? { allow: false, rule: "above-clearance", detail: target }
       : { allow: true };
   }
 
@@ -199,8 +223,8 @@ export function decide(
     const rawRoot = typeof args.path === "string" && args.path !== "" ? args.path : cwd;
     const root = canon(rawRoot);
     if (basenameDenied(root)) return { allow: false, rule: "denied-basename", detail: root };
-    if (reached(root, true)) return { allow: false, rule: "root-reaches-denied-path", detail: root };
-    if (outsideAllowed(root)) return { allow: false, rule: "outside-allowed-root", detail: root };
+    if (scanReachesSecret(root)) return { allow: false, rule: "root-reaches-denied-path", detail: root };
+    if (unreachable(root)) return { allow: false, rule: "above-clearance", detail: root };
 
     const selectorKey = SELECTOR_KEY[tool];
     const selector = selectorKey === undefined ? undefined : args[selectorKey];
@@ -221,10 +245,10 @@ export function decide(
     const prefix = globLiteralPrefix(selector);
     if (prefix === "") return { allow: true };
     const selectorRoot = canon(isAbsolute(expandHome(prefix, userHome)) ? prefix : join(rawRoot, prefix));
-    const hit = reached(selectorRoot, true);
+    const hit = scanReachesSecret(selectorRoot);
     if (hit) return { allow: false, rule: "root-reaches-denied-path", detail: selectorRoot };
-    return outsideAllowed(selectorRoot)
-      ? { allow: false, rule: "outside-allowed-root", detail: selectorRoot }
+    return unreachable(selectorRoot)
+      ? { allow: false, rule: "above-clearance", detail: selectorRoot }
       : { allow: true };
   }
 
@@ -240,7 +264,10 @@ export interface GuardDeps {
   now: () => string;
   realpath: (p: string) => string;
   appendLine: (file: string, line: string) => void;
-  allowedRoot?: string;
+  /** The owner's sensitivity map, floor already merged. */
+  map: SensitivityMap;
+  /** What the caller of this run may receive. */
+  clearance: Sensitivity;
 }
 
 type GuardOutput = { exitCode: number; stdout: string; stderr: string };
@@ -274,7 +301,7 @@ export function runGuard(raw: string, deps: GuardDeps, mode: GuardMode = "enforc
   // any exit other than 0 or 2 as a non-blocking error — so a full disk or a
   // read-only home would silently turn the guard off. Fail closed instead.
   try {
-    // Task frontmatter sets the envelope's caps verbatim, so it is as
+    // Task frontmatter declares which sources a task may read, so it is as
     // sensitive as policy.json. Under the per-line layout these live at
     // ~/AgentCall/<line>/tasks, which no fixed home-relative rule can match —
     // enumerate them instead. Every line's, not just this one's: one line's
@@ -292,7 +319,13 @@ export function runGuard(raw: string, deps: GuardDeps, mode: GuardMode = "enforc
     // defect (a) fixed for .ssh and quietly reopened for tasks.
     const userHome = deps.line.machine.userHome;
     const taskRoots = lineTaskDirs(getMachinePaths(userHome, userHome));
-    const verdict = decide(input, userHome, deps.realpath, undefined, deps.allowedRoot, taskRoots);
+    const verdict = decide(input, {
+      userHome,
+      realpath: deps.realpath,
+      map: deps.map,
+      clearance: deps.clearance,
+      extraSecretRoots: taskRoots,
+    });
     const ts = deps.now();
     const correlation = deps.correlationId
       ? { correlation_id: deps.correlationId }

@@ -1,8 +1,9 @@
 import { mkdirSync } from "node:fs";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
-import { decide, DENY_REASON, runGuard, type GuardDeps, type GuardInput } from "../src/guard.js";
+import { decide, DENY_REASON, runGuard, type DecideContext, type GuardDeps, type GuardInput } from "../src/guard.js";
 import { getLinePaths, getMachinePaths } from "../src/paths.js";
+import { SensitivityMapSchema, withFloor } from "../src/sensitivity.js";
 import { tempDir } from "./helpers.js";
 
 const HOME = "/Users/owner";
@@ -10,81 +11,138 @@ const CWD = "/Users/owner/AgentCall/public";
 // Identity realpath: these tests assert path logic, not symlink resolution.
 const id = (p: string) => p;
 
+// The owner has labelled the areas they work in. Everything else — including
+// the rest of $HOME — is `secret` by omission, and withFloor pins the sensitive
+// home paths so they stay secret even though ~/AgentCall's parent is not named.
+//
+// This is what replaced the old allow-everything-except-DENIED_DIRS default.
+// Assertions below that used to read "allows an ordinary project file" now
+// depend on that file sitting under a labelled root, which is the intended
+// inversion: unlabelled is secret.
+function mapFor(home: string, roots: string[] = []) {
+  return withFloor(SensitivityMapSchema.parse({
+    sources: roots.map((path) => ({ path, sensitivity: "internal" as const })),
+  }), home);
+}
+
+const OWNER_ROOTS = [
+  "/Users/owner/proj",
+  "/Users/owner/code",
+  "/Users/owner/AgentCall",
+  "/Users/owner/coding",
+];
+
+function ctx(over: Partial<DecideContext> = {}): DecideContext {
+  return {
+    userHome: HOME,
+    realpath: id,
+    map: mapFor(HOME, OWNER_ROOTS),
+    clearance: "internal",
+    ...over,
+  };
+}
+
 const call = (tool: string, input: Record<string, unknown>, cwd = CWD): GuardInput =>
   ({ tool_name: tool, tool_input: input, cwd });
 
 describe("decide — exact-target tools", () => {
   it("denies reading inside a denied directory", () => {
-    const v = decide(call("Read", { file_path: "/Users/owner/.ssh/id_rsa" }), HOME, id);
+    const v = decide(call("Read", { file_path: "/Users/owner/.ssh/id_rsa" }), ctx());
     expect(v.allow).toBe(false);
   });
 
   // ~/.codex holds auth.json and a config.toml that routinely carries API
   // keys in plaintext — the same argument that put ~/.claude on the list.
   it("denies reading inside ~/.codex", () => {
-    const v = decide(call("Read", { file_path: "/Users/owner/.codex/auth.json" }), HOME, id);
+    const v = decide(call("Read", { file_path: "/Users/owner/.codex/auth.json" }), ctx());
     expect(v.allow).toBe(false);
   });
 
   it("denies a denied basename anywhere on disk", () => {
-    const v = decide(call("Read", { file_path: "/Users/owner/proj/.env" }), HOME, id);
+    const v = decide(call("Read", { file_path: "/Users/owner/proj/.env" }), ctx());
     expect(v.allow).toBe(false);
   });
 
   it("allows .env.example, which is not a secret", () => {
-    const v = decide(call("Read", { file_path: "/Users/owner/proj/.env.example" }), HOME, id);
+    const v = decide(call("Read", { file_path: "/Users/owner/proj/.env.example" }), ctx());
     expect(v.allow).toBe(true);
   });
 
   it("allows an ordinary project file", () => {
-    const v = decide(call("Read", { file_path: "/Users/owner/proj/src/index.ts" }), HOME, id);
+    const v = decide(call("Read", { file_path: "/Users/owner/proj/src/index.ts" }), ctx());
     expect(v.allow).toBe(true);
   });
 
   it("resolves relative paths against cwd", () => {
-    const v = decide(call("Read", { file_path: "../../.ssh/id_rsa" }), HOME, id);
+    const v = decide(call("Read", { file_path: "../../.ssh/id_rsa" }), ctx());
     expect(v.allow).toBe(false);
   });
 
   it("follows a symlink into a denied directory", () => {
     const realpath = (p: string) => (p === "/tmp/x" ? "/Users/owner/.ssh/id_rsa" : p);
-    const v = decide(call("Read", { file_path: "/tmp/x" }), HOME, realpath);
+    const v = decide(call("Read", { file_path: "/tmp/x" }), ctx({ realpath }));
     expect(v.allow).toBe(false);
   });
 
   it("denies writing into the agent's own config", () => {
-    const v = decide(call("Write", { file_path: "/Users/owner/.claude/settings.json" }), HOME, id);
+    const v = decide(call("Write", { file_path: "/Users/owner/.claude/settings.json" }), ctx());
     expect(v.allow).toBe(false);
   });
 
   it("denies reading agentcall's own relay token", () => {
-    const v = decide(call("Read", { file_path: "/Users/owner/.agentcall/config.json" }), HOME, id);
+    const v = decide(call("Read", { file_path: "/Users/owner/.agentcall/config.json" }), ctx());
     expect(v.allow).toBe(false);
   });
 });
 
-describe("decide — allowed workdir boundary", () => {
+// Was "allowed workdir boundary". The confinement it tested (AGENTCALL_ALLOWED_ROOT
+// plus an allow-list root) is gone; the same containment now falls out of
+// labelling. Only `payments` is named, so its sibling `payroll` is unlabelled
+// and therefore secret — no separate allow-list needed to keep it out.
+//
+// The rule name changes with the mechanism: `outside-allowed-root` became
+// `above-clearance`, which is what actually happened.
+describe("decide — clearance bounds what a labelled root can reach", () => {
   const ROOT = "/Users/owner/code/payments";
   const bounded = (tool: string, input: Record<string, unknown>, cwd = ROOT) =>
-    decide(call(tool, input, cwd), HOME, id, "/opt/agentcall", ROOT);
+    decide(call(tool, input, cwd), {
+      userHome: HOME,
+      realpath: id,
+      map: mapFor(HOME, [ROOT]),
+      clearance: "internal",
+      guardRoot: "/opt/agentcall",
+    });
 
-  it("allows file tools inside the resolved workdir", () => {
+  it("allows file tools inside the labelled root", () => {
     expect(bounded("Read", { file_path: `${ROOT}/src/index.ts` }).allow).toBe(true);
     expect(bounded("Write", { file_path: `${ROOT}/notes/new.md` }).allow).toBe(true);
   });
 
-  it("denies exact file targets outside the resolved workdir", () => {
+  it("denies exact file targets in an unlabelled sibling", () => {
     expect(bounded("Read", { file_path: "/Users/owner/code/payroll/secrets.ts" }))
-      .toMatchObject({ allow: false, rule: "outside-allowed-root" });
+      .toMatchObject({ allow: false, rule: "above-clearance" });
     expect(bounded("Edit", { file_path: "../payroll/secrets.ts" }))
-      .toMatchObject({ allow: false, rule: "outside-allowed-root" });
+      .toMatchObject({ allow: false, rule: "above-clearance" });
   });
 
-  it("denies searches and absolute glob selectors outside the resolved workdir", () => {
+  it("denies searches and absolute glob selectors outside the labelled root", () => {
     expect(bounded("Grep", { path: "/Users/owner/code", pattern: "token" }))
-      .toMatchObject({ allow: false, rule: "outside-allowed-root" });
+      .toMatchObject({ allow: false, rule: "above-clearance" });
     expect(bounded("Glob", { pattern: "/Users/owner/code/payroll/**/*.ts" }))
-      .toMatchObject({ allow: false, rule: "outside-allowed-root" });
+      .toMatchObject({ allow: false, rule: "above-clearance" });
+  });
+
+  it("denies a public-cleared caller what an internal-cleared one may read", () => {
+    // Same map, same path, different caller. This is the axis the old
+    // allow-list could not express at all: containment used to be a property
+    // of the run, not of who was asking.
+    const asPublic = decide(call("Read", { file_path: `${ROOT}/src/index.ts` }, ROOT), {
+      userHome: HOME, realpath: id, map: mapFor(HOME, [ROOT]), clearance: "public",
+    });
+    // `inside-unreachable-source`, not `above-clearance`: the path sits inside a
+    // source the owner labelled `internal`, which this caller cannot reach. The
+    // other rule is for paths that are simply unlabelled.
+    expect(asPublic).toMatchObject({ allow: false, rule: "inside-unreachable-source" });
   });
 
   it("still records but allows Bash because exec is an explicit residual", () => {
@@ -94,60 +152,60 @@ describe("decide — allowed workdir boundary", () => {
 
 describe("decide — tilde is a path, not a literal directory", () => {
   it("denies a tilde-prefixed read", () => {
-    const v = decide(call("Read", { file_path: "~/.ssh/id_rsa" }), HOME, id);
+    const v = decide(call("Read", { file_path: "~/.ssh/id_rsa" }), ctx());
     expect(v.allow).toBe(false);
   });
 
   it("denies a tilde-prefixed Grep root", () => {
-    const v = decide(call("Grep", { path: "~/.ssh", pattern: "KEY" }), HOME, id);
+    const v = decide(call("Grep", { path: "~/.ssh", pattern: "KEY" }), ctx());
     expect(v.allow).toBe(false);
   });
 });
 
 describe("decide — case folding on a case-insensitive filesystem", () => {
   it("denies an upper-cased denied directory", () => {
-    const v = decide(call("Read", { file_path: "/Users/owner/.SSH/id_rsa" }), HOME, id);
+    const v = decide(call("Read", { file_path: "/Users/owner/.SSH/id_rsa" }), ctx());
     expect(v.allow).toBe(false);
   });
 
   it("denies an upper-cased denied basename", () => {
-    const v = decide(call("Read", { file_path: "/Users/owner/proj/KEY.PEM" }), HOME, id);
+    const v = decide(call("Read", { file_path: "/Users/owner/proj/KEY.PEM" }), ctx());
     expect(v.allow).toBe(false);
   });
 });
 
 describe("decide — scanning tools reach through a parent", () => {
   it("denies Grep rooted at home, which contains denied paths", () => {
-    const v = decide(call("Grep", { path: "/Users/owner", pattern: "PRIVATE KEY" }), HOME, id);
+    const v = decide(call("Grep", { path: "/Users/owner", pattern: "PRIVATE KEY" }), ctx());
     expect(v.allow).toBe(false);
   });
 
   it("denies Grep rooted at /", () => {
-    const v = decide(call("Grep", { path: "/", pattern: "PRIVATE KEY" }), HOME, id);
+    const v = decide(call("Grep", { path: "/", pattern: "PRIVATE KEY" }), ctx());
     expect(v.allow).toBe(false);
   });
 
   it("allows Grep rooted at a project that contains nothing denied", () => {
-    const v = decide(call("Grep", { path: "/Users/owner/proj", pattern: "TODO" }), HOME, id);
+    const v = decide(call("Grep", { path: "/Users/owner/proj", pattern: "TODO" }), ctx());
     expect(v.allow).toBe(true);
   });
 
   it("denies closed, not open, when `path` is present but not a string", () => {
     // A non-string path must not silently fall back to cwd — that would let
     // an array or a number sail past the root check entirely.
-    const v1 = decide(call("Grep", { path: ["/Users/owner/.ssh"], pattern: "x" }), HOME, id);
+    const v1 = decide(call("Grep", { path: ["/Users/owner/.ssh"], pattern: "x" }), ctx());
     expect(v1.allow).toBe(false);
-    const v2 = decide(call("Grep", { path: 0, pattern: "x" }), HOME, id);
+    const v2 = decide(call("Grep", { path: 0, pattern: "x" }), ctx());
     expect(v2.allow).toBe(false);
   });
 
   it("denies LS of a denied directory — LS is granted by the read cap", () => {
-    const v = decide(call("LS", { path: "/Users/owner/.ssh" }), HOME, id);
+    const v = decide(call("LS", { path: "/Users/owner/.ssh" }), ctx());
     expect(v.allow).toBe(false);
   });
 
   it("denies LS rooted at home", () => {
-    const v = decide(call("LS", { path: "/Users/owner" }), HOME, id);
+    const v = decide(call("LS", { path: "/Users/owner" }), ctx());
     expect(v.allow).toBe(false);
   });
 });
@@ -161,71 +219,71 @@ describe("decide — Grep's glob selects paths the root check never sees", () =>
   // has no home here yet. Denying an explicit `glob: ".env"` is worth doing on
   // its own — it is an unambiguous targeting attempt, and it gets logged.
   it("denies a glob naming a denied basename under an allowed root", () => {
-    const v = decide(call("Grep", { path: "/Users/owner/proj", glob: ".env", pattern: ".+" }), HOME, id);
+    const v = decide(call("Grep", { path: "/Users/owner/proj", glob: ".env", pattern: ".+" }), ctx());
     expect(v.allow).toBe(false);
   });
 
   it("denies a glob enumerating keys under an allowed root", () => {
-    const v = decide(call("Grep", { path: "/Users/owner/proj", glob: "**/*.pem", pattern: ".+" }), HOME, id);
+    const v = decide(call("Grep", { path: "/Users/owner/proj", glob: "**/*.pem", pattern: ".+" }), ctx());
     expect(v.allow).toBe(false);
   });
 
   it("denies a glob that climbs out of its root", () => {
-    const v = decide(call("Grep", { path: "/Users/owner/proj", glob: "../../.ssh/*", pattern: ".+" }), HOME, id);
+    const v = decide(call("Grep", { path: "/Users/owner/proj", glob: "../../.ssh/*", pattern: ".+" }), ctx());
     expect(v.allow).toBe(false);
   });
 
   it("denies an absolute glob into a denied directory", () => {
-    const v = decide(call("Grep", { path: "/Users/owner/proj", glob: "/Users/owner/.ssh/*", pattern: ".+" }), HOME, id);
+    const v = decide(call("Grep", { path: "/Users/owner/proj", glob: "/Users/owner/.ssh/*", pattern: ".+" }), ctx());
     expect(v.allow).toBe(false);
   });
 
   it("allows an ordinary source-file glob", () => {
-    const v = decide(call("Grep", { path: "/Users/owner/proj", glob: "**/*.ts", pattern: "TODO" }), HOME, id);
+    const v = decide(call("Grep", { path: "/Users/owner/proj", glob: "**/*.ts", pattern: "TODO" }), ctx());
     expect(v.allow).toBe(true);
   });
 
   it("denies a glob that is not a string", () => {
-    const v = decide(call("Grep", { path: "/Users/owner/proj", glob: 7, pattern: "x" }), HOME, id);
+    const v = decide(call("Grep", { path: "/Users/owner/proj", glob: 7, pattern: "x" }), ctx());
     expect(v.allow).toBe(false);
   });
 });
 
 describe("decide — Glob carries its path in the pattern", () => {
   it("denies an absolute pattern into a denied directory", () => {
-    const v = decide(call("Glob", { pattern: "/Users/owner/.ssh/*" }), HOME, id);
+    const v = decide(call("Glob", { pattern: "/Users/owner/.ssh/*" }), ctx());
     expect(v.allow).toBe(false);
   });
 
   it("denies a tilde pattern into a denied directory", () => {
-    const v = decide(call("Glob", { pattern: "~/.ssh/*" }), HOME, id);
+    const v = decide(call("Glob", { pattern: "~/.ssh/*" }), ctx());
     expect(v.allow).toBe(false);
   });
 
   it("denies a pattern enumerating a denied basename", () => {
-    expect(decide(call("Glob", { pattern: "**/.env" }), HOME, id).allow).toBe(false);
-    expect(decide(call("Glob", { pattern: "**/*.pem" }), HOME, id).allow).toBe(false);
+    expect(decide(call("Glob", { pattern: "**/.env" }), ctx()).allow).toBe(false);
+    expect(decide(call("Glob", { pattern: "**/*.pem" }), ctx()).allow).toBe(false);
   });
 
   it("denies a pattern that escapes its root", () => {
-    const v = decide(call("Glob", { pattern: "../../.ssh/*" }), HOME, id);
+    const v = decide(call("Glob", { pattern: "../../.ssh/*" }), ctx());
     expect(v.allow).toBe(false);
   });
 
   it("allows an ordinary source glob under cwd", () => {
-    const v = decide(call("Glob", { pattern: "**/*.ts" }), HOME, id);
+    const v = decide(call("Glob", { pattern: "**/*.ts" }), ctx());
     expect(v.allow).toBe(true);
   });
 
   it("denies closed, not open, when `pattern` is absent", () => {
     // Unlike Grep's `glob`, Glob's `pattern` IS the path — there is no
     // root-only check to fall back on, so absent must not mean "everything".
-    const v = decide(call("Glob", {}), HOME, id);
+    const v = decide(call("Glob", {}), ctx());
     expect(v.allow).toBe(false);
   });
 
   it("denies closed, not open, when `pattern` is not a string", () => {
-    const v = decide(call("Glob", { pattern: 7 }), HOME, id);
+    const v = decide(call("Glob", { pattern: 7 }), ctx());
     expect(v.allow).toBe(false);
   });
 });
@@ -238,22 +296,22 @@ describe("decide — the guard protects its own installed code", () => {
   const GUARD_ROOT = "/Users/owner/coding/agentcall/packages/cli";
 
   it("denies overwriting the guard's own entry point", () => {
-    const v = decide(call("Write", { file_path: `${GUARD_ROOT}/dist/guard-entry.js` }), HOME, id, GUARD_ROOT);
+    const v = decide(call("Write", { file_path: `${GUARD_ROOT}/dist/guard-entry.js` }), ctx({ guardRoot: GUARD_ROOT }));
     expect(v.allow).toBe(false);
   });
 
   it("denies overwriting guard.js itself", () => {
-    const v = decide(call("Write", { file_path: `${GUARD_ROOT}/dist/guard.js` }), HOME, id, GUARD_ROOT);
+    const v = decide(call("Write", { file_path: `${GUARD_ROOT}/dist/guard.js` }), ctx({ guardRoot: GUARD_ROOT }));
     expect(v.allow).toBe(false);
   });
 
   it("still allows writes outside the guard root with the same override in place", () => {
-    const v = decide(call("Write", { file_path: "/Users/owner/proj/src/index.ts" }), HOME, id, GUARD_ROOT);
+    const v = decide(call("Write", { file_path: "/Users/owner/proj/src/index.ts" }), ctx({ guardRoot: GUARD_ROOT }));
     expect(v.allow).toBe(true);
   });
 
   it("denies a Grep rooted at the guard's package root", () => {
-    const v = decide(call("Grep", { path: GUARD_ROOT, pattern: "x" }), HOME, id, GUARD_ROOT);
+    const v = decide(call("Grep", { path: GUARD_ROOT, pattern: "x" }), ctx({ guardRoot: GUARD_ROOT }));
     expect(v.allow).toBe(false);
   });
 });
@@ -266,19 +324,19 @@ describe("decide — task envelopes and launch config are protected", () => {
   const TASKS = "/Users/owner/AgentCall/ask-line/tasks";
 
   it("denies writing a task's SKILL.md, which sets its capability envelope", () => {
-    const v = decide(call("Write", { file_path: `${TASKS}/ask/SKILL.md` }), HOME, id, undefined, undefined, [TASKS]);
+    const v = decide(call("Write", { file_path: `${TASKS}/ask/SKILL.md` }), ctx({ extraSecretRoots: [TASKS] }));
     expect(v.allow).toBe(false);
   });
 
   it("denies a Grep rooted at the tasks directory", () => {
-    const v = decide(call("Grep", { path: TASKS, pattern: "tools" }), HOME, id, undefined, undefined, [TASKS]);
+    const v = decide(call("Grep", { path: TASKS, pattern: "tools" }), ctx({ extraSecretRoots: [TASKS] }));
     expect(v.allow).toBe(false);
   });
 
   it("denies writing a LaunchAgents plist, which controls how the listener is launched", () => {
     const v = decide(
       call("Write", { file_path: "/Users/owner/Library/LaunchAgents/com.agentcall.listener.plist" }),
-      HOME, id,
+      ctx(),
     );
     expect(v.allow).toBe(false);
   });
@@ -286,15 +344,14 @@ describe("decide — task envelopes and launch config are protected", () => {
   it("denies writing a systemd user unit, which controls how the Linux listener is launched", () => {
     expect(decide(
       call("Write", { file_path: "/home/owner/.config/systemd/user/agentcall-listener.service" }),
-      "/home/owner",
-      id,
+      { userHome: "/home/owner", realpath: id, map: mapFor("/home/owner"), clearance: "internal" },
     ).allow).toBe(false);
   });
 
   it.each([".zshrc", ".zprofile", ".bashrc", ".bash_profile", ".profile"])(
     "denies writing %s, a shell startup file",
     (file) => {
-      const v = decide(call("Write", { file_path: `/Users/owner/${file}` }), HOME, id);
+      const v = decide(call("Write", { file_path: `/Users/owner/${file}` }), ctx());
       expect(v.allow).toBe(false);
     },
   );
@@ -304,8 +361,7 @@ describe("guard security root", () => {
   it("denies the real home's .ssh, not the state root's", () => {
     const verdict = decide(
       { tool_name: "Read", tool_input: { file_path: "/Users/real/.ssh/id_rsa" }, cwd: "/tmp/work" },
-      "/Users/real",
-      id,
+      { userHome: "/Users/real", realpath: id, map: mapFor("/Users/real", ["/Users/real"]), clearance: "internal" },
     );
     expect(verdict.allow).toBe(false);
   });
@@ -313,8 +369,7 @@ describe("guard security root", () => {
   it("denies one line's config from another line's agent (.agentcall is a denied root)", () => {
     const verdict = decide(
       { tool_name: "Read", tool_input: { file_path: "/Users/real/.agentcall/lines/codex/config.json" }, cwd: "/tmp/work" },
-      "/Users/real",
-      id,
+      { userHome: "/Users/real", realpath: id, map: mapFor("/Users/real", ["/Users/real"]), clearance: "internal" },
     );
     expect(verdict.allow).toBe(false);
   });
@@ -324,11 +379,11 @@ describe("per-line task directories are denied", () => {
   it("denies AgentCall/<line>/tasks when passed as an extra root", () => {
     const verdict = decide(
       { tool_name: "Write", tool_input: { file_path: "/Users/real/AgentCall/codex/tasks/x/SKILL.md" }, cwd: "/tmp/work" },
-      "/Users/real",
-      id,
-      "/pkg",
-      undefined,
-      [join("/Users/real", "AgentCall", "codex", "tasks")],
+      {
+        userHome: "/Users/real", realpath: id, clearance: "internal", guardRoot: "/pkg",
+        map: mapFor("/Users/real", ["/Users/real/AgentCall"]),
+        extraSecretRoots: [join("/Users/real", "AgentCall", "codex", "tasks")],
+      },
     );
     expect(verdict.allow).toBe(false);
   });
@@ -336,11 +391,11 @@ describe("per-line task directories are denied", () => {
   it("still allows the line's own share directory", () => {
     const verdict = decide(
       { tool_name: "Write", tool_input: { file_path: "/Users/real/AgentCall/codex/public/notes.md" }, cwd: "/tmp/work" },
-      "/Users/real",
-      id,
-      "/pkg",
-      undefined,
-      [join("/Users/real", "AgentCall", "codex", "tasks")],
+      {
+        userHome: "/Users/real", realpath: id, clearance: "internal", guardRoot: "/pkg",
+        map: mapFor("/Users/real", ["/Users/real/AgentCall"]),
+        extraSecretRoots: [join("/Users/real", "AgentCall", "codex", "tasks")],
+      },
     );
     expect(verdict.allow).toBe(true);
   });
@@ -354,22 +409,22 @@ describe("decide — a denied directory that is itself a symlink", () => {
     p.startsWith("/Users/owner/.aws") ? p.replace("/Users/owner/.aws", "/Volumes/private/aws") : p;
 
   it("denies the canonical path behind the symlink", () => {
-    const v = decide(call("Read", { file_path: "/Volumes/private/aws/credentials" }), HOME, realpath);
+    const v = decide(call("Read", { file_path: "/Volumes/private/aws/credentials" }), ctx({ realpath }));
     expect(v.allow).toBe(false);
   });
 
   it("denies the path through the symlink itself", () => {
-    const v = decide(call("Read", { file_path: "/Users/owner/.aws/credentials" }), HOME, realpath);
+    const v = decide(call("Read", { file_path: "/Users/owner/.aws/credentials" }), ctx({ realpath }));
     expect(v.allow).toBe(false);
   });
 
   it("denies a Grep rooted at the canonical directory", () => {
-    const v = decide(call("Grep", { path: "/Volumes/private/aws", pattern: "aws_secret" }), HOME, realpath);
+    const v = decide(call("Grep", { path: "/Volumes/private/aws", pattern: "aws_secret" }), ctx({ realpath }));
     expect(v.allow).toBe(false);
   });
 
   it("keeps flagging a Bash command that names the symlink — the lexical form survives", () => {
-    const v = decide(call("Bash", { command: "cat ~/.aws/credentials" }), HOME, realpath);
+    const v = decide(call("Bash", { command: "cat ~/.aws/credentials" }), ctx({ realpath }));
     expect(v.allow).toBe(true);
     expect(v.allow === true && v.flag?.rule).toBeTruthy();
   });
@@ -383,20 +438,20 @@ describe("decide — writes to a path that does not exist yet", () => {
       if (p === "/tmp/link") return "/Users/owner/.ssh";
       return p;
     };
-    const v = decide(call("Write", { file_path: "/tmp/link/new_key" }), HOME, realpath);
+    const v = decide(call("Write", { file_path: "/tmp/link/new_key" }), ctx({ realpath }));
     expect(v.allow).toBe(false);
   });
 });
 
 describe("decide — Bash records but does not deny", () => {
   it("flags a command referencing a denied path, and still allows it", () => {
-    const v = decide(call("Bash", { command: "cat ~/.ssh/id_rsa" }), HOME, id);
+    const v = decide(call("Bash", { command: "cat ~/.ssh/id_rsa" }), ctx());
     expect(v.allow).toBe(true);
     expect(v.allow === true && v.flag?.rule).toBeTruthy();
   });
 
   it("does not flag ordinary work", () => {
-    const v = decide(call("Bash", { command: "npm test" }), HOME, id);
+    const v = decide(call("Bash", { command: "npm test" }), ctx());
     expect(v.allow).toBe(true);
     expect(v.allow === true && v.flag).toBeUndefined();
   });
@@ -404,41 +459,41 @@ describe("decide — Bash records but does not deny", () => {
 
 describe("decide — WebFetch is scheme-checked", () => {
   it("allows an ordinary http(s) url", () => {
-    expect(decide(call("WebFetch", { url: "https://example.com" }), HOME, id).allow).toBe(true);
-    expect(decide(call("WebFetch", { url: "http://example.com" }), HOME, id).allow).toBe(true);
+    expect(decide(call("WebFetch", { url: "https://example.com" }), ctx()).allow).toBe(true);
+    expect(decide(call("WebFetch", { url: "http://example.com" }), ctx()).allow).toBe(true);
   });
 
   it("denies a file:// url, which would read the local filesystem", () => {
-    const v = decide(call("WebFetch", { url: "file:///Users/owner/.ssh/id_rsa" }), HOME, id);
+    const v = decide(call("WebFetch", { url: "file:///Users/owner/.ssh/id_rsa" }), ctx());
     expect(v.allow).toBe(false);
   });
 
   it("denies a non-string or missing url", () => {
-    expect(decide(call("WebFetch", { url: 7 }), HOME, id).allow).toBe(false);
-    expect(decide(call("WebFetch", {}), HOME, id).allow).toBe(false);
+    expect(decide(call("WebFetch", { url: 7 }), ctx()).allow).toBe(false);
+    expect(decide(call("WebFetch", {}), ctx()).allow).toBe(false);
   });
 });
 
 describe("decide — unknown shapes fail closed", () => {
   it("allows a tool with no filesystem surface", () => {
-    expect(decide(call("WebSearch", { query: "typescript" }), HOME, id).allow).toBe(true);
-    expect(decide(call("WebFetch", { url: "https://example.com" }), HOME, id).allow).toBe(true);
+    expect(decide(call("WebSearch", { query: "typescript" }), ctx()).allow).toBe(true);
+    expect(decide(call("WebFetch", { url: "https://example.com" }), ctx()).allow).toBe(true);
   });
 
   it("DENIES a tool it has never been taught", () => {
     // The LS failure mode: an unclassified tool has an argument shape this
     // function cannot inspect, so it must not be waved through.
-    const v = decide(call("SomeNewTool", { path: "/Users/owner/.ssh" }), HOME, id);
+    const v = decide(call("SomeNewTool", { path: "/Users/owner/.ssh" }), ctx());
     expect(v.allow).toBe(false);
   });
 
   it("denies a path-shaped tool whose argument is missing", () => {
-    const v = decide(call("Read", {}), HOME, id);
+    const v = decide(call("Read", {}), ctx());
     expect(v.allow).toBe(false);
   });
 
   it("denies when tool_input is not an object", () => {
-    const v = decide({ tool_name: "Read", tool_input: null as never, cwd: CWD }, HOME, id);
+    const v = decide({ tool_name: "Read", tool_input: null as never, cwd: CWD }, ctx());
     expect(v.allow).toBe(false);
   });
 });
@@ -462,6 +517,8 @@ function harness() {
     now: () => "2026-07-31T00:00:00.000Z",
     realpath: id,
     appendLine: (file, line) => logLines.push({ file, line }),
+    map: mapFor(HOME, OWNER_ROOTS),
+    clearance: "internal",
   };
   return {
     deps, lines: logLines,
@@ -644,6 +701,12 @@ describe("runGuard — enumerates every line's tasksDir from the real home, not 
     return {
       line: acting, callId: "call-1", now: () => "2026-08-01T00:00:00.000Z",
       realpath: (p) => p, appendLine: () => {},
+      // Both AgentCall roots are labelled: the acting line's shareDir sits under
+      // the redirected stateRoot, while the obsolete flat task path sits under
+      // the real userHome. The tasks directories inside them stay secret via
+      // extraSecretRoots, which is the distinction these tests exist to pin.
+      map: mapFor(userHome, [join(stateRoot, "AgentCall"), join(userHome, "AgentCall")]),
+      clearance: "internal",
     };
   }
 

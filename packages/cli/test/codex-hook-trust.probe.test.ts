@@ -170,7 +170,7 @@ describe.skipIf(!enabled)("codex exact-hook trust", () => {
       const specFor = (resume?: string) =>
         buildSpawnSpec(
           "codex", prompt, workdir, () => "codex", { caps: ["read"] },
-          "probe-boundary", "probe-line", resume,
+          "probe-boundary", "probe-line", "internal", resume,
         );
       const eventsFrom = (spec: ReturnType<typeof buildSpawnSpec>) => {
         const result = spawnSpec(spec);
