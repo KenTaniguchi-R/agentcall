@@ -7,7 +7,7 @@ const readJsonc = (raw: string) => JSON.parse(
 
 function normalizedRuntimeConfig(input: any): any {
   const config = structuredClone(input);
-  for (const key of ["name", "routes", "workers_dev", "preview_urls"]) delete config[key];
+  for (const key of ["name", "account_id", "routes", "workers_dev", "preview_urls"]) delete config[key];
   if (config.vars) {
     if (config.vars.DEPLOYMENT_MODE) config.vars.DEPLOYMENT_MODE = "<deployment-mode>";
     delete config.vars.SELF_HOSTED_ORG;
@@ -57,8 +57,10 @@ describe("self-host Wrangler distribution", () => {
     const hosted = readJsonc(env.HOSTED_WRANGLER_CONFIG);
     const selfHosted = readJsonc(env.SELF_HOST_WRANGLER_CONFIG);
     const raw = env.SELF_HOST_WRANGLER_CONFIG;
+    expect(selfHosted).not.toHaveProperty("account_id");
     expect(selfHosted.d1_databases[0].database_id).toBe("00000000-0000-0000-0000-000000000000");
     expect(selfHosted.d1_databases[0].database_id).not.toBe(hosted.d1_databases[0].database_id);
+    expect(raw).not.toContain(hosted.account_id);
     expect(raw).not.toContain("agent-call.app");
   });
 });

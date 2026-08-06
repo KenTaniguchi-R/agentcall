@@ -80,7 +80,7 @@ describe("addLine", () => {
         encryption: async (relay) => { relays.push(relay); },
       },
     );
-    expect(relays).toEqual(["https://agentcall.benree.tech", "https://agentcall.benree.tech"]);
+    expect(relays).toEqual(["https://agent-call.app", "https://agent-call.app"]);
   });
   it("persists identity keys before registration and config immediately after", async () => {
     let keysExistedAtRegistration = false;
