@@ -63,17 +63,21 @@ export function mountPresence(app: Hono<RelayAppEnv>): void {
     // step. An unrelated existing target and an unknown target therefore take
     // the same branch and return the same response shape.
     const validTarget = HANDLE_RE.test(target);
+    // Resolved BEFORE the policy check now (#154 slice 6): membership is keyed
+    // by identity, so the check needs one. The enumeration-oracle property the
+    // old ordering gave for free is preserved deliberately instead — an
+    // unresolvable address still runs the shared-roster query, under a sentinel
+    // that cannot match any row. An unknown target and a known-but-unauthorized
+    // one therefore cost the same two queries and return the same 404. Skipping
+    // the query when the id is null would reintroduce the oracle as a timing
+    // difference, which is the same bug in a quieter form.
+    const targetAgentId = validTarget ? await resolveAgentId(c.env.DB, org, target) : null;
     const allowed = validTarget && (
-      viewer === target || (await sharedRosterIds(c.env.DB, org, viewer, target)).length > 0
+      viewer === target ||
+      (await sharedRosterIds(c.env.DB, org, identity.agentId, targetAgentId ?? "")).length > 0
     );
     await recordStatusRead(c, allowed ? "allowed" : "denied");
-    if (!allowed) return c.json({ error: "not found" }, 404);
-
-    // Resolved after the policy check above, so a missing identity returns
-    // the same 404 as a denied one and this stays closed as an enumeration
-    // oracle.
-    const targetAgentId = await resolveAgentId(c.env.DB, org, target);
-    if (!targetAgentId) return c.json({ error: "not found" }, 404);
+    if (!allowed || !targetAgentId) return c.json({ error: "not found" }, 404);
     const stub = c.env.HANDLE_DO.get(
       c.env.HANDLE_DO.idFromName(identityObjectName({ org, agentId: targetAgentId })),
     );

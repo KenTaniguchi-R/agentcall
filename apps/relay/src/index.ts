@@ -232,7 +232,7 @@ app.get("/v1/ws", async (c) => {
     // The caller cannot supply a policy selector. Group attestation is the
     // relay's observation that both identities are currently live members of
     // the same roster, taken before the DO accepts the caller socket.
-    groups = await sharedRosterIds(c.env.DB, org, handle, target);
+    groups = await sharedRosterIds(c.env.DB, org, identity.agentId, targetAgentId);
   } else {
     return c.json({ error: "bad role" }, 400);
   }

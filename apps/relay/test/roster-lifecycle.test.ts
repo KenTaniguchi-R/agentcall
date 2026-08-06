@@ -1,7 +1,7 @@
 import { env, SELF } from "cloudflare:test";
 import { describe, expect, it, vi } from "vitest";
 import { MAX_ROSTER_AUDIT_EVENTS } from "../src/events.js";
-import { registerHandle, wsAuth } from "./helpers.js";
+import { agentIdFor, registerHandle, wsAuth } from "./helpers.js";
 
 async function create(handle: string, ip = handle, country = "US") {
   const token = await registerHandle(handle);
@@ -28,10 +28,14 @@ async function join(id: string, handle: string, token: string, join_key: string)
   return mutate(id, "join", handle, token, { join_key });
 }
 
+// Takes an address for readability, resolves it to the identity membership is
+// actually keyed by (#154 slice 6). The indirection is the point: a test that
+// could still ask "is this handle a member" would be asking a question the
+// schema no longer answers.
 async function isMember(id: string, handle: string) {
   return Boolean(await env.DB.prepare(
-    "SELECT 1 FROM roster_members WHERE roster_id = ? AND handle = ?",
-  ).bind(id, handle).first());
+    "SELECT 1 FROM roster_members WHERE roster_id = ? AND agent_id = ?",
+  ).bind(id, await agentIdFor(handle)).first());
 }
 
 describe("roster lifecycle", () => {

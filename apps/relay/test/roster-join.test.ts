@@ -101,13 +101,15 @@ describe("POST /v1/roster/:id/join", () => {
   });
 
   it("409s when the roster is full, since the caller already proved the secret", async () => {
-    // Seeding MAX_ROSTER_MEMBERS - 1 handles through the API would blow the
-    // register rate limit, so insert membership rows directly.
+    // Seeding MAX_ROSTER_MEMBERS - 1 members through the API would blow the
+    // register rate limit, so insert membership rows directly. Synthetic
+    // agent ids, not handles (#154 slice 6) — the cap counts principals, and
+    // these fillers deliberately have no address bound to them at all.
     const r = await newRoster("rj6");
-    const stmt = env.DB.prepare("INSERT OR IGNORE INTO roster_members (roster_id, org, handle, joined_at) VALUES (?, ?, ?, ?)");
+    const stmt = env.DB.prepare("INSERT OR IGNORE INTO roster_members (roster_id, org, agent_id, joined_at) VALUES (?, ?, ?, ?)");
     await env.DB.batch(Array.from(
       { length: MAX_ROSTER_MEMBERS - 1 },
-      (_, i) => stmt.bind(r.roster_id, "acme", `filler${i}`, 1),
+      (_, i) => stmt.bind(r.roster_id, "acme", `agt_filler${i}`, 1),
     ));
     const token = await registerHandle("rj6b");
     expect((await join(r.roster_id, "rj6b", token, r.join_key)).status).toBe(409);
@@ -117,10 +119,10 @@ describe("POST /v1/roster/:id/join", () => {
 
   it("admits exactly one of two concurrent distinct joins at 199 members", async () => {
     const r = await newRoster("rj7");
-    const stmt = env.DB.prepare("INSERT INTO roster_members (roster_id, org, handle, joined_at) VALUES (?, ?, ?, ?)");
+    const stmt = env.DB.prepare("INSERT INTO roster_members (roster_id, org, agent_id, joined_at) VALUES (?, ?, ?, ?)");
     await env.DB.batch(Array.from(
       { length: MAX_ROSTER_MEMBERS - 2 },
-      (_, i) => stmt.bind(r.roster_id, "acme", `race-filler${i}`, 1),
+      (_, i) => stmt.bind(r.roster_id, "acme", `agt_race-filler${i}`, 1),
     ));
     const [tokenA, tokenB] = await Promise.all([registerHandle("rj7a"), registerHandle("rj7b")]);
     const [a, b] = await Promise.all([
