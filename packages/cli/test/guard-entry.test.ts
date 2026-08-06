@@ -1,6 +1,6 @@
 import { execFile, execFileSync } from "node:child_process";
 import { mkdirSync, readFileSync, statSync, writeFileSync } from "node:fs";
-import { join } from "node:path";
+import { dirname, join, resolve, sep } from "node:path";
 import { describe, expect, it } from "vitest";
 import { GUARD_TIMEOUT_S } from "../src/runner.js";
 import { tempDir } from "./helpers.js";
@@ -137,16 +137,35 @@ describe("guard-entry as a real process", () => {
     expect(JSON.parse(calls)).toMatchObject({ type: "tool_denied" });
   });
 
-  it("denies a file-shaped read outside AGENTCALL_ALLOWED_ROOT", () => {
+  // Was "denies a file-shaped read outside AGENTCALL_ALLOWED_ROOT". #372
+  // deleted that env var, and the test kept passing for a reason unrelated to
+  // its name: it seeded no sensitivity map, so EVERY path classified `secret`
+  // and the guard would have denied anything. Confirmed by running it with the
+  // env var removed (still denies) and against a file INSIDE the supposedly
+  // allowed root (also denies). It discriminated nothing.
+  //
+  // The property that replaced confinement is the labelled/unlabelled split,
+  // so that is what this drives: one seeded map, one clearance, two sibling
+  // paths, opposite verdicts. A guard that denied everything — which the old
+  // test could not tell from a working one — fails the first assertion.
+  it("allows a labelled path and denies its unlabelled sibling", () => {
     const home = tempDir("guard-");
-    const allowed = join(home, "code", "payments");
-    const r = run(
-      { tool_name: "Read", tool_input: { file_path: join(home, "code", "payroll", "salary.ts") }, cwd: allowed },
+    const labelled = join(home, "code", "payments");
+    seedMap(home, [labelled]);
+
+    const inside = run(
+      { tool_name: "Read", tool_input: { file_path: join(labelled, "ledger.ts") }, cwd: labelled },
       home,
-      { AGENTCALL_ALLOWED_ROOT: allowed },
     );
-    expect(r.status).toBe(0);
-    expect(JSON.parse(r.stdout).hookSpecificOutput.permissionDecision).toBe("deny");
+    expect(inside.status).toBe(0);
+    expect(inside.stdout).toBe("");
+
+    const outside = run(
+      { tool_name: "Read", tool_input: { file_path: join(home, "code", "payroll", "salary.ts") }, cwd: labelled },
+      home,
+    );
+    expect(outside.status).toBe(0);
+    expect(JSON.parse(outside.stdout).hookSpecificOutput.permissionDecision).toBe("deny");
   });
 
   it("exits 2 on unparseable input", () => {
@@ -215,6 +234,54 @@ describe("guard-entry as a real process", () => {
     // Interleaved appends must still parse: a torn line means the audit trail
     // cannot be trusted, which is the whole point of the second stream.
     for (const l of lines) expect(() => JSON.parse(l)).not.toThrow();
+  });
+});
+
+// #377. guard-entry.ts's header defends a minimal import graph, and #372 grew
+// that graph by a third-party package without anything noticing — the header
+// was still describing a constraint the file had stopped honouring. A comment
+// cannot catch that; this can.
+//
+// Measured 2026-08-06 (see docs/research/2026-08-06-guard-entry-import-cost.md):
+// zod costs 13ms of guard-entry's 48ms, against a 25ms bare-node floor. That was
+// accepted, because the alternative is a second parser on the sensitivity map.
+// A SECOND package would not be, and this is what makes adding one a decision
+// rather than an accident.
+describe("guard-entry import budget", () => {
+  // Walks the built graph rather than src, because dist is what the hook
+  // actually loads — a dependency reachable only through a transitive re-export
+  // costs the same as a direct one and must be visible here.
+  function thirdPartyImports(entry: string): Map<string, Set<string>> {
+    const seen = new Set<string>();
+    const bare = new Map<string, Set<string>>();
+    const walk = (file: string) => {
+      if (seen.has(file)) return;
+      seen.add(file);
+      let src: string;
+      try {
+        src = readFileSync(file, "utf8");
+      } catch {
+        return; // a .d.ts-only or type-erased specifier resolves to nothing at runtime
+      }
+      for (const m of src.matchAll(/(?:^|[\s;}])(?:import|export)[^;]*?from\s*"([^"]+)"/g)) {
+        const spec = m[1]!;
+        if (spec.startsWith(".")) walk(resolve(dirname(file), spec));
+        // node: builtins are already resident; only packages cost load time.
+        else if (!spec.startsWith("node:")) {
+          bare.set(spec, (bare.get(spec) ?? new Set()).add(file.split(`dist${sep}`)[1] ?? file));
+        }
+      }
+    };
+    walk(entry);
+    return bare;
+  }
+
+  it("pulls in exactly one third-party package, and only where the boundary is parsed", () => {
+    const bare = thirdPartyImports(ENTRY);
+    expect([...bare.keys()].sort()).toEqual(["zod"]);
+    // Named, not just counted. zod arriving through a second module would mean
+    // a new module in the hot graph, which is the thing being bounded.
+    expect([...bare.get("zod")!]).toEqual(["sensitivity.js"]);
   });
 });
 

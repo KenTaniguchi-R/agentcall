@@ -98,7 +98,9 @@ const KILL_GRACE_MS = 10_000;
 // Timeout for the PreToolUse guard hook. Biased long on purpose: timeout expiry
 // fails OPEN (the tool runs), so all risk is on the too-short side. A hung guard
 // stalls one call (safe and visible); an abandoned one is neither. Measured cost
-// is ~33ms.
+// is ~48ms (#377, re-measured 2026-08-06; ~33ms before #372 put zod in
+// guard-entry's graph), so the bias is roughly 600x, not 900x. Still no reason
+// to touch this number.
 export const GUARD_TIMEOUT_S = 30;
 const TOOL_TELEMETRY_TIMEOUT_S = 5;
 

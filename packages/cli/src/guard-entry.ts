@@ -1,21 +1,47 @@
 // Standalone process entry for the PreToolUse hook. Deliberately NOT a
-// subcommand on index.ts: routing through commander and the full import graph
-// measured 78ms against 33ms here, and this runs once per tool call.
-// Import only what it needs.
+// subcommand on index.ts: this runs once per tool call, as its own node
+// process, so the whole import graph is paid every time.
+//
+// Re-measured 2026-08-06 on node 24 (#377; method and raw numbers in
+// docs/research/2026-08-06-guard-entry-import-cost.md), p50 of 100 runs:
+//
+//   bare node, nothing imported          24ms
+//   THIS FILE                            48ms
+//   index.js, the full commander graph  127ms
+//
+// The original header quoted 78ms against 33ms. Both sides grew; the gap this
+// file exists to avoid grew with them, from 45ms to 79ms per tool call. The
+// split is earning more than when it was written, not less.
+//
+// Of this file's 24ms over bare node, 13ms is zod, reached only through
+// sensitivity.ts's SensitivityMapSchema. Measured against a real zod-free
+// build, and ACCEPTED rather than removed: the sensitivity map is the security
+// boundary, and the only way to drop zod here is to hand-roll a second parser
+// for it. Two parsers on one boundary can disagree, and when they do the guard
+// enforces a map nothing else believes is in force — a silent failure worth far
+// more than 13ms. The cost is also not on a hot loop: PreToolUse is gated by a
+// model round-trip, so 13ms lands against an inter-tool interval of a second or
+// more. (zod/mini and zod/v4/core were measured too. They save 1ms and 4ms,
+// which does not change the trade.)
+//
+// Still import only what this needs. `guard-entry import budget` in
+// test/guard-entry.test.ts pins the third-party graph to exactly zod, from
+// exactly sensitivity.js, so the next package to arrive here is a decision
+// someone makes rather than one that happens — which is how #372 grew this
+// graph while the header still claimed it was minimal.
 import { appendFileSync, mkdirSync, realpathSync } from "node:fs";
 import { dirname } from "node:path";
 import { FAIL_CLOSED_REASON, runGuard } from "./guard.js";
-// From line-name.js, not lines.js: lines.js imports zod at module scope (for
-// LineConfigSchema), and this file is a standalone process entry that runs
-// once per tool call — see the header comment above for why it stays a
-// minimal import graph. Pulling zod in here to validate one env var would be
-// exactly the cost that comment exists to avoid.
+// From line-name.js, not lines.js. Not about avoiding zod — sensitivity.js
+// already brings it in, and the header above explains why that was accepted.
+// It is about not adding a MODULE: lines.js carries LineConfigSchema and the
+// config-loading graph behind it, all to validate one env var against a regex
+// that line-name.js exports on its own. The budget is the graph, not the
+// package count.
 import { LINE_NAME_RE } from "./line-name.js";
 import { getLinePaths, getMachinePaths } from "./paths.js";
-// NOTE: this pulls zod into a process entry whose header defends a minimal
-// import graph (78ms vs 33ms per tool call). The map is the boundary and has to
-// be validated, so the cost is deliberate rather than accidental — but it is a
-// real regression against a measured property and is tracked, not swallowed.
+// The one import that costs a package (13ms; see the header). It is here
+// because the map is the boundary and a parsed boundary has to be validated.
 import { loadSensitivityMap, withFloor } from "./sensitivity.js";
 import { appendPrivateLogLine } from "./audit-log.js";
 import { writeToolHookEvent } from "./tool-telemetry-hook.js";

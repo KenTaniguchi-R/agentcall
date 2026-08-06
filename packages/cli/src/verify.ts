@@ -527,7 +527,7 @@ export function guardDenied(stdout: string): boolean {
 }
 
 // Invokes guard-entry.js directly with a synthetic PreToolUse payload for a
-// protected read. No model, no agent spawn, ~33ms: this answers "does the
+// protected read. No model, no agent spawn, ~48ms (#377): this answers "does the
 // guard deny?" deterministically, which the spawn probe cannot, because the
 // spawn probe depends on the model choosing to attempt the read at all.
 //
