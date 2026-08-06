@@ -1,9 +1,10 @@
 import { authOf, fetchKeys, getRecoveryStatus, getStatus } from "./api.js";
-import { lstatSync, readFileSync, realpathSync } from "node:fs";
+import { existsSync, lstatSync, readFileSync, realpathSync } from "node:fs";
 import { execFileSync } from "node:child_process";
 import { encryptionKeyTranscript, importIdentityPublicKey, keyIdFor, verifyTranscript } from "@benree/agentcall-shared";
 import { callAgent } from "./call-client.js";
-import { lineAddress, relayUrl, resolveLineWorkdir, type LineConfig, type Workdir } from "./config.js";
+import { lineAddress, relayUrl, type LineConfig } from "./config.js";
+import { loadSensitivityMap, withFloor, workdirFor } from "./sensitivity.js";
 import {
   inspectListenerService,
   type ListenerServiceStatus,
@@ -348,15 +349,46 @@ export async function runDoctor(deps: DoctorDeps): Promise<number> {
       continue;
     }
 
-    // A workdir that's relative, missing, or a file stops startListener
-    // dead, so diagnose it here rather than letting the owner discover it as
-    // a listener that won't stay up.
-    let workdir: Workdir | undefined;
+    // #372 deleted `workdir` from config.json; the spawn directory is derived
+    // from the sensitivity map instead. That derivation deliberately SKIPS a
+    // source that no longer exists rather than throwing — one stale entry must
+    // not take a line offline — which trades a loud failure for a quiet
+    // fallback to an empty share directory. This is where that trade is paid
+    // back: an owner whose repository moved sees it named here instead of
+    // discovering it as an agent that suddenly knows nothing.
+    let workdirDir: string | undefined;
     try {
-      workdir = resolveLineWorkdir(cfg, line.paths);
-      report({ name: "workdir", ok: true, detail: workdir.dir });
+      const map = loadSensitivityMap(line.paths);
+      const missing = map.sources.filter((s) => !existsSync(s.path));
+      // `internal` is the most permissive grantable clearance, so this is the
+      // best case — a public caller may land somewhere narrower.
+      workdirDir = workdirFor(withFloor(map, line.paths.machine.userHome), "internal", line.paths.shareDir);
+      if (missing.length > 0) {
+        report({
+          name: "sensitivity map", ok: false,
+          detail: `${missing.length} labelled source(s) missing: ${missing.map((s) => s.path).join(", ")}`,
+          hint: "fix or remove those entries in ~/.agentcall/lines/<line>/sensitivity.json",
+        });
+      } else if (map.sources.length === 0) {
+        // A warning, not a failure. Everything unlabelled is secret, so this
+        // line answers nothing useful — but it is the fail-CLOSED end of the
+        // model working as designed, not a broken install, and `setup` reaches
+        // it legitimately whenever it runs outside a git repository. Failing
+        // here would make `doctor` exit 1 on a line that is merely empty.
+        report({
+          name: "sensitivity map", ok: true, warn: true,
+          detail: "no source is labelled, so every path is secret and the agent can read nothing",
+          hint: "label at least one directory in ~/.agentcall/lines/<line>/sensitivity.json",
+        });
+      } else {
+        report({ name: "sensitivity map", ok: true, detail: `${map.sources.length} source(s) labelled` });
+      }
+      report({ name: "workdir", ok: true, detail: `${workdirDir} (derived, at internal clearance)` });
     } catch (e) {
-      report({ name: "workdir", ok: false, detail: short(e), hint: "fix or remove `workdir` in ~/.agentcall/lines/<line>/config.json" });
+      report({
+        name: "sensitivity map", ok: false, detail: short(e),
+        hint: "fix ~/.agentcall/lines/<line>/sensitivity.json — a listener refuses every call while it is unparseable",
+      });
     }
 
     // LineConfigSchema types `relay` as a bare string, so a syntactically
@@ -402,7 +434,7 @@ export async function runDoctor(deps: DoctorDeps): Promise<number> {
     // Falls back to shareDir when workdir didn't resolve: per the ladder
     // semantics above, a static-check failure reports itself but must not
     // stop the agent checks from running.
-    const agentWorkdir = workdir?.dir ?? line.paths.shareDir;
+    const agentWorkdir = workdirDir ?? line.paths.shareDir;
     const agentChecks = await verifyAgent(cfg.agent_kind, agentWorkdir, deps.verifyFns);
     for (const c of agentChecks) report(c);
     const agentOk = agentChecks.every((c) => c.ok);

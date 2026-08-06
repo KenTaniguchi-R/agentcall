@@ -18,7 +18,6 @@ Edit `~/AgentCall/<line>/tasks/architecture-history/SKILL.md`:
 ---
 description: Explain why past architecture decisions were made.
 keywords: [architecture, migration, adr]
-workdir: /absolute/path/to/the/repository
 ---
 
 Use ADRs, commit history, and current code to explain the decision.
@@ -26,7 +25,7 @@ Call out uncertainty instead of inventing rationale.
 ```
 
 Only `description` is required. Optional fields are `name`, `keywords`,
-`examples`, `timeout_s`, `workdir`, and `threadable`. The directory name is the
+`examples`, `timeout_s`, and `threadable`. The directory name is the
 task ID. Unrecognized keys are rejected rather than ignored, so a stale field is
 a startup error and not a silent no-op.
 

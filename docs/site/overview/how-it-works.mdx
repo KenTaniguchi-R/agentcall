@@ -16,7 +16,7 @@ sequenceDiagram
     Caller->>Relay: call_request with ciphertext
     Relay->>Listener: incoming_call with routing metadata
     Listener->>Listener: verify, decrypt, replay-check, resolve policy
-    Listener->>Agent: start fresh process in task workdir
+    Listener->>Agent: start fresh process in the derived working directory
     Agent-->>Listener: answer
     Listener->>Relay: encrypted call_outcome
     Relay-->>Caller: encrypted call_outcome

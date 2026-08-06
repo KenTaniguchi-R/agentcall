@@ -1,7 +1,4 @@
-import { existsSync, statSync } from "node:fs";
-import { isAbsolute } from "node:path";
 import { formatAddress, HOSTED_RELAY_HOST, type AgentKind } from "@benree/agentcall-shared";
-import type { LinePaths } from "./paths.js";
 
 // Per-line credentials and settings. Config (and the flat Paths it paired
 // with) used to be a single machine-wide record; Task 12 deleted that half
@@ -18,7 +15,11 @@ export interface LineConfig {
   relay: string;
   /** Absent = answer-incapable. The line can still call out. */
   agent_kind?: AgentKind;
-  workdir?: string;
+  // No `workdir`. #372 deleted it: the sensitivity map already names the
+  // directories the owner cares about, and a second setting here could point
+  // the agent somewhere the guard would then refuse to let it read. The spawn
+  // directory is derived from the map instead — see sensitivity.ts's
+  // workdirFor.
 }
 export type CallableLineConfig = LineConfig & { agent_kind: AgentKind };
 
@@ -31,38 +32,6 @@ export function assertCallableLine(cfg: LineConfig): asserts cfg is CallableLine
 }
 
 const DEFAULT_RELAY = `https://${HOSTED_RELAY_HOST}`;
-
-export interface Workdir {
-  /** Absolute directory the agent is spawned in. */
-  dir: string;
-  /**
-   * Whether the prompt should tell the agent to stay inside `dir`. True only
-   * for the default ~/AgentCall/<line>/public share folder — an owner who
-   * points workdir at a real project did so precisely so the agent would use it.
-   *
-   * Note this has never been an enforced boundary since the OS sandbox was
-   * removed; it is an instruction the model can decline either way.
-   */
-  confined: boolean;
-}
-
-// Resolved once at listener start rather than per call, so a misconfigured
-// workdir fails loudly at `agentcall listen` instead of turning every inbound
-// call into a cryptic spawn ENOENT. Defaults to p.shareDir (the line's
-// authored public folder).
-export function resolveLineWorkdir(cfg: LineConfig, p: LinePaths): Workdir {
-  if (cfg.workdir === undefined) return { dir: p.shareDir, confined: true };
-  if (!isAbsolute(cfg.workdir)) {
-    throw new Error(`config.json workdir must be an absolute path, got "${cfg.workdir}".`);
-  }
-  if (!existsSync(cfg.workdir)) {
-    throw new Error(`config.json workdir "${cfg.workdir}" does not exist.`);
-  }
-  if (!statSync(cfg.workdir).isDirectory()) {
-    throw new Error(`config.json workdir "${cfg.workdir}" is not a directory.`);
-  }
-  return { dir: cfg.workdir, confined: false };
-}
 
 // Strips a trailing slash so callers can build "${relayUrl(cfg)}/v1/..." without
 // risking a double slash when the env/config/default value already ends in one.

@@ -6,7 +6,8 @@ import { listLines } from "./lines.js";
 import { resolveLine } from "./line-context.js";
 import { getMachinePaths } from "./paths.js";
 import { canPrompt, ask as ttyAsk } from "./tty.js";
-import { relayUrl, resolveLineWorkdir, type LineConfig } from "./config.js";
+import { relayUrl, type LineConfig } from "./config.js";
+import { loadSensitivityMap, withFloor, workdirFor } from "./sensitivity.js";
 import { defaultResolveBin, listenerPathDirs } from "./listener-path.js";
 import { isEphemeralDir } from "./bin.js";
 import { host } from "./outbound.js";
@@ -258,7 +259,7 @@ export async function runSetup(opts: SetupOpts): Promise<{ ready: boolean }> {
   let verifyFailure: VerifyCheck | undefined;
   if (cfg.agent_kind && opts.verify !== false) {
     log(`\nVerifying ${cfg.agent_kind} can answer a test call (takes ~10-30s)...`);
-    const checks = await verifyAgent(cfg.agent_kind, resolveLineWorkdir(cfg, ctx.paths).dir, opts.verifyFns);
+    const checks = await verifyAgent(cfg.agent_kind, workdirFor(withFloor(loadSensitivityMap(ctx.paths), ctx.paths.machine.userHome), "internal", ctx.paths.shareDir), opts.verifyFns);
     for (const c of checks) log(formatCheck(c));
     verifyFailure = checks.find((c) => !c.ok);
   }

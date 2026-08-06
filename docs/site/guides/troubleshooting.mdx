@@ -24,7 +24,7 @@ could not prove the state. A warning does not make the overall command fail.
 | `task_not_offered` | Card/policy does not expose the task to this caller | Run `lint`, `policy`, and `card`; republish if intended |
 | `context_unknown` | Conversation expired or its binding changed | Start a fresh call without `--continue` |
 | Identity or epoch warning | Peer pin changed or key history rolled back | Verify out of band; never reset trust blindly |
-| Listener rejects workdir | Configured directory is relative, absent, or not a directory | Set an existing absolute path and restart |
+| Agent answers "I can't reach that" | The path is unlabelled, so it classifies `secret` | Label it in `sensitivity.json`, or check `agentcall doctor` for a source that has moved |
 | Search has no results | No roster/cache, no published match, or query below threshold | Check `roster list`, task keywords, and relay reachability |
 
 ## Inspect local evidence

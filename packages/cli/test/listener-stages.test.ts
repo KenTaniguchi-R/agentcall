@@ -262,37 +262,58 @@ describe("makeOutcomeSender", () => {
 });
 
 describe("resolveAdmission", () => {
-  const workdir = { dir: "/tmp/default-workdir", confined: true };
-
   it("admits the default ask task for a caller with no policy configured", () => {
     const result = resolveAdmission({
-      paths: seededPaths(), from: "shusaku", requestedTask: undefined, groups: [], workdir, agentKind: "claude",
+      paths: seededPaths(), from: "shusaku", requestedTask: undefined, groups: [],
     });
     expect(result.ok).toBe(true);
     if (!result.ok) throw new Error("expected ok");
     expect(result.task.id).toBe("ask");
-    expect(result.taskWorkdir).toEqual({ dir: "/tmp/default-workdir", confined: true });
   });
 
-  it("never claims confinement for codex, even in the confined default workdir", () => {
+  // Replaces "never claims confinement for codex, even in the confined default
+  // workdir". #372 deleted `taskWorkdir` and the `confined` flag with it: the
+  // directory is no longer a boundary for either runtime, so there is nothing
+  // left to claim. What resolveAdmission owes its caller instead is the map,
+  // which is what the spawn directory is derived from.
+  it("returns the sensitivity map, which is what the workdir is derived from", () => {
+    const paths = seededPaths();
     const result = resolveAdmission({
-      paths: seededPaths(), from: "shusaku", requestedTask: undefined, groups: [], workdir, agentKind: "codex",
+      paths, from: "shusaku", requestedTask: undefined, groups: [],
     });
-    expect(result.ok && result.taskWorkdir.confined).toBe(false);
+    expect(result.ok).toBe(true);
+    if (!result.ok) throw new Error("expected ok");
+    // withFloor is applied here, not by the caller: ~/.ssh and friends must be
+    // secret in the map every consumer sees, not only in the guard's copy.
+    expect(result.map.sources.some((s) => s.path.endsWith("/.ssh"))).toBe(true);
+  });
+
+  // The map is load-bearing for the CALL now, not only for the guard
+  // subprocess, so a corrupt one must fail the same way a corrupt policy does:
+  // one clean call_failed, rather than every tool call failing closed and the
+  // owner diagnosing it from the guard's log.
+  it("fails closed with policy_error when the sensitivity map is corrupt", () => {
+    const paths = seededPaths();
+    mkdirSync(paths.dir, { recursive: true });
+    writeFileSync(paths.sensitivityFile, "{not valid json");
+    const result = resolveAdmission({
+      paths, from: "shusaku", requestedTask: undefined, groups: [],
+    });
+    expect(result).toMatchObject({ ok: false, code: "policy_error" });
   });
 
   it("blocks a caller policy has denied, offering nothing", () => {
     const paths = seededPaths();
     seedPolicy(paths, { default_clearance: "public", callers: { spammer: { block: true } } });
     const result = resolveAdmission({
-      paths, from: "spammer", requestedTask: undefined, groups: [], workdir, agentKind: "claude",
+      paths, from: "spammer", requestedTask: undefined, groups: [],
     });
     expect(result).toEqual({ ok: false, code: "blocked", offered: [] });
   });
 
   it("rejects a requested task that does not exist on disk", () => {
     const result = resolveAdmission({
-      paths: seededPaths(), from: "shusaku", requestedTask: "no-such-task", groups: [], workdir, agentKind: "claude",
+      paths: seededPaths(), from: "shusaku", requestedTask: "no-such-task", groups: [],
     });
     expect(result).toMatchObject({ ok: false, code: "task_unknown" });
   });
@@ -307,7 +328,7 @@ describe("resolveAdmission", () => {
     seedTask(paths, "secret", ["description: shh"]);
     seedPolicy(paths, { default_clearance: "public", callers: {} });
     const result = resolveAdmission({
-      paths, from: "shusaku", requestedTask: "secret", groups: [], workdir, agentKind: "claude",
+      paths, from: "shusaku", requestedTask: "secret", groups: [],
     });
     expect(result).toMatchObject({ ok: true, task: { id: "secret" } });
   });
@@ -319,7 +340,7 @@ describe("resolveAdmission", () => {
     const paths = seededPaths();
     seedPolicy(paths, { default_clearance: "internal", callers: {} });
     const result = resolveAdmission({
-      paths, from: "shusaku", requestedTask: undefined, groups: [], workdir, agentKind: "claude",
+      paths, from: "shusaku", requestedTask: undefined, groups: [],
     });
     expect(result.ok && result.policy.default_clearance).toBe("internal");
   });
@@ -329,7 +350,7 @@ describe("resolveAdmission", () => {
     mkdirSync(paths.dir, { recursive: true });
     writeFileSync(paths.policyFile, "{not valid json");
     const result = resolveAdmission({
-      paths, from: "shusaku", requestedTask: undefined, groups: [], workdir, agentKind: "claude",
+      paths, from: "shusaku", requestedTask: undefined, groups: [],
     });
     expect(result.ok).toBe(false);
     if (result.ok || result.code !== "policy_error") throw new Error("expected a policy_error failure");

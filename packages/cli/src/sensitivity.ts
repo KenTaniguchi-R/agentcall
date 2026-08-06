@@ -6,8 +6,9 @@
 // every source: how sensitive is it. Everything not named is `secret`, so the
 // failure mode of an unconfigured or half-configured line is a refusal to
 // answer rather than a leak — which is what makes a generous default safe.
-import { existsSync, readFileSync } from "node:fs";
-import { dirname, join, resolve } from "node:path";
+import { existsSync, readFileSync, statSync } from "node:fs";
+import { homedir } from "node:os";
+import { dirname, isAbsolute, join, resolve } from "node:path";
 import { z } from "zod";
 import { canonical, expandHome, isInside } from "./path-canon.js";
 import type { LinePaths } from "./paths.js";
@@ -167,6 +168,75 @@ export function withFloor(map: SensitivityMap, home: string): SensitivityMap {
 
 export function classifySkill(map: SensitivityMap, skill: string): Sensitivity {
   return lookup(map.skills, skill);
+}
+
+/**
+ * The directory to spawn the answering agent in, derived from the map.
+ *
+ * #372 deleted line `workdir` (config.json) and task `workdir` (SKILL.md). Both
+ * were a second source of truth: the map already names the directory the owner
+ * cares about — `defaultSensitivityMap` seeds the git repository `setup` ran in
+ * — and a `workdir` that disagreed with it pointed the agent somewhere the
+ * guard would then refuse to let it read.
+ *
+ * Selection, in order:
+ *
+ *   1. Sources the caller is CLEARED for. `permits` already refuses `secret`
+ *      unconditionally, so the `withFloor` entries (~/.ssh, ~/.agentcall, …)
+ *      drop out here without a second exclusion list, and a `public` caller is
+ *      never spawned inside `internal` content it could only be refused on.
+ *   2. The richest of those — `internal` over `public` — because a cwd the
+ *      caller cannot be told about is worth less than one they can.
+ *   3. Shortest path, then lexicographic. Purely a tie-break, and it exists so
+ *      that reordering sensitivity.json cannot silently move the cwd.
+ *
+ * A source that no longer exists on disk is skipped rather than fatal: the map
+ * is read per call, and one stale entry must not take the line offline. That
+ * trades a loud failure for a quiet fallback, so `doctor` reports it instead —
+ * see checkSensitivityWorkdir.
+ */
+export function workdirFor(
+  map: SensitivityMap, clearance: Sensitivity, fallbackDir: string, home?: string,
+): string {
+  return readableSources(map, clearance, home)[0] ?? fallbackDir;
+}
+
+/**
+ * The labelled directories this caller may be told about, richest first.
+ *
+ * Shares its filter and ordering with `workdirFor` on purpose: the prompt tells
+ * the agent what it may read, and the cwd is the first of exactly that list. If
+ * the two could diverge, the agent would be oriented at a directory the prompt
+ * never named, or told about one the guard would refuse.
+ *
+ * Safe to put in a prompt: every entry is at or below the caller's clearance by
+ * construction, so echoing one into a reply is already permitted. A source the
+ * caller is NOT cleared for never appears, which is why this cannot become a
+ * path-disclosure channel for `secret` content.
+ */
+export function readableSources(
+  map: SensitivityMap, clearance: Sensitivity, home: string = homedir(),
+): string[] {
+  return map.sources
+    .filter((s) => permits(clearance, s.sensitivity))
+    .map((s) => ({ ...s, path: expandHome(s.path, home) }))
+    // Absolute only. The schema accepts any string, and `classifyPath`
+    // canonicalises a relative one against the CALL's cwd — but there is no
+    // call cwd yet when this runs, so a bare `statSync("code/api")` would
+    // resolve against whatever directory the listener service happens to have
+    // been launched in. That would make the spawn directory depend on how the
+    // daemon was started, which is not a property anyone can reason about.
+    // resolveLineWorkdir rejected the same shape before #372 deleted it.
+    .filter((s) => isAbsolute(s.path))
+    // Directories only: a file is a legitimate label — classifyPath handles
+    // them — but it cannot be a cwd, and naming one as somewhere to "read
+    // files under" would mislead the agent about what it can enumerate.
+    .filter((s) => { try { return statSync(s.path).isDirectory(); } catch { return false; } })
+    .sort((a, b) =>
+      RANK[b.sensitivity] - RANK[a.sensitivity] ||
+      a.path.length - b.path.length ||
+      a.path.localeCompare(b.path))
+    .map((s) => s.path);
 }
 
 /**

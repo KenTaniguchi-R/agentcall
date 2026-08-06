@@ -1,5 +1,5 @@
-import { existsSync, mkdirSync, readdirSync, readFileSync, statSync, writeFileSync } from "node:fs";
-import { isAbsolute, join } from "node:path";
+import { existsSync, mkdirSync, readdirSync, readFileSync, writeFileSync } from "node:fs";
+import { join } from "node:path";
 import { z } from "zod";
 import { parse as parseYaml } from "yaml";
 import { MAX_KEYWORD_LENGTH, MAX_TASK_KEYWORDS, TASK_ID_RE } from "@benree/agentcall-shared";
@@ -31,7 +31,11 @@ export const SkillFrontmatter = z.object({
   // highest.
   keywords: z.array(z.string().min(1).max(MAX_KEYWORD_LENGTH)).max(MAX_TASK_KEYWORDS).default([]),
   timeout_s: z.number().int().positive().max(300).optional(),
-  workdir: z.string().min(1).optional(),
+  // No `workdir`. #372 deleted it with the line-level one: where the agent
+  // runs is derived from the sensitivity map (sensitivity.ts's workdirFor), so
+  // a task naming its own directory could only ever contradict it. `.strict()`
+  // below means a SKILL.md still carrying one fails to load with a named
+  // warning rather than silently doing nothing.
   // Follow-up calls. Safe by default now that the reply is the only sink: the
   // multi-turn risk the old derivation managed was an attacker planting a
   // premise on turn 1 and cashing it on turn 5 against a write or exec grant,
@@ -50,7 +54,6 @@ export interface Task {
   examples: string[];
   keywords: string[];
   timeout_s?: number;
-  workdir?: string;
   threadable: boolean;
   skill: string; // SKILL.md body (after the frontmatter), embedded into the spawn prompt
 }
@@ -97,11 +100,6 @@ export function loadTasks(p: LinePaths, warn: (msg: string) => void = console.er
         continue;
       }
       fm = SkillFrontmatter.parse(parseYaml(split.meta));
-      if (fm.workdir !== undefined) {
-        if (!isAbsolute(fm.workdir)) throw new Error("workdir must be an absolute path");
-        if (!existsSync(fm.workdir)) throw new Error(`workdir does not exist: ${fm.workdir}`);
-        if (!statSync(fm.workdir).isDirectory()) throw new Error(`workdir is not a directory: ${fm.workdir}`);
-      }
       body = split.body;
     } catch (e) {
       warn(`agentcall: task "${id}": invalid SKILL.md frontmatter, skipped (${String(e).slice(0, 200)})`);
@@ -114,7 +112,6 @@ export function loadTasks(p: LinePaths, warn: (msg: string) => void = console.er
       examples: fm.examples,
       keywords: fm.keywords,
       timeout_s: fm.timeout_s,
-      workdir: fm.workdir,
       threadable: fm.threadable,
       skill: body,
     });
@@ -130,7 +127,6 @@ const SKILL_TEMPLATE = `---
 description: TODO — one line callers will see on your card
 # name: defaults to the directory name
 # timeout_s: 300
-# workdir: /absolute/path/to/the/repository
 # threadable: true       # allow --continue follow-ups; defaults true
 # examples:
 #   - An example message a caller might send

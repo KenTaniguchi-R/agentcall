@@ -4,7 +4,8 @@ import { writeJsonAtomic } from "../json-store.js";
 import { formatAddress, type AgentKind } from "@benree/agentcall-shared";
 import { authOf, publishEncryptionKey, publishIdentityKey, registerHandle } from "../api.js";
 import { publishCard } from "../card.js";
-import { resolveLineWorkdir, type LineConfig } from "../config.js";
+import { type LineConfig } from "../config.js";
+import { loadSensitivityMap, withFloor, workdirFor } from "../sensitivity.js";
 import { assertValidLineName, listLines, readyLines, saveLineConfig } from "../lines.js";
 import { defaultSensitivityMap } from "../sensitivity.js";
 import { listenerPathDirs } from "../listener-path.js";
@@ -191,7 +192,7 @@ export async function addLine(m: MachinePaths, opts: AddLineOpts): Promise<{ add
     // owner fixes whatever verifyAgent found.
     if (opts.verify !== false) {
       const log = opts.log ?? console.log;
-      const checks = await verifyAgent(agentKind, resolveLineWorkdir(cfg, paths).dir, opts.verifyFns);
+      const checks = await verifyAgent(agentKind, workdirFor(withFloor(loadSensitivityMap(paths), paths.machine.userHome), "internal", paths.shareDir), opts.verifyFns);
       for (const c of checks) log(formatCheck(c));
       const failure = checks.find((c) => !c.ok);
       if (failure) {

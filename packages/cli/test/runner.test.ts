@@ -99,17 +99,33 @@ describe("buildPrompt", () => {
     expect(buildPrompt("ken", "shusaku", "q?")).not.toContain("TASK-INSTRUCTIONS");
   });
 
-  // The confinement sentence is only honest for the default ~/AgentCall/public
-  // share folder. When an owner deliberately points workdir at a real project,
-  // telling the agent not to leave it contradicts the reason they set it.
-  it("claims confinement only for the default workdir", () => {
-    const confined = buildPrompt("ken", "shusaku", "q?", undefined, { dir: "/h/AgentCall/public", confined: true });
-    expect(confined).toContain("/h/AgentCall/public");
-    expect(confined).toMatch(/do not access anything outside it/i);
+  // Replaces "claims confinement only for the default workdir". #372 deleted
+  // the `confined` flag, and with it the sentence "Do not access anything
+  // outside it" — which had stopped being true when AGENTCALL_ALLOWED_ROOT was
+  // removed, and had become worse than untrue: the boundary is the sensitivity
+  // map, so telling the agent to stay in one directory discouraged it from
+  // reading sources it is explicitly permitted to read.
+  it("states the readable sources instead of claiming confinement", () => {
+    const p = buildPrompt("ken", "shusaku", "q?", undefined, {
+      dir: "/h/code/api", readable: ["/h/code/api", "/h/AgentCall/ken/public"],
+    });
+    expect(p).toContain("Your working directory is /h/code/api.");
+    expect(p).toContain("You may read files under: /h/code/api, /h/AgentCall/ken/public.");
+    expect(p).not.toMatch(/do not access anything outside it/i);
+  });
 
-    const open = buildPrompt("ken", "shusaku", "q?", undefined, { dir: "/h/code/api", confined: false });
-    expect(open).toContain("/h/code/api");
-    expect(open).not.toMatch(/do not access anything outside it/i);
+  it("says the reply is checked, which is the boundary that actually exists", () => {
+    const p = buildPrompt("ken", "shusaku", "q?", undefined, { dir: "/h/x", readable: ["/h/x"] });
+    expect(p).toMatch(/refused when you try to read it/i);
+    expect(p).toMatch(/reply is checked before it is sent/i);
+  });
+
+  // The fresh-install case: nothing labelled, so `readable` is empty. Listing
+  // an empty set reads as a bug and invites the model to guess at paths.
+  it("says so plainly when the caller may read nothing", () => {
+    const p = buildPrompt("ken", "shusaku", "q?", undefined, { dir: "/h/share", readable: [] });
+    expect(p).toContain("No source has been labelled for this caller");
+    expect(p).not.toContain("You may read files under:");
   });
 
   it("omits the directory sentence entirely when no workdir is given", () => {

@@ -5,9 +5,9 @@
 // call site instead of buried inside a helper. See listener.ts's message
 // handler for the sequencing: envelope opened and peer verified BEFORE
 // policy resolution; policy resolved BEFORE any agent spawn.
-import type { AgentKind, E2EEOutcomeType, E2EEResponsePayloadType, E2EERequestPayloadType } from "@benree/agentcall-shared";
+import type { E2EEOutcomeType, E2EEResponsePayloadType, E2EERequestPayloadType } from "@benree/agentcall-shared";
 import { formatAddress, keyIdFor } from "@benree/agentcall-shared";
-import { relayHostOf, type Workdir } from "./config.js";
+import { relayHostOf } from "./config.js";
 import { openE2EERequest, sealE2EEResponse } from "./e2ee.js";
 import { authOf, fetchKeys } from "./api.js";
 import { verifyAndPinPeer, type KnownPeer } from "./known-peers.js";
@@ -15,6 +15,7 @@ import { loadKeys, type StoredKeys } from "./keys.js";
 import { reserveReplay } from "./replay-store.js";
 import type { LinePaths, MachinePaths } from "./paths.js";
 import { loadPolicy, resolveTask, type Policy, type TaskResolution } from "./policy.js";
+import { loadSensitivityMap, withFloor, type SensitivityMap } from "./sensitivity.js";
 import { loadTasks, type Task } from "./tasks.js";
 import {
   admitContext, loadContexts, pruneContexts, type ContextBinding,
@@ -170,7 +171,7 @@ export function makeOutcomeSender(
 }
 
 // ---------------------------------------------------------------------------
-// Stage 6: policy resolution — loadPolicy -> resolveTask -> task workdir.
+// Stage 6: policy resolution — loadPolicy -> loadSensitivityMap -> resolveTask.
 //
 // CaMeL invariant, preserved from listener.ts: this runs on the verified
 // `from` and local files only, BEFORE the caller's message is placed in any
@@ -186,20 +187,27 @@ export function makeOutcomeSender(
 // ---------------------------------------------------------------------------
 
 type AdmissionDecision =
-  | { ok: true; task: Task; taskWorkdir: Workdir; policy: Policy }
+  | { ok: true; task: Task; policy: Policy; map: SensitivityMap }
   | { ok: false; code: "policy_error"; error: unknown }
   | { ok: false; code: "blocked" | "task_unknown"; offered: string[] };
 
 export function resolveAdmission(
-  input: {
-    paths: LinePaths; from: string; requestedTask?: string; groups: readonly string[];
-    workdir: Workdir; agentKind: AgentKind;
-  },
+  input: { paths: LinePaths; from: string; requestedTask?: string; groups: readonly string[] },
 ): AdmissionDecision {
   let policy: Policy;
+  let map: SensitivityMap;
   let resolution: TaskResolution;
   try {
     policy = loadPolicy(input.paths);
+    // Loaded here, inside the policy_error boundary, and returned like the
+    // policy. #372 made this file decide where the agent runs and what it may
+    // read, so it is now load-bearing for the CALL and not only for the guard
+    // subprocess. Before, a corrupt sensitivity.json surfaced as every tool
+    // call failing closed — an agent silently unable to read anything,
+    // diagnosable only from the guard's own log. Reading it here turns that
+    // into one clean call_failed carrying the parse error, which is the same
+    // treatment a corrupt policy.json already gets.
+    map = withFloor(loadSensitivityMap(input.paths), input.paths.machine.userHome);
     resolution = resolveTask(policy, loadTasks(input.paths), input.from, input.requestedTask, input.groups);
   } catch (error) {
     return { ok: false, code: "policy_error", error };
@@ -207,20 +215,12 @@ export function resolveAdmission(
   if (!resolution.ok) {
     return { ok: false, code: resolution.code, offered: resolution.offered };
   }
-  const task = resolution.task;
-  return {
-    ok: true,
-    task,
-    policy,
-    taskWorkdir: {
-      dir: task.workdir ?? input.workdir.dir,
-      // Claude's file-shaped tools are held to the task's own tool list; Codex
-      // has no equivalent, so do not claim confinement there. Neither is a
-      // read boundary on its own — since #372 that is the sensitivity map,
-      // enforced on the reply.
-      confined: input.agentKind === "claude",
-    },
-  };
+  // No workdir here any more. It depends on the caller's CLEARANCE, which is
+  // resolved from `policy` by the caller of this function — deliberately after
+  // admission, so a corrupt policy reports as policy_error rather than as a
+  // rejection. Returning the map and the policy lets that happen without a
+  // second read of either file.
+  return { ok: true, task: resolution.task, policy, map };
 }
 
 // ---------------------------------------------------------------------------
