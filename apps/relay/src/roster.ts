@@ -61,6 +61,41 @@ function publicJoinKey(row: JoinKeyRow) {
   };
 }
 
+// One shared body for "unknown roster" and "wrong secret". They MUST be
+// byte-identical: a distinct response for either one turns roster ids into
+// an enumerable namespace. Declared once so the two call sites cannot drift.
+const NOT_FOUND = { error: "not found" } as const;
+
+async function recordAuditBudgetExhaustion(
+  c: Context<RelayAppEnv>, id: string, org: string, actor: string,
+  actorType: "handle" | "admin_secret",
+) {
+  const now = Date.now();
+  await c.env.DB.batch([
+    c.env.DB.prepare(
+      "UPDATE rosters SET audit_budget_exhausted_at = ? " +
+        "WHERE id = ? AND org = ? AND audit_budget_exhausted_at IS NULL",
+    ).bind(now, id, org),
+    rosterAuditStatement(c, {
+      event: "roster.audit_budget_exhausted", action: "U", rosterId: id, org, actor, actorType,
+      targetType: "roster", targetId: null,
+      description: `Roster ${id} exhausted its membership audit event budget`, at: now,
+    }, "previous-change"),
+  ]);
+}
+
+async function adminRoster(c: Context<RelayAppEnv>, id: string, supplied: string) {
+  const row = await c.env.DB.prepare(
+    "SELECT org, admin_secret_hash FROM rosters WHERE id = ?",
+  ).bind(id).first<{ org: string; admin_secret_hash: string }>();
+  const digest = await sha256Hex(supplied);
+  // Always perform the fixed-length comparison, including for a missing
+  // roster, so absence does not skip work that a wrong secret performs.
+  const matches = constantTimeEqual(row?.admin_secret_hash ?? "0".repeat(64), digest);
+  if (!row || !matches) return null;
+  return row;
+}
+
 export function mountRoster(app: Hono<RelayAppEnv>): void {
   app.post("/v1/roster", rateLimit(REGISTER, "identity", "roster:"), async (c) => {
     const identity = c.var.identity;
@@ -97,11 +132,6 @@ export function mountRoster(app: Hono<RelayAppEnv>): void {
     // Both credentials are returned exactly once and only their digests persist.
     return c.json({ roster_id, join_key: joinKey, admin_secret });
   });
-
-  // One shared body for "unknown roster" and "wrong secret". They MUST be
-  // byte-identical: a distinct response for either one turns roster ids into
-  // an enumerable namespace. Declared once so the two call sites cannot drift.
-  const NOT_FOUND = { error: "not found" } as const;
 
   app.post("/v1/roster/:id/join", rateLimit(ROSTER_WRITE, byRoster), async (c) => {
     const identity = c.var.identity;
@@ -174,36 +204,6 @@ export function mountRoster(app: Hono<RelayAppEnv>): void {
     }
     return c.json({ error: "roster full" }, 409);
   });
-
-  async function recordAuditBudgetExhaustion(
-    c: Context<RelayAppEnv>, id: string, org: string, actor: string,
-    actorType: "handle" | "admin_secret",
-  ) {
-    const now = Date.now();
-    await c.env.DB.batch([
-      c.env.DB.prepare(
-        "UPDATE rosters SET audit_budget_exhausted_at = ? " +
-          "WHERE id = ? AND org = ? AND audit_budget_exhausted_at IS NULL",
-      ).bind(now, id, org),
-      rosterAuditStatement(c, {
-        event: "roster.audit_budget_exhausted", action: "U", rosterId: id, org, actor, actorType,
-        targetType: "roster", targetId: null,
-        description: `Roster ${id} exhausted its membership audit event budget`, at: now,
-      }, "previous-change"),
-    ]);
-  }
-
-  async function adminRoster(c: Context<RelayAppEnv>, id: string, supplied: string) {
-    const row = await c.env.DB.prepare(
-      "SELECT org, admin_secret_hash FROM rosters WHERE id = ?",
-    ).bind(id).first<{ org: string; admin_secret_hash: string }>();
-    const digest = await sha256Hex(supplied);
-    // Always perform the fixed-length comparison, including for a missing
-    // roster, so absence does not skip work that a wrong secret performs.
-    const matches = constantTimeEqual(row?.admin_secret_hash ?? "0".repeat(64), digest);
-    if (!row || !matches) return null;
-    return row;
-  }
 
   app.post("/v1/roster/:id/leave", rateLimit(ROSTER_WRITE, byRoster), async (c) => {
     const identity = c.var.identity;
