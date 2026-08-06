@@ -160,6 +160,22 @@ Free-text `ask` cannot; it emits `string`, which is unbounded.
 "is this path's sensitivity ≤ clearance", which is the same hook seam it already
 occupies. The net is fewer mechanisms, not more.
 
+### The change is contained to `packages/cli`
+
+**Capabilities never cross the wire.** Nothing in `packages/shared`'s protocol
+schemas or in `apps/relay` carries `caps` — the `Envelope` that appears there is
+`HpkeEnvelope`, the E2EE crypto envelope (`packages/shared/src/e2ee.ts:45-64`),
+which is unrelated and unaffected. A grep for `Envelope` alone conflates the two
+and overstates the blast radius; an earlier draft of this spec did exactly that.
+
+The capability surface is **9 source files and 8 test files, all in
+`packages/cli`**: `card.ts`, `lint.ts`, `listener-stages.ts`, `policy-report.ts`,
+`policy.ts`, `prompt.ts`, `runner.ts`, `verbs.ts`, `verify.ts`.
+
+So there is no protocol version to bump, no relay deploy to coordinate, and no
+migration between old and new callers. That materially lowers the cost of this
+change and is a point in its favour.
+
 ## What this does *not* solve
 
 **It bounds the audience, not the content.** A secret pasted into an

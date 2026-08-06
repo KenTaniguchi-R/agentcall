@@ -1,0 +1,10 @@
+{
+  "_comment": "Sensitivity map for the #373 over-tainting spike. Order matters: the first matching prefix wins, so narrower `secret` carve-outs must precede the broader `internal` root they sit inside. Anything matching nothing is `secret` by omission, which is the design's whole point.",
+  "rules": [
+    { "prefix": "<REPO>/.git", "sensitivity": "secret" },
+    { "prefix": "<REPO>/node_modules", "sensitivity": "internal" },
+    { "prefix": "<REPO>", "sensitivity": "internal" },
+    { "prefix": "<NOTES>", "sensitivity": "internal" }
+  ],
+  "default": "secret"
+}

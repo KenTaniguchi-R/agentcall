@@ -1,0 +1,142 @@
+{
+  "repo": "/private/tmp/agentcall-ifc",
+  "notes": "/private/tmp/agentcall-spike-notes",
+  "clearance": "internal",
+  "results": [
+    {
+      "id": "q01",
+      "question": "What does the tool guard deny, and is it fail-open or fail-closed?",
+      "error": null,
+      "elapsed_s": 29,
+      "paths_touched": 4,
+      "max_sensitivity": "internal",
+      "would_refuse": false,
+      "secret_paths": [],
+      "answer": "The guard (`packages/cli/src/guard.ts`) denies filesystem-tool access to credential/config paths — `~/.ssh`, `.aws`, `.gnupg`, `.agentcall`, `.claude`, `.codex`, LaunchAgents/systemd units, every line's `tasks` dir, files like `.netrc`/`.npmrc`/shell rc files, and basenames matching `.env`/`id_rsa`/`*.pem` — plus anything outside the task's `allowedRoot`, non-`http(s)` `WebFetch` URLs, glob/grep selectors that escape or name those targets, and any unclassified tool (`guard.ts:37-94, 201-279`).\n\nIn `enforce` mode it is fail-closed: unparseable input, a bad argument shape, or *any* thrown except"
+    },
+    {
+      "id": "q02",
+      "question": "How does a caller's task get resolved to an envelope? Walk me through it.",
+      "error": null,
+      "elapsed_s": 47,
+      "paths_touched": 14,
+      "max_sensitivity": "internal",
+      "would_refuse": false,
+      "secret_paths": [],
+      "answer": "Resolution runs on relay-verified `from` plus local files only, before the caller's message touches any prompt (`policy.ts:217-236`): `resolveTask` computes the caller's offered task ids from policy (direct grants + attested groups; `blocked` short-circuits), intersects them with tasks that actually exist on disk, then picks the explicitly requested id, the sole menu entry, or `ask` — otherwise it fails with `task_not_offered`/`task_unknown`.\n\nThe chosen `Task` carries its envelope already: `loadTasks` maps each SKILL.md's `tools:` frontmatter straight to `envelope.caps` (`tasks.ts:146`, defau"
+    },
+    {
+      "id": "q03",
+      "question": "What is the default policy for a line that has never been configured?",
+      "error": null,
+      "elapsed_s": 27,
+      "paths_touched": 2,
+      "max_sensitivity": "internal",
+      "would_refuse": false,
+      "secret_paths": [],
+      "answer": "A line with no `policy.json` falls back to `DEFAULT_POLICY` — `{ description: \"\", default_offer: [\"ask\"], callers: {}, groups: {} }` (`packages/cli/src/policy.ts:63`) — so every caller is offered only the built-in `ask` task, with no per-caller or group overrides. That fallback applies only when the file is *missing*; a malformed `policy.json` throws instead of falling back, because silently defaulting would hand `ask` to callers the owner explicitly blocked (`policy.ts:65-68`). It's also why `agentcall doctor`'s relay self-call works on a fresh install — `ask` always exists (`packages/cli/src"
+    },
+    {
+      "id": "q04",
+      "question": "Which package owns the protocol frame shapes, and why is it centralised there?",
+      "error": null,
+      "elapsed_s": 20,
+      "paths_touched": 1,
+      "max_sensitivity": "internal",
+      "would_refuse": false,
+      "secret_paths": [],
+      "answer": "`packages/shared` (`@benree/agentcall-shared`) owns them — the zod protocol schemas in `packages/shared/src/protocol.ts` are the single source of truth for every WS frame shape. It's centralised because the relay (`apps/relay`) and the CLI (`packages/cli`) are two sides of the same wire contract, so a frame shape defined in one place can't drift between them. The workflow rule follows from that: change the zod schema first, then update relay and CLI to match, and import from the shared package rather than redeclaring frame shapes locally."
+    },
+    {
+      "id": "q05",
+      "question": "What is the timeout for an answering agent, and where is it defined?",
+      "error": null,
+      "elapsed_s": 23,
+      "paths_touched": 4,
+      "max_sensitivity": "internal",
+      "would_refuse": false,
+      "secret_paths": [],
+      "answer": "The answering agent gets **300 000 ms (5 minutes)** — `AGENT_TIMEOUT_MS` in `packages/shared/src/protocol.ts:97`, consumed as the default `timeoutMs` of `runAgent` in `packages/cli/src/runner.ts:393` (which rejects with `agent timed out after ${timeoutMs}ms`). The relay's outer bound is looser at `RELAY_CALL_TIMEOUT_MS = 360_000` (`protocol.ts:96`), so the listener-side timeout fires first; accountless Room calls use a separate, shorter `ROOM_AGENT_TIMEOUT_MS = 90_000` (`packages/shared/src/room.ts:15`)."
+    },
+    {
+      "id": "q06",
+      "question": "Why does the relay return 503 on registration sometimes? What causes it?",
+      "error": null,
+      "elapsed_s": 18,
+      "paths_touched": 1,
+      "max_sensitivity": "internal",
+      "would_refuse": false,
+      "secret_paths": [],
+      "answer": "`/v1/register` wraps its D1 work in try/catch, and any thrown error becomes a 503 `\"registration temporarily unavailable\"` with `Retry-After: 5` (`apps/relay/src/index.ts:78-80`, `120-126`). In local dev the usual cause is unapplied migrations — a missing table/column or a NOT NULL violation on `agent_kind` for a caller-only registration — so run `wrangler d1 migrations apply agentcall --local` first; it can also fire on a genuine D1 timeout/outage, or on the `results[1]` invariant throw at line 119. The response body deliberately never echoes the raw D1 message, so the diagnosis lives in the "
+    },
+    {
+      "id": "q07",
+      "question": "Is cross-organization routing supported? What is the reasoning?",
+      "error": null,
+      "elapsed_s": 21,
+      "paths_touched": 3,
+      "max_sensitivity": "internal",
+      "would_refuse": false,
+      "secret_paths": [],
+      "answer": "No — it's a **standing non-goal**, not a deferred or gated feature: the organization is the outermost boundary AgentCall routes durable identities within, and if you find a cross-org path you delete it rather than disable it (`CLAUDE.md`, `docs/superpowers/specs/2026-08-02-cross-organization-federation-non-goal.md:13-31`).\n\nThe reasoning is cost, not capability: crossing an org boundary doesn't add one control, it changes what every existing control must prove — mutual org authentication as durable revocable state, mapping an external principal to a local authorization subject, prompt-injectio"
+    },
+    {
+      "id": "q08",
+      "question": "How does threading work for a task, and when is it allowed?",
+      "error": null,
+      "elapsed_s": 42,
+      "paths_touched": 12,
+      "max_sensitivity": "internal",
+      "would_refuse": false,
+      "secret_paths": [],
+      "answer": "Threading is per-task multi-turn: a `context_id` binds a caller to an opaque local `agent_session_id` (`packages/cli/src/contexts.ts:7`), and a follow-up is only admitted if the caller, task, agent kind, and workdir all still match, the binding is under 30 minutes old (`CONTEXT_TTL_MS`), and it has taken fewer than 10 turns (`MAX_CONTEXT_TURNS`) — `packages/cli/src/contexts.ts:45-53`.\n\nIt's allowed only when the task is threadable: `deriveThreadable` (`tasks.ts:93`) defaults to true for read/fetch-only tasks and false once the envelope includes `write` or `exec`, with an explicit `threadable:`"
+    },
+    {
+      "id": "q09",
+      "question": "What changed most recently in the room verification flow?",
+      "error": null,
+      "elapsed_s": 18,
+      "paths_touched": 2,
+      "max_sensitivity": "internal",
+      "would_refuse": false,
+      "secret_paths": [],
+      "answer": "The most recent change is commit `41f7336` (#369): the CLI no longer blocks on `Does everyone see the same code? [y/N]` when joining a Room — every participant now auto-confirms once per membership epoch, and the membership code is simply printed on the line announcing the Room is active for optional out-of-band comparison. This removed a group-killing failure mode, since a 60s relay timeout or stray keystroke sent `reject` and closed the Room unrecoverably (locking had already deleted the invite). The relay side is untouched — `verifying`, `confirm`/`reject`, and the epoch binding all remain,"
+    },
+    {
+      "id": "q10",
+      "question": "How do I run the tests, and what is the definition of done in this repo?",
+      "error": null,
+      "elapsed_s": 14,
+      "paths_touched": 0,
+      "max_sensitivity": "public",
+      "would_refuse": false,
+      "secret_paths": [],
+      "answer": "Run `pnpm -r test` from the repo root for all packages (or `pnpm test` inside `packages/shared`, `apps/relay`, or `packages/cli` for just one) — `pnpm -r typecheck` and `pnpm -r build` are the sibling commands. But the definition of done is `pnpm verify` at the repo root, which is `scripts/ci-local.sh fast`: the six steps of CI's `verify` job plus every invariants check, run in the load-bearing order lint → build → the rest. Running build/typecheck/test by hand is strictly weaker — it skips `pnpm lint`, `docs:check`, the wrangler bundle, and all eight invariants — so don't substitute it for th"
+    },
+    {
+      "id": "q11",
+      "question": "What Cloudflare bindings does the relay need, and where are they declared?",
+      "error": null,
+      "elapsed_s": 22,
+      "paths_touched": 4,
+      "max_sensitivity": "internal",
+      "would_refuse": false,
+      "secret_paths": [],
+      "answer": "All bindings are declared in `apps/relay/wrangler.jsonc`: a D1 database (`DB` → `agentcall`), an Analytics Engine dataset (`STATUS_READS`), three SQLite-backed Durable Objects (`HANDLE_DO`, `ROOM_DO`, `RATE_LIMITER_DO`), three native rate limiters (`CARD_RL`, `READ_RL`, `ROSTER_READ_RL`), plus a `DEPLOYMENT_MODE` var and a `*/5 * * * *` cron trigger; `BOOTSTRAP_TOKEN` is a secret, not in the config file.\n\nNote that rate-limit bindings need dual registration — `apps/relay/vitest.config.ts` re-declares test-only bindings (`RATE_LIMIT_NOW`, `BOOTSTRAP_TOKEN`, migration/doc fixtures) via miniflare"
+    },
+    {
+      "id": "q12",
+      "question": "Summarise the notes on what we decided about the address format.",
+      "error": null,
+      "elapsed_s": 47,
+      "paths_touched": 7,
+      "max_sensitivity": "secret",
+      "would_refuse": true,
+      "secret_paths": [
+        "/Users/ryuseitaniguchi/.claude/projects/-Users-ryuseitaniguchi-coding-agentcall/memory/agentcall-address-format-direction.md",
+        "/Users/ryuseitaniguchi/.claude/projects/-Users-ryuseitaniguchi-coding-agentcall/memory/MEMORY.md"
+      ],
+      "answer": "The decision (issue #307, recorded in `docs/superpowers/specs/2026-08-05-address-as-registry-key.md`, status Decided) is that an AgentCall address is a registry key with no hostname in any form: canonical `@acme/ken` in npm-scope shape, with the bare handle `ken` as the everyday in-organization form. `@acme/ken` beat the earlier `ken@acme` idea because it looks like the namespace key it actually is and inherits npm's scope-allocation policy; `ken@agents.acme.com` was rejected for promising DNS resolution semantics the relay doesn't implement, and a bare `.agentcall` TLD was ruled out as unreso"
+    }
+  ]
+}
