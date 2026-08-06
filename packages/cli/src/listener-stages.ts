@@ -14,7 +14,7 @@ import { verifyAndPinPeer, type KnownPeer } from "./known-peers.js";
 import { loadKeys, type StoredKeys } from "./keys.js";
 import { reserveReplay } from "./replay-store.js";
 import type { LinePaths, MachinePaths } from "./paths.js";
-import { loadPolicy, resolveTask, type TaskResolution } from "./policy.js";
+import { loadPolicy, resolveTask, type Policy, type TaskResolution } from "./policy.js";
 import { loadTasks, type Task } from "./tasks.js";
 import {
   admitContext, loadContexts, pruneContexts, type ContextBinding,
@@ -175,13 +175,20 @@ export function makeOutcomeSender(
 // CaMeL invariant, preserved from listener.ts: this runs on the verified
 // `from` and local files only, BEFORE the caller's message is placed in any
 // prompt (see policy.ts). Refusals never enqueue and never spawn: no tokens
-// are burned by blocked callers or menu probing.
+// are burned by blocked callers or task probing.
+//
+// The loaded policy is RETURNED, not merely consumed. The caller needs the
+// same table again to resolve clearance, and re-reading policy.json there
+// would mean two loads of one file that can disagree if it changes in
+// between — and would put the second load outside this function's
+// policy_error path, which is the only reason a corrupt policy reports as a
+// failure rather than as a rejection.
 // ---------------------------------------------------------------------------
 
 type AdmissionDecision =
-  | { ok: true; task: Task; taskWorkdir: Workdir }
+  | { ok: true; task: Task; taskWorkdir: Workdir; policy: Policy }
   | { ok: false; code: "policy_error"; error: unknown }
-  | { ok: false; code: "blocked" | "task_not_offered" | "task_unknown"; offered: string[] };
+  | { ok: false; code: "blocked" | "task_unknown"; offered: string[] };
 
 export function resolveAdmission(
   input: {
@@ -189,9 +196,11 @@ export function resolveAdmission(
     workdir: Workdir; agentKind: AgentKind;
   },
 ): AdmissionDecision {
+  let policy: Policy;
   let resolution: TaskResolution;
   try {
-    resolution = resolveTask(loadPolicy(input.paths), loadTasks(input.paths), input.from, input.requestedTask, input.groups);
+    policy = loadPolicy(input.paths);
+    resolution = resolveTask(policy, loadTasks(input.paths), input.from, input.requestedTask, input.groups);
   } catch (error) {
     return { ok: false, code: "policy_error", error };
   }
@@ -202,10 +211,13 @@ export function resolveAdmission(
   return {
     ok: true,
     task,
+    policy,
     taskWorkdir: {
       dir: task.workdir ?? input.workdir.dir,
-      // Claude's file-shaped tools are bounded by AGENTCALL_ALLOWED_ROOT.
-      // Codex has no equivalent read boundary, so do not claim confinement.
+      // Claude's file-shaped tools are held to the task's own tool list; Codex
+      // has no equivalent, so do not claim confinement there. Neither is a
+      // read boundary on its own — since #372 that is the sensitivity map,
+      // enforced on the reply.
       confined: input.agentKind === "claude",
     },
   };

@@ -27,31 +27,39 @@ describe("task fields inside encrypted payloads", () => {
   });
   it("carries offered[] on an authenticated failure outcome", () => {
     expect(E2EEOutcome.safeParse({
-      kind: "failure", code: "task_not_offered", offered: ["ask"],
+      kind: "failure", code: "task_unknown", offered: ["ask"],
     }).success).toBe(true);
   });
   it("rejects an offered[] entry that isn't a valid task id (terminal-injection guard)", () => {
     const badFailed = E2EEOutcome.safeParse({
-      kind: "failure", code: "task_not_offered", offered: ["Bad\x1b[31mTask"],
+      kind: "failure", code: "task_unknown", offered: ["Bad\x1b[31mTask"],
     });
     expect(badFailed.success).toBe(false);
   });
   it("rejects offered[] longer than MAX_OFFERED_TASKS (unbounded relay payload guard)", () => {
     const tooMany = Array.from({ length: MAX_OFFERED_TASKS + 1 }, (_, i) => `task-${i}`);
     expect(E2EEOutcome.safeParse({
-      kind: "failure", code: "task_not_offered", offered: tooMany,
+      kind: "failure", code: "task_unknown", offered: tooMany,
     }).success).toBe(false);
   });
   it("still accepts a valid offered[] list at or under the cap", () => {
     const okMany = Array.from({ length: MAX_OFFERED_TASKS }, (_, i) => `task-${i}`);
     expect(E2EEOutcome.safeParse({
-      kind: "failure", code: "task_not_offered", offered: okMany,
+      kind: "failure", code: "task_unknown", offered: okMany,
     }).success).toBe(true);
   });
   it("accepts the new error codes", () => {
-    for (const code of ["blocked", "task_not_offered", "task_unknown", "canceled"]) {
+    for (const code of ["blocked", "task_unknown", "canceled"]) {
       expect(ErrorCode.safeParse(code).success).toBe(true);
     }
+  });
+  // #379 deleted the task menu, and with it the only outcome that could report
+  // "you may not have this task". Pinned as a rejection rather than dropped:
+  // a code that silently starts parsing again would resurrect the concept with
+  // no mechanism behind it.
+  it("rejects task_not_offered, which nothing can emit since the menu was deleted", () => {
+    expect(ErrorCode.safeParse("task_not_offered").success).toBe(false);
+    expect(E2EEOutcome.safeParse({ kind: "failure", code: "task_not_offered" }).success).toBe(false);
   });
   it("keeps cancellation out of peer-authenticated failure outcomes", () => {
     expect(E2EEOutcome.safeParse({ kind: "failure", code: "canceled" }).success).toBe(false);
@@ -71,17 +79,16 @@ describe("TASK_ID_RE", () => {
 describe("card schemas", () => {
   const task = { id: "ask", name: "Ask", description: "Answer questions.", examples: [], keywords: [] };
   const upload = {
-    description: "", agent_kind: "claude" as const, tasks: [task], default_offer: ["ask"],
-    grants: {}, group_grants: {}, blocked: [],
+    description: "", agent_kind: "claude" as const, tasks: [task], blocked: [],
   };
   it("round-trips a current CardUpload", () => {
     expect(CardUpload.parse(upload)).toEqual(upload);
   });
-  it("rejects a grant keyed by an invalid handle", () => {
-    const bad = CardUpload.safeParse({
-      ...upload, grants: { "Bad Handle": ["ask"] },
-    });
-    expect(bad.success).toBe(false);
+  // The per-caller grant map went with #379's task menu. `blocked` is the only
+  // handle-keyed field left on a card, and it is still held to the handle
+  // shape — this is the same check, on the field that survived.
+  it("rejects an invalid handle in the blocked list", () => {
+    expect(CardUpload.safeParse({ ...upload, blocked: ["Bad Handle"] }).success).toBe(false);
   });
   it("rejects the removed tier field", () => {
     expect(CardUpload.safeParse({ ...upload, tasks: [{ ...task, tier: "T2" }] }).success).toBe(false);

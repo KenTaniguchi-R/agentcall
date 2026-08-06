@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import {
   ClearancePolicySchema,
   DEFAULT_CLEARANCE,
+  capClearance,
   clearanceFor,
 } from "../src/clearance.js";
 
@@ -91,6 +92,23 @@ describe("clearance", () => {
     it("never resolves a prototype-shaped handle to blocked", () => {
       const p = policy({ callers: { "ken@acme": { block: true } } });
       expect(clearanceFor(p, "valueOf")).toBe("public");
+    });
+  });
+
+  // The administrator ceiling (policy.ts's managed layer) is expressed as a
+  // clamp rather than a filter, so it lives with the ordering it depends on.
+  describe("capClearance", () => {
+    it("lowers a grant that exceeds the ceiling", () => {
+      expect(capClearance("internal", "public")).toBe("public");
+    });
+
+    it("leaves a grant at or below the ceiling alone", () => {
+      expect(capClearance("public", "internal")).toBe("public");
+      expect(capClearance("internal", "internal")).toBe("internal");
+    });
+
+    it("is idempotent, so applying a ceiling twice cannot change a verdict", () => {
+      expect(capClearance(capClearance("internal", "public"), "public")).toBe("public");
     });
   });
 

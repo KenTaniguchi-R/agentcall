@@ -2,12 +2,13 @@ import { existsSync, readFileSync } from "node:fs";
 import { buildCardUpload } from "./card.js";
 import type { LineConfig } from "./config.js";
 import type { LinePaths } from "./paths.js";
-import { loadPolicy, stripPlus, type Policy } from "./policy.js";
+import { clearanceFor } from "./clearance.js";
+import { loadPolicy, type Policy } from "./policy.js";
 import { ASK_TASK, loadTasks } from "./tasks.js";
 
 interface CardReport {
   menu: string[];     // the owner's card as callers see it
-  problems: string[]; // ✗ — broken manifests, dangling policy refs, unreadable policy; CLI exits 1
+  problems: string[]; // ✗ — broken manifests, unreadable or invalid policy; CLI exits 1
   notices: string[];  // ! — staleness / never-pushed; informational, exit 0
 }
 
@@ -29,38 +30,22 @@ export function buildCardReport(cfg: LineConfig, p: LinePaths): CardReport {
     return { menu: [], problems, notices };
   }
 
-  const exists = (id: string) => tasks.some((t) => t.id === stripPlus(id));
-  for (const id of policy.default_offer) {
-    if (!exists(id)) problems.push(`policy.json: default_offer references "${stripPlus(id)}" but no such task exists`);
-  }
-  for (const [caller, entry] of Object.entries(policy.callers)) {
-    for (const id of entry.offer) {
-      if (!exists(id)) problems.push(`policy.json: grant for ${caller} references "${stripPlus(id)}" but no such task exists`);
-    }
-  }
-  for (const [group, entry] of Object.entries(policy.groups)) {
-    for (const id of entry.offer) {
-      if (!exists(id)) problems.push(`policy.json: grant for group ${group} references "${stripPlus(id)}" but no such task exists`);
-    }
-  }
-
+  // The dangling-grant checks that used to live here are gone with the menu:
+  // there is no longer any way for policy.json to name a task, so it cannot
+  // name one that does not exist. What replaces them is the clearance readout
+  // below — the owner-facing question is no longer "who can run what" but
+  // "who can be told what".
   const upload = buildCardUpload(cfg, policy, tasks);
-  const byId = new Map(tasks.map((t) => [t.id, t]));
   const menu: string[] = [`${cfg.handle} (${cfg.agent_kind})${upload.description ? ` — ${upload.description}` : ""}`];
-  menu.push("  Offered to anyone:");
-  for (const id of upload.default_offer) {
-    const t = byId.get(id)!;
-    menu.push(`    ${id} — ${t.description}`);
+  menu.push("  Every caller who is not blocked can request:");
+  for (const t of upload.tasks) menu.push(`    ${t.id} — ${t.description}`);
+  menu.push(`  Anyone registered can be told: ${policy.default_clearance}`);
+  // Resolved, not the raw entry: a block sinks a named clearance, and printing
+  // the stored value would tell the owner a grant is live that is not.
+  const named = Object.keys(policy.callers).sort((x, y) => x.localeCompare(y));
+  for (const caller of named) {
+    menu.push(`    ${caller}: ${clearanceFor(policy, caller)}`);
   }
-  const grantEntries = Object.entries(upload.grants);
-  if (grantEntries.length > 0) {
-    menu.push("  Granted per caller:");
-    for (const [caller, ids] of grantEntries) {
-      menu.push(`    ${caller}: ${ids.join(", ")}`);
-    }
-  }
-  const blocked = Object.entries(policy.callers).filter(([, e]) => e.block).map(([h]) => h);
-  if (blocked.length > 0) menu.push(`  Blocked: ${blocked.join(", ")}`);
 
   // codex has no per-tool allowlist (see runner.ts's codex branch): only the
   // Claude is held to a read-only tool list; codex has no per-tool restriction

@@ -1,11 +1,10 @@
-import { readFileSync } from "node:fs";
 import WebSocket, { type RawData } from "ws";
 import {
   AGENT_TIMEOUT_MS, E2EERelayToListenerFrame, MAX_E2EE_WIRE_BYTES,
   requestTranscript, safeParseFrame, transcriptHash,
 } from "@benree/agentcall-shared";
 import { fetchKeys } from "./api.js";
-import { clearanceFor, loadClearancePolicy } from "./clearance.js";
+import { clearanceFor } from "./clearance.js";
 import { resolveLineWorkdir, type CallableLineConfig } from "./config.js";
 import type { LinePaths } from "./paths.js";
 import { buildPrompt } from "./prompt.js";
@@ -248,9 +247,9 @@ export function startListener(deps: ListenerDeps): { stop(): Promise<void> } {
         sealResponse,
       );
 
-      // Resolve caller -> task -> envelope BEFORE the message is placed in any
-      // prompt (see policy.ts). Refusals never enqueue and never spawn: no
-      // tokens are burned by blocked callers or menu probing.
+      // Resolve caller -> task BEFORE the message is placed in any prompt (see
+      // policy.ts). Refusals never enqueue and never spawn: no tokens are
+      // burned by blocked callers or task probing.
 
       const admission = resolveAdmission({
         paths: deps.paths, from, requestedTask, groups, workdir, agentKind: config.agent_kind,
@@ -267,7 +266,7 @@ export function startListener(deps: ListenerDeps): { stop(): Promise<void> } {
         audit({ call_id, ...correlation, from, message: message.slice(0, 500), task: requestedTask, status: admission.code, duration_ms: 0, outcome_delivery_error: outcomeDeliveryError });
         return;
       }
-      const { task, taskWorkdir } = admission;
+      const { task, taskWorkdir, policy } = admission;
 
       // Task resolution above ran on the verified `from` and local files only
       // (see policy.ts's CaMeL invariant). context_id is caller-controlled, so
@@ -337,15 +336,12 @@ export function startListener(deps: ListenerDeps): { stop(): Promise<void> } {
           // the same side of the CaMeL line: the caller's message must not be
           // able to influence what the answering agent may reach.
           //
-          // Deliberately AFTER resolveAdmission, not before. A corrupt
-          // policy.json has an existing failure path there (policy_error ->
-          // call_failed/agent_error); loading it earlier would throw first and
-          // report the same corruption as a rejection instead.
-          const clearance = clearanceFor(
-            loadClearancePolicy(deps.paths.policyFile, (f) => readFileSync(f, "utf8")),
-            from,
-            groups,
-          );
+          // From the SAME policy object resolveAdmission loaded, not a second
+          // read of policy.json. That keeps the corrupt-file failure path
+          // inside resolveAdmission — where it reports as policy_error rather
+          // than as a rejection — and makes it impossible for admission and
+          // clearance to disagree because the file changed between two loads.
+          const clearance = clearanceFor(policy, from, groups);
           const out = await run({
             kind: config.agent_kind,
             prompt: buildPrompt(config.handle, from, message, task, taskWorkdir, binding !== undefined),

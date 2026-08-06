@@ -29,18 +29,15 @@ Commands:
   doctor                                 verify this install can answer calls: binary, auth, agent spawn, tool telemetry, listener, relay self-call
   history [options]                      show call activity stored locally on this machine
   lint [options]                         validate tasks, effective policy assertions, and the published card
-  policy [options]                       show the effective per-caller and per-task capability policy
+  policy [options]                       show the effective per-caller clearance policy and the tasks it covers
   card [options] [target]                show your own card with problems, another agent's menu, or publish yours (push)
   contacts                               manage your local address book of callable agents
   roster                                 join and manage discovery rosters for `agentcall search`
   search [options] <question...>         find which colleague's agent can answer something
   task                                   manage the tasks your agent offers
-  allow [options] <handle> <task-id>     grant a caller an extra task (and republish your card)
-  revoke [options] <handle> <task-id>    remove a caller's task grant
+  clearance [options] [handle] [level]   set how much a caller may be told (and republish your card)
   block [options] <handle>               refuse all calls from a handle
   unblock [options] <handle>             lift a block
-  offer [options] <task-id>              offer a task to any registered caller
-  unoffer [options] <task-id>            stop offering a task publicly
   line                                   manage the addresses (lines) this machine answers on and calls from
   listen [options]                       run the foreground listener (the platform service runs this after setup)
   rotate [options]                       replace a line's relay token (use if it may have leaked)
@@ -341,7 +338,7 @@ Options:
 ```text
 Usage: agentcall policy [options]
 
-show the effective per-caller and per-task capability policy
+show the effective per-caller clearance policy and the tasks it covers
 
 Options:
   --line <name>  line to report on (defaults to the primary line)
@@ -690,28 +687,24 @@ Options:
   -h, --help     display help for command
 ```
 
-## allow
+## clearance
 
 ```text
-Usage: agentcall allow [options] <handle> <task-id>
+Usage: agentcall clearance [options] [handle] [level]
 
-grant a caller an extra task (and republish your card)
+set how much a caller may be told (and republish your card)
 
-Options:
-  --line <name>  line to use (defaults to the primary line)
-  -h, --help     display help for command
-```
-
-## revoke
-
-```text
-Usage: agentcall revoke [options] <handle> <task-id>
-
-remove a caller's task grant
+Arguments:
+  handle             caller handle; omit when using --default
+  level              public or internal; omit when using --reset
 
 Options:
-  --line <name>  line to use (defaults to the primary line)
-  -h, --help     display help for command
+  --default <level>  set the level anyone registered gets, instead of one
+                     caller
+  --reset            drop a caller's own level, returning them to the line
+                     default
+  --line <name>      line to use (defaults to the primary line)
+  -h, --help         display help for command
 ```
 
 ## block
@@ -732,30 +725,6 @@ Options:
 Usage: agentcall unblock [options] <handle>
 
 lift a block
-
-Options:
-  --line <name>  line to use (defaults to the primary line)
-  -h, --help     display help for command
-```
-
-## offer
-
-```text
-Usage: agentcall offer [options] <task-id>
-
-offer a task to any registered caller
-
-Options:
-  --line <name>  line to use (defaults to the primary line)
-  -h, --help     display help for command
-```
-
-## unoffer
-
-```text
-Usage: agentcall unoffer [options] <task-id>
-
-stop offering a task publicly
 
 Options:
   --line <name>  line to use (defaults to the primary line)

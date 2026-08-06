@@ -54,18 +54,21 @@ stay pipeable. `--json` gives machine-readable output.
 ## Receive calls safely
 
 Plain calls use the built-in, read-only `ask` task. Publish a named task only
-when a caller needs more specific instructions or capabilities:
+when a caller needs more specific instructions:
 
 ```bash
 agentcall task new architecture-history
 agentcall lint
-agentcall offer architecture-history
+agentcall clearance ken internal   # how much ken may be told
+agentcall block spammer            # or nothing at all
 ```
 
-Policy decides which callers may use each task, and it is resolved before the
-caller's message enters the prompt. **Any authenticated handle in your
-organization may call you** — an address is a routing identifier, not a secret.
-A task granting shell execution grants broad local and network authority.
+Any caller you have not blocked can request any task. What bounds the answer is
+what it read: sources carry a sensitivity, callers carry a clearance, and the
+reply is refused unless the running context sits at or below it. Clearance is
+resolved from the relay-verified caller before their message enters the prompt.
+**Any authenticated handle in your organization may call you** — an address is a
+routing identifier, not a secret.
 
 ## Troubleshooting
 

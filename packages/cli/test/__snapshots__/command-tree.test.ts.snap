@@ -311,7 +311,7 @@ exports[`CLI command tree > pins command paths, aliases, descriptions, and optio
     {
       "alias": undefined,
       "commands": [],
-      "description": "show the effective per-caller and per-task capability policy",
+      "description": "show the effective per-caller clearance policy and the tasks it covers",
       "name": "policy",
       "options": [
         {
@@ -614,21 +614,17 @@ exports[`CLI command tree > pins command paths, aliases, descriptions, and optio
     {
       "alias": undefined,
       "commands": [],
-      "description": "grant a caller an extra task (and republish your card)",
-      "name": "allow",
+      "description": "set how much a caller may be told (and republish your card)",
+      "name": "clearance",
       "options": [
         {
-          "description": "line to use (defaults to the primary line)",
-          "flags": "--line <name>",
+          "description": "set the level anyone registered gets, instead of one caller",
+          "flags": "--default <level>",
         },
-      ],
-    },
-    {
-      "alias": undefined,
-      "commands": [],
-      "description": "remove a caller's task grant",
-      "name": "revoke",
-      "options": [
+        {
+          "description": "drop a caller's own level, returning them to the line default",
+          "flags": "--reset",
+        },
         {
           "description": "line to use (defaults to the primary line)",
           "flags": "--line <name>",
@@ -652,30 +648,6 @@ exports[`CLI command tree > pins command paths, aliases, descriptions, and optio
       "commands": [],
       "description": "lift a block",
       "name": "unblock",
-      "options": [
-        {
-          "description": "line to use (defaults to the primary line)",
-          "flags": "--line <name>",
-        },
-      ],
-    },
-    {
-      "alias": undefined,
-      "commands": [],
-      "description": "offer a task to any registered caller",
-      "name": "offer",
-      "options": [
-        {
-          "description": "line to use (defaults to the primary line)",
-          "flags": "--line <name>",
-        },
-      ],
-    },
-    {
-      "alias": undefined,
-      "commands": [],
-      "description": "stop offering a task publicly",
-      "name": "unoffer",
       "options": [
         {
           "description": "line to use (defaults to the primary line)",

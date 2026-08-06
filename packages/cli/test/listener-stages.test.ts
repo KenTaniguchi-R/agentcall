@@ -283,7 +283,7 @@ describe("resolveAdmission", () => {
 
   it("blocks a caller policy has denied, offering nothing", () => {
     const paths = seededPaths();
-    seedPolicy(paths, { default_offer: ["ask"], callers: { spammer: { block: true } } });
+    seedPolicy(paths, { default_clearance: "public", callers: { spammer: { block: true } } });
     const result = resolveAdmission({
       paths, from: "spammer", requestedTask: undefined, groups: [], workdir, agentKind: "claude",
     });
@@ -297,14 +297,31 @@ describe("resolveAdmission", () => {
     expect(result).toMatchObject({ ok: false, code: "task_unknown" });
   });
 
-  it("rejects a real task the caller was never offered", () => {
+  // Was "rejects a real task the caller was never offered". #379 deleted the
+  // menu that made that possible: any task on disk now resolves for any
+  // unblocked caller, and whether the ANSWER may reach them is decided later
+  // by clearance. Inverted rather than deleted, because silently reintroducing
+  // an admission-time task filter is exactly what this pins against.
+  it("admits a task no policy names, since a task is no longer granted", () => {
     const paths = seededPaths();
     seedTask(paths, "secret", ["description: shh"]);
-    seedPolicy(paths, { default_offer: ["ask"], callers: {} });
+    seedPolicy(paths, { default_clearance: "public", callers: {} });
     const result = resolveAdmission({
       paths, from: "shusaku", requestedTask: "secret", groups: [], workdir, agentKind: "claude",
     });
-    expect(result).toMatchObject({ ok: false, code: "task_not_offered" });
+    expect(result).toMatchObject({ ok: true, task: { id: "secret" } });
+  });
+
+  // The policy resolveAdmission loaded is handed back so listener.ts resolves
+  // clearance from the same object. A second read of policy.json there would
+  // sit outside the policy_error path below and could disagree with admission.
+  it("returns the policy it loaded, so clearance resolves from the same table", () => {
+    const paths = seededPaths();
+    seedPolicy(paths, { default_clearance: "internal", callers: {} });
+    const result = resolveAdmission({
+      paths, from: "shusaku", requestedTask: undefined, groups: [], workdir, agentKind: "claude",
+    });
+    expect(result.ok && result.policy.default_clearance).toBe("internal");
   });
 
   it("fails closed with policy_error, not a thrown exception, when the policy file is corrupt", () => {

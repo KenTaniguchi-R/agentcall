@@ -1,5 +1,7 @@
+import { clearanceFor } from "./clearance.js";
 import type { CallableLineConfig } from "./config.js";
-import { offeredFor, stripPlus, type Policy } from "./policy.js";
+import { type Policy } from "./policy.js";
+import type { Sensitivity } from "./sensitivity.js";
 import { type Task } from "./tasks.js";
 
 interface PolicyReportOptions {
@@ -25,40 +27,22 @@ function renderTask(
   return lines;
 }
 
-function runnableTasks(offered: string[], tasks: readonly Task[]): Task[] {
-  const ids = new Set(offered);
-  return tasks.filter((task) => ids.has(task.id));
-}
-
+// One audience, one clearance. Before #379 this printed a per-audience task
+// menu; a task is no longer individually granted, so the task list is the same
+// for everyone and what changes per audience is only how much of an answer may
+// reach them.
 function renderAudience(
   heading: string,
-  offered: string[] | "blocked",
-  tasks: readonly Task[],
-  defaultWorkdir: string,
+  clearance: Sensitivity | "blocked",
 ): string[] {
   const lines = [heading];
-  if (offered === "blocked") {
-    lines.push("  BLOCKED — no task can run (saved grants remain inactive)");
+  if (clearance === "blocked") {
+    lines.push("  BLOCKED — no call is answered at all (a saved clearance stays inactive)");
     return lines;
   }
-  const runnable = runnableTasks(offered, tasks);
-  if (runnable.length === 0) {
-    lines.push("  (no runnable tasks)");
-    return lines;
-  }
-  for (const task of runnable) lines.push(...renderTask(task, defaultWorkdir));
+  lines.push(`  May be told: ${clearance} content and below`);
+  lines.push("  Anything more sensitive is refused at the reply, with a fixed reason");
   return lines;
-}
-
-function referencedTaskIds(policy: Policy): Set<string> {
-  const ids = new Set(policy.default_offer.map(stripPlus));
-  for (const entry of Object.values(policy.callers)) {
-    for (const id of entry.offer) ids.add(stripPlus(id));
-  }
-  for (const group of Object.values(policy.groups)) {
-    for (const id of group.offer) ids.add(stripPlus(id));
-  }
-  return ids;
 }
 
 export function renderPolicyReport(
@@ -67,7 +51,7 @@ export function renderPolicyReport(
   options: PolicyReportOptions,
 ): string {
   const lines = [
-    "Effective capability policy",
+    "Effective clearance policy",
     `Agent runtime: ${options.agentKind === "claude" ? "Claude" : "Codex"}`,
     options.managed
       ? "Administrator policy: active — combined result shown below"
@@ -79,20 +63,20 @@ export function renderPolicyReport(
   if (policy.description) lines.push(`Purpose: ${policy.description}`);
 
   lines.push("", "Runtime enforcement");
+  lines.push(
+    "  Sources are labelled by sensitivity; anything unlabelled is secret and never leaves.",
+    "  The running context takes the sensitivity of the most sensitive source it read,",
+    "  and the reply is refused unless that is at or below the caller's clearance.",
+  );
   if (options.agentKind === "claude") {
     lines.push(
-      "  Claude denies first-class tools not named by the task.",
-      "  A fetch grant enables Claude's web tools but does not restrict them to an AgentCall domain allowlist.",
-      "  An exec grant includes practical read, write, and network power through Bash, even when those caps are absent.",
-      "  Bash is recorded, not blocked, and is not confined to the task working directory.",
+      "  Claude denies first-class tools not named by the task, and Bash is recorded, not blocked.",
     );
   } else {
     lines.push(
-      "  Codex only enforces the write boundary with a read-only or workspace-write sandbox;",
-      "  fetch and exec are not separate Codex controls, and read access is not confined to the working directory.",
-      "  Codex can execute shell commands on any task; --sandbox read-only stops writes, not reads or execution.",
-      "  Bundled authenticated Codex apps, web search, and image generation are disabled with strict configuration on every spawn.",
-      "  AgentCall does not impose or audit a domain allowlist on Codex network access.",
+      "  Codex has no per-tool restriction: --sandbox read-only stops writes, not reads or execution,",
+      "  and the guard only observes there — so the clearance check on the reply is what bounds what leaves.",
+      "  Bundled authenticated Codex apps, web search, and image generation are disabled on every spawn.",
       "  On verified codex-cli 0.146.0, shell tool attempts are recorded by an observe-only hook unless managed-only hooks are required.",
       "  Other Codex releases or allow_managed_hooks_only=true may silently skip that hook; non-hooked read routes remain unrecorded.",
       "  Run agentcall doctor to verify the exact Codex session hook is active and trusted on this machine.",
@@ -101,49 +85,46 @@ export function renderPolicyReport(
 
   lines.push(
     "",
-    "Rules that compose at call time",
-    "For one caller: start with the base rule, add their named rule, then add every roster the relay attests.",
-    "A named caller block overrides every default and roster grant.",
+    "Tasks — every caller who is not blocked can request any of these",
+  );
+  if (tasks.length === 0) {
+    lines.push("  (none)");
+  } else {
+    for (const task of tasks) lines.push(...renderTask(task, options.defaultWorkdir));
+  }
+
+  lines.push(
     "",
-    ...renderAudience(
-      "Base rule: Everyone registered", offeredFor(policy, ""), tasks,
-      options.defaultWorkdir,
-    ),
+    "Rules that compose at call time",
+    "For one caller: start with the base rule, take the highest of their named rule and every roster the relay attests.",
+    "A named caller block overrides every default and roster clearance.",
+    "",
+    // Empty is not a valid handle, so the base rule cannot accidentally pick up
+    // a named caller's clearance.
+    ...renderAudience("Base rule: Everyone registered", clearanceFor(policy, "")),
   );
 
   for (const [caller] of Object.entries(policy.callers).sort(([a], [b]) => a.localeCompare(b))) {
-    // offeredFor includes defaults and applies the same block precedence as
-    // listener admission.
+    // clearanceFor applies the same block precedence as listener admission.
     lines.push(
       "",
       ...renderAudience(
-        `Named caller rule: ${caller} (before roster grants)`,
-        offeredFor(policy, caller),
-        tasks,
-        options.defaultWorkdir,
+        `Named caller rule: ${caller} (before roster clearances)`,
+        clearanceFor(policy, caller),
       ),
     );
   }
 
   for (const [name, group] of Object.entries(policy.groups).sort(([a], [b]) => a.localeCompare(b))) {
-    // Empty is not a valid handle, so it cannot accidentally pick up a named
-    // caller grant. The group preview is defaults plus exactly this attested
-    // roster, matching offeredFor's production union semantics.
+    // Defaults plus exactly this attested roster, matching clearanceFor's
+    // production union semantics.
     lines.push(
       "",
       ...renderAudience(
-        `Roster rule: ${name} (${group.roster_id}) — adds for each attested member`,
-        offeredFor(policy, "", [group.roster_id]),
-        tasks,
-        options.defaultWorkdir,
+        `Roster rule: ${name} (${group.roster_id}) — applies to each attested member`,
+        clearanceFor(policy, "", [group.roster_id]),
       ),
     );
-  }
-
-  const taskIds = new Set(tasks.map((task) => task.id));
-  const missing = [...referencedTaskIds(policy)].filter((id) => !taskIds.has(id)).sort();
-  if (missing.length > 0) {
-    lines.push("", `Ignored missing task references: ${missing.join(", ")}`);
   }
 
   return `${lines.join("\n")}\n`;

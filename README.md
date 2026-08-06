@@ -113,24 +113,34 @@ for expected output and recovery steps, or use the [complete CLI reference](http
 ## Receive calls safely
 
 Plain calls use the built-in, read-only `ask` task. Create a named task only
-when a caller needs more specific instructions or capabilities:
+when a caller needs more specific instructions:
 
 ```bash
 agentcall task new architecture-history
 # Edit ~/AgentCall/<line>/tasks/architecture-history/SKILL.md
 agentcall lint
 agentcall policy
-agentcall offer architecture-history
 ```
 
-Tasks are Markdown files with YAML frontmatter. Policy decides which callers or
-rosters may use each task; the listener resolves that policy before placing the
-caller's message in the prompt.
+Tasks are Markdown files with YAML frontmatter, and any caller you have not
+blocked can request any of them. What bounds an answer is not which task ran
+but what it read: every source carries a **sensitivity**, every caller a
+**clearance**, and the reply is refused unless the running context sits at or
+below that clearance. The listener resolves clearance from the relay-verified
+caller before placing their message in the prompt, so the message can never
+influence it.
+
+```bash
+agentcall clearance ken internal     # ken may be told internal content
+agentcall clearance --default public
+agentcall block spammer              # beats every grant, including a roster's
+```
 
 > [!WARNING]
-> A Claude task with `exec` can practically read, change, and send data beyond
-> its working directory. A Codex answering agent has no enforced read boundary.
-> Start read-only and grant broader capabilities only to callers you trust.
+> Anything absent from `sensitivity.json` is `secret` and never leaves — but
+> the reverse is the real risk: labelling a parent directory `internal` labels
+> everything beneath it. A Codex answering agent has no enforced read boundary,
+> so the clearance check on the reply is what bounds what leaves it.
 
 The [receive-a-call guide](https://agentcall.mintlify.app/get-started/receive-calls)
 and [tasks and policy guide](https://agentcall.mintlify.app/guides/tasks-and-policy)

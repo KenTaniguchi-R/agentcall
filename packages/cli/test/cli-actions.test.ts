@@ -837,16 +837,16 @@ describe.sequential("CLI command actions", () => {
     saveLineConfig(paths, { org: "acme", handle: "ken", token: "tok", relay: "https://relay.test", agent_kind: "claude" });
     mkdirSync(join(testHome, ".agentcall"), { recursive: true });
     writeFileSync(paths.policyFile, JSON.stringify({
-      default_offer: ["ask"], tests: [{ caller: "mia", deny: ["ask"] }],
+      default_clearance: "public", tests: [{ caller: "mia", expect_clearance: "internal" }],
     }));
 
     const out = await runCommand(testHome, ["lint"]);
 
     expect(out.code).toBe(1);
-    expect(out.stdout).toMatch(/assertion 1.*ask/i);
+    expect(out.stdout).toMatch(/assertion 1.*expected internal.*got public/i);
   });
 
-  it("renders the effective policy as a per-caller and per-task capability report", async () => {
+  it("renders the effective policy as a per-caller clearance report", async () => {
     const testHome = home();
     const paths = getLinePaths(getMachinePaths(testHome), "claude");
     saveLineConfig(paths, {
@@ -861,9 +861,9 @@ describe.sequential("CLI command actions", () => {
       "Deploy carefully.",
     ].join("\n"));
     writeFileSync(paths.policyFile, JSON.stringify({
-      default_offer: ["ask"],
+      default_clearance: "public",
       callers: {
-        alice: { offer: ["deploy"] },
+        alice: { clearance: "internal" },
         "blocked-bot": { block: true },
       },
     }));
@@ -872,13 +872,13 @@ describe.sequential("CLI command actions", () => {
 
     expect(out.code).toBe(0);
     expect(out.stderr).toBe("");
-    expect(out.stdout).toContain("Effective capability policy");
-    expect(out.stdout).toContain("does not restrict them to an AgentCall domain allowlist");
-    expect(out.stdout).toMatch(new RegExp(`Everyone registered[\\s\\S]*ask — Ask a question[\\s\\S]*Working directory: ${paths.shareDir}`));
-    expect(out.stdout).toMatch(/Named caller rule: alice \(before roster grants\)[\s\S]*deploy — Deploy production[\s\S]*inspect files — answers are read-only/);
+    expect(out.stdout).toContain("Effective clearance policy");
+    expect(out.stdout).toMatch(new RegExp(`Tasks — every caller who is not blocked[\\s\\S]*ask — Ask a question[\\s\\S]*Working directory: ${paths.shareDir}`));
+    expect(out.stdout).toMatch(/deploy — Deploy production[\s\S]*inspect files — answers are read-only/);
     // The exec warning is gone with the capability that caused it (#372).
     expect(out.stdout).not.toContain("WARNING: exec");
-    expect(out.stdout).toMatch(/Named caller rule: blocked-bot \(before roster grants\)[\s\S]*BLOCKED — no task can run/);
+    expect(out.stdout).toMatch(/Named caller rule: alice \(before roster clearances\)[\s\S]*May be told: internal content and below/);
+    expect(out.stdout).toMatch(/Named caller rule: blocked-bot \(before roster clearances\)[\s\S]*BLOCKED — no call is answered at all/);
   });
 
   it("rejects a CLI policy edit that would break an assertion and preserves the file", async () => {
@@ -887,14 +887,17 @@ describe.sequential("CLI command actions", () => {
     saveLineConfig(paths, { org: "acme", handle: "ken", token: "tok", relay: "https://relay.test", agent_kind: "claude" });
     mkdirSync(join(testHome, ".agentcall"), { recursive: true });
     const original = {
-      default_offer: ["ask"], tests: [{ caller: "mia", accept: ["ask"] }],
+      default_clearance: "internal", tests: [{ caller: "mia", expect_clearance: "internal" }],
     };
     writeFileSync(paths.policyFile, JSON.stringify(original));
 
-    const out = await runCommand(testHome, ["unoffer", "ask"]);
+    // The edit is legal on its own — lowering the default — but it drops mia
+    // below what an assertion pins, so it must be refused and the last
+    // known-good file left exactly as it was.
+    const out = await runCommand(testHome, ["clearance", "--default", "public"]);
 
     expect(out.code).toBe(1);
-    expect(out.stderr).toMatch(/assertion 1.*ask/i);
+    expect(out.stderr).toMatch(/assertion 1.*expected internal.*got public/i);
     expect(JSON.parse(readFileSync(paths.policyFile, "utf8"))).toEqual(original);
   });
 

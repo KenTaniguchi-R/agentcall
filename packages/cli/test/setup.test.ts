@@ -114,7 +114,7 @@ describe("runSetup", () => {
     // "no-op" guarantee that protects config.json is what protects any
     // custom policy.json now too.
     mkdirSync(lp.dir, { recursive: true });
-    const customPolicy = JSON.stringify({ description: "custom", default_offer: ["ask"] });
+    const customPolicy = JSON.stringify({ description: "custom", default_clearance: "public" });
     writeFileSync(lp.policyFile, customPolicy);
     const out: string[] = [];
     // handle/relay match the existing "claude" line's — a mismatch on
@@ -433,7 +433,7 @@ describe("runSetup", () => {
     const lp = getLinePaths(m, "claude");
     expect(existsSync(lp.tasksDir)).toBe(true);
     const policy = JSON.parse(readFileSync(lp.policyFile, "utf8"));
-    expect(policy.default_offer).toEqual(["ask"]);
+    expect(policy.default_clearance).toBe("public");
     expect(cardCalls).toHaveLength(1);
     expect(cardCalls[0]).toMatchObject({ agent_kind: "claude", relay: R });
   });

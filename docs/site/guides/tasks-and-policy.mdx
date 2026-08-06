@@ -1,10 +1,10 @@
 ---
 title: Tasks and policy
-description: Publish narrow AgentCall tasks, grant them to callers or rosters, and test the effective policy.
+description: Publish narrow AgentCall tasks, set what each caller may be told, and test the effective policy.
 ---
 
-Tasks define what an answering agent is asked to do and which capabilities it
-receives. Policy defines who may invoke each task.
+Tasks define what an answering agent is asked to do. Policy defines how much of
+what it finds may reach each caller.
 
 ## 1. Scaffold a task
 
@@ -18,7 +18,6 @@ Edit `~/AgentCall/<line>/tasks/architecture-history/SKILL.md`:
 ---
 description: Explain why past architecture decisions were made.
 keywords: [architecture, migration, adr]
-tools: [read]
 workdir: /absolute/path/to/the/repository
 ---
 
@@ -27,8 +26,9 @@ Call out uncertainty instead of inventing rationale.
 ```
 
 Only `description` is required. Optional fields are `name`, `keywords`,
-`examples`, `tools`, `timeout_s`, `workdir`, and `threadable`. The directory
-name is the task ID.
+`examples`, `timeout_s`, `workdir`, and `threadable`. The directory name is the
+task ID. Unrecognized keys are rejected rather than ignored, so a stale field is
+a startup error and not a silent no-op.
 
 ## 2. Validate before publishing
 
@@ -39,43 +39,56 @@ agentcall card
 ```
 
 `lint` checks task manifests, effective policy assertions, and the rendered
-card. The other commands make the final grants and working directories visible
-for human review.
+card. The other commands make the effective clearances and working directories
+visible for human review.
 
-## 3. Grant access
+## 3. Set clearance
+
+Any caller you have not blocked can request any task. What bounds the answer is
+what the task read, not which task ran: every source carries a **sensitivity**
+(`public`, `internal`, `secret`), every caller a **clearance**, and the reply is
+refused unless the running context sits at or below that clearance.
 
 ```bash
-# Everyone in the organization may request it
-agentcall offer architecture-history
+# What anyone in the organization may be told
+agentcall clearance --default public
 
-# Only one caller gets the extra task
-agentcall allow ken architecture-history
+# One caller may be told more
+agentcall clearance ken internal
 
-# Remove a named grant or public offer
-agentcall revoke ken architecture-history
-agentcall unoffer architecture-history
+# Back to the line default
+agentcall clearance ken --reset
 
-# Deny a caller completely
+# Deny a caller completely — beats every grant, including a roster's
 agentcall block spammer
 ```
+
+`secret` is not grantable. It means "never leaves this machine", so no caller
+and no roster can be cleared for it.
 
 Policy verbs republish the card automatically. `agentcall card push` republishes
 after a direct policy-file edit.
 
 ## Add policy assertions
 
-Assertions prevent an accidental edit from silently widening access:
+Assertions prevent an accidental edit from silently widening access. Each pins
+the clearance one caller resolves to, which is the value that actually governs
+what leaves:
 
 ```json
 {
-  "default_offer": ["ask"],
+  "default_clearance": "public",
   "callers": {
-    "ken": { "offer": ["architecture-history"] },
-    "stranger": { "offer": [], "block": true }
+    "ken": { "clearance": "internal" },
+    "stranger": { "block": true }
+  },
+  "groups": {
+    "eng": { "roster_id": "<relay-issued roster id>", "clearance": "internal" }
   },
   "tests": [
-    { "caller": "ken", "accept": ["architecture-history"], "deny": ["exec"] },
-    { "caller": "stranger", "deny": ["*"] }
+    { "caller": "ken", "expect_clearance": "internal" },
+    { "caller": "stranger", "expect_clearance": "blocked" },
+    { "caller": "someone-else", "groups": ["eng"], "expect_clearance": "internal" }
   ]
 }
 ```
@@ -84,15 +97,18 @@ A failed assertion blocks policy edits and listener startup rather than falling
 back to the last-looking configuration.
 
 <Warning>
-  `exec` is broad local authority. Shell commands can read, change, and send
-  data outside a task working directory. Codex cannot enforce the same file-read
-  boundary as Claude. Grant `write`, `fetch`, or `exec` only after reviewing the
-  [security model](/security/overview).
+  Anything absent from `sensitivity.json` is `secret` and never leaves — but the
+  reverse is the real risk: labelling a parent directory `internal` labels
+  everything beneath it, including anything a subdirectory later acquires.
+  Codex cannot enforce the same file-read boundary as Claude, so on a Codex line
+  the clearance check on the reply is what bounds what leaves. Review the
+  [security model](/security/overview) before widening a label.
 </Warning>
 
 ## Success check
 
-`agentcall lint` exits successfully and `agentcall card` shows the intended task,
-audience, capabilities, and working directory—nothing more.
+`agentcall lint` exits successfully and `agentcall card` shows the intended
+tasks, the default clearance, and each named caller's resolved level—nothing
+more.
 
 Source of truth: [README task and policy behavior](https://github.com/KenTaniguchi-R/agentcall#usage).

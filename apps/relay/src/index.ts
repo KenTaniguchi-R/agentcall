@@ -191,7 +191,10 @@ app.get("/v1/card/:handle", rateLimit(NATIVE_READ, "ip"), async (c) => {
     handle,
     description: upload.description,
     agent_kind: upload.agent_kind,
-    tasks: visibleTasks(upload, viewer, await sharedRosterIds(c.env.DB, org, viewer, handle)),
+    // No roster lookup here any more: since #379 a card carries no per-group
+    // task grants, so the viewer's shared rosters cannot change what they see.
+    // sharedRosterIds is still what attests groups for a CALL (below).
+    tasks: visibleTasks(upload, viewer),
     updated_at: row.updated_at,
   });
 });

@@ -10,7 +10,7 @@ import { fail } from "../errors.js";
 export function register(program: { command(name: string): any }): void {
   program
     .command("policy")
-    .description("show the effective per-caller and per-task capability policy")
+    .description("show the effective per-caller clearance policy and the tasks it covers")
     .option("--line <name>", "line to report on (defaults to the primary line)")
     .action((o: { line?: string }) => {
       let ctx: LineContext;

@@ -16,10 +16,7 @@ async function seedCard(handle: string) {
         description: "Ken's agent",
         agent_kind: "claude",
         tasks: [{ id: "ask", name: "Ask", description: "Answer a question.", examples: [], keywords: [] }],
-        default_offer: ["ask"],
-        grants: { someoneelse: ["secret-task"] },
-        group_grants: {},
-        blocked: [],
+        blocked: ["someoneelse"],
       }),
       1,
     )
@@ -96,15 +93,23 @@ describe("GET /v1/a2a/:handle/agent-card.json", () => {
     }
   });
 
-  it("never exposes grants or agent_kind", async () => {
+  // `blocked` is now the only enforcement field a card carries, and the A2A
+  // projection must not publish it: the list names callers this owner refuses,
+  // which is exactly the kind of thing they should not be able to read.
+  it("never exposes the blocked list or agent_kind", async () => {
     const res = await SELF.fetch(`${ORIGIN}/v1/a2a/ken/agent-card.json`, { headers: viewerHeaders() });
     const body = await res.text();
-    expect(body).not.toContain("grants");
-    expect(body).not.toContain("secret-task");
+    expect(body).not.toContain("blocked");
+    expect(body).not.toContain("someoneelse");
     expect(body).not.toContain("agent_kind");
   });
 
-  it("projects skills granted by relay-attested shared roster membership", async () => {
+  // Replaces "projects skills granted by relay-attested shared roster
+  // membership". #379 removed per-group grants from the card, so roster
+  // membership no longer changes an A2A projection at all — which is the
+  // property now worth pinning, since a reintroduced group filter here would
+  // silently narrow a caller's view.
+  it("projects the same skills whether or not a viewer shares a roster", async () => {
     const targetToken = await registerHandle("a2a-group");
     const created = await (await SELF.fetch("https://relay.test/v1/roster", {
       method: "POST", headers: wsAuth("a2a-group", targetToken),
@@ -117,11 +122,14 @@ describe("GET /v1/a2a/:handle/agent-card.json", () => {
       .bind("acme", await agentIdFor("a2a-group"), JSON.stringify({
         description: "grouped", agent_kind: "claude",
         tasks: [{ id: "eng", name: "Eng", description: "Engineering", examples: [], keywords: [] }],
-        default_offer: [], grants: {}, group_grants: { [created.roster_id]: ["eng"] }, blocked: [],
+        blocked: [],
       }), 2).run();
 
-    const res = await SELF.fetch(`${ORIGIN}/v1/a2a/a2a-group/agent-card.json`, { headers: viewerHeaders() });
-    expect((await res.json<any>()).skills.map((skill: any) => skill.id)).toEqual(["eng"]);
+    const memberToken = await registerHandle("a2a-nonmember");
+    for (const headers of [viewerHeaders(), wsAuth("a2a-nonmember", memberToken)]) {
+      const res = await SELF.fetch(`${ORIGIN}/v1/a2a/a2a-group/agent-card.json`, { headers });
+      expect((await res.json<any>()).skills.map((skill: any) => skill.id)).toEqual(["eng"]);
+    }
   });
 
   it("makes an individual block indistinguishable from an unknown A2A agent", async () => {
@@ -130,7 +138,7 @@ describe("GET /v1/a2a/:handle/agent-card.json", () => {
       .bind(await agentIdFor("a2a-blocked"), JSON.stringify({
         description: "blocked", agent_kind: "claude",
         tasks: [{ id: "ask", name: "Ask", description: "Ask", examples: [], keywords: [] }],
-        default_offer: ["ask"], grants: {}, group_grants: {}, blocked: ["viewer"],
+        blocked: ["viewer"],
       })).run();
     const blocked = await SELF.fetch(`${ORIGIN}/v1/a2a/a2a-blocked/agent-card.json`, { headers: viewerHeaders() });
     const missing = await SELF.fetch(`${ORIGIN}/v1/a2a/nobody/agent-card.json`, { headers: viewerHeaders() });

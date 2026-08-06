@@ -10,9 +10,6 @@ const UPLOAD = {
     { id: "ask", name: "Ask", description: "Answer questions.", examples: [], keywords: [] },
     { id: "schedule-meeting", name: "Schedule", description: "Book a time.", examples: [], keywords: [] },
   ],
-  default_offer: ["ask"],
-  grants: { mia: ["schedule-meeting"] },
-  group_grants: {},
   blocked: [],
 };
 const ORG_HEADERS = { "X-AgentCall-Org": "acme" };
@@ -36,7 +33,17 @@ describe("PUT /v1/card", () => {
   });
   it("400s on an invalid card body", async () => {
     const token = await registerHandle("ken3");
-    expect((await putCard("ken3", token, { agent_kind: "vim", tasks: [], default_offer: [] })).status).toBe(400);
+    expect((await putCard("ken3", token, { agent_kind: "vim", tasks: [] })).status).toBe(400);
+  });
+  // #379 deleted the per-caller menu from the card shape. A push still
+  // carrying it must be refused, not accepted with the menu ignored: silently
+  // dropping `grants` would publish every task to callers the owner believed
+  // were restricted.
+  it("400s on a card still carrying the deleted task menu", async () => {
+    const token = await registerHandle("ken3-menu");
+    expect((await putCard("ken3-menu", token, {
+      ...UPLOAD, default_offer: ["ask"], grants: { mia: ["schedule-meeting"] }, group_grants: {},
+    })).status).toBe(400);
   });
   it("upserts: a second push replaces the first", async () => {
     const token = await registerHandle("ken4");
@@ -78,8 +85,7 @@ describe("GET /v1/card/:handle", () => {
       method: "PUT",
       headers: { "content-type": "application/json", ...wsAuth("owns-its-card", token) },
       body: JSON.stringify({
-        description: "mine", agent_kind: "claude", tasks: [], default_offer: [],
-        grants: {}, group_grants: {}, blocked: [],
+        description: "mine", agent_kind: "claude", tasks: [], blocked: [],
       }),
     });
     const agentId = await agentIdFor("owns-its-card");
@@ -121,7 +127,7 @@ describe("GET /v1/card/:handle", () => {
     await putCard("private-card", token);
     expect((await SELF.fetch("https://relay.test/v1/card/private-card", { headers: ORG_HEADERS })).status).toBe(401);
   });
-  it("an authenticated tenant member sees default_offer tasks", async () => {
+  it("an authenticated tenant member sees the whole task list", async () => {
     const token = await registerHandle("pub");
     await putCard("pub", token);
     const viewer = await registerHandle("pub-viewer");
@@ -129,57 +135,57 @@ describe("GET /v1/card/:handle", () => {
     expect(res.status).toBe(200);
     const card = await res.json<{ handle: string; tasks: { id: string }[] }>();
     expect(card.handle).toBe("pub");
-    expect(card.tasks.map((t) => t.id)).toEqual(["ask"]);
+    expect(card.tasks.map((t) => t.id)).toEqual(["ask", "schedule-meeting"]);
   });
-  it("extended view adds the viewer's granted tasks", async () => {
-    const token = await registerHandle("ext");
-    await putCard("ext", token);
-    const miaToken = await registerHandle("mia");
-    const res = await SELF.fetch("https://relay.test/v1/card/ext", { headers: wsAuth("mia", miaToken) });
-    const card = await res.json<{ tasks: { id: string }[] }>();
-    expect(card.tasks.map((t) => t.id).sort()).toEqual(["ask", "schedule-meeting"]);
-  });
-  it("a different authenticated viewer does NOT see another caller's grants", async () => {
-    const token = await registerHandle("ext2");
-    await putCard("ext2", token);
-    const otherToken = await registerHandle("other");
-    const res = await SELF.fetch("https://relay.test/v1/card/ext2", { headers: wsAuth("other", otherToken) });
-    const card = await res.json<{ tasks: { id: string }[] }>();
-    expect(card.tasks.map((t) => t.id)).toEqual(["ask"]);
-  });
-  it("projects relay-attested group grants and lets an individual block override them", async () => {
-    const target = await registerHandle("group-card");
+  // Replaces the three tests that pinned the per-caller extended view, the
+  // grant-leak check between two viewers, and the roster-attested group
+  // projection. #379 deleted all three mechanisms: every viewer now gets the
+  // identical list, so the property worth pinning is that it does NOT vary by
+  // viewer, roster membership, or anything else short of a block.
+  it("serves the identical list to every viewer, regardless of roster membership", async () => {
+    const target = await registerHandle("same-for-all");
     const created = await (await SELF.fetch("https://relay.test/v1/roster", {
-      method: "POST", headers: wsAuth("group-card", target),
+      method: "POST", headers: wsAuth("same-for-all", target),
     })).json<{ roster_id: string; join_key: string }>();
-    const viewer = await registerHandle("group-viewer");
+    const member = await registerHandle("roster-member");
     await SELF.fetch(`https://relay.test/v1/roster/${created.roster_id}/join`, {
-      method: "POST", headers: { "content-type": "application/json", ...wsAuth("group-viewer", viewer) },
+      method: "POST", headers: { "content-type": "application/json", ...wsAuth("roster-member", member) },
       body: JSON.stringify({ join_key: created.join_key }),
     });
-    const grouped = {
-      ...UPLOAD, grants: {}, group_grants: { [created.roster_id]: ["schedule-meeting"] }, blocked: [],
-    };
-    await putCard("group-card", target, grouped);
-    let res = await SELF.fetch("https://relay.test/v1/card/group-card", { headers: wsAuth("group-viewer", viewer) });
-    expect((await res.json<{ tasks: { id: string }[] }>()).tasks.map((task) => task.id).sort())
+    await putCard("same-for-all", target);
+    const stranger = await registerHandle("no-roster");
+    for (const [handle, token] of [["roster-member", member], ["no-roster", stranger]] as const) {
+      const res = await SELF.fetch("https://relay.test/v1/card/same-for-all", { headers: wsAuth(handle, token) });
+      expect((await res.json<{ tasks: { id: string }[] }>()).tasks.map((t) => t.id))
+        .toEqual(["ask", "schedule-meeting"]);
+    }
+  });
+  // The surviving half of the old group-grant test. A block is the one rule
+  // clearance cannot express as a level, and it is now the ONLY thing that
+  // changes a card between viewers.
+  it("gives a blocked viewer nothing, the only per-viewer difference left", async () => {
+    const target = await registerHandle("blocks-one");
+    const viewer = await registerHandle("gets-blocked");
+    await putCard("blocks-one", target);
+    let res = await SELF.fetch("https://relay.test/v1/card/blocks-one", { headers: wsAuth("gets-blocked", viewer) });
+    expect((await res.json<{ tasks: { id: string }[] }>()).tasks.map((t) => t.id))
       .toEqual(["ask", "schedule-meeting"]);
-    await putCard("group-card", target, { ...grouped, blocked: ["group-viewer"] });
-    res = await SELF.fetch("https://relay.test/v1/card/group-card", { headers: wsAuth("group-viewer", viewer) });
+    await putCard("blocks-one", target, { ...UPLOAD, blocked: ["gets-blocked"] });
+    res = await SELF.fetch("https://relay.test/v1/card/blocks-one", { headers: wsAuth("gets-blocked", viewer) });
     expect((await res.json<{ tasks: { id: string }[] }>()).tasks).toEqual([]);
   });
-  // HANDLE_RE accepts "constructor", and the parsed card's `grants` object
-  // inherits Object.prototype — so an unguarded `grants[viewer]` lookup yields
-  // the Object constructor, which is not iterable and 500s the whole endpoint
-  // for that viewer against every callee.
-  it("serves the public view to a viewer whose handle is an Object.prototype key", async () => {
+  // HANDLE_RE accepts "constructor". The old `grants[viewer]` lookup yielded
+  // the Object constructor for such a viewer — not iterable, 500ing the whole
+  // endpoint against every callee. There is no record lookup left to trip on,
+  // and this pins that such a viewer is served as an ordinary one.
+  it("serves a viewer whose handle is an Object.prototype key as an ordinary viewer", async () => {
     const token = await registerHandle("ext4");
     await putCard("ext4", token);
     const ctorToken = await registerHandle("constructor");
     const res = await SELF.fetch("https://relay.test/v1/card/ext4", { headers: wsAuth("constructor", ctorToken) });
     expect(res.status).toBe(200);
     const card = await res.json<{ tasks: { id: string }[] }>();
-    expect(card.tasks.map((t) => t.id)).toEqual(["ask"]);
+    expect(card.tasks.map((t) => t.id)).toEqual(["ask", "schedule-meeting"]);
   });
 
   it("throttles authenticated card reads from one source past the burst limit", async () => {

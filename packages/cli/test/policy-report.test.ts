@@ -35,15 +35,15 @@ const shell: Task = {
 
 const policy: Policy = {
   description: "Production support policy",
-  default_offer: ["ask", "missing-task"],
+  default_clearance: "public",
   callers: {
-    alice: { offer: ["deploy", "shell"], block: false },
-    "blocked-bot": { offer: ["deploy"], block: true },
+    alice: { clearance: "internal", block: false },
+    "blocked-bot": { clearance: "internal", block: true },
   },
   groups: {
-    engineers: { roster_id: ROSTER_ID, offer: ["browse-docs"] },
+    engineers: { roster_id: ROSTER_ID, clearance: "internal" },
   },
-  tests: [{ caller: "alice", accept: ["deploy"], groups: [], deny: [] }],
+  tests: [{ caller: "alice", expect_clearance: "internal", groups: [] }],
 };
 
 describe("renderPolicyReport", () => {
@@ -54,21 +54,28 @@ describe("renderPolicyReport", () => {
       defaultWorkdir: "/srv/agentcall-default",
     });
 
-    expect(report).toContain("Effective capability policy");
+    expect(report).toContain("Effective clearance policy");
     expect(report).toContain("Agent runtime: Claude");
     expect(report).toContain("Administrator policy: active — combined result shown below");
     expect(report).toContain("Policy checks: 1 passed while loading this policy");
     // Capabilities are gone (#372): every task reads and only reads, so the
     // report states that once per task instead of enumerating a per-task list.
-    expect(report).toMatch(/Everyone registered[\s\S]*ask — Ask a question[\s\S]*inspect files — answers are read-only[\s\S]*Working directory: \/srv\/agentcall-default/);
-    expect(report).toMatch(/Named caller rule: alice \(before roster grants\)[\s\S]*deploy — Deploy production/);
+    // The per-audience task menus are gone too (#379): the task list is the
+    // same for everyone, so it is printed once and each audience shows only
+    // the clearance it resolves to.
+    expect(report).toMatch(/Tasks — every caller who is not blocked can request any of these[\s\S]*ask — Ask a question[\s\S]*inspect files — answers are read-only[\s\S]*Working directory: \/srv\/agentcall-default/);
+    expect(report).toMatch(/browse-docs — Browse documentation[\s\S]*Working directory: \/srv\/docs/);
     expect(report).toMatch(/shell — Run diagnostics[\s\S]*inspect files — answers are read-only/);
     expect(report).not.toMatch(/exec — run shell commands/);
-    expect(report).toMatch(/Named caller rule: blocked-bot \(before roster grants\)[\s\S]*BLOCKED — no task can run/);
-    expect(report).toMatch(new RegExp(`Roster rule: engineers \\(${ROSTER_ID}\\) — adds for each attested member[\\s\\S]*browse-docs — Browse documentation[\\s\\S]*inspect files — answers are read-only[\\s\\S]*Working directory: /srv/docs`));
-    expect(report).toContain("Ignored missing task references: missing-task");
-    expect(report).toContain("For one caller: start with the base rule, add their named rule, then add every roster the relay attests.");
-    expect(report).toContain("An exec grant includes practical read, write, and network power through Bash");
+    expect(report).toMatch(/Base rule: Everyone registered[\s\S]*May be told: public content and below/);
+    expect(report).toMatch(/Named caller rule: alice \(before roster clearances\)[\s\S]*May be told: internal content and below/);
+    expect(report).toMatch(/Named caller rule: blocked-bot \(before roster clearances\)[\s\S]*BLOCKED — no call is answered at all/);
+    expect(report).toMatch(new RegExp(`Roster rule: engineers \\(${ROSTER_ID}\\) — applies to each attested member[\\s\\S]*May be told: internal content and below`));
+    expect(report).toContain("For one caller: start with the base rule, take the highest of their named rule and every roster the relay attests.");
+    // The refusal is the enforcement point, so it has to appear in the report
+    // the owner reads to understand what their policy does.
+    expect(report).toContain("anything unlabelled is secret and never leaves");
+    expect(report).toContain("the reply is refused unless that is at or below the caller's clearance");
   });
 
   it("states the weaker Codex enforcement semantics instead of implying per-tool controls", () => {
@@ -79,11 +86,10 @@ describe("renderPolicyReport", () => {
     });
 
     expect(report).toContain("Agent runtime: Codex");
-    expect(report).toContain("Codex only enforces the write boundary");
-    expect(report).toContain("read-only or workspace-write sandbox");
-    expect(report).toContain("fetch and exec are not separate Codex controls");
-    expect(report).toContain("Codex can execute shell commands on any task");
-    expect(report).toContain("Bundled authenticated Codex apps, web search, and image generation are disabled with strict configuration");
+    expect(report).toContain("Codex has no per-tool restriction");
+    expect(report).toContain("--sandbox read-only stops writes, not reads or execution");
+    expect(report).toContain("the clearance check on the reply is what bounds what leaves");
+    expect(report).toContain("Bundled authenticated Codex apps, web search, and image generation are disabled on every spawn");
     expect(report).toContain("On verified codex-cli 0.146.0");
     expect(report).toContain("shell tool attempts are recorded by an observe-only hook");
     expect(report).toContain("unless managed-only hooks are required");
@@ -91,5 +97,8 @@ describe("renderPolicyReport", () => {
     expect(report).toContain("Run agentcall doctor to verify the exact Codex session hook");
     expect(report).toContain("non-hooked read routes remain unrecorded");
     expect(report).not.toContain("shell actions are recorded, not blocked");
+    // #372 deleted fetch and exec as separate grants, so the report must stop
+    // describing them as Codex controls that merely happen to be unenforced.
+    expect(report).not.toContain("fetch and exec are not separate Codex controls");
   });
 });
