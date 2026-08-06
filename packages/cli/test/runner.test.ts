@@ -36,10 +36,7 @@ function spawnSpec(
   toolTelemetryFile?: string,
   clearance: "public" | "internal" = "internal",
 ): SpawnSpec {
-  return buildSpawnSpec(
-    kind, prompt, workdir, resolveBin, callId, lineName,
-    clearance, undefined, undefined, toolTelemetryFile,
-  );
+  return buildSpawnSpec({ kind, prompt, workdir, resolveBin, callId, lineName, clearance, toolTelemetryFile });
 }
 function agentRun(
   kind: AgentKind, prompt: string, workdir: string, timeoutMs: number,
@@ -47,10 +44,7 @@ function agentRun(
   signal?: AbortSignal, lineName: string = LINE,
   clearance: "public" | "internal" = "internal",
 ): ReturnType<typeof runAgent> {
-  return runAgent(
-    kind, prompt, workdir, timeoutMs, specOverride, callId, signal, lineName,
-    undefined, undefined, undefined, clearance,
-  );
+  return runAgent({ kind, prompt, workdir, timeoutMs, specOverride, callId, signal, lineName, clearance });
 }
 
 describe("codex threading evidence", () => {
@@ -206,10 +200,10 @@ describe("telemetry environment isolation", () => {
     process.env.OTEL_EXPORTER_OTLP_HEADERS = "authorization=secret";
     try {
       for (const kind of ["claude", "codex"] as const) {
-        const spec = buildSpawnSpec(
-          kind, "PROMPT", WORKDIR, () => `/abs/${kind}`,
-          "call-1", LINE, "internal", undefined, "a".repeat(32),
-        );
+        const spec = buildSpawnSpec({
+          kind, prompt: "PROMPT", workdir: WORKDIR, resolveBin: () => `/abs/${kind}`,
+          callId: "call-1", lineName: LINE, clearance: "internal", correlationId: "a".repeat(32),
+        });
         expect(spec.env?.OTEL_EXPORTER_OTLP_HEADERS).toBeUndefined();
         expect(spec.env?.AGENTCALL_CALL_ID).toBe("call-1");
         expect(spec.env?.AGENTCALL_CORRELATION_ID).toBe("a".repeat(32));
@@ -465,11 +459,11 @@ describe("runAgent -> buildSpawnSpec forwarding", () => {
       // A real, existing cwd: the spawn inherits it, and a missing one fails
       // as ENOENT against the command itself. (WORKDIR is a path fixture under
       // a home that was never created.)
-      const out = await runAgent(
-        "claude", "PROMPT", tmpdir(), 10_000, undefined,
-        "call-id-not-a-session", undefined, "line-name-not-a-call-id-or-session",
-        "session-id-not-a-call", undefined, undefined, "internal",
-      );
+      const out = await runAgent({
+        kind: "claude", prompt: "PROMPT", workdir: tmpdir(), timeoutMs: 10_000,
+        callId: "call-id-not-a-session", lineName: "line-name-not-a-call-id-or-session",
+        resume: "session-id-not-a-call", clearance: "internal",
+      });
       expect(out.text).toBe("ok");
 
       const argv = readFileSync(capture, "utf8").split("\n");
@@ -654,21 +648,21 @@ describe("buildSpawnSpec resume (claude)", () => {
   const bin = () => "/usr/bin/claude";
 
   it("adds --resume with the agent session id", () => {
-    const spec = buildSpawnSpec("claude", "hi", "/w", bin, "c1", "line", "internal", "sess-abc");
+    const spec = buildSpawnSpec({ kind: "claude", prompt: "hi", workdir: "/w", resolveBin: bin, callId: "c1", lineName: "line", clearance: "internal", resume: "sess-abc" });
     const i = spec.args.indexOf("--resume");
     expect(i).toBeGreaterThan(-1);
     expect(spec.args[i + 1]).toBe("sess-abc");
   });
 
   it("omits --resume when no session is given", () => {
-    const spec = buildSpawnSpec("claude", "hi", "/w", bin, "c1", "line");
+    const spec = buildSpawnSpec({ kind: "claude", prompt: "hi", workdir: "/w", resolveBin: bin, callId: "c1", lineName: "line", clearance: "internal" });
     expect(spec.args).not.toContain("--resume");
   });
 
-  // The envelope is re-applied per spawn, so a resumed session cannot inherit
-  // capabilities from the turn that created it.
-  it("still carries the full envelope and guard on a resumed spawn", () => {
-    const spec = buildSpawnSpec("claude", "hi", "/w", bin, "c1", "line", "internal", "sess-abc");
+  // Tool grants and the guard are re-applied per spawn, so a resumed session
+  // cannot inherit anything looser from the turn that created it.
+  it("still carries the read-only tools and guard on a resumed spawn", () => {
+    const spec = buildSpawnSpec({ kind: "claude", prompt: "hi", workdir: "/w", resolveBin: bin, callId: "c1", lineName: "line", clearance: "internal", resume: "sess-abc" });
     expect(spec.args).toContain("--allowedTools");
     expect(spec.args).toContain("--permission-mode");
     expect(spec.args).toContain("dontAsk");
@@ -677,7 +671,7 @@ describe("buildSpawnSpec resume (claude)", () => {
   });
 
   it("keeps the prompt as the -p value", () => {
-    const spec = buildSpawnSpec("claude", "follow up", "/w", bin, "c1", "line", "internal", "sess-abc");
+    const spec = buildSpawnSpec({ kind: "claude", prompt: "follow up", workdir: "/w", resolveBin: bin, callId: "c1", lineName: "line", clearance: "internal", resume: "sess-abc" });
     expect(spec.args[spec.args.indexOf("-p") + 1]).toBe("follow up");
   });
 
@@ -686,7 +680,7 @@ describe("buildSpawnSpec resume (claude)", () => {
   // fresh spawn — restated here so a reader of the resume tests doesn't have
   // to trust that the branch wasn't split.
   it("still sets AGENTCALL_LINE on a resumed spawn", () => {
-    const spec = buildSpawnSpec("claude", "hi", "/w", bin, "c1", "line", "internal", "sess-abc");
+    const spec = buildSpawnSpec({ kind: "claude", prompt: "hi", workdir: "/w", resolveBin: bin, callId: "c1", lineName: "line", clearance: "internal", resume: "sess-abc" });
     expect(spec.env?.AGENTCALL_LINE).toBe("line");
   });
 });
@@ -695,7 +689,7 @@ describe("buildSpawnSpec resume (codex)", () => {
   const bin = () => "/usr/bin/codex";
 
   it("uses the resume subcommand with the session id", () => {
-    const spec = buildSpawnSpec("codex", "hi", "/w", bin, "c1", "line", "internal", "sess-abc");
+    const spec = buildSpawnSpec({ kind: "codex", prompt: "hi", workdir: "/w", resolveBin: bin, callId: "c1", lineName: "line", clearance: "internal", resume: "sess-abc" });
     expect(spec.args.slice(0, 3)).toEqual(["exec", "resume", "sess-abc"]);
   });
 
@@ -704,25 +698,25 @@ describe("buildSpawnSpec resume (codex)", () => {
   it("re-applies the read-only sandbox through -c sandbox_mode on resume", () => {
     // `codex exec resume` accepts neither --sandbox nor --cd, so the level has
     // to be re-applied as config or a resumed session runs unconfined.
-    const spec = buildSpawnSpec("codex", "hi", "/w", bin, "c1", "line", "internal", "sess-abc");
+    const spec = buildSpawnSpec({ kind: "codex", prompt: "hi", workdir: "/w", resolveBin: bin, callId: "c1", lineName: "line", clearance: "internal", resume: "sess-abc" });
     expect(spec.args).toContain('sandbox_mode="read-only"');
   });
 
   it("never passes --sandbox or --cd on a resume, which the subcommand rejects", () => {
-    const spec = buildSpawnSpec("codex", "hi", "/w", bin, "c1", "line", "internal", "sess-abc");
+    const spec = buildSpawnSpec({ kind: "codex", prompt: "hi", workdir: "/w", resolveBin: bin, callId: "c1", lineName: "line", clearance: "internal", resume: "sess-abc" });
     expect(spec.args).not.toContain("--sandbox");
     expect(spec.args).not.toContain("--cd");
   });
 
   it("keeps --ignore-user-config and the guard on a resumed spawn", () => {
-    const spec = buildSpawnSpec("codex", "hi", "/w", bin, "c1", "line", "internal", "sess-abc");
+    const spec = buildSpawnSpec({ kind: "codex", prompt: "hi", workdir: "/w", resolveBin: bin, callId: "c1", lineName: "line", clearance: "internal", resume: "sess-abc" });
     expect(spec.args).toContain("--ignore-user-config");
     expect(spec.args.some((a) => a.startsWith("hooks.PreToolUse="))).toBe(true);
     expect(spec.args.some((a) => a.startsWith("hooks.state="))).toBe(true);
   });
 
   it("puts the prompt last", () => {
-    const spec = buildSpawnSpec("codex", "follow up", "/w", bin, "c1", "line", "internal", "sess-abc");
+    const spec = buildSpawnSpec({ kind: "codex", prompt: "follow up", workdir: "/w", resolveBin: bin, callId: "c1", lineName: "line", clearance: "internal", resume: "sess-abc" });
     expect(spec.args.at(-1)).toBe("follow up");
   });
 
@@ -735,12 +729,12 @@ describe("buildSpawnSpec resume (codex)", () => {
   // dedicated resume return statement in buildSpawnSpec, which sets it
   // independently rather than falling through to the fresh branch's code.
   it("sets AGENTCALL_LINE on a resumed spawn, same as the fresh spawn", () => {
-    const spec = buildSpawnSpec("codex", "hi", "/w", bin, "c1", "line", "internal", "sess-abc");
+    const spec = buildSpawnSpec({ kind: "codex", prompt: "hi", workdir: "/w", resolveBin: bin, callId: "c1", lineName: "line", clearance: "internal", resume: "sess-abc" });
     expect(spec.env?.AGENTCALL_LINE).toBe("line");
   });
 
   it("keeps bundled remote tools disabled with strict configuration on resume", () => {
-    const spec = buildSpawnSpec("codex", "hi", "/w", bin, "c1", "line", "internal", "sess-abc");
+    const spec = buildSpawnSpec({ kind: "codex", prompt: "hi", workdir: "/w", resolveBin: bin, callId: "c1", lineName: "line", clearance: "internal", resume: "sess-abc" });
     const disabled = spec.args.flatMap((arg, index) => arg === "--disable" ? [spec.args[index + 1]] : []);
     expect(disabled).toEqual(["apps", "image_generation"]);
     expect(spec.args).toContain(`web_search="disabled"`);
@@ -764,13 +758,13 @@ describe("codex user-config isolation", () => {
 
 describe("AGENTCALL_LINE propagation", () => {
   it("injects the line name into a claude spawn", () => {
-    const spec = buildSpawnSpec("claude", "hi", "/work", () => "/bin/claude", "call-1", "codex", "internal");
+    const spec = buildSpawnSpec({ kind: "claude", prompt: "hi", workdir: "/work", resolveBin: () => "/bin/claude", callId: "call-1", lineName: "codex", clearance: "internal" });
     expect(spec.env?.AGENTCALL_LINE).toBe("codex");
     expect(spec.env?.AGENTCALL_CALL_ID).toBe("call-1");
   });
 
   it("injects the line name into a codex spawn alongside observe mode", () => {
-    const spec = buildSpawnSpec("codex", "hi", "/work", () => "/bin/codex", "call-2", "claude", "internal");
+    const spec = buildSpawnSpec({ kind: "codex", prompt: "hi", workdir: "/work", resolveBin: () => "/bin/codex", callId: "call-2", lineName: "claude", clearance: "internal" });
     expect(spec.env?.AGENTCALL_LINE).toBe("claude");
     expect(spec.env?.AGENTCALL_GUARD_MODE).toBe("observe");
   });

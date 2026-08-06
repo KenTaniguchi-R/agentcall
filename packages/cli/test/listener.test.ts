@@ -202,7 +202,7 @@ describe("startListener workdir", () => {
         stopper = startListener({
           ...baseDeps(url), paths,
           loadConfig: () => ({ ...cfg, workdir: project }),
-          run: async (_k, prompt, workdir) => {
+          run: async ({ prompt, workdir }) => {
             seen.prompt = prompt; seen.workdir = workdir;
             return { text: "ok" };
           },
@@ -451,7 +451,7 @@ describe("startListener acceptance and cancellation", () => {
           // Production runAgent settles when its AbortSignal fires. Keep the
           // first call active for the busy assertion while preserving that
           // shutdown contract so afterEach can stop the listener cleanly.
-          run: (_kind, _prompt, _workdir, _timeout, _spec, _callId, signal) =>
+          run: ({ signal }) =>
             new Promise((_resolve, reject) => signal?.addEventListener(
               "abort",
               () => reject(new AgentRunError("canceled", "canceled")),
@@ -478,7 +478,7 @@ describe("startListener acceptance and cancellation", () => {
         stopper = startListener({
           ...deps,
           // Mirrors runAgent: settles only once teardown completes.
-          run: (_k, _p, _w, _t, _s, _c, signal?: AbortSignal) =>
+          run: ({ signal }) =>
             new Promise((_res, rej) => {
               signal?.addEventListener("abort", () => {
                 setTimeout(() => { exited = true; rej(new AgentRunError("canceled", "canceled")); }, 10);
@@ -634,7 +634,7 @@ describe("startListener task resolution", () => {
         seedPolicy(deps.paths, { default_offer: ["ask"], callers: { shusaku: { offer: ["schedule-meeting"] } } });
         stopper = startListener({
           ...deps,
-          run: async (_k, prompt, workdir, timeoutMs, _spec, _cid, _sig, _ln, _r, _c, _sp, clearance) => {
+          run: async ({ prompt, workdir, timeoutMs, clearance }) => {
             seen.prompt = prompt; seen.workdir = workdir; seen.timeout = timeoutMs; seen.clearance = clearance;
             return { text: "booked" };
           },
@@ -661,7 +661,7 @@ describe("startListener task resolution", () => {
       void fakeRelay((ws) => resolveWs(ws)).then((url) => {
         stopper = startListener({
           ...baseDeps(url),
-          run: async (_k, _prompt, _p, _t, _spec, _cid, _sig, _ln, _r, _c, _sp, clearance) => { seen.clearance = clearance; return { text: "hi" }; },
+          run: async ({ clearance }) => { seen.clearance = clearance; return { text: "hi" }; },
         });
       });
     });
@@ -744,7 +744,7 @@ describe("startListener line name propagation", () => {
               startedAtMs: 1_000, endedAtMs: 1_010, durationMs: 10,
             }],
           }),
-          run: async (kind, prompt, workdir, _timeoutMs, _specOverride, callId, _signal, lineName, _resume, correlationId, toolTelemetryFile) => {
+          run: async ({ kind, prompt, workdir, callId, lineName, correlationId, toolTelemetryFile }) => {
             captured.kind = kind; captured.prompt = prompt; captured.workdir = workdir;
             captured.callId = callId; captured.lineName = lineName;
             captured.correlationId = correlationId;
@@ -780,14 +780,15 @@ describe("startListener line name propagation", () => {
     // default workdir (position 2, `captured.workdir`, 0-based like the
     // buildSpawnSpec positions cited below) resolves to
     // `<stateRoot>/AgentCall/sales/public` — which CONTAINS "sales" as a path
-    // segment. A 2<->8 argument swap (workdir <-> lineName) would only be
-    // caught because `toBe` requires exact equality; a looser matcher would
-    // let that specific swap through undetected, since the swapped-in
-    // workdir string still contains the line name as a substring.
-    const spec = buildSpawnSpec(
-      captured.kind!, captured.prompt!, captured.workdir!, () => "/fake/claude",
-      captured.callId!, captured.lineName!, "internal",
-    );
+    // The workdir<->lineName swap this used to guard against is now a compile
+    // error rather than a runtime one, since both are named fields. Kept
+    // because it still pins that the listener passes the LINE name and not the
+    // handle, which no type can express.
+    const spec = buildSpawnSpec({
+      kind: captured.kind!, prompt: captured.prompt!, workdir: captured.workdir!,
+      resolveBin: () => "/fake/claude",
+      callId: captured.callId!, lineName: captured.lineName!, clearance: "internal",
+    });
     expect(spec.env?.AGENTCALL_LINE).toBe(paths.name);
     // Pins the callId position too. buildSpawnSpec's tail has 4 plain-`string`-
     // typed positions that a swap among them would compile clean: prompt,
@@ -823,7 +824,7 @@ describe("startListener line name propagation", () => {
           createToolEventSpool: () => ({
             file: "/private/state/active-tool-events.jsonl", dispose, collect: () => [],
           }),
-          run: async (_kind, _prompt, _workdir, _timeout, _spec, _callId, signal) =>
+          run: async ({ signal }) =>
             new Promise((resolve) => signal?.addEventListener("abort", () => {
               runAborted = true;
               resolve({ text: "canceled" });
@@ -1138,13 +1139,10 @@ describe("listener contexts", () => {
       { message: "and the commit?", context_id: SEEDED_CTX },
       {
         seed: seedBinding(),
-        // run(...)'s positionals, per listener.ts: kind, prompt, workdir,
-        // timeoutMs, specOverride, callId, signal, lineName, resume — index 8
-        // since #372 deleted the envelope parameter that used to sit at 5.
-        // This index has now moved twice; runner.ts's own comment says the
-        // signature should become an options object, and this is why.
-        run: async (...a: any[]) => {
-          sawResume = a[8] as string | undefined;
+        // Named now, not positional. This index moved twice inside #372 before
+        // runAgent became an options object; that is what it cost.
+        run: async ({ resume }) => {
+          sawResume = resume;
           return { text: "ok", session_id: "real-agent-session" };
         },
       },
@@ -1158,8 +1156,8 @@ describe("listener contexts", () => {
       { message: "and the commit?", context_id: SEEDED_CTX },
       {
         seed: seedBinding(),
-        run: async (...a: any[]) => {
-          prompt = a[1] as string;
+        run: async ({ prompt: p }) => {
+          prompt = p;
           return { text: "ok", session_id: "real-agent-session" };
         },
       },

@@ -182,9 +182,7 @@ describe("checkAgentSpawn", () => {
 
   it("invokes runFn with the verify prompt, timeout, and the narrowest clearance", async () => {
     const seen: unknown[] = [];
-    await checkAgentSpawn("claude", fakeWorkdir, async (
-      kind, prompt, _p, timeoutMs, _specOverride, _callId, _signal, _lineName, _resume, _corr, _spool, clearance,
-    ) => {
+    await checkAgentSpawn("claude", fakeWorkdir, async ({ kind, prompt, timeoutMs, clearance }) => {
       seen.push(kind, prompt, timeoutMs, clearance);
       return { text: "OK" };
     }, fakeResolveBin);
@@ -225,7 +223,7 @@ describe("checkAgentSpawn", () => {
   // current code — there is no spec to inspect.
   it("spawns under a throwaway AGENTCALL_HOME so a real ~/.agentcall/lines/doctor-probe is never created", async () => {
     const seenSpecs: Array<{ env?: NodeJS.ProcessEnv } | undefined> = [];
-    await checkAgentSpawn("claude", fakeWorkdir, async (_kind, _prompt, _workdir, _timeoutMs, specOverride) => {
+    await checkAgentSpawn("claude", fakeWorkdir, async ({ specOverride }) => {
       seenSpecs.push(specOverride);
       return { text: "OK" };
     }, fakeResolveBin);
@@ -265,7 +263,7 @@ describe("checkAgentSpawn", () => {
   // clean up: a `finally` is the only place that covers both.
   it("removes the throwaway AGENTCALL_HOME after a successful probe", async () => {
     let seenHome: string | undefined;
-    const c = await checkAgentSpawn("claude", fakeWorkdir, async (_kind, _prompt, _workdir, _timeoutMs, specOverride) => {
+    const c = await checkAgentSpawn("claude", fakeWorkdir, async ({ specOverride }) => {
       seenHome = specOverride?.env?.AGENTCALL_HOME;
       return { text: "OK" };
     }, fakeResolveBin);
@@ -276,7 +274,7 @@ describe("checkAgentSpawn", () => {
 
   it("removes the throwaway AGENTCALL_HOME even when runFn throws", async () => {
     let seenHome: string | undefined;
-    const c = await checkAgentSpawn("claude", fakeWorkdir, async (_kind, _prompt, _workdir, _timeoutMs, specOverride) => {
+    const c = await checkAgentSpawn("claude", fakeWorkdir, async ({ specOverride }) => {
       seenHome = specOverride?.env?.AGENTCALL_HOME;
       throw new AgentRunError("boom", "agent_error");
     }, fakeResolveBin);

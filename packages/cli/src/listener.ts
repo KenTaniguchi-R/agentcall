@@ -346,26 +346,25 @@ export function startListener(deps: ListenerDeps): { stop(): Promise<void> } {
             from,
             groups,
           );
-          const out = await run(
-            config.agent_kind,
-            buildPrompt(config.handle, from, message, task, taskWorkdir, binding !== undefined),
-            taskWorkdir.dir,
+          const out = await run({
+            kind: config.agent_kind,
+            prompt: buildPrompt(config.handle, from, message, task, taskWorkdir, binding !== undefined),
+            workdir: taskWorkdir.dir,
             timeoutMs,
-            undefined,
-            call_id,
+            callId: call_id,
             signal,
-            // The line this call came in on — required (see runner.ts): the
-            // PreToolUse guard needs it to know which line's calls.log and
-            // task dirs it's policing, and fails closed without it.
-            deps.paths.name,
-            binding?.agent_session_id,
-            correlation_id,
-            toolSpool?.file,
+            // The line this call came in on — the PreToolUse guard needs it to
+            // know which line's calls.log and task dirs it's policing, and
+            // fails closed without it.
+            lineName: deps.paths.name,
+            resume: binding?.agent_session_id,
+            correlationId: correlation_id,
+            toolTelemetryFile: toolSpool?.file,
             // A blocked caller never reaches here (resolveAdmission refuses
             // first), so "blocked" would be unreachable — but narrowing it to
             // the least-revealing clearance is the safe way to say so.
-            clearance === "blocked" ? "public" : clearance,
-          );
+            clearance: clearance === "blocked" ? "public" : clearance,
+          });
 
           // Mint on a fresh threadable call; roll the existing binding forward
           // on a resumed one. The agent's session id can change between turns,
