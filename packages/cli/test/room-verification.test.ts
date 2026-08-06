@@ -1,32 +1,35 @@
 import { describe, expect, it, vi } from "vitest";
-import { randomBase64Url } from "@benree/agentcall-shared";
+import { randomBase64Url, roomMembershipFingerprint } from "@benree/agentcall-shared";
 import { runRoomVerification } from "../src/room-verification.js";
 import type { RoomPollOptions } from "../src/room-poll.js";
-import type { RoomLineListener } from "../src/tty.js";
 
 const ROOM_ID = `room_${randomBase64Url(16)}`;
 const HOST_ID = `rp_${randomBase64Url(16)}`;
 const GUEST_ID = `rp_${randomBase64Url(16)}`;
+const HOST_KEYS = { signing: randomBase64Url(32), encryption: randomBase64Url(32) };
+const GUEST_KEYS = { signing: randomBase64Url(32), encryption: randomBase64Url(32) };
 
-function member(id: string, name: string) {
+function member(id: string, name: string, keys: { signing: string; encryption: string }) {
   return {
     participant_id: id, display_name: name, state: "verified",
-    signing_public_key: randomBase64Url(32), encryption_public_key: randomBase64Url(32),
+    signing_public_key: keys.signing, encryption_public_key: keys.encryption,
   } as never;
 }
 
-function verifyingSnapshot(epoch: number, deadlineMs: number) {
+const MEMBERS = [member(HOST_ID, "ken", HOST_KEYS), member(GUEST_ID, "sota", GUEST_KEYS)];
+
+function verifyingSnapshot(epoch: number) {
   return {
     room: {
       room_id: ROOM_ID, state: "verifying", membership_epoch: epoch,
-      verification_deadline: Date.now() + deadlineMs,
+      verification_deadline: Date.now() + 60_000,
     },
-    participants: [member(HOST_ID, "ken"), member(GUEST_ID, "sota")],
+    participants: MEMBERS,
   } as never;
 }
 
 function activeSnapshot(epoch: number) {
-  return { room: { room_id: ROOM_ID, state: "active", membership_epoch: epoch }, participants: [] } as never;
+  return { room: { room_id: ROOM_ID, state: "active", membership_epoch: epoch }, participants: MEMBERS } as never;
 }
 
 function closedSnapshot(reason: string) {
@@ -43,107 +46,92 @@ function fakePoll() {
   return { poll, deliver: (snapshot: never) => captured!.onSnapshot(snapshot), stop };
 }
 
-function fakeListener() {
-  let handler: ((line: string) => void) | undefined;
-  const printed: string[] = [];
-  const close = vi.fn();
-  const factory = (): RoomLineListener => ({
-    onLine: (h) => { handler = h; },
-    print: (t) => printed.push(t),
-    close,
+function start(overrides: Partial<Parameters<typeof runRoomVerification>[0]> = {}) {
+  const { poll, deliver, stop } = fakePoll();
+  const mutate = vi.fn().mockResolvedValue(undefined);
+  const result = runRoomVerification({
+    relay: "https://relay.test", credential: "acrp.x", ownParticipantId: HOST_ID,
+    poll, mutate, ...overrides,
   });
-  return { factory, emit: (line: string) => handler?.(line), printed, close };
+  return { result, deliver, mutate, stop };
 }
 
 describe("runRoomVerification", () => {
-  it("confirms on 'y' and resolves active once the poll reports it", async () => {
-    const { poll, deliver } = fakePoll();
-    const mutate = vi.fn().mockResolvedValue(undefined);
-    const listener = fakeListener();
-    const resultPromise = runRoomVerification({
-      relay: "https://relay.test", credential: "acrp.x", ownParticipantId: "rp_host",
-      poll, mutate, createListener: listener.factory,
-    });
+  // The point of #369: this awaits the verifying snapshot directly. Under the
+  // old blocking prompt that deadlocked on an answer nobody had typed.
+  it("confirms without waiting for a human", async () => {
+    const { result, deliver, mutate } = start();
 
-    // onSnapshot for a "verifying" snapshot doesn't resolve until the prompt
-    // is answered, so this must not be awaited yet -- awaiting it here would
-    // deadlock on an answer nobody has given.
-    const verifying = deliver(verifyingSnapshot(1, 60_000));
-    await vi.waitFor(() => expect(listener.printed.join("")).toContain("Compare this code with everyone"));
-    listener.emit("y");
-    await vi.waitFor(() => expect(mutate).toHaveBeenCalledWith("https://relay.test", "acrp.x", "confirm"));
-    await verifying;
-    expect(listener.close).toHaveBeenCalled();
+    await deliver(verifyingSnapshot(1));
+    expect(mutate).toHaveBeenCalledWith("https://relay.test", "acrp.x", "confirm");
 
     await deliver(activeSnapshot(2));
-    const result = await resultPromise;
-    expect(result).toEqual({ outcome: "active", snapshot: activeSnapshot(2) });
+    expect(await result).toMatchObject({ outcome: "active" });
   });
 
-  it("rejects on anything other than 'y'", async () => {
-    const { poll, deliver } = fakePoll();
-    const mutate = vi.fn().mockResolvedValue(undefined);
-    const listener = fakeListener();
-    const resultPromise = runRoomVerification({
-      relay: "https://relay.test", credential: "acrp.x", ownParticipantId: "rp_host",
-      poll, mutate, createListener: listener.factory,
-    });
-    const verifying = deliver(verifyingSnapshot(1, 60_000));
-    await vi.waitFor(() => expect(listener.printed.join("")).toContain("Compare this code with everyone"));
-    listener.emit("n");
-    await vi.waitFor(() => expect(mutate).toHaveBeenCalledWith("https://relay.test", "acrp.x", "reject"));
-    await verifying;
-    await deliver(closedSnapshot("verification_failed"));
-    expect(await resultPromise).toEqual({ outcome: "closed", reason: "verification_failed" });
+  // Every path that used to close the whole Room for everyone went through a
+  // client-sent "reject". Nothing sends one now.
+  it("never rejects, so one slow participant cannot close the Room", async () => {
+    const { result, deliver, mutate } = start();
+    await deliver(verifyingSnapshot(1));
+    await deliver(verifyingSnapshot(2));
+    expect(mutate.mock.calls.every(([, , action]) => action === "confirm")).toBe(true);
+    await deliver(activeSnapshot(3));
+    await result;
   });
 
-  it("treats a deadline timeout as a rejection and tears down the listener", async () => {
-    const { poll, deliver } = fakePoll();
-    const mutate = vi.fn().mockResolvedValue(undefined);
-    const listener = fakeListener();
-    const resultPromise = runRoomVerification({
-      relay: "https://relay.test", credential: "acrp.x", ownParticipantId: "rp_host",
-      poll, mutate, createListener: listener.factory,
-    });
-    // Deadline already effectively passed -- the race resolves via the timer, not a typed line.
-    const verifying = deliver(verifyingSnapshot(1, 0));
-    await vi.waitFor(() => expect(mutate).toHaveBeenCalledWith("https://relay.test", "acrp.x", "reject"), { timeout: 3_000 });
-    await verifying;
-    expect(listener.close).toHaveBeenCalled();
-    await deliver(closedSnapshot("verification_failed"));
-    await resultPromise;
-  }, 5_000);
-
-  it("does not re-prompt for the same membership_epoch on a repeated snapshot", async () => {
-    const { poll, deliver } = fakePoll();
-    const mutate = vi.fn().mockResolvedValue(undefined);
-    let listenerCount = 0;
-    const listener = fakeListener();
-    const countingFactory = () => { listenerCount += 1; return listener.factory(); };
-    const resultPromise = runRoomVerification({
-      relay: "https://relay.test", credential: "acrp.x", ownParticipantId: "rp_host",
-      poll, mutate, createListener: countingFactory,
-    });
-    const firstVerifying = deliver(verifyingSnapshot(1, 60_000));
-    await vi.waitFor(() => expect(listenerCount).toBe(1));
-    // Same epoch, still verifying: onSnapshot returns immediately (the
-    // early-return guard, before ever touching the listener), so this one
-    // is safe to await directly.
-    await deliver(verifyingSnapshot(1, 60_000));
-    expect(listenerCount).toBe(1);
-    listener.emit("y");
-    await firstVerifying;
+  it("returns the fingerprint everyone else is looking at", async () => {
+    const { result, deliver } = start();
+    await deliver(verifyingSnapshot(1));
     await deliver(activeSnapshot(2));
-    await resultPromise;
+
+    const expected = await roomMembershipFingerprint({
+      room_id: ROOM_ID,
+      membership_epoch: 1,
+      members: [
+        {
+          participant_id: HOST_ID, display_name: "ken",
+          signing_public_key: HOST_KEYS.signing, encryption_public_key: HOST_KEYS.encryption,
+        },
+        {
+          participant_id: GUEST_ID, display_name: "sota",
+          signing_public_key: GUEST_KEYS.signing, encryption_public_key: GUEST_KEYS.encryption,
+        },
+      ],
+    });
+    expect(await result).toEqual({ outcome: "active", snapshot: activeSnapshot(2), fingerprint: expected });
+  });
+
+  it("does not confirm twice for the same membership_epoch", async () => {
+    const { result, deliver, mutate } = start();
+    await deliver(verifyingSnapshot(1));
+    await deliver(verifyingSnapshot(1));
+    await deliver(verifyingSnapshot(1));
+    expect(mutate).toHaveBeenCalledTimes(1);
+    await deliver(activeSnapshot(2));
+    await result;
+  });
+
+  // The relay 409s a confirm from a participant it has already marked verified,
+  // and a transient network failure must not take the Room down with it.
+  it("survives a confirm the relay refuses", async () => {
+    const mutate = vi.fn().mockRejectedValue(new Error("409"));
+    const { result, deliver } = start({ mutate });
+    await expect(deliver(verifyingSnapshot(1))).resolves.toBeUndefined();
+    await deliver(activeSnapshot(2));
+    expect(await result).toMatchObject({ outcome: "active" });
   });
 
   it("resolves closed immediately if the room is already closed", async () => {
-    const { poll, deliver } = fakePoll();
-    const resultPromise = runRoomVerification({
-      relay: "https://relay.test", credential: "acrp.x", ownParticipantId: "rp_host",
-      poll, mutate: vi.fn(), createListener: fakeListener().factory,
-    });
+    const { result, deliver } = start();
     await deliver(closedSnapshot("idle"));
-    expect(await resultPromise).toEqual({ outcome: "closed", reason: "idle" });
+    expect(await result).toEqual({ outcome: "closed", reason: "idle" });
+  });
+
+  it("reports a Room that closed during verification rather than hanging", async () => {
+    const { result, deliver } = start();
+    await deliver(verifyingSnapshot(1));
+    await deliver(closedSnapshot("host_left"));
+    expect(await result).toEqual({ outcome: "closed", reason: "host_left" });
   });
 });

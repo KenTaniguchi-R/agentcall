@@ -2,8 +2,6 @@ import type { RoomCloseReasonType, RoomMutationResponseType } from "@benree/agen
 import { roomMembershipFingerprint } from "@benree/agentcall-shared";
 import { mutateRoom } from "./room-api.js";
 import { pollRoomState, type RoomPollOptions } from "./room-poll.js";
-import { formatFingerprintPrompt } from "./room-render.js";
-import { createLineListener, type RoomLineListener } from "./tty.js";
 
 export interface RoomVerificationDeps {
   relay: string;
@@ -11,37 +9,37 @@ export interface RoomVerificationDeps {
   ownParticipantId: string;
   poll?: typeof pollRoomState;
   mutate?: typeof mutateRoom;
-  createListener?: () => RoomLineListener;
   pollIntervalMs?: number;
 }
 
 export type RoomVerificationResult =
-  | { outcome: "active"; snapshot: RoomMutationResponseType }
+  | { outcome: "active"; snapshot: RoomMutationResponseType; fingerprint: string }
   | { outcome: "closed"; reason: RoomCloseReasonType | "unknown" };
 
 /**
  * Runs from the moment a poll snapshot shows `"verifying"` until the Room
  * reaches `"active"` or `"closed"`. Identical for host and guest: everyone
- * computes the same fingerprint locally from the same polled membership list
- * and confirms independently — nobody's confirmation is authoritative over
- * anyone else's.
+ * computes the same fingerprint locally from the same polled membership list.
  *
- * Uses a cancelable line listener, not tty.ts's per-question `ask()`, because
- * the prompt races against the relay's own `verification_deadline`: if the
- * deadline wins, the listener must be torn down cleanly rather than left
- * attached to stdin waiting for a line that may never come — two readline
- * interfaces on the same input stream is the exact "two readers race for the
- * typed line" hang this codebase has already fixed once (tty.ts's comments).
+ * The fingerprint is *reported*, not *gated on* (#369). It used to be a
+ * blocking `[y/N]` the relay gave everyone 60 seconds to answer, where a
+ * timeout, a stray keystroke, or one person stepping away closed the Room for
+ * the whole group — unrecoverably, since locking already deleted the invites.
+ * The check only ever detected substitution when people genuinely compared, and
+ * a mandatory prompt is the design most likely to be cleared reflexively, so
+ * this follows Zoom and Signal: access control blocks, key verification does
+ * not. Callers surface the returned fingerprint so anyone who wants to compare
+ * still can.
  */
 export function runRoomVerification(deps: RoomVerificationDeps): Promise<RoomVerificationResult> {
   const {
-    relay, credential, ownParticipantId, poll = pollRoomState, mutate = mutateRoom,
-    createListener = createLineListener, pollIntervalMs,
+    relay, credential, ownParticipantId, poll = pollRoomState, mutate = mutateRoom, pollIntervalMs,
   } = deps;
 
   return new Promise((resolve) => {
     let settled = false;
-    let promptedEpoch = -1;
+    let confirmedEpoch = -1;
+    let fingerprint = "";
     const pollOptions: RoomPollOptions = {
       relay, credential, ownParticipantId, intervalMs: pollIntervalMs,
       onSnapshot: async (snapshot) => {
@@ -49,7 +47,7 @@ export function runRoomVerification(deps: RoomVerificationDeps): Promise<RoomVer
         if (snapshot.room.state === "active") {
           settled = true;
           handle.stop();
-          resolve({ outcome: "active", snapshot });
+          resolve({ outcome: "active", snapshot, fingerprint });
           return;
         }
         if (snapshot.room.state === "closed") {
@@ -59,10 +57,12 @@ export function runRoomVerification(deps: RoomVerificationDeps): Promise<RoomVer
           return;
         }
         if (snapshot.room.state !== "verifying") return;
-        if (promptedEpoch === snapshot.room.membership_epoch) return;
-        promptedEpoch = snapshot.room.membership_epoch;
+        // The poller fires repeatedly; a second confirm 409s once the relay has
+        // marked this participant verified.
+        if (confirmedEpoch === snapshot.room.membership_epoch) return;
+        confirmedEpoch = snapshot.room.membership_epoch;
 
-        const fingerprint = await roomMembershipFingerprint({
+        fingerprint = await roomMembershipFingerprint({
           room_id: snapshot.room.room_id,
           membership_epoch: snapshot.room.membership_epoch,
           members: snapshot.participants.map((p) => ({
@@ -70,19 +70,7 @@ export function runRoomVerification(deps: RoomVerificationDeps): Promise<RoomVer
             signing_public_key: p.signing_public_key, encryption_public_key: p.encryption_public_key,
           })),
         });
-        const deadline = snapshot.room.verification_deadline ?? Date.now() + 60_000;
-        const remainingMs = Math.max(1_000, deadline - Date.now());
-        const listener = createListener();
-        listener.print(formatFingerprintPrompt(fingerprint, snapshot.participants));
-        const answer = await Promise.race<string | "timeout">([
-          new Promise<string>((res) => listener.onLine(res)),
-          new Promise<"timeout">((res) => setTimeout(() => res("timeout"), remainingMs)),
-        ]);
-        listener.close();
-        if (settled) return;
-
-        const action = answer.trim().toLowerCase() === "y" ? "confirm" : "reject";
-        await mutate(relay, credential, action).catch(() => {});
+        await mutate(relay, credential, "confirm").catch(() => {});
       },
       onError: () => {},
     };

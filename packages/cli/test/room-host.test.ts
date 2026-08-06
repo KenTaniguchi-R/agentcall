@@ -55,7 +55,7 @@ function baseDeps() {
   const { poll, deliver, waitReady } = fakePoll();
   const listener = fakeListener();
   const mutate = vi.fn().mockResolvedValue(undefined);
-  const runVerification = vi.fn().mockResolvedValue({ outcome: "active", snapshot: { participants: [1, 2] } });
+  const runVerification = vi.fn().mockResolvedValue({ outcome: "active", snapshot: { participants: [1, 2] }, fingerprint: "ABC-123-XYZ-789" });
   const createRoomFn = vi.fn().mockResolvedValue(created as never);
   return { poll, deliver, waitReady, listener, mutate, runVerification, createRoomFn };
 }
@@ -93,7 +93,7 @@ describe("runRoomHost", () => {
     await deps.deliver({ room: { room_id: "room_x", state: "verifying", membership_epoch: 1 }, participants: [] } as never);
     const result = await resultPromise;
     expect(deps.runVerification).toHaveBeenCalledWith(expect.objectContaining({ credential: created.credential }));
-    expect(result).toEqual({ outcome: "active", snapshot: { participants: [1, 2] } });
+    expect(result).toEqual({ outcome: "active", snapshot: { participants: [1, 2] }, fingerprint: "ABC-123-XYZ-789" });
     expect(deps.listener.close).toHaveBeenCalled();
   });
 

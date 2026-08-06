@@ -6,6 +6,20 @@ which are released together.
 
 ## Unreleased
 
+### The Room membership code is reported, not asked (#369)
+
+- Joining a Room no longer stops on `Does everyone see the same code? [y/N]`.
+  Every participant confirms automatically and the Room starts.
+- This removes a failure mode that cost the whole group the Room: the relay gave
+  everyone 60 seconds to answer, and a timeout, a stray keystroke, or one person
+  stepping away closed it for everybody — unrecoverably, because locking a Room
+  already deleted its invite.
+- The membership code is still derived and still shown, now on the line that
+  announces the Room is active, so anyone who wants to compare it out of band
+  still can. This matches how `agentcall verify` already treats peer identity
+  fingerprints, and how Zoom and Signal treat theirs: access control blocks, key
+  verification does not.
+
 ### Room auto-admits joiners and drops `--seats` (#367)
 
 - `agentcall room` no longer stops on a blocking `<name> wants to join. Admit?
