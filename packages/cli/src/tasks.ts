@@ -5,27 +5,10 @@ import { parse as parseYaml } from "yaml";
 import { MAX_KEYWORD_LENGTH, MAX_TASK_KEYWORDS, TASK_ID_RE } from "@benree/agentcall-shared";
 import type { LinePaths } from "./paths.js";
 
-export const CAPS = ["read", "write", "fetch", "exec"] as const;
-export type Cap = (typeof CAPS)[number];
-
-// What a caller is granted for one call. `caps` is the whole envelope: it
-// maps to claude's --allowedTools and codex's --sandbox level (see
-// runner.ts), which is the only place a grant is actually enforced.
-//
-// This used to also carry `write_paths` and `network`, which existed solely
-// to populate the OS sandbox's allowWrite/allowedDomains lists. With the
-// sandbox gone they would grant nothing while still reading like a
-// restriction on the owner's card, so they're gone too — a decorative
-// permission is worse than no permission.
-export interface Envelope {
-  caps: Cap[];
-}
-
-// The default envelope for call sites that predate task scoping (the runner
-// default) so nothing changes until a resolved task passes a narrower one.
-export const FULL_ACCESS_ENVELOPE: Envelope = {
-  caps: ["read", "write", "fetch", "exec"],
-};
+// The capability envelope is gone (#372). A call answers a question; the reply
+// is the only sink, so there is no write/exec/fetch grant to model. What a task
+// may reach is a property of the sources it reads, which sensitivity.ts answers,
+// and of who is asking, which clearance.ts answers.
 
 // A SKILL.md is YAML frontmatter between --- fences, then the skill body.
 // Returns null when the file has no leading fence or no closing fence.
@@ -47,13 +30,17 @@ export const SkillFrontmatter = z.object({
   // drift: this is the authoring side of the field the search ranker weights
   // highest.
   keywords: z.array(z.string().min(1).max(MAX_KEYWORD_LENGTH)).max(MAX_TASK_KEYWORDS).default([]),
-  tools: z.array(z.enum(CAPS)).default(["read"]),
   timeout_s: z.number().int().positive().max(300).optional(),
   workdir: z.string().min(1).optional(),
-  // Omitted = derived from `tools` (see deriveThreadable). Present = the owner
-  // has decided, and their decision wins.
-  threadable: z.boolean().optional(),
-});
+  // Follow-up calls. Safe by default now that the reply is the only sink: the
+  // multi-turn risk the old derivation managed was an attacker planting a
+  // premise on turn 1 and cashing it on turn 5 against a write or exec grant,
+  // and neither exists any more.
+  threadable: z.boolean().default(true),
+// Strict: a SKILL.md still carrying `tools:` from the capability model now
+// fails to load with a named warning, rather than being silently ignored while
+// its author believes it still grants or restricts something.
+}).strict();
 type SkillFrontmatterType = z.infer<typeof SkillFrontmatter>;
 
 export interface Task {
@@ -62,7 +49,6 @@ export interface Task {
   description: string;
   examples: string[];
   keywords: string[];
-  envelope: Envelope;
   timeout_s?: number;
   workdir?: string;
   threadable: boolean;
@@ -75,25 +61,9 @@ export const ASK_TASK: Task = {
   description: "Answer questions using the files in the public directory.",
   examples: [],
   keywords: [],
-  envelope: { caps: ["read"] },
   threadable: true,
   skill: "",
 };
-
-// Whether a caller may hold a multi-turn conversation against this task.
-//
-// Derived rather than configured, because the risk it manages is already
-// declared: across turns the caller's earlier messages sit in the model's
-// context as conversation rather than as fenced input, so an attacker can
-// plant a premise on turn 1 and cash it on turn 5. That is a tolerable risk
-// against a read-only envelope and a materially worse one against exec.
-//
-// Same move as claudeAllowedTools, which derives tool grants from the envelope
-// instead of asking the owner to restate them.
-export function deriveThreadable(caps: Cap[], explicit?: boolean): boolean {
-  if (explicit !== undefined) return explicit;
-  return !caps.includes("write") && !caps.includes("exec");
-}
 
 // Reads ~/AgentCall/<line>/tasks/<id>/SKILL.md (YAML frontmatter + body).
 // Invalid or duplicate entries are skipped with a warning rather than
@@ -143,10 +113,9 @@ export function loadTasks(p: LinePaths, warn: (msg: string) => void = console.er
       description: fm.description,
       examples: fm.examples,
       keywords: fm.keywords,
-      envelope: { caps: fm.tools },
       timeout_s: fm.timeout_s,
       workdir: fm.workdir,
-      threadable: deriveThreadable(fm.tools, fm.threadable),
+      threadable: fm.threadable,
       skill: body,
     });
   }
@@ -160,10 +129,9 @@ export function loadTasks(p: LinePaths, warn: (msg: string) => void = console.er
 const SKILL_TEMPLATE = `---
 description: TODO — one line callers will see on your card
 # name: defaults to the directory name
-# tools: [read]           # read | write | fetch | exec
 # timeout_s: 300
 # workdir: /absolute/path/to/the/repository
-# threadable: true       # allow --continue follow-ups; defaults false for write/exec tasks
+# threadable: true       # allow --continue follow-ups; defaults true
 # examples:
 #   - An example message a caller might send
 # keywords:              # search terms; weighted highest by \`agentcall search\`

@@ -11,7 +11,6 @@ import {
   toolTelemetryCodexConfigArg, type AgentKind,
 } from "./runner.js";
 import { resolveAgentBin } from "./bin.js";
-import { ASK_TASK } from "./tasks.js";
 import { agentChildEnv } from "./telemetry-env.js";
 
 // One row of verification output, shared by `setup` and `agentcall doctor`.
@@ -360,11 +359,11 @@ export async function checkAgentSpawn(
     const home = mkdtempSync(join(tmpdir(), "agentcall-doctor-probe-"));
     try {
       const spec = buildSpawnSpec(
-        kind, VERIFY_PROMPT, workdir, resolveBin, ASK_TASK.envelope, "unknown", GUARD_PROBE_LINE, "public",
+        kind, VERIFY_PROMPT, workdir, resolveBin, "unknown", GUARD_PROBE_LINE, "public",
       );
       spec.env = { ...spec.env, AGENTCALL_HOME: home };
       await runFn(
-        kind, VERIFY_PROMPT, workdir, VERIFY_TIMEOUT_MS, spec, ASK_TASK.envelope, "unknown", undefined,
+        kind, VERIFY_PROMPT, workdir, VERIFY_TIMEOUT_MS, spec, "unknown", undefined,
         GUARD_PROBE_LINE, undefined, undefined, undefined, "public",
       );
       return { name: "agent run", ok: true };

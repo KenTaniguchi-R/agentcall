@@ -116,7 +116,6 @@ describe.skipIf(!enabled)("codex exact-hook trust", () => {
         "Use the shell tool exactly once to run pwd, then reply with the single word done.",
         workdir,
         () => "codex",
-        { caps: ["read"] },
         "probe-tool-lifecycle",
         "probe-line",
         undefined,
@@ -169,7 +168,7 @@ describe.skipIf(!enabled)("codex exact-hook trust", () => {
       };
       const specFor = (resume?: string) =>
         buildSpawnSpec(
-          "codex", prompt, workdir, () => "codex", { caps: ["read"] },
+          "codex", prompt, workdir, () => "codex",
           "probe-boundary", "probe-line", "internal", resume,
         );
       const eventsFrom = (spec: ReturnType<typeof buildSpawnSpec>) => {

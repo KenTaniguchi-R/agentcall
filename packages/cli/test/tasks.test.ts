@@ -1,7 +1,7 @@
 import { mkdirSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
-import { ASK_TASK, deriveThreadable, FULL_ACCESS_ENVELOPE, loadTasks, scaffoldTask, SkillFrontmatter, splitFrontmatter } from "../src/tasks.js";
+import { ASK_TASK, loadTasks, scaffoldTask, SkillFrontmatter, splitFrontmatter } from "../src/tasks.js";
 import { getLinePaths, getMachinePaths } from "../src/paths.js";
 import { tempDir } from "./helpers.js";
 
@@ -60,7 +60,7 @@ describe("splitFrontmatter", () => {
 describe("SkillFrontmatter", () => {
   it("applies defaults (read-only)", () => {
     const m = SkillFrontmatter.parse({ description: "Introduce the owner." });
-    expect(m).toMatchObject({ tools: ["read"], examples: [] });
+    expect(m).toMatchObject({ examples: [] });
     expect(m.name).toBeUndefined();
   });
   it("requires description", () => {
@@ -72,11 +72,12 @@ describe("SkillFrontmatter", () => {
   // write_paths/network were srt allowWrite/allowedDomains inputs. With the
   // sandbox gone they grant nothing, so they're no longer part of the
   // frontmatter contract — an unknown key is ignored rather than honoured.
-  it("ignores the removed write_paths and network keys", () => {
-    const m = SkillFrontmatter.parse({ description: "d", write_paths: ["public/inbox"], network: ["evil.com"] }) as
-      Record<string, unknown>;
-    expect(m.write_paths).toBeUndefined();
-    expect(m.network).toBeUndefined();
+  it("rejects the removed write_paths, network and tools keys instead of ignoring them", () => {
+    // These used to be silently dropped. Strict frontmatter now refuses them,
+    // so an owner is told their SKILL.md no longer means what they think.
+    for (const stale of [{ write_paths: ["public/inbox"] }, { network: ["evil.com"] }, { tools: ["exec"] }]) {
+      expect(() => SkillFrontmatter.parse({ description: "d", ...stale })).toThrow();
+    }
   });
 });
 
@@ -90,8 +91,6 @@ describe("loadTasks", () => {
     writeSkill(home, "schedule-meeting", [
       "---",
       "description: Book a time.",
-      "tools: [read, fetch]",
-      "network: [calendar.google.com]",
       "timeout_s: 120",
       "---",
       "# Check the calendar first",
@@ -100,7 +99,6 @@ describe("loadTasks", () => {
     const tasks = loadTasks(linePaths(home), () => {});
     const t = tasks.find((x) => x.id === "schedule-meeting")!;
     expect(t.name).toBe("schedule-meeting");
-    expect(t.envelope).toEqual({ caps: ["read", "fetch"] });
     expect(t.skill).toContain("Check the calendar");
     expect(t.timeout_s).toBe(120);
   });
@@ -153,47 +151,33 @@ describe("loadTasks", () => {
   });
 });
 
-describe("deriveThreadable", () => {
-  it("threads read-only envelopes", () => {
-    expect(deriveThreadable(["read"])).toBe(true);
-    expect(deriveThreadable(["read", "fetch"])).toBe(true);
-  });
-
-  // Across turns the caller's earlier text lives in context as conversation,
-  // not as fenced input, so a premise planted on turn 1 can be cashed on turn
-  // 5. Tolerable against read; not against exec.
-  it("refuses to thread write or exec envelopes", () => {
-    expect(deriveThreadable(["read", "write"])).toBe(false);
-    expect(deriveThreadable(["read", "exec"])).toBe(false);
-  });
-
-  it("lets an explicit value win either way", () => {
-    expect(deriveThreadable(["read", "exec"], true)).toBe(true);
-    expect(deriveThreadable(["read"], false)).toBe(false);
-  });
-});
+// deriveThreadable is gone with the capability envelope (#372). The risk it
+// managed -- a premise planted on turn 1 and cashed on turn 5 -- was only
+// material against a write or exec grant, and neither exists now that the reply
+// is the only sink. Threading defaults to true and stays owner-overridable.
 
 describe("loadTasks threadable", () => {
-  it("derives threadable from tools when frontmatter omits it", () => {
+  it("defaults to true, because the reply is the only sink", () => {
     const home = tempHome();
-    writeSkill(home, "readonly-task", "---\ndescription: d\ntools: [read]\n---\nbody");
-    expect(loadTasks(linePaths(home)).find((t) => t.id === "readonly-task")!.threadable).toBe(true);
+    writeSkill(home, "plain", "---\ndescription: d\n---\nbody");
+    expect(loadTasks(linePaths(home)).find((t) => t.id === "plain")!.threadable).toBe(true);
   });
 
-  it("derives false for an exec task", () => {
+  it("honours an explicit false", () => {
     const home = tempHome();
-    writeSkill(home, "exec-task", "---\ndescription: d\ntools: [read, exec]\n---\nbody");
-    expect(loadTasks(linePaths(home)).find((t) => t.id === "exec-task")!.threadable).toBe(false);
+    writeSkill(home, "opt-out", "---\ndescription: d\nthreadable: false\n---\nbody");
+    expect(loadTasks(linePaths(home)).find((t) => t.id === "opt-out")!.threadable).toBe(false);
   });
 
-  it("honours an explicit override", () => {
+  it("skips a task still declaring the deleted `tools:` key rather than ignoring it", () => {
+    // Silently accepting it would leave an owner believing their SKILL.md still
+    // restricts something. The frontmatter is strict so the task drops out with
+    // a warning naming it.
     const home = tempHome();
-    writeSkill(home, "opt-in", "---\ndescription: d\ntools: [read, exec]\nthreadable: true\n---\nbody");
-    expect(loadTasks(linePaths(home)).find((t) => t.id === "opt-in")!.threadable).toBe(true);
-  });
-
-  it("makes the built-in ask task threadable", () => {
-    expect(loadTasks(linePaths(tempHome())).find((t) => t.id === "ask")!.threadable).toBe(true);
+    const warnings: string[] = [];
+    writeSkill(home, "stale", "---\ndescription: d\ntools: [read, exec]\n---\nbody");
+    expect(loadTasks(linePaths(home), (m) => warnings.push(m)).find((t) => t.id === "stale")).toBeUndefined();
+    expect(warnings.join()).toContain("stale");
   });
 });
 
@@ -208,7 +192,6 @@ describe("scaffoldTask", () => {
     expect(warnings).toEqual([]);
     const t = tasks.find((x) => x.id === "schedule-meeting")!;
     expect(t.description).toContain("TODO");
-    expect(t.envelope).toEqual({ caps: ["read"] });
   });
   it("refuses invalid ids, the reserved ask id, and existing directories", () => {
     const p = linePaths(tempHome());
@@ -216,12 +199,6 @@ describe("scaffoldTask", () => {
     expect(() => scaffoldTask(p, "ask")).toThrow(/reserved/i);
     scaffoldTask(p, "twice");
     expect(() => scaffoldTask(p, "twice")).toThrow(/already exists/i);
-  });
-});
-
-describe("FULL_ACCESS_ENVELOPE", () => {
-  it("is every capability", () => {
-    expect(FULL_ACCESS_ENVELOPE).toEqual({ caps: ["read", "write", "fetch", "exec"] });
   });
 });
 

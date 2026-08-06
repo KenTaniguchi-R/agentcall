@@ -7,7 +7,6 @@ import { runGuard } from "../src/guard.js";
 import { getLinePaths, getMachinePaths } from "../src/paths.js";
 import { SensitivityMapSchema, withFloor } from "../src/sensitivity.js";
 import { AgentRunError, type AgentKind } from "../src/runner.js";
-import { ASK_TASK } from "../src/tasks.js";
 import {
   checkAgentBinary,
   checkCodexAuth,
@@ -181,13 +180,17 @@ describe("checkAgentSpawn", () => {
     expect(c).toMatchObject({ name: "agent run", ok: true });
   });
 
-  it("invokes runFn with the verify prompt, timeout, and the read-only ask envelope", async () => {
+  it("invokes runFn with the verify prompt, timeout, and the narrowest clearance", async () => {
     const seen: unknown[] = [];
-    await checkAgentSpawn("claude", fakeWorkdir, async (kind, prompt, _p, timeoutMs, _specOverride, envelope) => {
-      seen.push(kind, prompt, timeoutMs, envelope);
+    await checkAgentSpawn("claude", fakeWorkdir, async (
+      kind, prompt, _p, timeoutMs, _specOverride, _callId, _signal, _lineName, _resume, _corr, _spool, clearance,
+    ) => {
+      seen.push(kind, prompt, timeoutMs, clearance);
       return { text: "OK" };
     }, fakeResolveBin);
-    expect(seen).toEqual(["claude", VERIFY_PROMPT, VERIFY_TIMEOUT_MS, ASK_TASK.envelope]);
+    // "public": the doctor probe answers nobody, so it gets the clearance that
+    // reveals least rather than whatever the ask task used to carry.
+    expect(seen).toEqual(["claude", VERIFY_PROMPT, VERIFY_TIMEOUT_MS, "public"]);
   });
 
   it("classifies an auth failure into a hint", async () => {

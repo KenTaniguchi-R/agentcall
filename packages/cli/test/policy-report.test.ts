@@ -10,7 +10,6 @@ const deploy: Task = {
   description: "Build and deploy the service.",
   examples: [],
   keywords: [],
-  envelope: { caps: ["read", "write", "exec"] },
   threadable: false,
   skill: "",
 };
@@ -20,7 +19,6 @@ const browse: Task = {
   description: "Read public documentation.",
   examples: [],
   keywords: [],
-  envelope: { caps: ["read", "fetch"] },
   workdir: "/srv/docs",
   threadable: true,
   skill: "",
@@ -31,7 +29,6 @@ const shell: Task = {
   description: "Run a diagnostic command.",
   examples: [],
   keywords: [],
-  envelope: { caps: ["exec"] },
   threadable: false,
   skill: "",
 };
@@ -61,11 +58,14 @@ describe("renderPolicyReport", () => {
     expect(report).toContain("Agent runtime: Claude");
     expect(report).toContain("Administrator policy: active — combined result shown below");
     expect(report).toContain("Policy checks: 1 passed while loading this policy");
-    expect(report).toMatch(/Everyone registered[\s\S]*ask — Ask a question[\s\S]*read — inspect files[\s\S]*Working directory: \/srv\/agentcall-default/);
-    expect(report).toMatch(/Named caller rule: alice \(before roster grants\)[\s\S]*deploy — Deploy production[\s\S]*write — change files[\s\S]*exec — run shell commands/);
-    expect(report).toMatch(/shell — Run diagnostics[\s\S]*exec — run shell commands[\s\S]*WARNING: exec can read, change, and send data outside this working directory/);
+    // Capabilities are gone (#372): every task reads and only reads, so the
+    // report states that once per task instead of enumerating a per-task list.
+    expect(report).toMatch(/Everyone registered[\s\S]*ask — Ask a question[\s\S]*inspect files — answers are read-only[\s\S]*Working directory: \/srv\/agentcall-default/);
+    expect(report).toMatch(/Named caller rule: alice \(before roster grants\)[\s\S]*deploy — Deploy production/);
+    expect(report).toMatch(/shell — Run diagnostics[\s\S]*inspect files — answers are read-only/);
+    expect(report).not.toMatch(/exec — run shell commands/);
     expect(report).toMatch(/Named caller rule: blocked-bot \(before roster grants\)[\s\S]*BLOCKED — no task can run/);
-    expect(report).toMatch(new RegExp(`Roster rule: engineers \\(${ROSTER_ID}\\) — adds for each attested member[\\s\\S]*browse-docs — Browse documentation[\\s\\S]*fetch — use web tools[\\s\\S]*Working directory: /srv/docs`));
+    expect(report).toMatch(new RegExp(`Roster rule: engineers \\(${ROSTER_ID}\\) — adds for each attested member[\\s\\S]*browse-docs — Browse documentation[\\s\\S]*inspect files — answers are read-only[\\s\\S]*Working directory: /srv/docs`));
     expect(report).toContain("Ignored missing task references: missing-task");
     expect(report).toContain("For one caller: start with the base rule, add their named rule, then add every roster the relay attests.");
     expect(report).toContain("An exec grant includes practical read, write, and network power through Bash");
@@ -82,7 +82,7 @@ describe("renderPolicyReport", () => {
     expect(report).toContain("Codex only enforces the write boundary");
     expect(report).toContain("read-only or workspace-write sandbox");
     expect(report).toContain("fetch and exec are not separate Codex controls");
-    expect(report).toContain("Codex can execute shell commands whether or not a task declares exec");
+    expect(report).toContain("Codex can execute shell commands on any task");
     expect(report).toContain("Bundled authenticated Codex apps, web search, and image generation are disabled with strict configuration");
     expect(report).toContain("On verified codex-cli 0.146.0");
     expect(report).toContain("shell tool attempts are recorded by an observe-only hook");

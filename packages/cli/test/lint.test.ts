@@ -105,7 +105,7 @@ describe("buildCardReport", () => {
 
   it("warns that codex gives no per-tool exec restriction when a task's tools exclude exec", () => {
     const h = home();
-    writeSkill(h, "intro", "---\ndescription: d\ntools: [read]\n---\n");
+    writeSkill(h, "intro", "---\ndescription: d\n---\n");
     const p = linePaths(h);
     writeFileSync(p.policyFile, JSON.stringify({ default_offer: ["ask", "intro"], callers: {} }));
     const codexCfg: LineConfig = { ...cfg, agent_kind: "codex" };
@@ -116,21 +116,27 @@ describe("buildCardReport", () => {
 
   it("does not warn about the codex exec gap for a claude-backed agent", () => {
     const h = home();
-    writeSkill(h, "intro", "---\ndescription: d\ntools: [read]\n---\n");
+    writeSkill(h, "intro", "---\ndescription: d\n---\n");
     const p = linePaths(h);
     writeFileSync(p.policyFile, JSON.stringify({ default_offer: ["ask", "intro"], callers: {} }));
     const r = buildCardReport(cfg, p);
     expect(r.notices.join("\n")).not.toMatch(/codex/i);
   });
 
-  it("does not warn about the ask task itself, and not about a task that already declares exec", () => {
+  it("warns for every codex task except ask, since the caveat no longer depends on a cap", () => {
+    // The notice used to fire only for tasks that did NOT declare exec. With
+    // capabilities deleted there is nothing to declare: codex can run shell
+    // commands on any task, and --sandbox read-only stops writes but not
+    // reads or execution. So the caveat applies to all of them.
     const h = home();
-    writeSkill(h, "runner", "---\ndescription: d\ntools: [read, exec]\n---\n");
+    writeSkill(h, "runner", "---\ndescription: d\n---\n");
     const p = linePaths(h);
     writeFileSync(p.policyFile, JSON.stringify({ default_offer: ["ask", "runner"], callers: {} }));
     const codexCfg: LineConfig = { ...cfg, agent_kind: "codex" };
     const r = buildCardReport(codexCfg, p);
-    expect(r.notices.join("\n")).not.toMatch(/codex/i);
+    const notices = r.notices.join("\n");
+    expect(notices).toMatch(/task "runner": codex has no per-tool restriction/);
+    expect(notices).not.toMatch(/task "ask"/);
   });
 
   it("lists per-caller grants and blocked callers in the menu", () => {

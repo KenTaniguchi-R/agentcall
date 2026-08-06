@@ -352,7 +352,6 @@ export function startListener(deps: ListenerDeps): { stop(): Promise<void> } {
             taskWorkdir.dir,
             timeoutMs,
             undefined,
-            task.envelope,
             call_id,
             signal,
             // The line this call came in on — required (see runner.ts): the

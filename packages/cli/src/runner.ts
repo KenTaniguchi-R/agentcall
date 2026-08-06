@@ -3,7 +3,6 @@ import { createHash } from "node:crypto";
 import { fileURLToPath } from "node:url";
 import { AGENT_TIMEOUT_MS, MAX_REPLY_BYTES, type AgentKind } from "@benree/agentcall-shared";
 import { resolveAgentBin } from "./bin.js";
-import { CAPS, FULL_ACCESS_ENVELOPE, type Cap, type Envelope } from "./tasks.js";
 import type { Sensitivity } from "./sensitivity.js";
 import { agentChildEnv } from "./telemetry-env.js";
 
@@ -217,20 +216,18 @@ export function guardCodexTrustArg(includeToolTelemetry = false): string {
     `}`;
 }
 
-// Cap -> Claude Code tool names, used with --allowedTools + --permission-mode
-// dontAsk: listed tools are pre-approved, everything else is denied instead
-// of prompting (headless -p can't prompt). "read" is always included — an
-// agent that can't read its own cwd can't answer anything.
-const CLAUDE_TOOLS: Record<Cap, string[]> = {
-  read: ["Read", "Grep", "Glob", "LS"],
-  write: ["Write", "Edit"],
-  fetch: ["WebFetch", "WebSearch"],
-  exec: ["Bash"],
-};
+// Used with --allowedTools + --permission-mode dontAsk: listed tools are
+// pre-approved, everything else is denied instead of prompting (headless -p
+// can't prompt).
+//
+// Fixed and read-only (#372). A call answers a question and the reply is the
+// only sink, so there is nothing for Write, Edit or Bash to be granted FOR.
+// WebFetch/WebSearch are out for a different reason: they are a second exit
+// from the machine, and the clearance check only governs the reply.
+export const CLAUDE_READ_ONLY_TOOLS = ["Read", "Grep", "Glob", "LS"] as const;
 
-export function claudeAllowedTools(envelope: Envelope): string {
-  const caps = new Set<Cap>(["read", ...envelope.caps]);
-  return CAPS.filter((c) => caps.has(c)).flatMap((c) => CLAUDE_TOOLS[c]).join(",");
+export function claudeAllowedTools(): string {
+  return CLAUDE_READ_ONLY_TOOLS.join(",");
 }
 
 // resolveBin is injectable for tests (the default resolves the real binary
@@ -249,7 +246,7 @@ export function claudeAllowedTools(envelope: Envelope): string {
 // between a caller and the machine.
 export function buildSpawnSpec(
   kind: AgentKind, prompt: string, workdir: string, resolveBin: (kind: AgentKind) => string = resolveAgentBin,
-  envelope: Envelope = FULL_ACCESS_ENVELOPE, callId: string = "unknown", lineName: string,
+  callId: string = "unknown", lineName: string,
   // What the caller of this run may receive. Resolved from the relay-verified
   // identity before the message reaches any prompt (the CaMeL invariant), and
   // handed to the guard hook, which fails closed without it.
@@ -269,7 +266,7 @@ export function buildSpawnSpec(
       args: [
         ...(resume ? ["--resume", resume] : []),
         "-p", prompt, "--output-format", "json",
-        "--permission-mode", "dontAsk", "--allowedTools", claudeAllowedTools(envelope),
+        "--permission-mode", "dontAsk", "--allowedTools", claudeAllowedTools(),
         "--settings", guardSettingsJson(toolTelemetryFile !== undefined),
       ],
       cwd: workdir,
@@ -283,11 +280,11 @@ export function buildSpawnSpec(
       },
     };
   }
-  // Codex has no per-tool granularity, so the envelope's write cap maps onto
-  // its native sandbox level instead — the codex-side analogue of claude's
-  // --allowedTools, and now the only thing confining its writes. Note it does
+  // Codex has no per-tool granularity, so it gets its sandbox level instead —
+  // the codex-side analogue of claude's --allowedTools, and the only thing
+  // confining its writes. Always read-only now. Note it does
   // NOT confine reads: `codex exec --sandbox read-only` still reads ~/.ssh.
-  const sandbox = envelope.caps.includes("write") ? "workspace-write" : "read-only";
+  const sandbox = "read-only";
   // --ignore-user-config does not remove Codex's bundled authenticated apps,
   // web search, or image generation. Disable every bundled remote surface on
   // fresh and resumed spawns: no AgentCall task cap grants account mutation or
@@ -408,7 +405,7 @@ export function truncateUtf8(text: string, maxBytes: number): string {
 export function runAgent(
   kind: AgentKind, prompt: string, workdir: string, timeoutMs: number = AGENT_TIMEOUT_MS,
   specOverride: SpawnSpec | undefined = undefined,
-  envelope: Envelope = FULL_ACCESS_ENVELOPE, callId: string = "unknown",
+  callId: string = "unknown",
   signal: AbortSignal | undefined = undefined, lineName: string,
   // The REAL agent session id, resolved from a context binding by the
   // listener. A caller-supplied context id must never reach this parameter.
@@ -429,7 +426,7 @@ export function runAgent(
 ): Promise<AgentOutput> {
   const spec = specOverride
     ?? buildSpawnSpec(
-      kind, prompt, workdir, resolveAgentBin, envelope, callId, lineName, clearance, resume,
+      kind, prompt, workdir, resolveAgentBin, callId, lineName, clearance, resume,
       correlationId, toolTelemetryFile,
     );
   return new Promise<AgentOutput>((resolve, reject) => {

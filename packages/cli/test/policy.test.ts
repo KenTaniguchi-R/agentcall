@@ -26,11 +26,11 @@ function missingManagedLinePaths(home: string) {
 
 const intro: Task = {
   id: "owner-introduction", name: "Intro", description: "Introduce the owner.",
-  examples: [], keywords: [], envelope: { caps: ["read"] }, threadable: true, skill: "",
+  examples: [], keywords: [], threadable: true, skill: "",
 };
 const meet: Task = {
   id: "schedule-meeting", name: "Schedule", description: "Book a time.",
-  examples: [], keywords: [], envelope: { caps: ["read", "fetch"] }, threadable: true, skill: "",
+  examples: [], keywords: [], threadable: true, skill: "",
 };
 const TASKS = [ASK_TASK, intro, meet];
 const ENG = "e".repeat(22);
