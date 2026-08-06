@@ -74,10 +74,15 @@ describe("renderPolicyReport", () => {
     expect(report).toMatch(/Named caller rule: blocked-bot \(before roster clearances\)[\s\S]*BLOCKED — no call is answered at all/);
     expect(report).toMatch(new RegExp(`Roster rule: engineers \\(${ROSTER_ID}\\) — applies to each attested member[\\s\\S]*May be told: internal content and below`));
     expect(report).toContain("For one caller: start with the base rule, take the highest of their named rule and every roster the relay attests.");
-    // The refusal is the enforcement point, so it has to appear in the report
-    // the owner reads to understand what their policy does.
+    // The enforcement point is the READ, and the report has to say so. It
+    // previously claimed the reply was refused unless the context was within
+    // clearance; no such check exists (listener.ts only runs redactOutbound).
+    // Pinned as an absence too, because naming a control that does not exist
+    // tells an owner they are covered when they are not.
     expect(report).toContain("anything unlabelled is secret and never leaves");
-    expect(report).toContain("the reply is refused unless that is at or below the caller's clearance");
+    expect(report).toContain("refused AT THE READ, before the agent sees it");
+    expect(report).toContain("The answer itself is not inspected");
+    expect(report).not.toMatch(/reply is refused/i);
   });
 
   it("states the weaker Codex enforcement semantics instead of implying per-tool controls", () => {
@@ -88,9 +93,16 @@ describe("renderPolicyReport", () => {
     });
 
     expect(report).toContain("Agent runtime: Codex");
-    expect(report).toContain("Codex has no per-tool restriction");
+    // The honest statement, and the one this test previously got wrong. On
+    // codex the guard runs in observe mode AND there is no reply check, so
+    // nothing in the sensitivity model is enforced — clearance decides only
+    // what gets logged. The old text pointed at "the clearance check on the
+    // reply" as the compensating control, which does not exist.
+    expect(report).toContain("on Codex the sensitivity model is NOT enforced");
+    expect(report).toContain("recorded and then allowed");
     expect(report).toContain("--sandbox read-only stops writes, not reads or execution");
-    expect(report).toContain("the clearance check on the reply is what bounds what leaves");
+    expect(report).toContain("intent, not as a boundary");
+    expect(report).not.toMatch(/clearance check on the reply/i);
     expect(report).toContain("Bundled authenticated Codex apps, web search, and image generation are disabled on every spawn");
     expect(report).toContain("On verified codex-cli 0.146.0");
     expect(report).toContain("shell tool attempts are recorded by an observe-only hook");

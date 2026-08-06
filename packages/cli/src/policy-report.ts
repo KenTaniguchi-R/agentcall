@@ -63,10 +63,16 @@ export function renderPolicyReport(
   if (policy.description) lines.push(`Purpose: ${policy.description}`);
 
   lines.push("", "Runtime enforcement");
+  // Enforcement is on the READ, not on the reply. An earlier revision of this
+  // block said the reply was refused unless the context was within clearance —
+  // there is no such check anywhere. listener.ts runs redactOutbound over the
+  // answer, which replaces credential-shaped strings and this line's own relay
+  // token, and nothing else looks at it. Naming a control that does not exist
+  // is worse than naming none: it tells an owner they are covered.
   lines.push(
     "  Sources are labelled by sensitivity; anything unlabelled is secret and never leaves.",
-    "  The running context takes the sensitivity of the most sensitive source it read,",
-    "  and the reply is refused unless that is at or below the caller's clearance.",
+    "  A path above this caller's clearance is refused AT THE READ, before the agent sees it.",
+    "  The answer itself is not inspected — only credential-shaped strings are redacted from it.",
   );
   if (options.agentKind === "claude") {
     lines.push(
@@ -74,8 +80,10 @@ export function renderPolicyReport(
     );
   } else {
     lines.push(
-      "  Codex has no per-tool restriction: --sandbox read-only stops writes, not reads or execution,",
-      "  and the guard only observes there — so the clearance check on the reply is what bounds what leaves.",
+      "  WARNING: on Codex the sensitivity model is NOT enforced. The guard runs in observe",
+      "  mode, so a read above this caller's clearance is recorded and then allowed.",
+      "  --sandbox read-only stops writes, not reads or execution, and there is no check on the",
+      "  reply. Treat a Codex line's clearances as documentation of intent, not as a boundary.",
       "  Bundled authenticated Codex apps, web search, and image generation are disabled on every spawn.",
       "  On verified codex-cli 0.146.0, shell tool attempts are recorded by an observe-only hook unless managed-only hooks are required.",
       "  Other Codex releases or allow_managed_hooks_only=true may silently skip that hook; non-hooked read routes remain unrecorded.",

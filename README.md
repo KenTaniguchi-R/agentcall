@@ -125,10 +125,10 @@ agentcall policy
 Tasks are Markdown files with YAML frontmatter, and any caller you have not
 blocked can request any of them. What bounds an answer is not which task ran
 but what it read: every source carries a **sensitivity**, every caller a
-**clearance**, and the reply is refused unless the running context sits at or
-below that clearance. The listener resolves clearance from the relay-verified
-caller before placing their message in the prompt, so the message can never
-influence it.
+**clearance**, and a path above that clearance is refused **at the read** —
+before the agent ever sees it. The answer itself is not inspected. The listener
+resolves clearance from the relay-verified caller before placing their message
+in the prompt, so the message can never influence it.
 
 ```bash
 agentcall clearance ken internal     # ken may be told internal content
@@ -139,8 +139,12 @@ agentcall block spammer              # beats every grant, including a roster's
 > [!WARNING]
 > Anything absent from `sensitivity.json` is `secret` and never leaves — but
 > the reverse is the real risk: labelling a parent directory `internal` labels
-> everything beneath it. A Codex answering agent has no enforced read boundary,
-> so the clearance check on the reply is what bounds what leaves it.
+> everything beneath it, including whatever it acquires later.
+>
+> **On a Codex line none of this is enforced.** The guard runs in observe mode,
+> so a read above the caller's clearance is recorded and then allowed, and
+> nothing inspects the answer. Clearances on a Codex line describe intent, not
+> a boundary. Use Claude for anything you actually need bounded.
 
 The [receive-a-call guide](https://agentcall.mintlify.app/get-started/receive-calls)
 and [tasks and policy guide](https://agentcall.mintlify.app/guides/tasks-and-policy)

@@ -64,9 +64,13 @@ agentcall block spammer            # or nothing at all
 ```
 
 Any caller you have not blocked can request any task. What bounds the answer is
-what it read: sources carry a sensitivity, callers carry a clearance, and the
-reply is refused unless the running context sits at or below it. Clearance is
-resolved from the relay-verified caller before their message enters the prompt.
+what it read: sources carry a sensitivity, callers carry a clearance, and a path
+above that clearance is refused at the read, before the agent sees it. The answer
+itself is not inspected. Clearance is resolved from the relay-verified caller
+before their message enters the prompt.
+
+**On a Codex line this is not enforced** — the guard observes rather than
+blocks, so clearances there are intent rather than a boundary.
 **Any authenticated handle in your organization may call you** — an address is a
 routing identifier, not a secret.
 

@@ -73,19 +73,23 @@ be refused on.
 Set a caller's clearance with `agentcall clearance <handle> <level>`; see
 [tasks and policy](/guides/tasks-and-policy).
 
-## The reply is the boundary
+## The read is the boundary
 
-The directory is orientation, not enforcement. Two things actually bound an
-answer:
+The directory is orientation, not enforcement. **One** thing bounds an answer:
+reading a path above the caller's clearance is **refused at the tool call**,
+before the agent ever sees the content.
 
-1. Reading a path above the caller's clearance is **refused at the tool call**.
-2. The running context takes the sensitivity of the most sensitive source it
-   read, and the reply is **refused unless that is at or below the caller's
-   clearance**.
+The answer itself is **not** inspected. Credential-shaped strings and this
+line's own relay token are redacted from it, and nothing else looks at it. If
+the agent was permitted to read something, it is permitted to repeat it.
 
-Shell execution is not constrained to any directory, and Codex has no enforced
-read boundary at all — so on a Codex line, the check on the reply is the only
-thing bounding what leaves.
+<Warning>
+  **On a Codex line, none of this is enforced.** The guard runs in observe mode
+  there, so a read above the caller's clearance is recorded and then allowed;
+  `--sandbox read-only` stops writes but not reads; and nothing inspects the
+  answer. Clearances on a Codex line describe intent, not a boundary. Use Claude
+  for anything you need actually bounded.
+</Warning>
 
 ## Success check
 

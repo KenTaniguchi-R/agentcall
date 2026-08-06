@@ -50,16 +50,23 @@ export function buildCardReport(cfg: LineConfig, p: LinePaths): CardReport {
   // codex has no per-tool allowlist (see runner.ts's codex branch): only the
   // Claude is held to a read-only tool list; codex has no per-tool restriction
   // at all. `--sandbox read-only` stops it writing, but not reading or running
-  // commands, and the guard runs in observe mode there — so a codex line's
-  // answers are bounded by the sandbox and the clearance check on the reply,
-  // not by the tool list. Surface it rather than leave the owner to find out.
+  // commands, and the guard runs in observe mode there.
+  //
+  // This comment used to finish "so a codex line's answers are bounded by the
+  // sandbox and the clearance check on the reply". There is no clearance check
+  // on the reply — listener.ts only runs redactOutbound, which replaces
+  // credential-shaped strings and the line's own token. Combined with the guard
+  // observing rather than blocking, a codex line enforces NOTHING from the
+  // sensitivity model; clearance there decides only what gets logged. Say that,
+  // rather than pointing at a control that does not exist.
   if (cfg.agent_kind === "codex") {
     for (const t of tasks) {
       if (t.id === ASK_TASK.id) continue;
       notices.push(
         `task "${t.id}": codex has no per-tool restriction, so it can still run shell commands. ` +
         `--sandbox read-only prevents writes but not reads or execution, and the guard only ` +
-        `observes on codex — the clearance check on the reply is what bounds what leaves.`,
+        `observes on codex — a read above the caller's clearance is recorded and then allowed. ` +
+        `Nothing checks the answer either. Clearances on a codex line are intent, not enforcement.`,
       );
     }
   }

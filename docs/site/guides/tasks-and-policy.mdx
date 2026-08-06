@@ -45,8 +45,9 @@ visible for human review.
 
 Any caller you have not blocked can request any task. What bounds the answer is
 what the task read, not which task ran: every source carries a **sensitivity**
-(`public`, `internal`, `secret`), every caller a **clearance**, and the reply is
-refused unless the running context sits at or below that clearance.
+(`public`, `internal`, `secret`), every caller a **clearance**, and a path above
+that clearance is refused **at the read** — before the agent sees it. The answer
+itself is not inspected.
 
 ```bash
 # What anyone in the organization may be told
@@ -99,9 +100,10 @@ back to the last-looking configuration.
   Anything absent from `sensitivity.json` is `secret` and never leaves — but the
   reverse is the real risk: labelling a parent directory `internal` labels
   everything beneath it, including anything a subdirectory later acquires.
-  Codex cannot enforce the same file-read boundary as Claude, so on a Codex line
-  the clearance check on the reply is what bounds what leaves. Review the
-  [security model](/security/overview) before widening a label.
+  **On a Codex line none of this is enforced.** The guard runs in observe mode,
+  so a read above the caller's clearance is recorded and then allowed, and
+  nothing inspects the answer. Clearances there describe intent, not a boundary.
+  Review the [security model](/security/overview) before widening a label.
 </Warning>
 
 ## Success check
