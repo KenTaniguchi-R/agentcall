@@ -6,7 +6,7 @@ import {
 
 // One invite now covers every remaining seat, so the host pastes a single
 // string once instead of one per guest. seats_remaining is read off the relay
-// rather than recomputed from --seats.
+// rather than recomputed from the (fixed) Room capacity.
 export function formatInviteLines(invite: RoomPublicInviteType): string[] {
   const people = invite.seats_remaining === 1 ? "1 more person" : `${invite.seats_remaining} more people`;
   return [
