@@ -1,7 +1,7 @@
 import { env, SELF } from "cloudflare:test";
 import { describe, expect, it, vi } from "vitest";
 import app from "../src/index.js";
-import { fixedRateLimit, registerHandle, wsAuth } from "./helpers.js";
+import { fixedRateLimit, registerHandle, wsAuth, agentIdFor} from "./helpers.js";
 
 const UPLOAD = {
   description: "Ken's public agent",
@@ -68,11 +68,36 @@ describe("GET /v1/card/:handle", () => {
     const viewer = await registerHandle("nocard-viewer");
     expect((await SELF.fetch("https://relay.test/v1/card/nocard", { headers: wsAuth("nocard-viewer", viewer) })).status).toBe(404);
   });
+  // #154 slice 5. A card belongs to the identity that published it, so the
+  // row is not reachable by address alone -- which is what stops a future
+  // reassigned handle from inheriting the previous owner's published tasks
+  // and caller grants.
+  it("stores a published card against the publisher's identity", async () => {
+    const token = await registerHandle("owns-its-card");
+    await SELF.fetch("https://relay.test/v1/card", {
+      method: "PUT",
+      headers: { "content-type": "application/json", ...wsAuth("owns-its-card", token) },
+      body: JSON.stringify({
+        description: "mine", agent_kind: "claude", tasks: [], default_offer: [],
+        grants: {}, group_grants: {}, blocked: [],
+      }),
+    });
+    const agentId = await agentIdFor("owns-its-card");
+    const byIdentity = await env.DB.prepare(
+      "SELECT COUNT(*) AS n FROM cards WHERE org = ? AND agent_id = ?",
+    ).bind("acme", agentId).first<{ n: number }>();
+    expect(byIdentity?.n).toBe(1);
+    // The address is not part of the key at all, so a row cannot be addressed
+    // by it even accidentally.
+    const columns = await env.DB.prepare("SELECT * FROM cards LIMIT 1").first<Record<string, unknown>>();
+    expect(Object.keys(columns ?? {})).not.toContain("handle");
+  });
+
   it("treats malformed stored JSON as a missing card and logs safe metadata", async () => {
     await registerHandle("corrupt-card");
     const viewer = await registerHandle("corrupt-card-viewer");
-    await env.DB.prepare("INSERT INTO cards (org, handle, card_json, updated_at) VALUES (?, ?, ?, ?)")
-      .bind("acme", "corrupt-card", "{not json", 1).run();
+    await env.DB.prepare("INSERT INTO cards (org, agent_id, card_json, updated_at) VALUES (?, ?, ?, ?)")
+      .bind("acme", await agentIdFor("corrupt-card"), "{not json", 1).run();
     const log = vi.spyOn(console, "error").mockImplementation(() => {});
     try {
       const invalid = await SELF.fetch("https://relay.test/v1/card/corrupt-card", {

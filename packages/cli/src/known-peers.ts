@@ -1,6 +1,6 @@
 import { chmodSync, existsSync, mkdirSync } from "node:fs";
 import { z } from "zod";
-import {
+import { ADDRESS_RE, BASE64URL_RE, FINGERPRINT_RE, RELAY_ORIGIN_RE,
   encryptionKeyTranscript, fingerprint, identityTranscript, importIdentityPublicKey,
   verifyTranscript, type EncryptionKeyRecordType, type IdentityRecordType,
 } from "@benree/agentcall-shared";
@@ -11,9 +11,14 @@ import type { MachinePaths } from "./paths.js";
 export const MAX_KNOWN_PEERS = 10_000;
 
 const KnownPeerSchema = z.object({
-  address: z.string().regex(/^[a-z0-9][a-z0-9-]{1,30}@[a-z0-9.-]{1,253}$/),
-  identity_pub: z.string().regex(/^[A-Za-z0-9_-]+$/).max(256),
-  fingerprint: z.string().regex(/^SHA256:[0-9a-f]{32}$/),
+  // Which relay this key was trusted on. Lines may sit on different relays and
+  // the trust store is per-machine, so the pin is only meaningful together with
+  // its origin — and the identity transcript covers it, so a stored peer
+  // without it cannot have its fingerprint recomputed.
+  relay_origin: z.string().regex(RELAY_ORIGIN_RE),
+  address: z.string().regex(ADDRESS_RE),
+  identity_pub: z.string().regex(BASE64URL_RE).max(256),
+  fingerprint: z.string().regex(FINGERPRINT_RE),
   first_seen_at: z.number().int().nonnegative(),
   highest_encryption_epoch: z.number().int().positive(),
   call_count: z.number().int().nonnegative(),
@@ -75,7 +80,10 @@ export async function verifyAndPinPeer(
     const peers = loadKnownPeers(machine);
     const existing = peers.find((peer) => peer.address === address);
     const servedFingerprint = await fingerprint(identityTranscript(bundle.identity));
-    const storedIdentity = existing && { v: 1 as const, address: existing.address, identity_pub: existing.identity_pub };
+    const storedIdentity = existing && {
+      v: 1 as const, relay_origin: existing.relay_origin,
+      address: existing.address, identity_pub: existing.identity_pub,
+    };
     const storedFingerprint = storedIdentity && await fingerprint(identityTranscript(storedIdentity));
     if (existing && existing.fingerprint !== storedFingerprint) {
       throw new Error(`Corrupt known-peer trust store at ${machine.knownPeersFile}: fingerprint does not match ${address}.`);
@@ -104,6 +112,7 @@ export async function verifyAndPinPeer(
       highest_encryption_epoch: Math.max(existing.highest_encryption_epoch, bundle.encryption.record.epoch),
       call_count: existing.call_count + 1,
     } : {
+      relay_origin: bundle.identity.relay_origin,
       address,
       identity_pub: bundle.identity.identity_pub,
       fingerprint: servedFingerprint,

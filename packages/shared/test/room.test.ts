@@ -59,15 +59,14 @@ const room = {
 const invite = {
   invite_id: INVITE_ID,
   room_id: ROOM_ID,
-  seat: 2 as const,
   secret_hash: HASH,
   expires_at: NOW + ROOM_INVITE_TTL_MS,
+  seats_remaining: 1 as const,
 };
 
 const participant = {
   participant_id: PARTICIPANT_1,
   room_id: ROOM_ID,
-  seat: 1 as const,
   state: "ready" as const,
   display_name: "ken",
   credential_hash: HASH,
@@ -230,16 +229,14 @@ describe("RoomInviteRecord", () => {
     expect(RoomInviteRecord.parse(invite)).toEqual(invite);
   });
 
-  it("accepts consumed_at and participant_id together", () => {
-    expect(RoomInviteRecord.safeParse({
-      ...invite, consumed_at: NOW + 1, participant_id: PARTICIPANT_2,
-    }).success).toBe(true);
+  it("accepts an invite with no seats remaining", () => {
+    expect(RoomInviteRecord.safeParse({ ...invite, seats_remaining: 0 }).success).toBe(true);
   });
 
   it.each([
-    ["consumed time only", { consumed_at: NOW + 1 }],
-    ["participant only", { participant_id: PARTICIPANT_2 }],
-    ["consumption after expiry", { consumed_at: invite.expires_at + 1, participant_id: PARTICIPANT_2 }],
+    ["negative seats remaining", { seats_remaining: -1 }],
+    ["seats remaining above the max", { seats_remaining: ROOM_MAX_PARTICIPANTS }],
+    ["a per-seat invite from the retired single-use shape", { seat: 2 }],
     ["raw secret", { secret: "do-not-store" }],
   ])("rejects %s", (_name, change) => {
     expect(RoomInviteRecord.safeParse({ ...invite, ...change }).success).toBe(false);
@@ -269,6 +266,7 @@ describe("RoomParticipantRecord", () => {
     ["last seen before join", { last_seen_at: NOW - 1 }],
     ["too many calls", { calls_charged: 6 }],
     ["credential value", { credential: "raw" }],
+    ["a seat from the retired per-seat invite shape", { seat: 1 }],
   ])("rejects %s", (_name, change) => {
     expect(RoomParticipantRecord.safeParse({ ...participant, ...change }).success).toBe(false);
   });
@@ -309,6 +307,17 @@ describe("RoomCallRecord", () => {
   it("rejects non-canonical ciphertext padding bits", () => {
     expect(RoomCallRecord.safeParse({ ...call, encrypted_request: "B" }).success).toBe(false);
   });
+
+  // No byte sequence encodes to a base64url string of length 1 mod 4: four
+  // characters carry three bytes, so the valid remainders are 0, 2, and 3.
+  // Ciphertext is variable-length and its only length check is the byte
+  // ceiling, so an impossible spelling has to be rejected by the decoder.
+  it.each(["A".repeat(5), "A".repeat(9), "A".repeat(13)])(
+    "rejects ciphertext of impossible base64url length (%s)",
+    (encrypted_request) => {
+      expect(RoomCallRecord.safeParse({ ...call, encrypted_request }).success).toBe(false);
+    },
+  );
 });
 
 describe("Room membership transcript", () => {

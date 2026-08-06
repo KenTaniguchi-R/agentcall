@@ -1,12 +1,12 @@
-import { existsSync, mkdirSync, renameSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, renameSync, rmSync } from "node:fs";
 import { join } from "node:path";
-import type { AgentKind } from "@benree/agentcall-shared";
-import { publishEncryptionKey, publishIdentityKey, registerHandle } from "../api.js";
+import { writeJsonAtomic } from "../json-store.js";
+import { formatAddress, type AgentKind } from "@benree/agentcall-shared";
+import { authOf, publishEncryptionKey, publishIdentityKey, registerHandle } from "../api.js";
 import { publishCard } from "../card.js";
-import { addressHost, resolveLineWorkdir, type LineConfig } from "../config.js";
+import { resolveLineWorkdir, type LineConfig } from "../config.js";
 import { assertValidLineName, listLines, readyLines, saveLineConfig } from "../lines.js";
 import { listenerPathDirs } from "../listener-path.js";
-import { host } from "../outbound.js";
 import { getLinePaths, type LinePaths, type MachinePaths } from "../paths.js";
 import { generateIdentityKeys, type StoredKeys } from "../keys.js";
 import { loadPerson, resolvePrimary, savePerson } from "../person.js";
@@ -62,10 +62,9 @@ export async function publishStoredKeys(
   paths: LinePaths,
   fns: { identity?: typeof publishIdentityKey; encryption?: typeof publishEncryptionKey } = {},
 ): Promise<void> {
-  const auth = { org: line.org, handle: line.handle, token: line.token };
-  const canonicalHost = addressHost(line);
-  await (fns.identity ?? publishIdentityKey)(line.relay, auth, stored, canonicalHost);
-  await (fns.encryption ?? publishEncryptionKey)(line.relay, auth, paths, canonicalHost);
+  const auth = authOf(line);
+  await (fns.identity ?? publishIdentityKey)(line.relay, auth, stored);
+  await (fns.encryption ?? publishEncryptionKey)(line.relay, auth, paths);
 }
 
 // A handle that is `<existing>-<something>` is guessable from an address the
@@ -137,7 +136,7 @@ export async function addLine(m: MachinePaths, opts: AddLineOpts): Promise<{ add
     rmSync(paths.dir, { recursive: true, force: true });
     throw error;
   }
-  const { org, token, address } = registration;
+  const { org, token } = registration;
 
   // Registration succeeded, so the handle is spent and unreclaimable (#16).
   // config.json is therefore the first post-registration write — the key file
@@ -162,7 +161,7 @@ export async function addLine(m: MachinePaths, opts: AddLineOpts): Promise<{ add
     mkdirSync(paths.shareDir, { recursive: true });
     mkdirSync(paths.tasksDir, { recursive: true });
     if (!existsSync(paths.policyFile)) {
-      writeFileSync(paths.policyFile, JSON.stringify(DEFAULT_POLICY, null, 2) + "\n", { mode: 0o600 });
+      writeJsonAtomic(paths.policyFile, DEFAULT_POLICY);
     }
     try {
       await (opts.publishCardFn ?? publishCard)(cfg, paths);
@@ -200,7 +199,7 @@ export async function addLine(m: MachinePaths, opts: AddLineOpts): Promise<{ add
   // person.json is written LAST, and only for the first line, so a failed
   // first setup never leaves primary_line pointing at a broken line.
   if (!existsSync(m.personFile)) savePerson(m, { primary_line: opts.name });
-  return { address };
+  return { address: formatAddress(org, opts.handle) };
   });
 }
 
@@ -313,12 +312,11 @@ export function listLinesReport(
   }
   return listLines(m).map((l) => ({
     name: l.name,
-    // host() (shared with outbound.ts) falls back to the raw string on an
-    // unparseable relay instead of throwing — a broken line must still show
-    // up in the listing (marked broken below), same contract listLines
-    // itself already guarantees. A bare `new URL(...).host` here would take
-    // down the whole `line list` command over one bad config.json.
-    address: l.config ? `${l.config.handle}@${host(l.config.relay)}` : "—",
+    // The relay no longer appears here: an address is (org, handle), and the
+    // relay is shown in its own column below. That also removes the reason
+    // this had to tolerate an unparseable relay URL — a broken line still
+    // lists, and its address still renders.
+    address: l.config ? formatAddress(l.config.org, l.config.handle) : "—",
     relay: l.config?.relay ?? "—",
     state: !l.ok ? "broken" : !l.config!.agent_kind ? "caller-only" : presence(l.config!) ? "online" : "offline",
     primary: l.name === primary,

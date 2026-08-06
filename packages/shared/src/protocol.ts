@@ -1,15 +1,37 @@
 import { z } from "zod";
 
-export const HANDLE_RE = /^[a-z0-9][a-z0-9-]{1,30}$/;
-export const ORG_RE = /^[a-z0-9][a-z0-9-]{1,62}$/;
-// The hosted deployment's DNS host, and the single place it is written. The
-// relay derives tenant orgs and registration addresses from it, and the CLI
-// derives its default relay URL and expected address host — each of those used
-// to be its own string literal, in four files.
+// One source of truth for the three patterns, because they must agree: an org
+// that registers must also be spellable in an address, and a drifting copy
+// would let one be created that the other cannot name.
+const ORG_BODY = "[a-z0-9][a-z0-9-]{1,19}";
+const HANDLE_BODY = "[a-z0-9][a-z0-9-]{1,30}";
+
+export const HANDLE_RE = new RegExp(`^${HANDLE_BODY}$`);
+// 20 characters, not the 63 this allowed while orgs were DNS labels. The
+// address is meant to be short enough to say out loud, and
+// `@acme-corporation-platform-engineering/ken` would trade a vendor domain for
+// a self-inflicted one.
+export const ORG_RE = new RegExp(`^${ORG_BODY}$`);
+
+// `@<org>/<handle>` — a registry key, not a locator. See
+// docs/superpowers/specs/2026-08-05-address-as-registry-key.md.
+//
+// Deliberately unable to express a hostname: dots are absent from both bodies,
+// so no DNS-shaped address can parse. That is the point rather than an
+// oversight — nothing resolves an AgentCall address, and a key dressed as a
+// locator invites tooling to try.
+//
+// The single address grammar. `keys.ts` imports it rather than keeping its own
+// so a signed record and a dialled address can never disagree about what an
+// address is.
+export const ADDRESS_RE = new RegExp(`^@(${ORG_BODY})/(${HANDLE_BODY})$`);
+
+// The hosted deployment's DNS host, and the single place it is written. It is
+// the relay *endpoint* only: the CLI derives its default relay URL from it.
+// Addresses no longer contain it, so nothing parses it back out.
 //
 // This is deployment configuration, not protocol: a self-hosted relay sets its
-// own host and never reads this. It lives here because both sides must agree
-// on how a hosted address is spelled. Notably NOT the source of
+// own host and never reads this. Notably NOT the source of
 // AGENTCALL_POLICY_EXT — see the comment there.
 export const HOSTED_RELAY_HOST = "agent-call.app";
 export const TASK_ID_RE = /^[a-z0-9][a-z0-9-]{0,63}$/;
@@ -146,25 +168,35 @@ export const RegisterRequest = z.object({
   // Absent = caller-only: the handle can call others but is not callable.
   agent_kind: AgentKindSchema.optional(),
 });
-export const RegisterResponse = z.object({ org: z.string().regex(ORG_RE), token: z.string(), address: z.string() });
+// No `address`: it is `formatAddress(org, handle)` and the caller already knows
+// both. Shipping the composed string is what forced the relay to build one, and
+// the client to parse a host back out of it.
+export const RegisterResponse = z.object({ org: z.string().regex(ORG_RE), token: z.string() });
 
 export const SHA256_HEX_RE = /^[0-9a-f]{64}$/;
-export const CREDENTIAL_PUBLIC_ID_RE = /^(?:act|agr)_[0-9a-f]{16}$/;
 export const RECOVERY_OPERATION_ID_RE = /^[A-Za-z0-9_-]{22,64}$/;
+
+// Two quantities, two patterns — deliberately not one loose `(?:act|agr)_`
+// alternation. Each field admits exactly one prefix, and a shared pattern
+// would let a client public id satisfy a recovery public id field. The
+// prefixes come from publicId() in the relay, which mints them from the
+// first 16 hex characters of the corresponding digest.
+export const CLIENT_PUBLIC_ID_RE = /^act_[0-9a-f]{16}$/;
+export const RECOVERY_PUBLIC_ID_RE = /^agr_[0-9a-f]{16}$/;
 
 export const RecoveryIssueRequest = z.object({
   expected_generation: z.number().int().nonnegative(),
   successor_recovery_digest: z.string().regex(SHA256_HEX_RE),
-  successor_recovery_public_id: z.string().regex(/^agr_[0-9a-f]{16}$/),
+  successor_recovery_public_id: z.string().regex(RECOVERY_PUBLIC_ID_RE),
 }).strict();
 export const RecoveryIssueResponse = z.object({
   generation: z.number().int().positive(),
-  recovery_public_id: z.string().regex(/^agr_[0-9a-f]{16}$/),
+  recovery_public_id: z.string().regex(RECOVERY_PUBLIC_ID_RE),
 }).strict();
 export const RecoveryStatusResponse = z.object({
   issued: z.boolean(),
   generation: z.number().int().nonnegative(),
-  recovery_public_id: z.string().regex(/^agr_[0-9a-f]{16}$/).optional(),
+  recovery_public_id: z.string().regex(RECOVERY_PUBLIC_ID_RE).optional(),
 }).strict();
 export const RecoveryRedeemRequest = z.object({
   org: z.string().regex(ORG_RE),
@@ -173,9 +205,9 @@ export const RecoveryRedeemRequest = z.object({
   current_recovery_proof: z.string().min(32).max(200),
   operation_id: z.string().regex(RECOVERY_OPERATION_ID_RE),
   client_token_digest: z.string().regex(SHA256_HEX_RE),
-  client_public_id: z.string().regex(/^act_[0-9a-f]{16}$/),
+  client_public_id: z.string().regex(CLIENT_PUBLIC_ID_RE),
   successor_recovery_digest: z.string().regex(SHA256_HEX_RE),
-  successor_recovery_public_id: z.string().regex(/^agr_[0-9a-f]{16}$/),
+  successor_recovery_public_id: z.string().regex(RECOVERY_PUBLIC_ID_RE),
 }).strict();
 export const RecoveryReceipt = z.object({
   org: z.string().regex(ORG_RE),
@@ -183,39 +215,39 @@ export const RecoveryReceipt = z.object({
   operation_id: z.string().regex(RECOVERY_OPERATION_ID_RE),
   consumed_generation: z.number().int().positive(),
   recovery_generation: z.number().int().positive(),
-  client_public_id: z.string().regex(/^act_[0-9a-f]{16}$/),
-  recovery_public_id: z.string().regex(/^agr_[0-9a-f]{16}$/),
+  client_public_id: z.string().regex(CLIENT_PUBLIC_ID_RE),
+  recovery_public_id: z.string().regex(RECOVERY_PUBLIC_ID_RE),
   committed_at: z.number().int().nonnegative(),
   // Confirms the recovered identity's current DO applied its tombstone. Before
   // #154, this is not a claim that caller sockets housed in remote DOs closed.
   eviction_confirmed: z.boolean(),
+  // #346: the relay already knows this from `handles`, and it never changes
+  // after registration. Redeeming with no local config.json to preserve it
+  // from must still be able to restore a callable line as callable — nullable,
+  // not optional, because the relay always knows the true answer and a missing
+  // key here would be indistinguishable from "not reported."
+  agent_kind: AgentKindSchema.nullable(),
 }).strict();
 
 export type ErrorCodeType = z.infer<typeof ErrorCode>;
 export type RelayOperationalErrorCodeType = z.infer<typeof RelayOperationalErrorCode>;
-export type PeerFailureCodeType = z.infer<typeof PeerFailureCode>;
 export type CallStatusType = z.infer<typeof CallStatus>;
-export type CallAcceptedType = z.infer<typeof CallAccepted>;
-export type CallStartedType = z.infer<typeof CallStarted>;
-export type CancelCallType = z.infer<typeof CancelCall>;
-export type CallCancelledType = z.infer<typeof CallCancelled>;
-export type CallNotCancelledType = z.infer<typeof CallNotCancelled>;
-export type RegisterRequestType = z.infer<typeof RegisterRequest>;
-export type RegisterResponseType = z.infer<typeof RegisterResponse>;
 export type RecoveryIssueRequestType = z.infer<typeof RecoveryIssueRequest>;
 export type RecoveryIssueResponseType = z.infer<typeof RecoveryIssueResponse>;
 export type RecoveryStatusResponseType = z.infer<typeof RecoveryStatusResponse>;
 export type RecoveryRedeemRequestType = z.infer<typeof RecoveryRedeemRequest>;
 export type RecoveryReceiptType = z.infer<typeof RecoveryReceipt>;
 
-export function parseAddress(addr: string): { handle: string; host: string } | null {
-  const at = addr.indexOf("@");
-  if (at <= 0) return null;
-  const handle = addr.slice(0, at);
-  const host = addr.slice(at + 1);
-  if (!HANDLE_RE.test(handle)) return null;
-  if (!/^[a-z0-9][a-z0-9.-]*\.[a-z]{2,}$/.test(host)) return null;
-  return { handle, host };
+export function formatAddress(org: string, handle: string): string {
+  return `@${org}/${handle}`;
+}
+
+// Returns the pair, not a host. Callers that need to know which relay to dial
+// read `cfg.relay`; an address never carried that information usefully, because
+// a caller only ever reaches its own organization's relay.
+export function parseAddress(addr: string): { org: string; handle: string } | null {
+  const m = ADDRESS_RE.exec(addr);
+  return m ? { org: m[1]!, handle: m[2]! } : null;
 }
 
 // Peer-controlled free-form text has two display paths. Human-readable output
@@ -235,6 +267,18 @@ const JSON_UNESCAPED_TERMINAL_CHARS =
 // return because it can overwrite already-rendered terminal content.
 export function sanitizeTerminalOutput(text: string): string {
   return text.replace(TERMINAL_CONTROLS_AND_BIDI, " ");
+}
+
+// One cell of an aligned listing, where sanitizeTerminalOutput is not enough.
+// It keeps tab and line feed so a multi-line agent reply stays readable, but
+// in a single-line row a line feed forges an entire additional row and a tab
+// shifts every column after it. Either turns caller-supplied text — an invite
+// description, a join-key label — into a way to hide the row above it, which
+// matters most for exactly the rows an operator is scanning for: an admin
+// grant they did not expect. ALL_CONTROLS_AND_BIDI is the same class
+// sanitizeDetail uses, without its length cut.
+export function sanitizeTerminalCell(text: string): string {
+  return text.replace(ALL_CONTROLS_AND_BIDI, " ");
 }
 
 // JSON.stringify already escapes C0 controls such as ESC, but JSON permits

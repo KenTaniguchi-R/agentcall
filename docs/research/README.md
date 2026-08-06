@@ -11,7 +11,10 @@ a separate call.
 Docs #1–6 date from 2026-07-31 and were produced together; read them as one body of
 work rather than six independent studies. #7 is a later addition and is the only one
 that carries a backlog. #8 records the protocol and positioning implications of MCP
-tunnels and Enterprise-Managed Authorization.
+tunnels and Enterprise-Managed Authorization. #9 is the exception to the
+"not decisions" rule above — an approved decision followed it the same day, and it
+carries a forward amendment saying which of its recommendations that decision
+rejected.
 
 ## Reading order
 
@@ -30,8 +33,9 @@ produced in. Later research revised earlier conclusions, so the production order
 | 6 | [lessons-from-composio](./2026-07-31-lessons-from-composio.md) | How does a shipping Claude Code plugin do this, and what should we copy? |
 | 7 | [cotal-enterprise-installability](./2026-08-01-cotal-enterprise-installability.md) | Which tool does an enterprise actually install — and what has to be true for it to be ours? |
 | 8 | [mcp-tunnels-ema-positioning](./2026-08-02-mcp-tunnels-ema-positioning.md) | What did MCP tunnels and EMA actually ship, and where should MCP sit beside A2A? |
+| 9 | [agentcall-onboarding-comparables](./2026-08-03-agentcall-onboarding-comparables.md) | How do adjacent tools get a stranger to a first result, and where do they introduce accounts, administrators, and invitations? |
 
-Six notes on the sequence:
+Seven notes on the sequence:
 
 - **#3 predates two decisions made the same day.** `agent-coordination-landscape` was
   written before the sandbox was dropped and before Q&A-first was chosen. Its
@@ -54,6 +58,12 @@ Six notes on the sequence:
   private-network reachability a substitute rather than differentiation. EMA supplies a
   useful enterprise-authorization shape, but no non-MCP compatibility claim. The
   companion decision keeps A2A as the public protocol and defers an MCP facade.
+- **#9 is the only doc a decision followed directly, and it was partly overruled.**
+  [#259](https://github.com/KenTaniguchi-R/agentcall/issues/259) took its two-lane
+  separation of constrained evaluation from durable administration, and shipped it as
+  Room versus Team. It rejected #9's recommended first experiment — a vendor-operated
+  demo callee — in favour of 2–6 real people who already know each other. #9 carries
+  that amendment inline; read #259 for what was decided.
 - **#7's GTM conflict is resolved.** Keep the first beachhead at non-EU,
   non-unionized 100–500-person engineering organizations, lead with measured
   senior-time recovery, and preserve the narrower no-retained-call-corpus/no-connected-

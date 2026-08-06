@@ -10,7 +10,7 @@ channel before relying on it.
 ## Verify a peer
 
 ```bash
-agentcall verify ken@acme.agent-call.app
+agentcall verify @acme/ken
 ```
 
 The command validates the signed encryption-key record and pins the identity in
@@ -22,8 +22,8 @@ epochs fail closed.
 Confirm the new fingerprint out of band, then run:
 
 ```bash
-agentcall trust --reset ken@acme.agent-call.app
-agentcall verify ken@acme.agent-call.app
+agentcall trust --reset @acme/ken
+agentcall verify @acme/ken
 ```
 
 <Warning>

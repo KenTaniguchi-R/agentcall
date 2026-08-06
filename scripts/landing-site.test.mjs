@@ -22,6 +22,22 @@ test("the landing page publishes favicon metadata and assets", () => {
   assert.equal(existsSync(join(root, "apps/landing/assets/favicon.svg")), true);
 });
 
+// The landing page is the only AgentCall surface a stranger sees before
+// installing, and it spent a release teaching `ken@acme.example.com` after the
+// CLI, README, and docs site had all moved to `@acme/ken`. Nothing caught it:
+// the checks above assert structure, not content, and the address is the
+// product's core noun. The placeholder in the waitlist email field is a real
+// email address and is deliberately exempt.
+test("the landing page teaches the current @org/handle address format", () => {
+  const withoutEmailPlaceholder = html.replace(/placeholder="[^"]*"/g, "");
+  assert.doesNotMatch(
+    withoutEmailPlaceholder,
+    /[A-Za-z0-9_-]+@[A-Za-z0-9_-]+\.[A-Za-z]/,
+    "landing page still shows a handle@host-style address; use @org/handle",
+  );
+  assert.match(html, /@acme\/ken/);
+});
+
 test("the waitlist posts to Formspark with accessible feedback", () => {
   assert.match(html, /<form[^>]+id="waitlist-form"/);
   assert.match(html, /action="https:\/\/submit-form\.com\/36DfpcI7U"/);

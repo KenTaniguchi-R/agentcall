@@ -3,6 +3,8 @@ import { describe, expect, it, vi } from "vitest";
 import { sha256Hex } from "../src/auth.js";
 import app from "../src/index.js";
 import { issueInvite, registerHandle, wsAuth } from "./helpers.js";
+import { resolveAgentId } from "../src/identity.js";
+import { authenticatedHandle } from "../src/auth.js";
 
 // Each test uses its own synthetic source IP so the per-IP register rate
 // limit (5/60s, see REGISTER in src/ratelimit) doesn't make unrelated
@@ -18,13 +20,133 @@ async function register(body: unknown, ip = "203.0.113.1") {
 }
 
 describe("POST /v1/register", () => {
-  it("registers a handle and returns token + address", async () => {
+  // #319, first slice of #154. agent_id is the stable principal that later
+  // slices move DO naming, cards, roster membership, policy, and audit
+  // subjects onto. Nothing reads it yet, so these tests pin the properties
+  // the rest of the cutover will depend on before anything relies on them.
+  describe("stable agent identity", () => {
+    async function agentIdOf(org: string, handle: string): Promise<string | null> {
+      const row = await env.DB.prepare("SELECT agent_id FROM handles WHERE org = ? AND handle = ?")
+        .bind(org, handle).first<{ agent_id: string | null }>();
+      return row?.agent_id ?? null;
+    }
+
+    it("mints a distinct opaque agent_id per registration", async () => {
+      await register({ org: "acme", handle: "id-one" }, "203.0.113.60");
+      await register({ org: "acme", handle: "id-two" }, "203.0.113.61");
+      const one = await agentIdOf("acme", "id-one");
+      const two = await agentIdOf("acme", "id-two");
+      expect(one).toMatch(/^agt_[0-9a-f]{32}$/);
+      expect(two).toMatch(/^agt_[0-9a-f]{32}$/);
+      expect(one).not.toBe(two);
+    });
+
+    // The spec forbids deriving the identity from the handle, credential,
+    // device, or signing key, and requires two organizations to be able to
+    // hold the same handle without sharing an identity.
+    it("does not derive the identity from the handle: same handle, two orgs", async () => {
+      await register({ org: "org-alpha", handle: "shared" }, "203.0.113.62");
+      await register({ org: "org-beta", handle: "shared" }, "203.0.113.63");
+      const alpha = await agentIdOf("org-alpha", "shared");
+      const beta = await agentIdOf("org-beta", "shared");
+      expect(alpha).not.toBeNull();
+      expect(alpha).not.toBe(beta);
+    });
+
+    it("never leaves a registered handle without an identity", async () => {
+      await register({ org: "acme", handle: "always-identified" }, "203.0.113.64");
+      const unidentified = await env.DB.prepare(
+        "SELECT COUNT(*) AS n FROM handles WHERE agent_id IS NULL",
+      ).first<{ n: number }>();
+      expect(unidentified?.n).toBe(0);
+    });
+
+    // Storage-level, not call-site-level. The decision's own argument is that
+    // remembering to do this at every write site is not an identity boundary.
+    it("refuses an insert with no agent_id", async () => {
+      await expect(env.DB.prepare(
+        "INSERT INTO handles (org, handle, token_hash, created_at, org_role) VALUES (?, ?, ?, ?, ?)",
+      ).bind("acme", "no-identity", "x".repeat(64), Date.now(), "member").run()).rejects.toThrow();
+    });
+
+    it("refuses to repoint an existing handle at another identity", async () => {
+      await register({ org: "acme", handle: "immutable-id" }, "203.0.113.65");
+      await expect(env.DB.prepare(
+        "UPDATE handles SET agent_id = ? WHERE org = ? AND handle = ?",
+      ).bind("agt_" + "9".repeat(32), "acme", "immutable-id").run()).rejects.toThrow();
+    });
+
+    it("refuses two handles in one org sharing an identity", async () => {
+      await register({ org: "acme", handle: "unique-a" }, "203.0.113.66");
+      const taken = await agentIdOf("acme", "unique-a");
+      await expect(env.DB.prepare(
+        "INSERT INTO handles (org, handle, token_hash, created_at, org_role, agent_id) VALUES (?, ?, ?, ?, ?, ?)",
+      ).bind("acme", "unique-b", "y".repeat(64), Date.now(), "member", taken).run()).rejects.toThrow();
+    });
+
+    // Slice 2 (#321): the id now travels on the authenticated Identity, so
+    // slices 4-7 can key on it without re-querying handles. The lookup is
+    // still by the caller-supplied handle -- slice 3 inverts that.
+    it("carries agentId on an authenticated identity", async () => {
+      const token = await registerHandle("authed", "claude", "acme");
+      const authed = await authenticatedHandle(env.DB, "acme", "authed", token);
+      expect(authed?.agentId).toMatch(/^agt_[0-9a-f]{32}$/);
+      expect(authed?.agentId).toBe(await agentIdOf("acme", "authed"));
+    });
+
+    it("gives the same handle in two orgs different authenticated principals", async () => {
+      const alpha = await registerHandle("twin", "claude", "org-one");
+      const beta = await registerHandle("twin", "claude", "org-two");
+      const a = await authenticatedHandle(env.DB, "org-one", "twin", alpha);
+      const b = await authenticatedHandle(env.DB, "org-two", "twin", beta);
+      expect(a?.agentId).toMatch(/^agt_[0-9a-f]{32}$/);
+      expect(b?.agentId).toMatch(/^agt_[0-9a-f]{32}$/);
+      expect(a?.agentId).not.toBe(b?.agentId);
+    });
+
+    it("returns no identity at all for a wrong token", async () => {
+      await registerHandle("wrong-token", "claude", "acme");
+      expect(await authenticatedHandle(env.DB, "acme", "wrong-token", "not-the-token")).toBeNull();
+    });
+
+    // One handle's credential must not authenticate another row, which is the
+    // property slice 3 has to preserve when it stops looking the row up by
+    // the caller-supplied handle at all.
+    it("does not let one handle's token authenticate another handle", async () => {
+      await registerHandle("victim", "claude", "acme");
+      const attacker = await registerHandle("attacker", "claude", "acme");
+      expect(await authenticatedHandle(env.DB, "acme", "victim", attacker)).toBeNull();
+    });
+
+    // The shim slice 9 deletes. Tested rather than shipped uncalled: slices 4
+    // to 7 route their handle-keyed call sites through it while they move.
+    it("resolveAgentId maps an address to its identity, and misses to null", async () => {
+      await register({ org: "acme", handle: "resolvable" }, "203.0.113.69");
+      const direct = await agentIdOf("acme", "resolvable");
+      expect(await resolveAgentId(env.DB, "acme", "resolvable")).toBe(direct);
+      expect(await resolveAgentId(env.DB, "acme", "no-such-handle")).toBeNull();
+      // Scoped by org: the same handle elsewhere is a different principal.
+      expect(await resolveAgentId(env.DB, "other-org", "resolvable")).toBeNull();
+    });
+
+    it("writes no identity when registration fails", async () => {
+      const invite = await issueInvite("acme", "doomed");
+      await register({ invite, handle: "consumed" }, "203.0.113.67");
+      const replay = await register({ invite, handle: "never-created" }, "203.0.113.68");
+      expect(replay.status).toBe(404);
+      expect(await agentIdOf("acme", "never-created")).toBeNull();
+    });
+  });
+
+  it("registers a handle and returns org + token", async () => {
     const invite = await issueInvite("acme", "successful-registration");
     const res = await register({ invite, handle: "ken", agent_kind: "claude" }, "203.0.113.10");
     expect(res.status).toBe(200);
-    const json = await res.json<{ token: string; address: string }>();
+    const json = await res.json<{ org: string; token: string }>();
     expect(json.token.length).toBeGreaterThanOrEqual(40);
-    expect(json.address).toBe("ken@relay.test");
+    // No address on the wire: it is formatAddress(org, handle) and the caller
+    // already holds both.
+    expect(json).not.toHaveProperty("address");
     const inviteRow = await env.DB.prepare("SELECT used_at, used_by FROM invites WHERE org = ? AND used_by = ?")
       .bind("acme", "ken").first<{ used_at: number | null; used_by: string | null }>();
     expect(inviteRow?.used_at).toEqual(expect.any(Number));
@@ -40,7 +162,7 @@ describe("POST /v1/register", () => {
     const invite = await issueInvite("invite-org", "tenant-proof");
     const first = await register({ invite, org: "attacker-choice", handle: "invited" }, "203.0.113.161");
     expect(first.status).toBe(200);
-    expect(await first.json()).toMatchObject({ org: "invite-org", address: "invited@relay.test" });
+    expect(await first.json()).toMatchObject({ org: "invite-org" });
     const replay = await register({ invite, handle: "replay" }, "203.0.113.162");
     expect(replay.status).toBe(404);
   });
@@ -137,9 +259,9 @@ describe("POST /v1/register", () => {
   it("registers caller-only (no agent_kind) and stores NULL", async () => {
     const res = await register({ org: "acme", handle: "solo" }, "203.0.113.13");
     expect(res.status).toBe(200);
-    const json = await res.json<{ token: string; address: string }>();
+    const json = await res.json<{ org: string; token: string }>();
     expect(json.token.length).toBeGreaterThanOrEqual(40);
-    expect(json.address).toBe("solo@relay.test");
+    
     const row = await env.DB.prepare("SELECT agent_kind FROM handles WHERE org = ? AND handle = ?")
       .bind("acme", "solo").first<{ agent_kind: string | null }>();
     expect(row?.agent_kind).toBeNull();
@@ -179,14 +301,17 @@ describe("POST /v1/register", () => {
     })).status).toBe(401);
   });
 
-  it("returns the tenant hostname on the hosted relay", async () => {
+  // Was: the response carries `person@hosted.agentcall.benree.tech`. There is
+  // no address on the wire now, and the tenant comes from the invite rather
+  // than from any hostname, so what is asserted is the org.
+  it("returns the invite's tenant on the hosted relay", async () => {
     const invite = await issueInvite("hosted", "hosted-address");
     const res = await SELF.fetch("https://agent-call.app/v1/register", {
       method: "POST",
       headers: { "content-type": "application/json", "cf-connecting-ip": "203.0.113.153" },
       body: JSON.stringify({ invite, handle: "person", agent_kind: "claude" }),
     });
-    expect((await res.json<{ address: string }>()).address).toBe("person@hosted.agent-call.app");
+    expect(await res.json()).toMatchObject({ org: "hosted" });
   });
 
   it("uses the invite tenant rather than a conflicting hosted tenant subdomain", async () => {
@@ -196,7 +321,7 @@ describe("POST /v1/register", () => {
       headers: { "content-type": "application/json", "cf-connecting-ip": "203.0.113.213" },
       body: JSON.stringify({ invite, handle: "person" }),
     });
-    expect((await res.json<{ address: string }>()).address).toBe("person@bob.agent-call.app");
+    expect(await res.json()).toMatchObject({ org: "bob" });
   });
 });
 

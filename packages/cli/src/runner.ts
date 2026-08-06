@@ -55,6 +55,34 @@ export class AgentRunError extends Error {
   constructor(message: string, public code: "timeout" | "agent_error" | "canceled") { super(message); }
 }
 
+// A resume the agent CLI can no longer honour: the recorded session is gone —
+// pruned, written by a since-upgraded CLI, or never durable in the first place.
+// Conversation state lives in claude's/codex's own session store, which
+// AgentCall neither owns nor prunes, so an admitted binding can still fail at
+// spawn. That reaches the listener as a plain AgentRunError and used to be
+// reported to the caller as "the agent hit an internal error", which points at
+// the wrong thing entirely: the conversation ended, the agent is fine.
+//
+// Probed 2026-08-05 against the installed binaries. Both exit 1 with an empty
+// stdout and the text on stderr, which runAgent folds into `agent exited 1:`:
+//   claude: No conversation found with session ID: <id>
+//   codex:  Error: thread/resume: thread/resume failed: no rollout found for
+//           thread id <id> (code -32600)
+// String-matching a CLI's error text is the same shape as classifyAgentFailure
+// (verify.ts) and carries the same maintenance risk: a reworded message
+// degrades to the old "agent_error", which is the safe direction to fail.
+//
+// The listener consults this ONLY when it actually passed a resume, which is
+// what bounds it. A caller who talks the agent into printing this text on a
+// failing turn can therefore only get their OWN conversation dropped — no
+// other caller's binding is reachable, and nothing is granted.
+export function isResumeFailure(kind: AgentKind, error: unknown): boolean {
+  const msg = String(error instanceof Error ? error.message : error);
+  return kind === "claude"
+    ? /no conversation found with session id/i.test(msg)
+    : /no rollout found for thread id|thread\/resume failed/i.test(msg);
+}
+
 // Cap on accumulated stdout while an agent is running, independent of the
 // final MAX_REPLY_BYTES truncation applied to the parsed reply text — this
 // bounds memory for a runaway/malicious process that never stops writing.

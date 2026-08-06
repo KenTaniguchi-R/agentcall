@@ -4,7 +4,7 @@ import type { AgentKind } from "@benree/agentcall-shared";
 import { resolveAgentBin } from "./bin.js";
 import { runAgent, type AgentOutput } from "./runner.js";
 
-interface RoomSafetyTuple {
+export interface RoomSafetyTuple {
   agent: AgentKind;
   cliVersion: string;
   platform: NodeJS.Platform;
@@ -60,7 +60,7 @@ export interface RoomSafetyEvidence extends RoomSafetyTuple {
   surfaces: RoomSafetySurfaceResults;
 }
 
-type RoomSafetySupport =
+export type RoomSafetySupport =
   | { supported: true; evidence: RoomSafetyEvidence }
   | { supported: false; reason: string };
 
@@ -215,21 +215,52 @@ export function roomSafetySupport(
   };
 }
 
-export function buildRoomSafeSpawnContract(
-  options: BuildRoomSafeSpawnContractOptions,
-): RoomSafeSpawnContract {
+interface ResolveRoomSafetyTupleOptions {
+  agent: AgentKind;
+  platform?: NodeJS.Platform;
+  arch?: string;
+  resolveBin?: (agent: AgentKind) => string;
+  readVersion?: (bin: string) => string;
+}
+
+/** Resolves which (agent, version, platform, arch) tuple is actually installed here. */
+export function resolveRoomSafetyTuple(options: ResolveRoomSafetyTupleOptions): RoomSafetyTuple {
   const resolveBin = options.resolveBin ?? resolveAgentBin;
   const bin = resolveBin(options.agent);
   const readVersion = options.readVersion ?? ((path: string) =>
     execFileSync(path, ["--version"], { encoding: "utf8", stdio: ["ignore", "pipe", "ignore"] }));
   const cliVersion = readVersion(bin).match(/\b(\d+\.\d+\.\d+)\b/)?.[1];
   if (!cliVersion) throw new Error(`could not determine Room safety version for ${options.agent}`);
-  const tuple: RoomSafetyTuple = {
+  return {
     agent: options.agent,
     cliVersion,
     platform: options.platform ?? process.platform,
     arch: options.arch ?? process.arch,
   };
+}
+
+interface CheckRoomSafetyEligibilityOptions extends ResolveRoomSafetyTupleOptions {
+  evidenceCatalog?: readonly RoomSafetyEvidence[];
+  now?: Date;
+}
+
+/**
+ * Check-only: whether this machine's installed agent can join a Room, with no
+ * `prompt`/`workdir` required. This is what `room`/`room join` call before
+ * creating or joining anything — `buildRoomSafeSpawnContract` below is for
+ * actually spawning an answering agent, which is out of scope until R2b.
+ */
+export function checkRoomSafetyEligibility(options: CheckRoomSafetyEligibilityOptions): RoomSafetySupport {
+  const tuple = resolveRoomSafetyTuple(options);
+  return roomSafetySupport(tuple, options.evidenceCatalog, options.now);
+}
+
+export function buildRoomSafeSpawnContract(
+  options: BuildRoomSafeSpawnContractOptions,
+): RoomSafeSpawnContract {
+  const resolveBin = options.resolveBin ?? resolveAgentBin;
+  const bin = resolveBin(options.agent);
+  const tuple = resolveRoomSafetyTuple(options);
   const support = roomSafetySupport(tuple, options.evidenceCatalog);
   if (!support.supported) throw new Error(support.reason);
   if (tuple.agent !== "claude") {

@@ -1,7 +1,7 @@
 import { DurableObject } from "cloudflare:workers";
 import {
-  ROOM_ABSOLUTE_TTL_MS, ROOM_HEARTBEAT_GRACE_MS, ROOM_IDLE_TTL_MS,
-  ROOM_AGENT_TIMEOUT_MS, ROOM_INVITE_TTL_MS, ROOM_MAX_CALLS_PER_PARTICIPANT,
+  ROOM_HEARTBEAT_GRACE_MS, ROOM_IDLE_TTL_MS,
+  ROOM_AGENT_TIMEOUT_MS, ROOM_MAX_CALLS_PER_PARTICIPANT,
   ROOM_MAX_CALL_WIRE_BYTES, ROOM_MAX_FAILED_JOINS, ROOM_SUBMISSION_COOLDOWN_MS,
   ROOM_VERIFICATION_TTL_MS,
   RoomAction, RoomMutationResponse, RoomSnapshot, RoomSocketClientFrame,
@@ -21,7 +21,7 @@ type ClosedTombstone = { close_reason: RoomCloseReasonType; cleanup_at: number }
 type InternalCreate = {
   room: RoomRecordType;
   host: RoomParticipantRecordType;
-  invites: RoomInviteRecordType[];
+  invite: RoomInviteRecordType;
 };
 type InternalJoin = {
   invite_id: string;
@@ -75,10 +75,17 @@ function publicParticipant(participant: RoomParticipantRecordType) {
   return publicRecord;
 }
 
+// Join order, host first. Every client renders this list beside the membership
+// fingerprint, so the order has to be identical everywhere: participant_id
+// breaks a same-millisecond tie rather than leaving it to storage order.
 function publicRoom(room: RoomRecordType, participants: RoomParticipantRecordType[]) {
   return {
     room,
-    participants: participants.sort((left, right) => left.seat - right.seat).map(publicParticipant),
+    participants: participants
+      .sort((left, right) =>
+        left.joined_at - right.joined_at ||
+        (left.participant_id < right.participant_id ? -1 : left.participant_id > right.participant_id ? 1 : 0))
+      .map(publicParticipant),
   };
 }
 
@@ -155,7 +162,7 @@ export class RoomDO extends DurableObject {
       if (await txn.get(ROOM_KEY)) return false;
       await txn.put(ROOM_KEY, input.room);
       await txn.put(participantKey(input.host.participant_id), input.host);
-      for (const invite of input.invites) await txn.put(inviteKey(invite.invite_id), invite);
+      await txn.put(inviteKey(input.invite.invite_id), input.invite);
       await txn.put(FAILED_JOINS_KEY, 0);
       await this.schedule(txn, input.room, [input.host], now);
       return true;
@@ -178,21 +185,24 @@ export class RoomDO extends DurableObject {
       if (!invite || now >= invite.expires_at || !constantTimeEqual(invite.secret_hash, input.invite_hash)) {
         return { status: 404 as const, error: "Room invitation unavailable" };
       }
-      if (invite.participant_id) {
-        const existing = await txn.get<RoomParticipantRecordType>(participantKey(invite.participant_id));
+      const participants = [...(await txn.list<RoomParticipantRecordType>({ prefix: "participant:" })).values()];
+      const retry = participants.find((existing) =>
+        constantTimeEqual(existing.credential_hash, input.participant.credential_hash));
+      if (retry) {
         if (
-          existing?.state === "pending" &&
-          constantTimeEqual(existing.credential_hash, input.participant.credential_hash) &&
-          existing.display_name === input.participant.display_name &&
-          existing.signing_public_key === input.participant.signing_public_key &&
-          existing.encryption_public_key === input.participant.encryption_public_key &&
-          existing.agent_adapter === input.participant.agent_adapter
+          retry.state === "pending" &&
+          retry.display_name === input.participant.display_name &&
+          retry.signing_public_key === input.participant.signing_public_key &&
+          retry.encryption_public_key === input.participant.encryption_public_key &&
+          retry.agent_adapter === input.participant.agent_adapter
         ) {
-          return { status: 200 as const, participant: existing, room };
+          return { status: 200 as const, participant: retry, room };
         }
         return { status: 404 as const, error: "Room invitation unavailable" };
       }
-      const participants = [...(await txn.list<RoomParticipantRecordType>({ prefix: "participant:" })).values()];
+      if (invite.seats_remaining <= 0) {
+        return { status: 404 as const, error: "Room invitation unavailable" };
+      }
       const comparable = input.participant.display_name.normalize("NFC").toLowerCase();
       if (participants.some((participant) => participant.display_name.normalize("NFC").toLowerCase() === comparable)) {
         return { status: 409 as const, error: "Room display name unavailable" };
@@ -202,11 +212,9 @@ export class RoomDO extends DurableObject {
         participant.encryption_public_key === input.participant.encryption_public_key)) {
         return { status: 409 as const, error: "Room public key unavailable" };
       }
-      const participant = { ...input.participant, seat: invite.seat };
+      const participant = input.participant;
       await txn.put(participantKey(participant.participant_id), participant);
-      await txn.put(inviteKey(invite.invite_id), {
-        ...invite, consumed_at: now, participant_id: participant.participant_id,
-      });
+      await txn.put(inviteKey(invite.invite_id), { ...invite, seats_remaining: invite.seats_remaining - 1 });
       const nextRoom = { ...room, idle_deadline: Math.min(room.expires_at, now + ROOM_IDLE_TTL_MS) };
       await txn.put(ROOM_KEY, nextRoom);
       await this.schedule(txn, nextRoom, [...participants, participant], now);

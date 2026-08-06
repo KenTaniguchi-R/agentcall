@@ -16,26 +16,26 @@ import {
   encryptionKeyTranscript, exportPublicKey, fingerprint, generateEncryptionKeyPair, identityTranscript,
   generateIdentityKeyPair, HPKE_SUITE, keyIdFor, RELAY_CALL_TIMEOUT_MS, requestTranscript,
   signTranscript, transcriptHash, type E2EEOutcomeType, type E2EEResponsePayloadType,
+  type OrgInviteMetadataType,
 } from "@benree/agentcall-shared";
 import { openE2EERequest, sealE2EEResponse } from "../src/e2ee.js";
 import type { StoredKeys } from "../src/keys.js";
 import { tempDir } from "./helpers.js";
 
-// The "local-sota" contact stands in for an address on whichever relay the
-// current test spun up. pickOutboundLine (src/outbound.ts) now matches the
-// destination's host against a LINE's own configured relay before placing a
-// call, so a fixed placeholder host could never match a real seeded line.
-// routing.host lets each test point the mocked resolution at its own
-// ephemeral relay's host; vi.hoisted keeps the mutable ref safe against
-// vi.mock's hoisting to the top of the module.
-const routing = vi.hoisted(() => ({ host: "local.test" }));
+// The "local-sota" contact stands in for a colleague in the caller's own
+// organization. pickOutboundLine (src/outbound.ts) matches the destination's
+// ORG against a LINE's configured org — it used to match relay hosts, which is
+// why this stub used to carry one. routing.org lets a test point the mocked
+// resolution at whatever org it seeded; vi.hoisted keeps the mutable ref safe
+// against vi.mock's hoisting to the top of the module.
+const routing = vi.hoisted(() => ({ host: "local.test", org: "acme" }));
 vi.mock("../src/contacts.js", async (importOriginal) => {
   const actual = await importOriginal<typeof import("../src/contacts.js")>();
   return {
     ...actual,
     resolveAddress: (...args: Parameters<typeof actual.resolveAddress>) =>
       args[1] === "local-sota"
-        ? { ok: true as const, handle: "sota", host: routing.host, address: `sota@${routing.host}` }
+        ? { ok: true as const, org: routing.org, handle: "sota", address: `@${routing.org}/sota` }
         : actual.resolveAddress(...args),
   };
 });
@@ -112,13 +112,14 @@ describe("trust CLI", () => {
     const testHome = home();
     const machine = getMachinePaths(testHome, testHome);
     writeJsonAtomic(machine.knownPeersFile, { peers: [{
-      address: "peer@relay.example", identity_pub: "abc",
+      relay_origin: "relay.example",
+      address: "@acme/peer", identity_pub: "abc",
       fingerprint: "SHA256:0123456789abcdef0123456789abcdef",
       first_seen_at: 1, highest_encryption_epoch: 1, call_count: 1,
     }] });
-    const result = await runCommand(testHome, ["trust", "--reset", "peer@relay.example"]);
+    const result = await runCommand(testHome, ["trust", "--reset", "@acme/peer"]);
     expect(result.code, result.stderr).toBe(0);
-    expect(result.stdout).toContain("Removed the identity pin for peer@relay.example");
+    expect(result.stdout).toContain("Removed the identity pin for @acme/peer");
     expect(loadKnownPeers(machine)).toEqual([]);
   });
 
@@ -129,10 +130,14 @@ describe("trust CLI", () => {
       const encryption = await generateEncryptionKeyPair();
       const pub = await exportPublicKey(encryption.publicKey);
       const record = {
-        v: 1 as const, address, key_id: await keyIdFor(pub), suite: HPKE_SUITE, pub,
+        v: 1 as const, relay_origin: "relay.test",
+        address, key_id: await keyIdFor(pub), suite: HPKE_SUITE, pub,
         epoch: 1, not_before: Date.now() - 1_000, not_after: Date.now() + 60_000, prev: null,
       };
-      const identityRecord = { v: 1 as const, address, identity_pub: identityPub };
+      const identityRecord = {
+        v: 1 as const, relay_origin: "relay.test",
+        address, identity_pub: identityPub,
+      };
       return {
         expected: await fingerprint(identityTranscript(identityRecord)),
         response: {
@@ -145,7 +150,7 @@ describe("trust CLI", () => {
     const relay = "https://local.test";
     routing.host = "local.test";
     vi.stubGlobal("fetch", vi.fn(async () => new Response(JSON.stringify(response), { status: 200 })));
-    const address = "sota@local.test";
+    const address = "@acme/sota";
     const firstIdentity = await identityBundle(address);
     response = firstIdentity.response;
     const testHome = home();
@@ -210,10 +215,14 @@ async function startCallRelay(
 ): Promise<{ relay: string; connections: () => number }> {
   const remote = await testKeys();
   const relayOrigin = "127.0.0.1";
-  const remoteAddress = `sota@${relayOrigin}`;
-  const identity = { v: 1 as const, address: remoteAddress, identity_pub: remote.identity_pub };
+  const remoteAddress = "@acme/sota";
+  const identity = {
+    v: 1 as const, relay_origin: relayOrigin,
+    address: remoteAddress, identity_pub: remote.identity_pub,
+  };
   const record = {
-    v: 1 as const, address: remoteAddress, key_id: await keyIdFor(remote.encryption_pub),
+    v: 1 as const, relay_origin: relayOrigin,
+    address: remoteAddress, key_id: await keyIdFor(remote.encryption_pub),
     suite: HPKE_SUITE, pub: remote.encryption_pub, epoch: 1,
     not_before: Date.now() - 1_000, not_after: Date.now() + 60_000, prev: null,
   };
@@ -252,7 +261,7 @@ async function startCallRelay(
         const request = await openE2EERequest(
           outer.envelope, remote.encryption_pkcs8, local.identity_pub,
           {
-            relay_origin: relayOrigin, from: `ken@${relayOrigin}`, to: remoteAddress,
+            relay_origin: relayOrigin, from: "@acme/ken", to: remoteAddress,
             key_id: record.key_id, epoch: record.epoch,
           },
         );
@@ -260,7 +269,7 @@ async function startCallRelay(
           const issuedAt = Date.now();
           const response: E2EEResponsePayloadType = {
             v: 1, direction: "response", relay_origin: relayOrigin,
-            from: remoteAddress, to: `ken@${relayOrigin}`, request_id: request.request_id,
+            from: remoteAddress, to: "@acme/ken", request_id: request.request_id,
             sender_identity_key_id: await keyIdFor(remote.identity_pub),
             recipient_encryption_key_id: await keyIdFor(local.encryption_pub),
             recipient_epoch: local.epoch, issued_at: issuedAt,
@@ -471,7 +480,7 @@ describe.sequential("CLI command actions", () => {
   });
 
   it("requires setup before fetching another agent's card", async () => {
-    const out = await runCommand(home(), ["card", "ken@acme.agent-call.app"]);
+    const out = await runCommand(home(), ["card", "@acme/ken"]);
     expect(out.code).toBe(1);
     expect(out.stderr).toMatch(/agentcall setup/);
   });
@@ -497,13 +506,19 @@ describe.sequential("CLI command actions", () => {
     const created = await runCommand(testHome, [
       "invite", "create", "--description", "contractor", "--expires-in-days", "30", "--role", "admin",
     ]);
-    const listed = await runCommand(testHome, ["invite", "list"]);
+    // #313 flipped `invite list`'s default from JSON to a table, so the
+    // machine-readable shape now lives behind --json like every other list
+    // verb. The relay request assertions below are unchanged by that.
+    const listed = await runCommand(testHome, ["invite", "list", "--json"]);
     const revoked = await runCommand(testHome, ["invite", "revoke", id]);
 
     expect(created).toMatchObject({ code: 0, stdout: secret });
     expect(created.stderr).toContain(`ID ${id}`);
     expect(listed.code).toBe(0);
     expect(JSON.parse(listed.stdout)).toEqual([metadata]);
+    // Compact, like `contacts list --json` and `line list --json`: pretty
+    // printing is for reading, and reading is what the table is for now.
+    expect(listed.stdout.trim()).not.toContain("\n");
     expect(listed.stdout).not.toContain(secret);
     expect(revoked).toMatchObject({ code: 0, stdout: expect.stringContaining(`Revoked ${id}`) });
     expect(requests).toEqual([
@@ -511,6 +526,127 @@ describe.sequential("CLI command actions", () => {
       { url: "/v1/invites/list", body: "" },
       { url: `/v1/invites/${id}/revoke`, body: "" },
     ]);
+  });
+
+  // #313. The real task at this inventory is "which of these do I revoke?",
+  // which the raw JSON dump answered by making the admin read four nullable
+  // timestamps off a wall of objects. State is derived here, not stored.
+  describe("invite list", () => {
+    const ACTIVE = Date.UTC(2033, 4, 18); // far future, so the date renders stably
+    const PAST = Date.UTC(2020, 0, 15);
+    const invite = (over: Partial<OrgInviteMetadataType> & { id: string }): OrgInviteMetadataType => ({
+      description: "", created_by: "ken", created_at: 1, expires_at: ACTIVE,
+      used_at: null, used_by: null, revoked_at: null, role: "member", ...over,
+    });
+
+    async function list(invites: OrgInviteMetadataType[], args: string[] = []) {
+      const relay = await startRelay(() => ({ status: 200, body: { invites } }));
+      const testHome = home();
+      seedConfig(testHome, relay);
+      return await runCommand(testHome, ["invite", "list", ...args]);
+    }
+
+    it("renders a row per invite carrying role, description, and expiry", async () => {
+      const id = "a".repeat(64);
+      const out = await list([invite({ id, description: "contractor", role: "member" })]);
+      expect(out.code).toBe(0);
+      expect(out.stdout).toMatch(/member/);
+      expect(out.stdout).toContain("contractor");
+      expect(out.stdout).toContain("2033-05-18");
+    });
+
+    // The whole point of showing the ID: `invite revoke` takes the full
+    // 64-char value (ORG_INVITE_ID_RE), so a truncated one would force the
+    // second lookup this issue exists to remove.
+    it("prints the full revoke ID so revoking is a copy, not another command", async () => {
+      const id = "b".repeat(64);
+      const out = await list([invite({ id })]);
+      expect(out.stdout).toContain(id);
+    });
+
+    it("derives state from the nullable timestamps rather than printing them", async () => {
+      const [a, b, c, d] = ["1", "2", "3", "4"].map((n) => n.repeat(64));
+      const out = await list([
+        invite({ id: a }),
+        invite({ id: b, expires_at: PAST }),
+        invite({ id: c, used_at: 5, used_by: "sota" }),
+        invite({ id: d, revoked_at: 6 }),
+      ]);
+      expect(out.stdout).toMatch(/active/);
+      expect(out.stdout).toMatch(/expired/);
+      expect(out.stdout).toMatch(/used by sota/);
+      expect(out.stdout).toMatch(/revoked/);
+      // Raw epoch timestamps are what the JSON dump made the admin read.
+      expect(out.stdout).not.toContain("used_at");
+      expect(out.stdout).not.toContain("revoked_at");
+    });
+
+    // Same reasoning as #304's admin call-out: an admin invite can itself
+    // issue invites and export the audit log, so "did I issue any admin
+    // invites?" must be answerable at a glance.
+    it("makes an admin invite stand out from a member invite", async () => {
+      const out = await list([
+        invite({ id: "c".repeat(64), role: "admin" }),
+        invite({ id: "d".repeat(64), role: "member" }),
+      ]);
+      expect(out.stdout).toMatch(/ADMIN/);
+    });
+
+    it("prints a next step rather than an empty array when there are none", async () => {
+      const out = await list([]);
+      expect(out.code).toBe(0);
+      expect(out.stdout).not.toContain("[]");
+      expect(out.stdout).toContain("agentcall invite create");
+    });
+
+    // A description is caller-supplied free text: MAX_ORG_INVITE_DESCRIPTION
+    // bounds its length and nothing bounds its character set
+    // (packages/shared/src/invite.ts). The pretty-printed JSON this listing
+    // replaced escaped control characters for free; an aligned row does not,
+    // so the row an operator most needs to see - an admin grant - is exactly
+    // the one an erase sequence can hide.
+    it("neutralizes terminal escapes in a caller-supplied description", async () => {
+      const out = await list([invite({
+        id: "f".repeat(64),
+        description: "\u001b[2K\rinnocent",
+      })]);
+      expect(out.stdout).not.toContain("\u001b");
+      expect(out.stdout).not.toContain("\r");
+      expect(out.stdout).toContain("innocent");
+    });
+
+    it("does not let a description forge an extra row", async () => {
+      const out = await list([invite({
+        id: "0".repeat(64),
+        description: "ok\nactive  ADMIN  2099-01-01  forged",
+      })]);
+      expect(out.stdout.trim().split("\n")).toHaveLength(1);
+      expect(out.stdout).toContain("forged");
+    });
+
+    // stringifyTerminalSafeJson, not bare JSON.stringify: JSON escapes C0 but
+    // permits C1 and bidi through as literal characters, so `--json` piped to
+    // a pager is still a terminal write.
+    it("escapes C1 and bidi in --json, which JSON.stringify leaves literal", async () => {
+      const out = await list([invite({
+        id: "9".repeat(64),
+        description: "a\u009b31mb\u202ec",
+      })], ["--json"]);
+      expect(out.stdout).not.toContain("\u009b");
+      expect(out.stdout).not.toContain("\u202e");
+      expect(JSON.parse(out.stdout)[0].description).toContain("31m");
+    });
+
+    it("still emits the raw array under --json", async () => {
+      const rows = [invite({ id: "e".repeat(64) })];
+      const out = await list(rows, ["--json"]);
+      expect(JSON.parse(out.stdout)).toEqual(rows);
+      // Compact like the sibling list verbs, not the old `null, 2`. Asserted
+      // as "one line" rather than against JSON.stringify of the fixture: the
+      // response is re-serialized through the zod schema on the way back, so
+      // key order is the schema's, not this object literal's.
+      expect(out.stdout.trim()).not.toContain("\n");
+    });
   });
 
   // #304. On a terminal the admin's next move is "send this to someone", not
@@ -861,6 +997,33 @@ describe.sequential("CLI command actions", () => {
     expect(out.stdout).toContain("Evicted 2 member(s)");
   });
 
+  // Same defect class as the invite listing: a join-key description is
+  // caller-supplied free text (MAX_ROSTER_JOIN_KEY_DESCRIPTION bounds length,
+  // not character set) rendered into a row. This row is tab-delimited, so a
+  // tab shifts every following column as well.
+  it("neutralizes terminal escapes and tabs in a join-key description", async () => {
+    const metadata = {
+      prefix: KEY_PREFIX, description: "safe\u001b[2K\r\tspoofed", created_by: "ken",
+      created_at: 1, expires_at: 2_000_000_000_000, reusable: true, used: false, revoked_at: null,
+    };
+    const relay = await startRelay(() => ({ status: 200, body: { keys: [metadata] } }));
+    const testHome = home();
+    seedConfig(testHome, relay);
+    saveMembership(getLinePaths(getMachinePaths(testHome), "claude"), { name: "acme", relay, roster_id: A });
+
+    const out = await runCommand(testHome, [
+      "roster", "key", "list", "acme", "--admin-secret", "admin-secret",
+    ]);
+
+    expect(out.code).toBe(0);
+    expect(out.stdout).not.toContain("\u001b");
+    expect(out.stdout).not.toContain("\r");
+    // The column separators this row legitimately uses are the ones the
+    // renderer writes, not any the description smuggled in.
+    expect(out.stdout.split("\t")).toHaveLength(6);
+    expect(out.stdout).toContain("spoofed");
+  });
+
   it("issues a key once and lists metadata without a secret", async () => {
     const metadata = {
       prefix: KEY_PREFIX, description: "contractor", created_by: "ken", created_at: 1, expires_at: 2_000_000_000_000,
@@ -1016,8 +1179,99 @@ describe.sequential("CLI command actions", () => {
 
     expect(out.code).toBe(1);
     expect(out.stdout).toBe("");
-    expect(out.stderr).toMatch(/conversation is on task.*resolved-task.*not.*other-task/i);
+    // The store keys by task now, so there may be several open conversations
+    // and "that conversation is on X, not Y" can no longer name them. Listing
+    // the open tasks keeps the information the old message carried.
+    expect(out.stderr).toMatch(/No open conversation with local-sota on task "other-task"/);
+    expect(out.stderr).toMatch(/Open: resolved-task/);
     expect(callRelay.connections()).toBe(0);
+  });
+
+  it("keeps one conversation per task and refuses to guess between them", async () => {
+    const callRelay = await startCallRelay(() => {});
+    routing.host = new URL(callRelay.relay).host;
+    const testHome = home();
+    const paths = seedConfig(testHome, callRelay.relay);
+    rememberOutbound(paths, {
+      relay: callRelay.relay, from: "ken", to: "sota", task: "review",
+      context_id: "ctx_AAAAAAAAAAAAAAAAAAAAAA", at: 1,
+    });
+    rememberOutbound(paths, {
+      relay: callRelay.relay, from: "ken", to: "sota", task: "triage",
+      context_id: "ctx_BBBBBBBBBBBBBBBBBBBBBB", at: 2,
+    });
+
+    // Keyed on the callee alone, the second call silently discarded the first.
+    expect(loadOutbound(paths)).toHaveLength(2);
+
+    const out = await runCommand(testHome, ["call", "local-sota", "follow up", "--continue"]);
+
+    expect(out.code).toBe(1);
+    expect(out.stdout).toBe("");
+    expect(out.stderr).toMatch(/Several open conversations/i);
+    expect(out.stderr).toContain("review");
+    expect(out.stderr).toContain("triage");
+    expect(callRelay.connections()).toBe(0);
+  });
+
+  it("resumes the conversation --task names when several are open", async () => {
+    const frames: Record<string, unknown>[] = [];
+    const callRelay = await startCallRelay(async (frame, reply) => {
+      frames.push(frame);
+      await reply({ kind: "reply", text: "ok", task: "triage", context_id: "ctx_BBBBBBBBBBBBBBBBBBBBBB" });
+    });
+    routing.host = new URL(callRelay.relay).host;
+    const testHome = home();
+    const paths = seedConfig(testHome, callRelay.relay);
+    rememberOutbound(paths, {
+      relay: callRelay.relay, from: "ken", to: "sota", task: "review",
+      context_id: "ctx_AAAAAAAAAAAAAAAAAAAAAA", at: 1,
+    });
+    rememberOutbound(paths, {
+      relay: callRelay.relay, from: "ken", to: "sota", task: "triage",
+      context_id: "ctx_BBBBBBBBBBBBBBBBBBBBBB", at: 2,
+    });
+
+    const out = await runCommand(testHome, ["call", "local-sota", "follow up", "--continue", "--task", "triage"]);
+
+    expect(out.code).toBe(0);
+    expect(frames).toHaveLength(1);
+    expect(frames[0]).toMatchObject({ task: "triage", context_id: "ctx_BBBBBBBBBBBBBBBBBBBBBB" });
+    // The other conversation is untouched, not replaced by this turn.
+    expect(loadOutbound(paths).map((e) => e.task).sort()).toEqual(["review", "triage"]);
+  });
+
+  // The callee ends a conversation on its own schedule -- the turn cap, the
+  // TTL, or a session its agent CLI has dropped -- and says so only ever as
+  // context_unknown. rememberOutbound runs on the success path alone, so
+  // without forgetOutbound the caller's half outlived the callee's binding and
+  // every later --continue re-sent the same dead context id, failing
+  // identically forever.
+  it("clears the stored conversation when the callee reports context_unknown", async () => {
+    const callRelay = await startCallRelay(async (_frame, reply) => {
+      await reply({ kind: "failure", code: "context_unknown" });
+    });
+    routing.host = new URL(callRelay.relay).host;
+    const testHome = home();
+    const paths = seedConfig(testHome, callRelay.relay);
+    rememberOutbound(paths, {
+      relay: callRelay.relay, from: "ken", to: "sota", task: "resolved-task",
+      context_id: "ctx_AAAAAAAAAAAAAAAAAAAAAA", at: 1,
+    });
+
+    const out = await runCommand(testHome, ["call", "local-sota", "follow up", "--continue"]);
+
+    expect(out.code).toBe(1);
+    expect(out.stdout).toBe("");
+    expect(out.stderr).toMatch(/has ended/i);
+    expect(out.stderr).toMatch(/without --continue/);
+    expect(loadOutbound(paths)).toEqual([]);
+
+    // And the follow-up after that is the "start one" message rather than the
+    // same failure against an id the callee has already forgotten.
+    const again = await runCommand(testHome, ["call", "local-sota", "again", "--continue"]);
+    expect(again.code).toBe(1);
+    expect(again.stderr).toMatch(/No open conversation/);
   });
 
   it("stores a returned context and continues it with the resolved task while keeping stdout parseable", async () => {

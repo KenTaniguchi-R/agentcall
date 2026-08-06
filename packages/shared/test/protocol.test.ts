@@ -2,9 +2,9 @@ import { describe, expect, it } from "vitest";
 import {
   E2EECallerFrame, E2EEListenerToRelayFrame, E2EERelayToCallerFrame, E2EERelayToListenerFrame,
   E2EERequestPayload, E2EEOutcome,
-  HANDLE_RE, MAX_MESSAGE_BYTES, parseAddress, safeParseFrame,
+  formatAddress, HANDLE_RE, MAX_MESSAGE_BYTES, parseAddress, safeParseFrame,
   RegisterRequest, MAX_DETAIL_LENGTH, sanitizeDetail, sanitizeTerminalOutput,
-  stringifyTerminalSafeJson,
+  sanitizeTerminalCell, stringifyTerminalSafeJson,
   CallAccepted, CallStarted, CancelCall, CallCancelled, CallNotCancelled,
   AGENT_KINDS, AgentKindSchema,
   TASK_ID_RE, MAX_TASK_ID_LENGTH,
@@ -16,13 +16,13 @@ import {
 
 const requestEnvelope = {
   v: 1 as const, direction: "request" as const, relay_origin: "relay.test",
-  from: "alice@relay.test", to: "ken@relay.test", key_id: "a".repeat(32),
+  from: "@acme/alice", to: "@acme/ken", key_id: "a".repeat(32),
   epoch: 1, enc: "A", ct: "B",
 };
 
 const innerRequest = {
   v: 1 as const, direction: "request" as const, relay_origin: "relay.test",
-  from: "alice@relay.test", to: "ken@relay.test", request_id: "1".repeat(32),
+  from: "@acme/alice", to: "@acme/ken", request_id: "1".repeat(32),
   sender_identity_key_id: "2".repeat(32), recipient_encryption_key_id: "3".repeat(32),
   recipient_epoch: 1, issued_at: 1, expires_at: 2, message: "hi",
 };
@@ -63,9 +63,27 @@ describe("recovery protocol", () => {
       consumed_generation: 1, recovery_generation: 2,
       client_public_id: request.client_public_id,
       recovery_public_id: request.successor_recovery_public_id,
-      committed_at: 1, eviction_confirmed: true,
+      committed_at: 1, eviction_confirmed: true, agent_kind: "claude",
     });
     expect(JSON.stringify(receipt)).not.toContain("proof");
+  });
+
+  it("requires agent_kind, nullable for a caller-only handle (regression #346)", () => {
+    const base = {
+      org: "acme", handle: "alice", operation_id: request.operation_id,
+      consumed_generation: 1, recovery_generation: 2,
+      client_public_id: request.client_public_id,
+      recovery_public_id: request.successor_recovery_public_id,
+      committed_at: 1, eviction_confirmed: true,
+    };
+    // A caller-only handle has no agent_kind, and the relay must be able to
+    // say so explicitly rather than omit the field -- omission is exactly what
+    // left the CLI with no way to distinguish "not reported" from "genuinely
+    // none," which is how a recovered callable line came back caller-only.
+    expect(RecoveryReceipt.safeParse({ ...base, agent_kind: null }).success).toBe(true);
+    expect(RecoveryReceipt.safeParse({ ...base, agent_kind: "claude" }).success).toBe(true);
+    expect(RecoveryReceipt.safeParse({ ...base, agent_kind: "vim" }).success).toBe(false);
+    expect(RecoveryReceipt.safeParse(base).success).toBe(false);
   });
 });
 
@@ -78,14 +96,49 @@ describe("task id bounds", () => {
   });
 });
 
-describe("parseAddress", () => {
-  it("splits handle@host", () => {
-    expect(parseAddress("ken@agent-call.app")).toEqual({ handle: "ken", host: "agent-call.app" });
+describe("address grammar", () => {
+  it("splits @org/handle", () => {
+    expect(parseAddress("@acme/ken")).toEqual({ org: "acme", handle: "ken" });
   });
+
+  it("round-trips through formatAddress", () => {
+    expect(parseAddress(formatAddress("acme", "ken"))).toEqual({ org: "acme", handle: "ken" });
+    expect(formatAddress("acme", "ken")).toBe("@acme/ken");
+  });
+
+  // The whole point of the format: an address is a registry key, so nothing
+  // that looks like a host may parse. A DNS-shaped address promises resolution
+  // this system does not implement.
+  it("rejects every host-shaped form", () => {
+    expect(parseAddress("ken@agentcall.benree.tech")).toBeNull();
+    expect(parseAddress("ken@acme.agentcall.agent-call.app")).toBeNull();
+    expect(parseAddress("ken@acme")).toBeNull();
+    expect(parseAddress("@acme.corp/ken")).toBeNull();
+    expect(parseAddress("@acme/ken.tech")).toBeNull();
+  });
+
   it("rejects garbage", () => {
     expect(parseAddress("ken")).toBeNull();
-    expect(parseAddress("KEN@x.y")).toBeNull();
-    expect(parseAddress("ken@")).toBeNull();
+    expect(parseAddress("@acme/")).toBeNull();
+    expect(parseAddress("@/ken")).toBeNull();
+    expect(parseAddress("acme/ken")).toBeNull();
+    expect(parseAddress("@ACME/ken")).toBeNull();
+    expect(parseAddress("@acme/KEN")).toBeNull();
+    expect(parseAddress("@acme/ken/extra")).toBeNull();
+    expect(parseAddress("")).toBeNull();
+  });
+
+  // Leading and trailing whitespace is the paste hazard: addresses are copied
+  // out of chat and docs. Reject rather than trim, so a mis-scoped address can
+  // never be silently normalised into a valid one.
+  it("rejects surrounding whitespace rather than trimming", () => {
+    expect(parseAddress(" @acme/ken")).toBeNull();
+    expect(parseAddress("@acme/ken ")).toBeNull();
+  });
+
+  it("enforces the org length cap so the address stays short", () => {
+    expect(parseAddress(`@${"a".repeat(20)}/ken`)).not.toBeNull();
+    expect(parseAddress(`@${"a".repeat(21)}/ken`)).toBeNull();
   });
 });
 
@@ -145,6 +198,41 @@ describe("call correlation", () => {
     expect(CallStatus.safeParse({
       type: "call_status", state: "ringing", call_id: "c1", correlation_id: correlationId,
     }).success).toBe(true);
+  });
+});
+
+// sanitizeTerminalOutput deliberately keeps \n and \t so a multi-line agent
+// reply stays readable. A single-line field in an aligned listing cannot
+// afford either: a newline forges a whole extra row, and a tab shifts every
+// column after it. sanitizeTerminalCell is that stricter variant.
+describe("sanitizeTerminalCell", () => {
+  it("strips the newline that would forge an extra row in a listing", () => {
+    const forged = sanitizeTerminalCell("contractor\nactive  member  2099-01-01  spoofed");
+    expect(forged).not.toContain("\n");
+    expect(forged).toContain("contractor");
+  });
+
+  it("strips tabs, which would shift every column in a tab-delimited row", () => {
+    expect(sanitizeTerminalCell("a\tb")).toBe("a b");
+  });
+
+  it("still strips what sanitizeTerminalOutput strips - ESC, C1, CR and bidi", () => {
+    // Erase-line plus carriage-return is the pair that hides an already-printed row.
+    const erasing = sanitizeTerminalCell("\u001b[2K\rgone");
+    expect(erasing).not.toContain("\u001b");
+    expect(erasing).not.toContain("\r");
+    expect(sanitizeTerminalCell("\u009b31m")).not.toContain("\u009b");
+    expect(sanitizeTerminalCell("real \u202espoof")).toBe("real  spoof");
+  });
+
+  it("leaves ordinary text, including non-ASCII, alone", () => {
+    expect(sanitizeTerminalCell("contractor ok")).toBe("contractor ok");
+  });
+
+  it("is strictly stronger than sanitizeTerminalOutput on the same input", () => {
+    const input = "one\ntwo";
+    expect(sanitizeTerminalOutput(input)).toContain("\n");
+    expect(sanitizeTerminalCell(input)).toBe("one two");
   });
 });
 

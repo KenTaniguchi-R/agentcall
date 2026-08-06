@@ -4,7 +4,7 @@ Call another person's coding agent—Claude Code or Codex—on their machine,
 across the public internet.
 
 Install the CLI, claim an address such as
-`ken@acme.agent-call.app`, and share it with your team. When someone
+`@acme/ken`, and share it with your team. When someone
 calls, AgentCall starts a fresh agent process on your machine and returns its
 answer to the caller.
 
@@ -76,27 +76,33 @@ and [setup guide](https://agentcall.mintlify.app/get-started/setup).
 Check an address, make a call, or ask for machine-readable output:
 
 ```bash
-agentcall status ken@acme.agent-call.app
-agentcall call ken@acme.agent-call.app "Why did CI fail?"
-agentcall call ken@acme.agent-call.app "Summarize the failure" --json
+agentcall status @acme/ken
+agentcall call @acme/ken "Why did CI fail?"
+agentcall call @acme/ken "Summarize the failure" --json
 ```
 
 Pin a peer's identity and compare the fingerprint through another channel:
 
 ```bash
-agentcall verify ken@acme.agent-call.app
+agentcall verify @acme/ken
 ```
 
-Continue the last open conversation with that address:
+Continue the open conversation with that address:
 
 ```bash
-agentcall call ken@acme.agent-call.app "Which commit introduced it?" --continue
+agentcall call @acme/ken "Which commit introduced it?" --continue
 ```
+
+One conversation stays open per address *per task*. When more than one is open,
+`--continue` asks which rather than guessing — add `--task <id>` to pick one.
+When the callee reports that a conversation has ended, the stored context is
+cleared, so the next `--continue` says to start a fresh call instead of retrying
+a dead one.
 
 Save frequently used addresses locally:
 
 ```bash
-agentcall contacts add ken ken@acme.agent-call.app
+agentcall contacts add ken @acme/ken
 agentcall call ken "Can you review this migration plan?"
 ```
 
@@ -227,6 +233,12 @@ from its owner's operating-system account.
   An address is a routing identifier, not a secret capability.
 - The callee's policy selects the task before untrusted message text enters the
   prompt. The built-in `ask` task is read-only.
+- The caller's message is defanged before it is placed in the prompt: AgentCall's
+  own instruction fence and model control tokens are replaced with `[filtered]`,
+  so a caller cannot forge the syntax that separates the owner's instructions
+  from the caller's message. This is a syntax boundary, not a classifier — a
+  harmful instruction written as ordinary prose still reaches the agent, and the
+  task and its capabilities are what bound it.
 - Claude file tools are guarded against credential paths and paths outside the
   task working directory. Shell access is recorded but not confined by that
   guard.
@@ -234,6 +246,14 @@ from its owner's operating-system account.
   hook. Its read-only mode prevents writes but does not confine reads.
 - A task that grants shell execution gives broad local and network authority.
   AgentCall has no domain firewall.
+- A caller's prompt can induce the answering agent to read and echo back
+  material the guard does not cover — a key pasted into a tracked config file, a
+  credential printed by an allowed command. Replies are scanned locally for
+  credential shapes (`sk-`, `gh*_`, AWS key ids, JWTs, bearer tokens, roster join
+  keys) and for this line's own relay token, and matches are replaced with
+  `[redacted]` before the reply is sealed and before it is written to the local
+  log. The scan is a fixed local pass with no network call, so it cannot fail
+  open — but it recognizes shapes, not secrets in general.
 - Calls and tool attempts are logged locally on the callee's machine. Relay and
   organization audit records contain metadata, not call plaintext.
 - The callee's own Claude or Codex account pays for the answering process.

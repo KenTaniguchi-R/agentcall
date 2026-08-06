@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { execVerb } from "../src/verbs.js";
-import { DEFAULT_POLICY, type Policy } from "../src/policy.js";
+import { type Policy } from "../src/policy.js";
 import { ASK_TASK, type Task } from "../src/tasks.js";
 
 const meet: Task = {

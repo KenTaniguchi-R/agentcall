@@ -5,72 +5,77 @@ import { getMachinePaths } from "../paths.js";
 import { relayUrl } from "../config.js";
 import { resolveAddress } from "../contacts.js";
 import { pickOutboundLine } from "../outbound.js";
-import { findOutbound, loadOutbound, rememberOutbound } from "../contexts-out.js";
+import { forgetOutbound, matchOutbound, loadOutbound, rememberOutbound } from "../contexts-out.js";
 import { getTelemetry, shutdownTelemetry, telemetrySafely } from "../telemetry.js";
 import type { LineContext } from "../line-context.js";
+import { fail } from "../errors.js";
 
 export function register(program: Command): void {
   program
     .command("call")
     .description("call another handle's agent with a message and print its reply")
-    .argument("<address>", "contact name or handle@host to call")
+    .argument("<address>", "contact name or @org/handle to call")
     .argument("<message...>", "message to send")
     .option("--json", "print the full reply envelope instead of just the text")
     .option("--task <id>", "task from the callee's card to perform (see: agentcall card <address>)")
     .option("--as <line>", "line to call from (defaults to the primary line on the destination's relay)")
-    .option("--continue", "continue the last conversation with this address")
+    .option("--continue", "continue the open conversation with this address (add --task when several are open)")
     .option("--context <id>", "continue a specific conversation by id")
     .action(async (address: string, messageParts: string[], o: { json?: boolean; task?: string; as?: string; continue?: boolean; context?: string }) => {
       if (process.env.AGENTCALL_CALL_ID !== undefined) {
-        console.error("Nested agentcall calls are disabled until relay-attested chains and secret-isolated per-run credentials exist.");
-        process.exitCode = 1;
+        fail("Nested agentcall calls are disabled until relay-attested chains and secret-isolated per-run credentials exist.");
         return;
       }
       const machine = getMachinePaths();
       const firstPass = resolveAddress(machine, address);
       if (!firstPass.ok) {
-        console.error(firstPass.error);
-        process.exitCode = 1;
+        fail(firstPass.error);
         return;
       }
       let ctx: LineContext;
       try {
-        ctx = pickOutboundLine(machine, `https://${firstPass.host}`, { as: o.as });
+        ctx = pickOutboundLine(machine, firstPass.org, { as: o.as });
       } catch (e) {
-        console.error(String(e instanceof Error ? e.message : e));
-        process.exitCode = 1;
+        fail(e);
         return;
       }
       const cfg = ctx.config;
       const parsed = resolveAddress(machine, address, relayUrl(cfg), cfg.org);
       if (!parsed.ok) {
-        console.error(parsed.error);
-        process.exitCode = 1;
+        fail(parsed.error);
         return;
       }
-      if (parsed.warning) console.error(parsed.warning);
       const message = messageParts.join(" ");
       let contextId = o.context;
       let task = o.task;
       if (o.continue) {
         if (contextId) {
-          console.error("Use --continue or --context, not both.");
-          process.exitCode = 1;
+          fail("Use --continue or --context, not both.");
           return;
         }
-        const prev = findOutbound(loadOutbound(ctx.paths), {
+        // The store keys by task, so a peer can have one open conversation per
+        // task. `--continue` alone resumes only when that is unambiguous; it
+        // asks rather than guessing, which is the property the single-entry
+        // store used to get by silently discarding the older conversation.
+        const withPeer = matchOutbound(loadOutbound(ctx.paths), {
           relay: relayUrl(cfg), from: cfg.handle, to: parsed.handle,
         });
-        if (!prev) {
-          console.error(`No open conversation with ${address}. Call without --continue to start one.`);
-          process.exitCode = 1;
+        const open = task === undefined ? withPeer : withPeer.filter((e) => e.task === task);
+        if (open.length === 0) {
+          // Naming the tasks that ARE open keeps what the single-entry store's
+          // "that conversation is on task X, not Y" told the user, and scales
+          // to the several-conversations case it could not represent.
+          fail(withPeer.length > 0
+            ? `No open conversation with ${address} on task "${task}". Open: ${withPeer.map((e) => e.task).join(", ")}.`
+            : `No open conversation with ${address}. Call without --continue to start one.`);
           return;
         }
-        if (task !== undefined && task !== prev.task) {
-          console.error(`That conversation is on task "${prev.task}", not "${task}".`);
-          process.exitCode = 1;
+        if (open.length > 1) {
+          const tasks = open.map((e) => e.task).join(", ");
+          fail(`Several open conversations with ${address} (${tasks}). Add --task <id> to pick one.`);
           return;
         }
+        const prev = open[0]!;
         contextId = prev.context_id;
         task = prev.task;
       }
@@ -94,8 +99,20 @@ export function register(program: Command): void {
         console.log(o.json ? stringifyTerminalSafeJson(reply) : sanitizeTerminalOutput(reply.text));
       } catch (e) {
         telemetrySafely(() => callerSpan?.endError(e instanceof CallError ? e.code : "agent_error", e instanceof CallError ? e.callId : undefined));
-        console.error(e instanceof CallError ? `Call failed (${e.code}): ${e.message}` : String(e));
-        process.exitCode = 1;
+        // `context_unknown` is the callee's ONLY word for a conversation that
+        // is no longer resumable — expired, past its turn cap, threading
+        // withdrawn, or a session its agent CLI has dropped. It is deliberately
+        // one code (see contexts.ts), so the callee cannot tell us which. We do
+        // not need it to: we know we sent --continue, and every one of those
+        // means the same thing here. Without clearing the entry the next
+        // --continue re-sends the dead context_id and fails identically
+        // forever, because rememberOutbound only runs on success.
+        if (o.continue && e instanceof CallError && e.code === "context_unknown") {
+          forgetOutbound(ctx.paths, { relay: relayUrl(cfg), from: cfg.handle, to: parsed.handle, task });
+          fail(`That conversation with ${address} has ended. Call again without --continue to start a new one.`);
+          return;
+        }
+        fail(e instanceof CallError ? `Call failed (${e.code}): ${e.message}` : String(e));
       } finally {
         await shutdownTelemetry();
       }

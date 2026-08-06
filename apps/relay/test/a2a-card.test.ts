@@ -1,17 +1,17 @@
 import { env, SELF } from "cloudflare:test";
 import { beforeAll, describe, expect, it, vi } from "vitest";
 import app from "../src/index.js";
-import { fixedRateLimit, registerHandle, wsAuth } from "./helpers.js";
+import { fixedRateLimit, registerHandle, wsAuth, agentIdFor} from "./helpers.js";
 
 const ORIGIN = "https://example.com";
 let viewerToken: string;
 
 async function seedCard(handle: string) {
   await registerHandle(handle);
-  await env.DB.prepare("INSERT OR REPLACE INTO cards (org, handle, card_json, updated_at) VALUES (?, ?, ?, ?)")
+  await env.DB.prepare("INSERT OR REPLACE INTO cards (org, agent_id, card_json, updated_at) VALUES (?, ?, ?, ?)")
     .bind(
       "acme",
-      handle,
+      await agentIdFor(handle),
       JSON.stringify({
         description: "Ken's agent",
         agent_kind: "claude",
@@ -75,8 +75,8 @@ describe("GET /v1/a2a/:handle/agent-card.json", () => {
 
   it("treats a stored card that no longer validates as an unavailable agent", async () => {
     await registerHandle("legacy-card");
-    await env.DB.prepare("INSERT INTO cards (org, handle, card_json, updated_at) VALUES (?, ?, ?, ?)")
-      .bind("acme", "legacy-card", JSON.stringify({ description: "stale" }), 1).run();
+    await env.DB.prepare("INSERT INTO cards (org, agent_id, card_json, updated_at) VALUES (?, ?, ?, ?)")
+      .bind("acme", await agentIdFor("legacy-card"), JSON.stringify({ description: "stale" }), 1).run();
     const log = vi.spyOn(console, "error").mockImplementation(() => {});
     try {
       const invalid = await SELF.fetch(`${ORIGIN}/v1/a2a/legacy-card/agent-card.json`, {
@@ -113,8 +113,8 @@ describe("GET /v1/a2a/:handle/agent-card.json", () => {
       method: "POST", headers: { "content-type": "application/json", ...viewerHeaders() },
       body: JSON.stringify({ join_key: created.join_key }),
     });
-    await env.DB.prepare("INSERT OR REPLACE INTO cards (org, handle, card_json, updated_at) VALUES (?, ?, ?, ?)")
-      .bind("acme", "a2a-group", JSON.stringify({
+    await env.DB.prepare("INSERT OR REPLACE INTO cards (org, agent_id, card_json, updated_at) VALUES (?, ?, ?, ?)")
+      .bind("acme", await agentIdFor("a2a-group"), JSON.stringify({
         description: "grouped", agent_kind: "claude",
         tasks: [{ id: "eng", name: "Eng", description: "Engineering", examples: [], keywords: [] }],
         default_offer: [], grants: {}, group_grants: { [created.roster_id]: ["eng"] }, blocked: [],
@@ -126,8 +126,8 @@ describe("GET /v1/a2a/:handle/agent-card.json", () => {
 
   it("makes an individual block indistinguishable from an unknown A2A agent", async () => {
     await registerHandle("a2a-blocked");
-    await env.DB.prepare("INSERT INTO cards (org, handle, card_json, updated_at) VALUES ('acme', ?, ?, 3)")
-      .bind("a2a-blocked", JSON.stringify({
+    await env.DB.prepare("INSERT INTO cards (org, agent_id, card_json, updated_at) VALUES ('acme', ?, ?, 3)")
+      .bind(await agentIdFor("a2a-blocked"), JSON.stringify({
         description: "blocked", agent_kind: "claude",
         tasks: [{ id: "ask", name: "Ask", description: "Ask", examples: [], keywords: [] }],
         default_offer: ["ask"], grants: {}, group_grants: {}, blocked: ["viewer"],
@@ -180,11 +180,15 @@ describe("GET /v1/a2a/:handle/agent-card.json", () => {
     expect(res.status).toBe(200);
   });
 
-  it("derives the tenant from the hosted request hostname", async () => {
-    const res = await SELF.fetch("https://acme.agent-call.app/v1/a2a/ken/agent-card.json", {
+  // Was: the hostname derives the tenant. That fallback is gone — the org now
+  // comes only from the authenticated credential path, so a request that names
+  // the tenant in its hostname and nowhere else must not authenticate. Two
+  // sources for one boundary is the hazard this removes.
+  it("refuses to derive the tenant from the request hostname", async () => {
+    const res = await SELF.fetch("https://acme.agentcall.benree.tech/v1/a2a/ken/agent-card.json", {
       headers: { Authorization: `Bearer ${viewerToken}`, "X-AgentCall-Handle": "viewer" },
     });
-    expect(res.status).toBe(200);
+    expect(res.status).toBe(401);
   });
 
   it("401s an anonymous per-agent card read", async () => {

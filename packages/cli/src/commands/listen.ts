@@ -5,6 +5,7 @@ import { loadLineConfig } from "../lines.js";
 import { resolveLine, type LineContext } from "../line-context.js";
 import { startAllListeners } from "../listen-all.js";
 import { startListener } from "../listener.js";
+import { fail } from "../errors.js";
 
 export function register(program: Command): void {
   program
@@ -24,8 +25,7 @@ export function register(program: Command): void {
           ctx = resolveLine(machine, { line: o.line });
           assertCallableLine(ctx.config);
         } catch (e) {
-          console.error(String(e instanceof Error ? e.message : e));
-          process.exitCode = 1;
+          fail(e);
           return;
         }
         listener = startListener({

@@ -25,6 +25,45 @@ describe("listener attach + status", () => {
     expect((await status.json<{ online: boolean }>()).online).toBe(true);
   });
 
+  // #154 slice 4. The object is named by the stable identity now, so a rename
+  // keeps a caller on the same object instead of silently landing them on a
+  // fresh empty one -- losing pending calls, the audit outbox, and the
+  // credential floor with no error. Asserted against BOTH names: proving the
+  // new one is live is only half of it, since a stray call site left on the
+  // old scheme would still pass that alone.
+  it("addresses the durable object by identity, not by handle", async () => {
+    const token = await registerHandle("addressed-by-id");
+    await openWs("/v1/ws?role=listen", wsAuth("addressed-by-id", token));
+
+    const agentId = (await env.DB.prepare(
+      "SELECT agent_id FROM handles WHERE org = ? AND handle = ?",
+    ).bind("acme", "addressed-by-id").first<{ agent_id: string }>())!.agent_id;
+
+    const byIdentity = env.HANDLE_DO.get(env.HANDLE_DO.idFromName(`acme:${agentId}`));
+    expect(await (await byIdentity.fetch("https://do/status")).json()).toEqual({ online: true });
+
+    // The pre-cutover name. Nothing routes here any more, so it is a distinct,
+    // empty object.
+    const byHandle = env.HANDLE_DO.get(env.HANDLE_DO.idFromName("acme:addressed-by-id"));
+    expect(await (await byHandle.fetch("https://do/status")).json()).toEqual({ online: false });
+  });
+
+  it("gives the same handle in two orgs separate durable objects", async () => {
+    const one = await registerHandle("twinned", "claude", "org-x");
+    await registerHandle("twinned", "claude", "org-y");
+    await openWs("/v1/ws?role=listen", wsAuth("twinned", one, "org-x"));
+
+    const status = async (org: string) => {
+      const agentId = (await env.DB.prepare(
+        "SELECT agent_id FROM handles WHERE org = ? AND handle = ?",
+      ).bind(org, "twinned").first<{ agent_id: string }>())!.agent_id;
+      const stub = env.HANDLE_DO.get(env.HANDLE_DO.idFromName(`${org}:${agentId}`));
+      return (await (await stub.fetch("https://do/status")).json<{ online: boolean }>()).online;
+    };
+    expect(await status("org-x")).toBe(true);
+    expect(await status("org-y")).toBe(false);
+  });
+
   it("404s status for unknown handle", async () => {
     const token = await registerHandle("nobody-asker");
     const res = await SELF.fetch("https://relay.test/v1/status/nobody", { headers: wsAuth("nobody-asker", token) });
@@ -171,7 +210,7 @@ describe("listener attach + status", () => {
     const acmeCaller = await registerHandle("caller", "claude", "acme-do");
     const incoming = nextFrame(acmeListener);
     const caller = await openWs("/v1/ws?role=call&to=same-person", wsAuth("caller", acmeCaller, "acme-do"));
-    caller.send(JSON.stringify(encryptedCallRequest("caller", "same-person")));
+    caller.send(JSON.stringify(encryptedCallRequest("caller", "same-person", { org: "acme-do" })));
     expect(await incoming).toMatchObject({ type: "incoming_call", from: "caller" });
     expect(await incoming).not.toHaveProperty("message");
   });

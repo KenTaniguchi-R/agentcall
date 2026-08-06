@@ -1,6 +1,6 @@
 import WebSocket, { type RawData } from "ws";
 import { randomBytes } from "node:crypto";
-import {
+import { formatAddress,
   CORRELATION_ID_RE, E2EERelayToCallerFrame, MAX_E2EE_WIRE_BYTES, RELAY_CALL_TIMEOUT_MS, keyIdFor,
   normalizeTraceparent, requestTranscript, safeParseFrame, sanitizeDetail, transcriptHash,
   type CallStatusType, type E2EERequestPayloadType, type ErrorCodeType,
@@ -10,7 +10,7 @@ import { openE2EEResponse, sealE2EERequest } from "./e2ee.js";
 import { loadKeys } from "./keys.js";
 import { verifyAndPinPeer } from "./known-peers.js";
 import type { LinePaths } from "./paths.js";
-import { relayAddressHost } from "./config.js";
+import { relayHostOf } from "./config.js";
 
 export class CallError extends Error {
   constructor(
@@ -95,9 +95,9 @@ export async function callAgent(opts: CallOpts): Promise<CallReply> {
     ? opts.correlationId
     : createCorrelationId();
   const traceparent = normalizeTraceparent(correlationId, opts.traceparent);
-  const relayOrigin = relayAddressHost(opts.relay, opts.org);
-  const fromAddress = `${opts.from}@${relayOrigin}`;
-  const toAddress = `${opts.to}@${relayOrigin}`;
+  const relayOrigin = relayHostOf(opts.relay);
+  const fromAddress = formatAddress(opts.org, opts.from);
+  const toAddress = formatAddress(opts.org, opts.to);
   const auth = { org: opts.org, handle: opts.from, token: opts.token };
   try {
     assertValidHandle(opts.to);

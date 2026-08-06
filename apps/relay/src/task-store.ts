@@ -2,6 +2,8 @@ import {
   A2AListTasksResponse,
   A2ATask,
   A2ATaskState,
+  decodeSignedToken,
+  encodeSignedToken,
   type A2AListTasksResponseType,
   type A2ATaskStateType,
   type A2ATaskType,
@@ -78,21 +80,10 @@ export function updateTask(
   return { ...task, ...update, updated_at: now };
 }
 
-function base64Url(bytes: Uint8Array): string {
-  let binary = "";
-  for (const byte of bytes) binary += String.fromCharCode(byte);
-  return btoa(binary).replaceAll("+", "-").replaceAll("/", "_").replace(/=+$/, "");
-}
-
-function decodeBase64Url(value: string): Uint8Array | null {
-  if (!/^[A-Za-z0-9_-]+$/.test(value)) return null;
-  try {
-    const padded = value.replaceAll("-", "+").replaceAll("_", "/").padEnd(Math.ceil(value.length / 4) * 4, "=");
-    return Uint8Array.from(atob(padded), (character) => character.charCodeAt(0));
-  } catch {
-    return null;
-  }
-}
+// A page token is relay state carried by the client, same as an audit export
+// cursor, so it uses the same signed-token codec — including its canonicality
+// check, which this file previously lacked.
+const MAX_PAGE_TOKEN_LENGTH = 1_024;
 
 function queryFingerprint(query: TaskListQuery): string {
   return JSON.stringify({
@@ -113,41 +104,28 @@ async function importCursorKey(key: string): Promise<CryptoKey> {
 async function encodeCursor(
   task: PersistedTask, caller: string, query: TaskListQuery, key: string, scope: string,
 ): Promise<string> {
-  const payload = new TextEncoder().encode(JSON.stringify([
-    taskCreatedAt(task), task.call_id, caller, scope, queryFingerprint(query),
-  ]));
-  const signature = new Uint8Array(await crypto.subtle.sign("HMAC", await importCursorKey(key), payload));
-  return `${base64Url(payload)}.${base64Url(signature)}`;
+  return encodeSignedToken(
+    [taskCreatedAt(task), task.call_id, caller, scope, queryFingerprint(query)],
+    await importCursorKey(key),
+  );
 }
 
 async function decodeCursor(
   value: string | undefined, caller: string, query: TaskListQuery, key: string, scope: string,
 ): Promise<Cursor | undefined | null> {
   if (!value) return undefined;
-  if (value.length > 1024) return null;
-  const [payloadValue, signatureValue, extra] = value.split(".");
-  if (!payloadValue || !signatureValue || extra !== undefined) return null;
-  const payload = decodeBase64Url(payloadValue);
-  const signature = decodeBase64Url(signatureValue);
-  if (!payload || !signature) return null;
-  try {
-    if (!await crypto.subtle.verify(
-      "HMAC",
-      await importCursorKey(key),
-      signature as Uint8Array<ArrayBuffer>,
-      payload as Uint8Array<ArrayBuffer>,
-    )) return null;
-    const parsed = JSON.parse(new TextDecoder().decode(payload));
-    if (
-      !Array.isArray(parsed) || parsed.length !== 5 ||
-      typeof parsed[0] !== "number" || !Number.isFinite(parsed[0]) ||
-      typeof parsed[1] !== "string" || parsed[1].length < 1 || parsed[1].length > 128 ||
-      parsed[2] !== caller || parsed[3] !== scope || parsed[4] !== queryFingerprint(query)
-    ) return null;
-    return { createdAt: parsed[0], id: parsed[1] };
-  } catch {
-    return null;
-  }
+  const parsed = await decodeSignedToken<unknown[]>(value, await importCursorKey(key), MAX_PAGE_TOKEN_LENGTH);
+  if (!parsed) return null;
+  // A valid signature proves the relay issued these bytes, not that they still
+  // describe THIS request. Re-check caller, scope, and the query fingerprint so
+  // a cursor cannot be replayed against a different listing.
+  if (
+    !Array.isArray(parsed) || parsed.length !== 5 ||
+    typeof parsed[0] !== "number" || !Number.isFinite(parsed[0]) ||
+    typeof parsed[1] !== "string" || parsed[1].length < 1 || parsed[1].length > 128 ||
+    parsed[2] !== caller || parsed[3] !== scope || parsed[4] !== queryFingerprint(query)
+  ) return null;
+  return { createdAt: parsed[0], id: parsed[1] };
 }
 
 function afterCursor(task: PersistedTask, cursor: Cursor): boolean {

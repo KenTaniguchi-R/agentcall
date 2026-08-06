@@ -4,7 +4,7 @@ import {
   ListOrgInvitesResponse, ListRosterJoinKeysResponse, RegisterResponse, RevokeOrgInviteResponse,
   RecoveryIssueResponse, RecoveryReceipt, RecoveryStatusResponse,
   RevokeRosterJoinKeyResponse, RosterBundle,
-  EncryptionKeyRecord, IdentityRecord, HPKE_SUITE, MAX_ENCRYPTION_KEY_VALIDITY_MS,
+  EncryptionKeyRecord, formatAddress, IdentityRecord, HPKE_SUITE, MAX_ENCRYPTION_KEY_VALIDITY_MS, parseAddress,
   encryptionKeyTranscript, encryptionKeyTranscriptHash, fromBase64Url, identityTranscript, keyIdFor, signTranscript,
   // AgentKind is ours: registerHandle takes it, and it is the shared type that
   // replaced the inline "claude" | "codex" unions.
@@ -33,6 +33,17 @@ export class ApiError extends Error {
 }
 
 export type Auth = { org: string; handle: string; token: string };
+
+// Callers hold a LineConfig, which carries more than these three fields.
+// Copying the three out — rather than passing the config straight through —
+// is the point: TypeScript's excess-property check only fires on object
+// literals, so a whole config would be accepted structurally and every field
+// on it would be in reach of the request layer. This narrows deliberately,
+// and now does it in one place instead of at 25 call sites.
+export function authOf(source: Auth): Auth {
+  return { org: source.org, handle: source.handle, token: source.token };
+}
+
 const CREDENTIALS_REJECTED = "Your credentials were rejected. Re-run `agentcall setup`.";
 
 function authHeaders(auth: Auth): Record<string, string> {
@@ -113,7 +124,7 @@ const relayError = (message: string, code: ApiError["code"] = "network"): RelayE
 
 export async function registerHandle(
   relay: string, invite: string, handle: string, agentKind?: AgentKind, opts: { timeoutMs?: number } = {},
-): Promise<{ org: string; token: string; address: string }> {
+): Promise<{ org: string; token: string }> {
   if (!invite) throw new ApiError("An organization invite is required.", "invite_invalid");
   assertValidHandle(handle);
   return relayCall({ relay, path: "/v1/register", method: "POST",
@@ -130,7 +141,17 @@ export async function registerHandle(
           `${DEFAULT_ORG_INVITE_EXPIRY_DAYS} days by default.`,
         "invite_invalid",
       ),
-      409: relayError(`Handle "${handle}" is already taken.`, "handle_taken"),
+      // The reassurance is the point. Registration is one D1 batch: the
+      // invite's used_at UPDATE is guarded by an EXISTS on the handles row
+      // this request just tried to insert (apps/relay/src/index.ts), so a
+      // handle collision consumes nothing. Without saying so, the owner's
+      // reasonable reading of "already taken" at the end of a failed setup is
+      // that they burned their one-time invite on a name they cannot have.
+      409: relayError(
+        `Handle "${handle}" is already taken.\n` +
+          "Your invite was not used — run `agentcall setup` again with a different handle.",
+        "handle_taken",
+      ),
       503: relayError("Registration is temporarily unavailable. Try again shortly."),
       401: relayError("Registration failed (401).", "invalid"),
     }, failed: "Registration", failedCode: "invalid" });
@@ -383,10 +404,14 @@ async function importIdentityPrivateKey(pkcs8B64url: string): Promise<CryptoKey>
 }
 
 export async function publishIdentityKey(
-  relay: string, auth: Auth, keys: StoredKeys, host: string,
+  relay: string, auth: Auth, keys: StoredKeys,
 ): Promise<void> {
   const record: IdentityRecordType = IdentityRecord.parse({
-    v: 1, address: `${auth.handle}@${host}`, identity_pub: keys.identity_pub,
+    // Both bindings are derived, never passed in pre-composed: the address is
+    // a registry key over (org, handle), and the relay origin is the endpoint.
+    v: 1, relay_origin: new URL(relay).hostname,
+    address: formatAddress(auth.org, auth.handle),
+    identity_pub: keys.identity_pub,
   });
   // Self-signed: the record is signed by the very key it publishes. The relay
   // has no way to check an identity key against anything else, so possession of
@@ -401,7 +426,7 @@ export async function publishIdentityKey(
 }
 
 export async function publishEncryptionKey(
-  relay: string, auth: Auth, paths: LinePaths, host: string, now: number = Date.now(),
+  relay: string, auth: Auth, paths: LinePaths, now: number = Date.now(),
 ): Promise<void> {
   let keys = loadKeys(paths);
   let publication = loadPendingEncryptionPublication(paths, keys);
@@ -419,7 +444,8 @@ export async function publishEncryptionKey(
     const pub = keys.encryption_pub;
     const record: EncryptionKeyRecordType = EncryptionKeyRecord.parse({
       v: 1,
-      address: `${auth.handle}@${host}`,
+      relay_origin: new URL(relay).hostname,
+      address: formatAddress(auth.org, auth.handle),
       key_id: await keyIdFor(pub),
       suite: HPKE_SUITE,
       pub,
@@ -479,9 +505,13 @@ export async function fetchKeys(
       "invalid",
     );
   }
-  if (identity.data.address.split("@")[0] !== handle) {
+  // Was `address.split("@")[0]`, which only worked while an address was
+  // `handle@host`. Parsing it also binds the organization, so a relay cannot
+  // answer with a same-named handle from another tenant.
+  const served = parseAddress(identity.data.address);
+  if (!served || served.handle !== handle || served.org !== auth.org) {
     throw new ApiError(
-      `The relay returned keys for ${identity.data.address} when asked for ${handle}.`,
+      `The relay returned keys for ${identity.data.address} when asked for ${formatAddress(auth.org, handle)}.`,
       "invalid",
     );
   }

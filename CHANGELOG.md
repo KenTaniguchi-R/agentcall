@@ -6,6 +6,24 @@ which are released together.
 
 ## Unreleased
 
+### Conversations say when they have ended (#364)
+
+- Keep one outbound conversation per address **per task**. Calling the same peer
+  on a second task previously discarded the first conversation from the caller's
+  store while the callee kept its binding, so `--continue` reported "no open
+  conversation" for a thread that was still live.
+- `--continue` resumes when exactly one conversation matches, names the open
+  tasks when `--task` selects none, and asks for a `--task` rather than guessing
+  when several match.
+- Clear the stored context when the callee reports `context_unknown`. The entry
+  was only ever written on success, so an ended conversation left `--continue`
+  re-sending a dead context id and failing identically forever.
+- Report a resume the answering agent's CLI no longer holds as
+  `context_unknown` rather than `agent_error`, and drop the dead binding. Agent
+  session state lives in claude's/codex's own store, which AgentCall neither
+  owns nor prunes, so an admitted binding can still fail at spawn — that is an
+  ended conversation, not an internal agent fault.
+
 ### Native Windows compatibility evidence
 
 - Add a native `windows-2025` CI matrix for Node 20, 22, and 24 that exercises

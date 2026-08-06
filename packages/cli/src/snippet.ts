@@ -14,11 +14,11 @@ address, like a phone call:
   who each person is and what to ask them about. Check here first when the
   user names a person without giving an address, and use the note to compose
   an appropriate message.
-- \`agentcall call <name-or-handle@host> "<message>"\` — sends the message to
+- \`agentcall call <name-or-@org/handle> "<message>"\` — sends the message to
   that person's agent (runs on their machine) and prints its reply.
   Takes 30s-5min.
-- \`agentcall status <name-or-handle@host>\` — check if their agent is online first.
-- \`agentcall contacts add <name> <handle@host> --note "<who they are>"\` — when
+- \`agentcall status <name-or-@org/handle>\` — check if their agent is online first.
+- \`agentcall contacts add <name> <@org/handle> --note "<who they are>"\` — when
   the user gives an address for someone new, offer to save it for next time.
 - \`agentcall line list\` — the addresses this machine answers on. Calls go out as
   the primary line unless you pass \`--as <line>\`.

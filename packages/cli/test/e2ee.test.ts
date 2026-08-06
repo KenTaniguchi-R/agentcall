@@ -24,7 +24,7 @@ const NOW = 1_000_000;
 async function request(sender: StoredKeys, recipient: StoredKeys): Promise<E2EERequestPayloadType> {
   return {
     v: 1, direction: "request", relay_origin: "acme.agentcall.test",
-    from: "alice@acme.agentcall.test", to: "bob@acme.agentcall.test",
+    from: "@acme/alice", to: "@acme/bob",
     request_id: "1".repeat(32), sender_identity_key_id: await keyIdFor(sender.identity_pub),
     recipient_encryption_key_id: await keyIdFor(recipient.encryption_pub),
     recipient_epoch: recipient.epoch, issued_at: NOW - 1, expires_at: NOW + 1_000,

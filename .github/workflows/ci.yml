@@ -35,6 +35,11 @@ jobs:
 
       - run: pnpm install --frozen-lockfile
 
+      # The cheapest rung, and it needs nothing built: unused imports, dead
+      # declarations, and the correctness rules types cannot express. Runs at
+      # --max-warnings 0, because a warning nobody has to fix is not a gate.
+      - run: pnpm lint
+
       # Build first: packages/cli typechecks against packages/shared's built
       # dist, so a build after typecheck would check the previous run's types.
       - run: pnpm -r build
@@ -98,7 +103,7 @@ jobs:
             exit 1
           fi
           grep -F "No agentcall config found" "$RUNNER_TEMP/doctor-output"
-          if "$agentcall_bin" status nobody@example.invalid >"$RUNNER_TEMP/status-output" 2>&1; then
+          if "$agentcall_bin" status @acme/nobody >"$RUNNER_TEMP/status-output" 2>&1; then
             echo "status unexpectedly succeeded without a configured identity"
             exit 1
           fi

@@ -1,5 +1,6 @@
 import { z } from "zod";
 import { canonicalEncode } from "./canonical.js";
+import { BASE64URL_RE, fromBase64UrlStrict } from "./signing.js";
 
 export const ROOM_MIN_PARTICIPANTS = 2 as const;
 export const ROOM_MAX_PARTICIPANTS = 6 as const;
@@ -18,8 +19,6 @@ export const ROOM_MAX_FAILED_JOINS = 3 as const;
 
 const ROOM_MAX_ENCRYPTED_REQUEST_BYTES = ROOM_MAX_PROMPT_BYTES + 1_024;
 const ROOM_MAX_ENCRYPTED_OUTCOME_BYTES = ROOM_MAX_REPLY_BYTES + 1_024;
-const BASE64URL_ALPHABET = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_";
-const BASE64URL_RE = /^[A-Za-z0-9_-]+$/;
 const UNSAFE_DISPLAY_CHARACTERS =
   /[\u0000-\u001f\u007f-\u009f\u061c\u200e\u200f\u202a-\u202e\u2066-\u2069]/u;
 
@@ -30,36 +29,16 @@ export const RoomCallId = z.string().regex(/^rc_[A-Za-z0-9_-]{22}$/);
 export const RoomSecretHash = z.string().regex(/^[0-9a-f]{64}$/);
 export const RoomIdempotencyKey = z.string().regex(/^[A-Za-z0-9_-]{16,64}$/);
 export const RoomSecret = z.string().regex(/^[A-Za-z0-9_-]{43}$/).refine(
-  (value) => decodeCanonicalBase64url(value)?.byteLength === 32,
+  (value) => fromBase64UrlStrict(value)?.byteLength === 32,
   { message: "Room secret must be canonical unpadded base64url for 32 bytes" },
 );
 export const RoomSigningProof = z.string().regex(/^[A-Za-z0-9_-]{86}$/).refine(
-  (value) => decodeCanonicalBase64url(value)?.byteLength === 64,
+  (value) => fromBase64UrlStrict(value)?.byteLength === 64,
   { message: "Room signing proof must be canonical unpadded base64url for 64 bytes" },
 );
 
-function decodeCanonicalBase64url(value: string): Uint8Array | undefined {
-  if (!BASE64URL_RE.test(value)) return undefined;
-  const bytes: number[] = [];
-  let accumulator = 0;
-  let bitCount = 0;
-  for (const character of value) {
-    const index = BASE64URL_ALPHABET.indexOf(character);
-    if (index < 0) return undefined;
-    accumulator = (accumulator << 6) | index;
-    bitCount += 6;
-    while (bitCount >= 8) {
-      bitCount -= 8;
-      bytes.push((accumulator >> bitCount) & 0xff);
-      accumulator &= (1 << bitCount) - 1;
-    }
-  }
-  if (bitCount > 0 && accumulator !== 0) return undefined;
-  return Uint8Array.from(bytes);
-}
-
 export const RoomPublicKey = z.string().regex(/^[A-Za-z0-9_-]{43}$/).refine(
-  (value) => decodeCanonicalBase64url(value)?.byteLength === 32,
+  (value) => fromBase64UrlStrict(value)?.byteLength === 32,
   { message: "Room public key must be canonical unpadded base64url for 32 bytes" },
 );
 
@@ -157,7 +136,7 @@ export async function verifyRoomJoinProof(input: z.input<typeof RoomJoinRequest>
   try {
     const publicKey = await crypto.subtle.importKey(
       "raw",
-      decodeCanonicalBase64url(parsed.data.signing_public_key)! as BufferSource,
+      fromBase64UrlStrict(parsed.data.signing_public_key)! as BufferSource,
       { name: "Ed25519" },
       false,
       ["verify"],
@@ -166,7 +145,7 @@ export async function verifyRoomJoinProof(input: z.input<typeof RoomJoinRequest>
     return crypto.subtle.verify(
       { name: "Ed25519" },
       publicKey,
-      decodeCanonicalBase64url(parsed.data.signing_proof)! as BufferSource,
+      fromBase64UrlStrict(parsed.data.signing_proof)! as BufferSource,
       canonicalRoomJoinProofTranscript(transcriptInput) as BufferSource,
     );
   } catch {
@@ -180,12 +159,7 @@ const ActiveMembershipEpoch = z.number().int().min(1).max(0xffff_ffff);
 const ParticipantCount = z.union([
   z.literal(2), z.literal(3), z.literal(4), z.literal(5), z.literal(6),
 ]);
-const Seat = z.union([
-  z.literal(1), z.literal(2), z.literal(3), z.literal(4), z.literal(5), z.literal(6),
-]);
-const InviteSeat = z.union([
-  z.literal(2), z.literal(3), z.literal(4), z.literal(5), z.literal(6),
-]);
+const RemainingSeats = z.number().int().min(0).max(ROOM_MAX_PARTICIPANTS - 1);
 
 export const RoomState = z.enum(["waiting", "verifying", "active", "closed"]);
 export const RoomCloseReason = z.enum([
@@ -237,19 +211,10 @@ export const RoomRecord = z.object({
 export const RoomInviteRecord = z.object({
   invite_id: RoomInviteId,
   room_id: RoomId,
-  seat: InviteSeat,
   secret_hash: RoomSecretHash,
   expires_at: Timestamp,
-  consumed_at: Timestamp.optional(),
-  participant_id: RoomParticipantId.optional(),
-}).strict().superRefine((record, ctx) => {
-  if ((record.consumed_at !== undefined) !== (record.participant_id !== undefined)) {
-    ctx.addIssue({ code: "custom", path: ["consumed_at"], message: "invite consumption fields must appear together" });
-  }
-  if (record.consumed_at !== undefined && record.consumed_at > record.expires_at) {
-    ctx.addIssue({ code: "custom", path: ["consumed_at"], message: "invite cannot be consumed after expiry" });
-  }
-});
+  seats_remaining: RemainingSeats,
+}).strict();
 
 function validParticipantHistory(record: {
   state: z.infer<typeof RoomParticipantState>;
@@ -269,7 +234,6 @@ function validParticipantHistory(record: {
 const RoomParticipantRecordBase = z.object({
   participant_id: RoomParticipantId,
   room_id: RoomId,
-  seat: Seat,
   state: RoomParticipantState,
   display_name: RoomDisplayName,
   credential_hash: RoomSecretHash,
@@ -302,13 +266,13 @@ export const RoomSnapshot = z.object({
   participant: RoomPublicParticipant.optional(),
 }).strict();
 export const RoomPublicInvite = z.object({
-  seat: InviteSeat,
   invite: RoomInviteCapability,
   expires_at: Timestamp,
+  seats_remaining: RemainingSeats,
 }).strict();
 export const RoomCreateResponse = RoomSnapshot.extend({
   credential: RoomCapability,
-  invites: z.array(RoomPublicInvite).min(1).max(ROOM_MAX_PARTICIPANTS - 1),
+  invite: RoomPublicInvite,
 }).strict();
 export const RoomJoinResponse = RoomSnapshot.extend({
   participant: RoomPublicParticipant,
@@ -318,8 +282,8 @@ export const RoomMutationResponse = RoomSnapshot;
 
 function encryptedPayload(maxBytes: number) {
   return z.string().regex(BASE64URL_RE).refine((value) => {
-    const decoded = decodeCanonicalBase64url(value);
-    return decoded !== undefined && decoded.byteLength > 0 && decoded.byteLength <= maxBytes;
+    const decoded = fromBase64UrlStrict(value);
+    return decoded !== null && decoded.byteLength > 0 && decoded.byteLength <= maxBytes;
   }, { message: `encrypted payload must be canonical base64url of at most ${maxBytes} bytes` });
 }
 
@@ -521,8 +485,8 @@ export function canonicalRoomMembershipTranscript(input: {
     parts.push(
       lengthPrefixed(encoder.encode(member.participant_id)),
       lengthPrefixed(encoder.encode(member.display_name)),
-      decodeCanonicalBase64url(member.signing_public_key)!,
-      decodeCanonicalBase64url(member.encryption_public_key)!,
+      fromBase64UrlStrict(member.signing_public_key)!,
+      fromBase64UrlStrict(member.encryption_public_key)!,
     );
   }
   return concatenate(parts);
@@ -555,46 +519,18 @@ export async function roomMembershipFingerprint(input: Parameters<typeof canonic
 export type RoomIdType = z.infer<typeof RoomId>;
 export type RoomParticipantIdType = z.infer<typeof RoomParticipantId>;
 export type RoomInviteIdType = z.infer<typeof RoomInviteId>;
-export type RoomCallIdType = z.infer<typeof RoomCallId>;
-export type RoomSecretHashType = z.infer<typeof RoomSecretHash>;
-export type RoomPublicKeyType = z.infer<typeof RoomPublicKey>;
-export type RoomIdempotencyKeyType = z.infer<typeof RoomIdempotencyKey>;
-export type RoomDisplayNameType = z.infer<typeof RoomDisplayName>;
-export type RoomAgentAdapterType = z.infer<typeof RoomAgentAdapter>;
-export type RoomStateType = z.infer<typeof RoomState>;
 export type RoomCloseReasonType = z.infer<typeof RoomCloseReason>;
-export type RoomParticipantStateType = z.infer<typeof RoomParticipantState>;
 export type RoomCallStateType = z.infer<typeof RoomCallState>;
 export type RoomRecordType = z.infer<typeof RoomRecord>;
 export type RoomInviteRecordType = z.infer<typeof RoomInviteRecord>;
 export type RoomParticipantRecordType = z.infer<typeof RoomParticipantRecord>;
-export type RoomCallRecordType = z.infer<typeof RoomCallRecord>;
-export type RoomMembershipMemberType = z.infer<typeof RoomMembershipMember>;
-export type RoomSecretType = z.infer<typeof RoomSecret>;
-export type RoomInviteCapabilityType = z.infer<typeof RoomInviteCapability>;
-export type RoomCapabilityType = z.infer<typeof RoomCapability>;
-export type RoomCreateRequestType = z.infer<typeof RoomCreateRequest>;
-export type RoomJoinRequestType = z.infer<typeof RoomJoinRequest>;
-export type RoomMutationRequestType = z.infer<typeof RoomMutationRequest>;
-export type RoomSigningProofType = z.infer<typeof RoomSigningProof>;
 export type RoomActionType = z.infer<typeof RoomAction>;
 export type RoomPublicParticipantType = z.infer<typeof RoomPublicParticipant>;
-export type RoomSnapshotType = z.infer<typeof RoomSnapshot>;
 export type RoomPublicInviteType = z.infer<typeof RoomPublicInvite>;
 export type RoomCreateResponseType = z.infer<typeof RoomCreateResponse>;
 export type RoomJoinResponseType = z.infer<typeof RoomJoinResponse>;
 export type RoomMutationResponseType = z.infer<typeof RoomMutationResponse>;
 export type RoomCallSubmitType = z.infer<typeof RoomCallSubmit>;
-export type RoomCallAcceptedType = z.infer<typeof RoomCallAccepted>;
-export type RoomCallStartedType = z.infer<typeof RoomCallStarted>;
-export type RoomCallOutcomeType = z.infer<typeof RoomCallOutcome>;
-export type RoomCallCancelType = z.infer<typeof RoomCallCancel>;
-export type RoomCallCanceledType = z.infer<typeof RoomCallCanceled>;
-export type RoomIncomingCallType = z.infer<typeof RoomIncomingCall>;
-export type RoomRelayCallStatusType = z.infer<typeof RoomRelayCallStatus>;
-export type RoomRelayCallResultType = z.infer<typeof RoomRelayCallResult>;
 export type RoomRelayCallErrorCodeType = z.infer<typeof RoomRelayCallErrorCode>;
-export type RoomRelayCallErrorType = z.infer<typeof RoomRelayCallError>;
-export type RoomRelayCancelCallType = z.infer<typeof RoomRelayCancelCall>;
 export type RoomSocketClientFrameType = z.infer<typeof RoomSocketClientFrame>;
 export type RoomSocketRelayFrameType = z.infer<typeof RoomSocketRelayFrame>;

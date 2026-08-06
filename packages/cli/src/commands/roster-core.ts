@@ -1,8 +1,9 @@
 import type { Command } from "commander";
-import { createRoster, joinRoster, leaveRoster } from "../api.js";
+import { authOf, createRoster, joinRoster, leaveRoster } from "../api.js";
 import { relayUrl } from "../config.js";
 import type { LineContext } from "../line-context.js";
 import { deleteCached, forgetMembership, loadMemberships, saveMembership } from "../rosters.js";
+import { fail } from "../errors.js";
 
 type ResolveLine = (line: string | undefined) => LineContext | undefined;
 
@@ -16,7 +17,7 @@ export function register(roster: Command, lineFor: ResolveLine): void {
       if (!ctx) return;
       const cfg = ctx.config;
       try {
-        const { roster_id, join_key, admin_secret } = await createRoster(relayUrl(cfg), { org: cfg.org, handle: cfg.handle, token: cfg.token });
+        const { roster_id, join_key, admin_secret } = await createRoster(relayUrl(cfg), authOf(cfg));
         console.log("Roster created.\n");
         console.log(`  id:     ${roster_id}`);
         console.log(`  join key:     ${join_key}`);
@@ -28,11 +29,9 @@ export function register(roster: Command, lineFor: ResolveLine): void {
           saveMembership(ctx.paths, { name: o.as, relay: relayUrl(cfg), roster_id });
           console.log(`\nSaved locally as "${o.as}".`);
         } catch (e) {
-          const message = e instanceof Error ? e.message : String(e);
-          console.error(`${message}\nRoster was created but not saved locally. Save it with a different name:\n  agentcall roster join ${roster_id} --key ${join_key} --as <name>`);
-          process.exitCode = 1;
+          fail(e, `Roster was created but not saved locally. Save it with a different name:\n  agentcall roster join ${roster_id} --key ${join_key} --as <name>`);
         }
-      } catch (e) { console.error(e instanceof Error ? e.message : String(e)); process.exitCode = 1; }
+      } catch (e) { fail(e); }
     });
 
   roster.command("join")
@@ -46,17 +45,15 @@ export function register(roster: Command, lineFor: ResolveLine): void {
       if (!ctx) return;
       const cfg = ctx.config;
       try {
-        await joinRoster(relayUrl(cfg), { org: cfg.org, handle: cfg.handle, token: cfg.token }, rosterId, o.key);
+        await joinRoster(relayUrl(cfg), authOf(cfg), rosterId, o.key);
         try {
           saveMembership(ctx.paths, { name: o.as, relay: relayUrl(cfg), roster_id: rosterId });
           console.log(`Joined. Saved locally as "${o.as}".`);
           console.log("Try: agentcall search \"<what you need to know>\"");
         } catch (e) {
-          const message = e instanceof Error ? e.message : String(e);
-          console.error(`${message}\nYou joined roster ${rosterId}, but it was not saved locally. Re-run with a different name:\n  agentcall roster join ${rosterId} --key <same-key> --as <name>`);
-          process.exitCode = 1;
+          fail(e, `You joined roster ${rosterId}, but it was not saved locally. Re-run with a different name:\n  agentcall roster join ${rosterId} --key <same-key> --as <name>`);
         }
-      } catch (e) { console.error(e instanceof Error ? e.message : String(e)); process.exitCode = 1; }
+      } catch (e) { fail(e); }
     });
 
   roster.command("list")
@@ -84,10 +81,10 @@ export function register(roster: Command, lineFor: ResolveLine): void {
       try {
         const membership = loadMemberships(ctx.paths).find((r) => r.name.toLowerCase() === name.toLowerCase());
         if (!membership) throw new Error(`No roster named "${name}" — run \`agentcall roster list\`.`);
-        await leaveRoster(membership.relay, { org: cfg.org, handle: cfg.handle, token: cfg.token }, membership.roster_id);
+        await leaveRoster(membership.relay, authOf(cfg), membership.roster_id);
         forgetMembership(ctx.paths, name);
         deleteCached(ctx.paths, name);
         console.log(`Left "${name}" and removed its local record.`);
-      } catch (e) { console.error(e instanceof Error ? e.message : String(e)); process.exitCode = 1; }
+      } catch (e) { fail(e); }
     });
 }

@@ -16,3 +16,6 @@
 0016_audit_retention_controls.sql
 0017_audit_retention_readiness.sql
 0018_recovery_v2.sql
+0019_agent_identity.sql
+0020_cards_by_identity.sql
+0021_key_records_persist_origin.sql

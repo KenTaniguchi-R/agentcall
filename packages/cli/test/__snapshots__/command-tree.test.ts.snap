@@ -50,6 +50,39 @@ exports[`CLI command tree > pins command paths, aliases, descriptions, and optio
         {
           "alias": undefined,
           "commands": [],
+          "description": "join a Room using an invitation from its host",
+          "name": "join",
+          "options": [
+            {
+              "description": "relay URL",
+              "flags": "--relay <url>",
+            },
+          ],
+        },
+      ],
+      "description": "host a temporary, accountless group Room — no account, handle, or listener required",
+      "name": "room",
+      "options": [
+        {
+          "description": "Room size including you (2-6)",
+          "flags": "--seats <n>",
+        },
+        {
+          "description": "relay URL",
+          "flags": "--relay <url>",
+        },
+        {
+          "description": "your display name in this Room",
+          "flags": "--name <name>",
+        },
+      ],
+    },
+    {
+      "alias": undefined,
+      "commands": [
+        {
+          "alias": undefined,
+          "commands": [],
           "description": "create a one-time invite",
           "name": "create",
           "options": [
@@ -74,9 +107,13 @@ exports[`CLI command tree > pins command paths, aliases, descriptions, and optio
         {
           "alias": undefined,
           "commands": [],
-          "description": "list organization invite lifecycle metadata",
+          "description": "list organization invites: state, role, expiry, and the ID to revoke",
           "name": "list",
           "options": [
+            {
+              "description": "print the raw invite array",
+              "flags": "--json",
+            },
             {
               "description": "line whose organization to list (defaults to the primary line)",
               "flags": "--line <name>",
@@ -167,7 +204,7 @@ exports[`CLI command tree > pins command paths, aliases, descriptions, and optio
           "flags": "--as <line>",
         },
         {
-          "description": "continue the last conversation with this address",
+          "description": "continue the open conversation with this address (add --task when several are open)",
           "flags": "--continue",
         },
         {

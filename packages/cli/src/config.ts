@@ -1,6 +1,6 @@
 import { existsSync, statSync } from "node:fs";
 import { isAbsolute } from "node:path";
-import { HOSTED_RELAY_HOST, type AgentKind } from "@benree/agentcall-shared";
+import { formatAddress, HOSTED_RELAY_HOST, type AgentKind } from "@benree/agentcall-shared";
 import type { LinePaths } from "./paths.js";
 
 // Per-line credentials and settings. Config (and the flat Paths it paired
@@ -77,8 +77,16 @@ export function relayUrl(cfg?: LineConfig): string {
   return normalizeRelay(envRelay ?? cfg?.relay ?? DEFAULT_RELAY);
 }
 
-export function addressHost(cfg: LineConfig): string {
-  return relayAddressHost(relayUrl(cfg), cfg.org);
+// The relay's hostname, for the `relay_origin` binding. The org used to be
+// glued on as a subdomain; it travels in the address now.
+export function relayHostOf(relay: string): string {
+  return new URL(relay).hostname;
+}
+
+// The line's own address. Formatted from (org, handle), never composed from a
+// host and never stored — see the spec on address-as-rendering.
+export function lineAddress(cfg: LineConfig): string {
+  return formatAddress(cfg.org, cfg.handle);
 }
 
 export function relayAddressHost(relay: string, org: string): string {

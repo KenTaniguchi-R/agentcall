@@ -1,19 +1,19 @@
-import { rotateToken } from "../api.js";
+import { authOf, rotateToken } from "../api.js";
 import { relayUrl } from "../config.js";
 import type { LineContext } from "../line-context.js";
 import { listenerServiceRestartCommand } from "../listener-service.js";
 import { loadLineConfig, saveLineConfig } from "../lines.js";
 import { withFileLock } from "../file-lock.js";
-import { ApiError } from "../api.js";
 import { getMachinePaths } from "../paths.js";
 import { resolveLine } from "../line-context.js";
+import { fail } from "../errors.js";
 
 export function register(program: { command(name: string): any }): void {
   program.command("rotate").description("replace a line's relay token (use if it may have leaked)")
     .option("--line <name>", "line to rotate (defaults to the primary line)")
     .action(async (o: { line?: string }) => {
       try { await rotateLine(resolveLine(getMachinePaths(), { line: o.line })); }
-      catch (e) { console.error(e instanceof ApiError ? e.message : String(e instanceof Error ? e.message : e)); process.exitCode = 1; }
+      catch (e) { fail(e); }
     });
 }
 
@@ -38,7 +38,7 @@ async function rotateLineLocked(ctx: LineContext, deps: RotateDeps): Promise<voi
   const current = loadLineConfig(ctx.paths);
   const log = deps.log ?? console.log;
   const { token } = await (deps.rotate ?? rotateToken)(
-    relayUrl(current), { org: current.org, handle: current.handle, token: current.token },
+    relayUrl(current), authOf(current),
   );
   saveLineConfig(ctx.paths, { ...current, token });
   // A caller-only line (no agent_kind) has no listener socket of its own — the

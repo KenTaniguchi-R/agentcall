@@ -1,11 +1,12 @@
 import type { AgentKind } from "@benree/agentcall-shared";
 import type { Command } from "commander";
-import { getStatus } from "../api.js";
+import { authOf, getStatus } from "../api.js";
 import { relayUrl, type LineConfig } from "../config.js";
 import { getMachinePaths } from "../paths.js";
 import { addLine, listLinesReport } from "./line.js";
 import { assertValidLineName, readyLines } from "../lines.js";
 import { ask } from "../tty.js";
+import { fail } from "../errors.js";
 
 export function register(line: Command): void {
   line.command("add").description("register another address on this machine")
@@ -20,12 +21,12 @@ export function register(line: Command): void {
     .action(async (name: string, o: { handle?: string; invite?: string; agent?: string; relay?: string; callerOnly?: boolean; skipService?: boolean; verify?: boolean }) => {
       const machine = getMachinePaths();
       if (!o.callerOnly && o.agent !== "claude" && o.agent !== "codex") {
-        console.error("Pass --agent claude or --agent codex, or --caller-only for a line that can only call out."); process.exitCode = 1; return;
+        fail("Pass --agent claude or --agent codex, or --caller-only for a line that can only call out."); return;
       }
-      try { assertValidLineName(name); } catch (e) { console.error(String(e instanceof Error ? e.message : e)); process.exitCode = 1; return; }
-      if (!o.invite?.trim()) { console.error(`An organization invite is required. Run \`agentcall line add ${name} --invite <token>\`.`); process.exitCode = 1; return; }
+      try { assertValidLineName(name); } catch (e) { fail(e); return; }
+      if (!o.invite?.trim()) { fail(`An organization invite is required. Run \`agentcall line add ${name} --invite <token>\`.`); return; }
       const handle = o.handle ?? (await ask(`Choose a handle for "${name}" (e.g. ${name}): `)).trim();
-      if (!handle) { console.error("A handle is required."); process.exitCode = 1; return; }
+      if (!handle) { fail("A handle is required."); return; }
       try {
         const { address } = await addLine(machine, {
           name, handle, relay: (o.relay ?? relayUrl()).replace(/\/+$/, ""), invite: o.invite,
@@ -33,7 +34,7 @@ export function register(line: Command): void {
           verify: o.verify, installListenerServiceFn: o.skipService ? () => {} : undefined,
         });
         console.log(`Added line "${name}": ${address}`);
-      } catch (e) { console.error(String(e instanceof Error ? e.message : e)); process.exitCode = 1; }
+      } catch (e) { fail(e); }
     });
 
   line.command("list").description("list the addresses this machine holds, which is primary, and whether each is online")
@@ -42,7 +43,7 @@ export function register(line: Command): void {
       const machine = getMachinePaths(); const online = new Map<string, boolean>();
       for (const l2 of readyLines(machine)) {
         if (!l2.config.agent_kind) continue;
-        try { online.set(l2.config.handle, (await getStatus(relayUrl(l2.config), l2.config.handle, { org: l2.config.org, handle: l2.config.handle, token: l2.config.token })).online); }
+        try { online.set(l2.config.handle, (await getStatus(relayUrl(l2.config), l2.config.handle, authOf(l2.config))).online); }
         catch { online.set(l2.config.handle, false); }
       }
       const rows = listLinesReport(machine, (cfg: LineConfig) => online.get(cfg.handle) ?? false);

@@ -4,6 +4,8 @@
   "type": "module",
   "engines": { "node": ">=20" },
   "scripts": {
+    "verify": "scripts/ci-local.sh fast",
+    "lint": "oxlint --max-warnings 0 apps packages",
     "test": "pnpm -r test",
     "build": "pnpm -r build",
     "typecheck": "pnpm -r typecheck",
@@ -11,5 +13,8 @@
     "docs:check": "node --test scripts/docs-site.test.mjs scripts/windows-compat.test.mjs && node scripts/check-docs-site.mjs",
     "landing:check": "node --test scripts/landing-site.test.mjs"
   },
-  "packageManager": "pnpm@11.5.2"
+  "packageManager": "pnpm@11.5.2",
+  "devDependencies": {
+    "oxlint": "1.77.0"
+  }
 }

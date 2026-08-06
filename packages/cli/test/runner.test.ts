@@ -10,6 +10,7 @@ import {
   toolTelemetryCodexConfigArg,
   codexThreadingEnabled, codexToolTelemetryEnabled, CODEX_HOOK_TRUST_VERIFIED_VERSION,
   CODEX_THREADING_VERIFIED_VERSION,
+  AgentRunError, isResumeFailure,
   parseClaudeJson, parseCodexJsonl, runAgent, truncateUtf8, type AgentKind, type SpawnSpec,
 } from "../src/runner.js";
 import { resolveAgentBin } from "../src/bin.js";
@@ -776,4 +777,43 @@ describe("AGENTCALL_LINE propagation", () => {
   // so a caller can no longer silently end up with "", which makes the
   // PreToolUse guard fail closed on every tool call (Task 7). There is no
   // longer a default to test.
+});
+
+// The exact text each CLI emits for a session it no longer holds, probed
+// 2026-08-05 against the installed binaries: both exit 1 with an empty stdout
+// and this on stderr, which runAgent folds into "agent exited 1: <text>".
+// These strings are the whole basis for the classification, so they are
+// written out verbatim here rather than paraphrased -- if a CLI rewords its
+// message, this is the test that should fail.
+const CLAUDE_RESUME_GONE =
+  "agent exited 1: No conversation found with session ID: 00000000-dead-beef-0000-000000000000";
+const CODEX_RESUME_GONE =
+  "agent exited 1: Error: thread/resume: thread/resume failed: no rollout found for thread id "
+  + "01999999-dead-beef-0000-000000000000 (code -32600)";
+
+describe("isResumeFailure", () => {
+  it("recognizes each CLI's own dead-session message", () => {
+    expect(isResumeFailure("claude", new AgentRunError(CLAUDE_RESUME_GONE, "agent_error"))).toBe(true);
+    expect(isResumeFailure("codex", new AgentRunError(CODEX_RESUME_GONE, "agent_error"))).toBe(true);
+  });
+
+  // Each kind is matched only against its own wording. Sharing one pattern
+  // across both would make either CLI's text reclassify the other's failure.
+  it("does not match the other CLI's message", () => {
+    expect(isResumeFailure("codex", new AgentRunError(CLAUDE_RESUME_GONE, "agent_error"))).toBe(false);
+    expect(isResumeFailure("claude", new AgentRunError(CODEX_RESUME_GONE, "agent_error"))).toBe(false);
+  });
+
+  // Everything else stays agent_error, which is the safe direction to fail:
+  // a reworded CLI message degrades to the behaviour that existed before this
+  // classifier, not to a wrong one.
+  it("leaves every other failure alone", () => {
+    for (const kind of ["claude", "codex"] as AgentKind[]) {
+      expect(isResumeFailure(kind, new AgentRunError("agent timed out after 1000ms", "timeout"))).toBe(false);
+      expect(isResumeFailure(kind, new AgentRunError("agent exited 1: Not logged in.", "agent_error"))).toBe(false);
+      expect(isResumeFailure(kind, new AgentRunError("agent exited 127: command not found", "agent_error"))).toBe(false);
+      expect(isResumeFailure(kind, new AgentRunError("could not parse agent output", "agent_error"))).toBe(false);
+      expect(isResumeFailure(kind, "a bare string, not an Error")).toBe(false);
+    }
+  });
 });

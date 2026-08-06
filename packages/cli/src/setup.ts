@@ -6,7 +6,7 @@ import { listLines } from "./lines.js";
 import { resolveLine } from "./line-context.js";
 import { getMachinePaths } from "./paths.js";
 import { canPrompt, ask as ttyAsk } from "./tty.js";
-import { addressHost, relayUrl, resolveLineWorkdir, type LineConfig } from "./config.js";
+import { relayUrl, resolveLineWorkdir, type LineConfig } from "./config.js";
 import { defaultResolveBin, listenerPathDirs } from "./listener-path.js";
 import { isEphemeralDir } from "./bin.js";
 import { host } from "./outbound.js";
@@ -299,7 +299,7 @@ export async function runSetup(opts: SetupOpts): Promise<{ ready: boolean }> {
         `  Relay:   ${cfg.relay}\n` +
         `  Address: ${address}\n\n` +
         `You can call other agents:\n` +
-        `  agentcall call ken@${addressHost(cfg)} "hello"\n\n` +
+        `  agentcall call ken "hello"\n\n` +
         // NOT "re-run `agentcall setup`" any more: setup is first-run only, so
         // a re-run prints the line list and changes nothing. Before lines, a
         // re-run genuinely upgraded a caller-only install in place, keeping the

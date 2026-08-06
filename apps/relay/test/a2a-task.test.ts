@@ -147,6 +147,20 @@ describe("A2A task store", () => {
     ), { headers: wsAuth("list-first", firstToken) });
     expect(forgedResponse.status).toBe(400);
 
+    // A page token has exactly one textual form. Flipping the unused low bits
+    // of the payload's final base64url character leaves the decoded bytes — and
+    // therefore the HMAC — intact, so only the canonicality check separates
+    // this alias from the token the relay actually issued.
+    const B64URL = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_";
+    const aliasedPayload = cursorPayload.slice(0, -1) +
+      B64URL[B64URL.indexOf(cursorPayload.at(-1)!) + 1]!;
+    expect(aliasedPayload).not.toBe(cursorPayload);
+    const aliasedResponse = await SELF.fetch(taskUrl(
+      "list-callee",
+      `tasks?pageSize=1&pageToken=${encodeURIComponent(`${aliasedPayload}.${cursorSignature}`)}`,
+    ), { headers: wsAuth("list-first", firstToken) });
+    expect(aliasedResponse.status).toBe(400);
+
     const crossCallerReplay = await SELF.fetch(taskUrl(
       "list-callee",
       `tasks?pageSize=1&pageToken=${encodeURIComponent(body1.nextPageToken)}`,
@@ -442,7 +456,7 @@ describe("A2A task store", () => {
       `/v1/ws?role=call&to=${callee}`,
       wsAuth(caller, alphaCallerToken, "alpha-org"),
     );
-    socket.send(JSON.stringify(encryptedCallRequest(caller, callee)));
+    socket.send(JSON.stringify(encryptedCallRequest(caller, callee, { org: "alpha-org" })));
     const ringing = await nextFrame(socket);
     await nextFrame(listener);
 

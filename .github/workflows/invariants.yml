@@ -231,3 +231,69 @@ jobs:
             esac
           done
           echo "OK: no markdown task board reintroduced"
+
+      - name: Test files don't shrink alongside a src/ change
+        run: |
+          # Keep identical to inv_test_churn in scripts/ci-local.sh -- see its
+          # comment for why this checks net line count on MODIFIED test files
+          # rather than failing on any test file touched alongside src/ (that
+          # would fail nearly every ordinary TDD PR this repo's CLAUDE.md
+          # requires). #335: nothing else stops a stuck loop from quietly
+          # relaxing the check that would catch its own broken change.
+          test_globs=(packages/*/test packages/*/test/* apps/relay/test apps/relay/test/*)
+          src_globs=(packages/*/src packages/*/src/* apps/relay/src apps/relay/src/*)
+          modified_tests=$(git diff --name-only --diff-filter=M "${INVARIANTS_BASE}...HEAD" -- "${test_globs[@]}" 2>/dev/null || true)
+          touched_src=$(git diff --name-only --diff-filter=ACMR "${INVARIANTS_BASE}...HEAD" -- "${src_globs[@]}" 2>/dev/null || true)
+
+          shrunk=""
+          if [ -n "$modified_tests" ] && [ -n "$touched_src" ]; then
+            while IFS= read -r file; do
+              [ -n "$file" ] || continue
+              read -r added deleted rest <<< "$(git diff --numstat "${INVARIANTS_BASE}...HEAD" -- "$file" 2>/dev/null)"
+              if [ "${deleted:-0}" -gt "${added:-0}" ]; then
+                shrunk+="$file (+${added:-0}/-${deleted:-0})"$'\n'
+              fi
+            done <<< "$modified_tests"
+          fi
+
+          if [ -n "$shrunk" ]; then
+            echo "$shrunk" | while IFS= read -r line; do
+              [ -n "$line" ] || continue
+              file=${line%% *}
+              echo "::error file=$file::An existing test file lost more lines than it gained on a branch that also changed src/. If this is a deliberate simplification rather than a weakened check, that's fine -- this heuristic cannot tell the difference by itself, a human confirming by reading the diff can."
+            done
+            exit 1
+          fi
+
+          if [ -n "$touched_src" ]; then
+            added_test_lines=0
+            while IFS= read -r test_file; do
+              [ -n "$test_file" ] || continue
+              read -r added rest <<< "$(git diff --numstat "${INVARIANTS_BASE}...HEAD" -- "$test_file" 2>/dev/null)"
+              added_test_lines=$((added_test_lines + ${added:-0}))
+            done < <(git diff --name-only --diff-filter=ACMR "${INVARIANTS_BASE}...HEAD" -- "${test_globs[@]}" 2>/dev/null || true)
+            if [ "$added_test_lines" -eq 0 ]; then
+              echo "::warning::src/ changed with no lines added to any test file -- confirm existing coverage already exercises this."
+            fi
+          fi
+          echo "OK: no test file shrank alongside a src/ change"
+
+      - name: The local gate mirrors this workflow's verify job
+        run: |
+          # scripts/ci-local.sh calls itself a faithful mirror of ci.yml's
+          # verify job, and with automatic runs paused it is the only gate a
+          # push crosses. Nothing enforced the claim, and it drifted: docs:check
+          # and the wrangler bundle ran in ci.yml and not there, so the pre-push
+          # hook passed commits CI would have failed.
+          #
+          # Every shell step in the verify job is classified inside ci-local.sh
+          # as mirrored (the command appears verbatim in run_verify) or
+          # knowingly unmirrored. A new step is in neither list and fails there.
+          # This step runs that same assertion from CI's side, so the two cannot
+          # drift while only one of them is being run.
+          if bash scripts/ci-local.sh mirror-check; then
+            echo "OK: scripts/ci-local.sh mirrors the verify job"
+          else
+            echo "::error file=scripts/ci-local.sh::The local gate has drifted from ci.yml's verify job -- see CLAUDE.md."
+            exit 1
+          fi

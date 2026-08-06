@@ -4,12 +4,13 @@ import {
 } from "@benree/agentcall-shared";
 import { constantTimeEqual, sha256Hex } from "./auth.js";
 import { checkLimit, REGISTER } from "./ratelimit/index.js";
-import { rateLimit, type RelayAppEnv } from "./middleware.js";
+import { jsonBody, rateLimit, type RelayAppEnv } from "./middleware.js";
 import type { Env } from "./index.js";
 import { orgAuditStatement, orgAuditTrimStatement } from "./events.js";
 import {
-  deploymentOrgAllows, identityKey,
+  deploymentOrgAllows, identityObjectName,
 } from "./tenant.js";
+import { resolveAgentId } from "./identity.js";
 
 const RECEIPT_TTL_MS = 7 * 24 * 60 * 60_000;
 
@@ -37,14 +38,31 @@ const MAX_EVICTIONS_PER_ALARM = 50;
 const MAX_EVICTION_BACKOFF_MS = 60 * 60_000;
 type EvictionEnv = Pick<Env, "DB" | "HANDLE_DO">;
 
+// Resolved here rather than at the five call sites: they all address the job
+// by (org, handle) because recovery_evictions is keyed that way, and the
+// object name is the only thing that needs the identity.
 async function evict(env: EvictionEnv, org: string, handle: string, generation: number): Promise<boolean> {
   try {
-    const stub = env.HANDLE_DO.get(env.HANDLE_DO.idFromName(identityKey(org, handle)));
+    const agentId = await resolveAgentId(env.DB, org, handle);
+    if (!agentId) {
+      // No identity behind the address means no object to evict from. Drop
+      // the job instead of retrying it forever against nothing. Unreachable
+      // today — handles cannot be released yet — but this queue retries with
+      // backoff and an orphan would never drain on its own.
+      await env.DB.prepare(
+        "DELETE FROM recovery_evictions WHERE org = ? AND handle = ? AND recovery_generation = ?",
+      ).bind(org, handle, generation).run();
+      return true;
+    }
+    const stub = env.HANDLE_DO.get(env.HANDLE_DO.idFromName(identityObjectName({ org, agentId })));
     if (!(await stub.fetch("https://do/credentials/evict", {
       method: "POST",
       headers: {
         "X-Credential-Org": org,
         "X-Credential-Handle": handle,
+        // The floor is durable DO state, so it is keyed by the identity while
+        // the handle above only matches live sockets for this request.
+        "X-Credential-Agent-Id": agentId,
         "X-Recovery-Generation": String(generation),
       },
     })).ok) throw new Error("eviction rejected");
@@ -81,7 +99,7 @@ export async function drainRecoveryEvictions(env: EvictionEnv): Promise<void> {
   }
 }
 
-function receiptJson(row: StoredReceipt, evictionConfirmed: boolean) {
+function receiptJson(row: StoredReceipt, evictionConfirmed: boolean, agentKind: string | null) {
   return {
     org: row.org,
     handle: row.handle,
@@ -92,7 +110,20 @@ function receiptJson(row: StoredReceipt, evictionConfirmed: boolean) {
     recovery_public_id: row.successor_recovery_public_id,
     committed_at: row.committed_at,
     eviction_confirmed: evictionConfirmed,
+    agent_kind: agentKind,
   };
+}
+
+// #346: agent_kind never changes after registration, so it is safe to read
+// once regardless of which path below produces the response (fresh redemption,
+// a replayed receipt, or a concurrent-writer's receipt). A recovering client
+// with no local config.json to preserve it from has no other way to learn
+// whether the line it is restoring was ever callable.
+async function agentKindFor(env: Env, org: string, handle: string): Promise<string | null> {
+  const row = await env.DB.prepare(
+    "SELECT agent_kind FROM handles WHERE org = ? AND handle = ?",
+  ).bind(org, handle).first<{ agent_kind: string | null }>();
+  return row?.agent_kind ?? null;
 }
 
 async function findReceipt(
@@ -130,9 +161,9 @@ export function mountRecovery(app: Hono<RelayAppEnv>): void {
 
   app.post("/v1/recovery/issue", rateLimit(REGISTER, "identity", "recovery-issue:"), async (c) => {
     const identity = c.var.identity;
-    const body = RecoveryIssueRequest.safeParse(await c.req.json().catch(() => null));
-    if (!body.success || body.data.successor_recovery_public_id !==
-      publicId("agr", body.data.successor_recovery_digest)) {
+    const body = await jsonBody(c, RecoveryIssueRequest);
+    if (!body || body.successor_recovery_public_id !==
+      publicId("agr", body.successor_recovery_digest)) {
       return c.json({ error: "invalid request" }, 400);
     }
     const presented = (c.req.header("Authorization") ?? "").replace(/^Bearer\s+/i, "");
@@ -143,8 +174,8 @@ export function mountRecovery(app: Hono<RelayAppEnv>): void {
           "recovery_redeemed_at = NULL WHERE org = ? AND handle = ? AND token_hash = ? " +
           "AND recovery_generation = ?",
       ).bind(
-        body.data.successor_recovery_digest, identity.org, identity.handle, await sha256Hex(presented),
-        body.data.expected_generation,
+        body.successor_recovery_digest, identity.org, identity.handle, await sha256Hex(presented),
+        body.expected_generation,
       ),
       orgAuditStatement(c, {
         event: "credential.recovery.issue", action: "U", org: identity.org,
@@ -155,8 +186,8 @@ export function mountRecovery(app: Hono<RelayAppEnv>): void {
     ]);
     if ((result[0].meta.changes ?? 0) !== 1) return c.json({ error: "credential changed" }, 409);
     return c.json({
-      generation: body.data.expected_generation + 1,
-      recovery_public_id: body.data.successor_recovery_public_id,
+      generation: body.expected_generation + 1,
+      recovery_public_id: body.successor_recovery_public_id,
     });
   });
 
@@ -165,12 +196,12 @@ export function mountRecovery(app: Hono<RelayAppEnv>): void {
     if (!(await checkLimit(c.env, `recovery-ip:${ip}`, REGISTER))) {
       return c.json({ error: "rate limited" }, 429);
     }
-    const body = RecoveryRedeemRequest.safeParse(await c.req.json().catch(() => null));
-    if (!body.success || !validPublicIds(body.data) ||
-      !deploymentOrgAllows(c.env.DEPLOYMENT_MODE, c.env.SELF_HOSTED_ORG, body.success ? body.data.org : "")) {
+    const body = await jsonBody(c, RecoveryRedeemRequest);
+    if (!body || !validPublicIds(body) ||
+      !deploymentOrgAllows(c.env.DEPLOYMENT_MODE, c.env.SELF_HOSTED_ORG, body.org)) {
       return c.json({ error: "unauthorized" }, 401);
     }
-    const request = body.data;
+    const request = body;
     const currentHash = await sha256Hex(request.current_recovery_proof);
     if (!(await checkLimit(c.env, `recovery-proof:${currentHash.slice(0, 16)}`, REGISTER))) {
       return c.json({ error: "rate limited" }, 429);
@@ -180,7 +211,10 @@ export function mountRecovery(app: Hono<RelayAppEnv>): void {
     const replay = await findReceipt(c.env, request, now);
     if (replay) {
       if (!exactReceipt(replay, request, currentHash)) return c.json({ error: "unauthorized" }, 401);
-      return c.json(receiptJson(replay, await evict(c.env, request.org, request.handle, request.generation + 1)));
+      return c.json(receiptJson(
+        replay, await evict(c.env, request.org, request.handle, request.generation + 1),
+        await agentKindFor(c.env, request.org, request.handle),
+      ));
     }
 
     const live = await c.env.DB.prepare(
@@ -247,7 +281,10 @@ export function mountRecovery(app: Hono<RelayAppEnv>): void {
       // instead of surfacing the uniqueness race as a server error.
       const concurrent = await findReceipt(c.env, request, now);
       if (concurrent && exactReceipt(concurrent, request, currentHash)) {
-        return c.json(receiptJson(concurrent, await evict(c.env, request.org, request.handle, request.generation + 1)));
+        return c.json(receiptJson(
+          concurrent, await evict(c.env, request.org, request.handle, request.generation + 1),
+          await agentKindFor(c.env, request.org, request.handle),
+        ));
       }
       console.error("recovery transaction failure", {
         name: error instanceof Error ? error.name : "UnknownError",
@@ -257,7 +294,10 @@ export function mountRecovery(app: Hono<RelayAppEnv>): void {
     if ((results[0].meta.changes ?? 0) !== 1 || (results[1].meta.changes ?? 0) !== 1) {
       const concurrent = await findReceipt(c.env, request, now);
       if (concurrent && exactReceipt(concurrent, request, currentHash)) {
-        return c.json(receiptJson(concurrent, await evict(c.env, request.org, request.handle, request.generation + 1)));
+        return c.json(receiptJson(
+          concurrent, await evict(c.env, request.org, request.handle, request.generation + 1),
+          await agentKindFor(c.env, request.org, request.handle),
+        ));
       }
       return c.json({ error: "unauthorized" }, 401);
     }
@@ -268,6 +308,9 @@ export function mountRecovery(app: Hono<RelayAppEnv>): void {
       successor_recovery_hash: request.successor_recovery_digest,
       successor_recovery_public_id: request.successor_recovery_public_id, committed_at: now,
     };
-    return c.json(receiptJson(stored, await evict(c.env, request.org, request.handle, request.generation + 1)));
+    return c.json(receiptJson(
+      stored, await evict(c.env, request.org, request.handle, request.generation + 1),
+      await agentKindFor(c.env, request.org, request.handle),
+    ));
   });
 }

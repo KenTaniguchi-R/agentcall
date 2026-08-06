@@ -1,9 +1,8 @@
 import { randomBytes } from "node:crypto";
-import { existsSync, readFileSync } from "node:fs";
 import { z } from "zod";
 import { CONTEXT_ID_RE, CONTEXT_TTL_MS, MAX_CONTEXTS, MAX_CONTEXT_TURNS } from "@benree/agentcall-shared";
 import type { LinePaths } from "./paths.js";
-import { writeJsonAtomic } from "./json-store.js";
+import { readJsonStore, writeJsonAtomic } from "./json-store.js";
 
 // The binding is the whole security design in one shape. `context_id` is the
 // only field that ever travels; `agent_session_id` is the capability it stands
@@ -72,13 +71,10 @@ export function upsertContext(list: ContextBinding[], binding: ContextBinding): 
 // opposite of loadPolicy's deliberate throw — there, a silent default would
 // GRANT what the owner withheld; here, a silent empty only DENIES.
 export function loadContexts(p: LinePaths): ContextBinding[] {
-  if (!existsSync(p.contextsFile)) return [];
-  try {
-    const parsed = z.array(ContextBindingSchema).safeParse(JSON.parse(readFileSync(p.contextsFile, "utf8")));
-    return parsed.success ? parsed.data : [];
-  } catch {
-    return [];
-  }
+  return readJsonStore(p.contextsFile, z.array(ContextBindingSchema), {
+    missing: () => [],
+    corrupt: () => [],
+  });
 }
 
 // 0600, same posture as config.json: this file holds real agent session ids and

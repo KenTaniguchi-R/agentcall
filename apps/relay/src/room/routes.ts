@@ -8,8 +8,8 @@ import {
   type RoomInviteRecordType, type RoomParticipantRecordType, type RoomRecordType,
 } from "@benree/agentcall-shared";
 import { sha256Hex } from "../auth.js";
-import type { Env } from "../index.js";
 import type { RelayAppEnv } from "../middleware.js";
+import { jsonBody } from "../middleware.js";
 import {
   formatRoomCapability, formatRoomInvite, newInviteId, newParticipantId, newRoomId,
   newRoomSecret, parseRoomCapability, parseRoomInvite,
@@ -22,8 +22,8 @@ function bearer(header: string | undefined): string {
 
 export function mountRooms(app: Hono<RelayAppEnv>): void {
   app.post("/v1/rooms", async (c) => {
-    const parsed = RoomCreateRequest.safeParse(await c.req.json().catch(() => null));
-    if (!parsed.success) return c.json({ error: "invalid Room request" }, 400);
+    const parsed = await jsonBody(c, RoomCreateRequest);
+    if (!parsed) return c.json({ error: "invalid Room request" }, 400);
     const now = Date.now();
     const roomId = newRoomId();
     const participantId = newParticipantId();
@@ -32,7 +32,7 @@ export function mountRooms(app: Hono<RelayAppEnv>): void {
       room_id: roomId,
       state: "waiting",
       moderator_participant_id: participantId,
-      expected_participants: parsed.data.expected_participants,
+      expected_participants: parsed.expected_participants,
       membership_epoch: 0,
       created_at: now,
       invite_deadline: now + ROOM_INVITE_TTL_MS,
@@ -42,66 +42,62 @@ export function mountRooms(app: Hono<RelayAppEnv>): void {
     const host: RoomParticipantRecordType = {
       participant_id: participantId,
       room_id: roomId,
-      seat: 1,
       state: "admitted",
-      display_name: parsed.data.display_name,
+      display_name: parsed.display_name,
       credential_hash: await sha256Hex(hostSecret),
-      signing_public_key: parsed.data.signing_public_key,
-      encryption_public_key: parsed.data.encryption_public_key,
-      agent_adapter: parsed.data.agent_adapter,
+      signing_public_key: parsed.signing_public_key,
+      encryption_public_key: parsed.encryption_public_key,
+      agent_adapter: parsed.agent_adapter,
       joined_at: now,
       admitted_at: now,
       last_seen_at: now,
       calls_charged: 0,
     };
-    const publicInvites: RoomPublicInviteType[] = [];
-    const records: RoomInviteRecordType[] = [];
-    for (let seat = 2; seat <= parsed.data.expected_participants; seat++) {
-      const inviteId = newInviteId();
-      const secret = newRoomSecret();
-      publicInvites.push({
-        seat: seat as 2 | 3 | 4 | 5 | 6,
-        invite: formatRoomInvite(roomId, inviteId, secret),
-        expires_at: room.invite_deadline,
-      });
-      records.push({
-        invite_id: inviteId, room_id: roomId, seat: seat as 2 | 3 | 4 | 5 | 6,
-        secret_hash: await sha256Hex(secret), expires_at: room.invite_deadline,
-      });
-    }
+    const inviteId = newInviteId();
+    const inviteSecret = newRoomSecret();
+    const seatsRemaining = parsed.expected_participants - 1;
+    const inviteRecord: RoomInviteRecordType = {
+      invite_id: inviteId, room_id: roomId,
+      secret_hash: await sha256Hex(inviteSecret), expires_at: room.invite_deadline,
+      seats_remaining: seatsRemaining,
+    };
+    const publicInvite: RoomPublicInviteType = {
+      invite: formatRoomInvite(roomId, inviteId, inviteSecret),
+      expires_at: room.invite_deadline,
+      seats_remaining: seatsRemaining,
+    };
     const stub = c.env.ROOM_DO.get(c.env.ROOM_DO.idFromName(roomId));
     const response = await stub.fetch("https://room.internal/create", {
-      method: "POST", body: JSON.stringify({ room, host, invites: records }),
+      method: "POST", body: JSON.stringify({ room, host, invite: inviteRecord }),
     });
     if (!response.ok) return c.json({ error: "Room unavailable" }, 503);
     const snapshot = RoomSnapshot.parse(await response.json());
     return c.json(RoomCreateResponse.parse({
       ...snapshot,
       credential: formatRoomCapability(roomId, participantId, hostSecret),
-      invites: publicInvites,
+      invite: publicInvite,
     }), 201);
   });
 
   app.post("/v1/rooms/join", async (c) => {
-    const parsed = RoomJoinRequest.safeParse(await c.req.json().catch(() => null));
-    if (!parsed.success) return c.json({ error: "invalid Room join" }, 400);
-    if (!(await verifyRoomJoinProof(parsed.data))) {
+    const parsed = await jsonBody(c, RoomJoinRequest);
+    if (!parsed) return c.json({ error: "invalid Room join" }, 400);
+    if (!(await verifyRoomJoinProof(parsed))) {
       return c.json({ error: "Room invitation unavailable" }, 404);
     }
-    const invite = parseRoomInvite(parsed.data.invite);
+    const invite = parseRoomInvite(parsed.invite);
     if (!invite) return c.json({ error: "Room invitation unavailable" }, 404);
     const participantId = newParticipantId();
     const now = Date.now();
     const participant: RoomParticipantRecordType = {
       participant_id: participantId,
       room_id: invite.roomId,
-      seat: 2,
       state: "pending",
-      display_name: parsed.data.display_name,
-      credential_hash: await sha256Hex(parsed.data.participant_secret),
-      signing_public_key: parsed.data.signing_public_key,
-      encryption_public_key: parsed.data.encryption_public_key,
-      agent_adapter: parsed.data.agent_adapter,
+      display_name: parsed.display_name,
+      credential_hash: await sha256Hex(parsed.participant_secret),
+      signing_public_key: parsed.signing_public_key,
+      encryption_public_key: parsed.encryption_public_key,
+      agent_adapter: parsed.agent_adapter,
       joined_at: now,
       last_seen_at: now,
       calls_charged: 0,
@@ -122,7 +118,7 @@ export function mountRooms(app: Hono<RelayAppEnv>): void {
     return response.status === 201
       ? c.json(RoomJoinResponse.parse({
         ...body,
-        credential: formatRoomCapability(invite.roomId, returnedId, parsed.data.participant_secret),
+        credential: formatRoomCapability(invite.roomId, returnedId, parsed.participant_secret),
       }), 201)
       : c.json(RoomJoinResponse.parse(body), 200);
   });
@@ -145,9 +141,9 @@ export function mountRooms(app: Hono<RelayAppEnv>): void {
   });
   for (const action of RoomAction.options) {
     app.post(`/v1/room/${action}`, async (c) => {
-      const parsed = RoomMutationRequest.safeParse(await c.req.json().catch(() => null));
-      if (!parsed.success) return c.json({ error: "invalid Room action" }, 400);
-      return forwardRoom(c, action, "POST", parsed.data);
+      const parsed = await jsonBody(c, RoomMutationRequest);
+      if (!parsed) return c.json({ error: "invalid Room action" }, 400);
+      return forwardRoom(c, action, "POST", parsed);
     });
   }
 }

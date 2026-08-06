@@ -1,6 +1,5 @@
 import type { Context } from "hono";
 import type { OrgAuditEvent, OrgRoleType, RosterAuditEvent } from "@benree/agentcall-shared";
-import type { Env } from "./index.js";
 import type { RelayAppEnv } from "./middleware.js";
 
 type AuditAction = "C" | "R" | "U" | "D";

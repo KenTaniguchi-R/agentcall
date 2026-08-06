@@ -1,18 +1,20 @@
 import { describe, expect, it } from "vitest";
 import {
   EncryptionKeyRecord, HPKE_SUITE, IdentityRecord,
-  encryptionKeyTranscript, encryptionKeyTranscriptHash, fingerprint, identityTranscript,
+  encryptionKeyTranscript, encryptionKeyTranscriptHash, FINGERPRINT_RE, fingerprint, identityTranscript,
 } from "../src/keys.js";
 
 const identity = {
   v: 1 as const,
-  address: "ken@agent-call.app",
+  relay_origin: "agentcall.benree.tech",
+  address: "@acme/ken",
   identity_pub: "BASE64URLPUBLICKEY",
 };
 
 const encKey = {
   v: 1 as const,
-  address: "ken@agent-call.app",
+  relay_origin: "agentcall.benree.tech",
+  address: "@acme/ken",
   key_id: "0123456789abcdef0123456789abcdef",
   suite: HPKE_SUITE,
   pub: "BASE64URLENCRYPTIONKEY",
@@ -90,8 +92,31 @@ describe("EncryptionKeyRecord", () => {
 describe("transcripts", () => {
   it("changes when any identity field changes", () => {
     const a = identityTranscript(identity);
-    const b = identityTranscript({ ...identity, address: "sarah@agent-call.app" });
+    const b = identityTranscript({ ...identity, address: "@acme/sarah" });
     expect(Array.from(a)).not.toEqual(Array.from(b));
+  });
+
+  // The cross-relay binding. It used to ride inside `address` as the host part,
+  // which meant it survived only as long as addresses were DNS-shaped. It is an
+  // explicit signed field now, so a record published on one relay still cannot
+  // be presented as valid on another once the address is a bare registry key.
+  it("binds an identity record to its relay", () => {
+    const a = identityTranscript(identity);
+    const b = identityTranscript({ ...identity, relay_origin: "relay.other.example" });
+    expect(Array.from(a)).not.toEqual(Array.from(b));
+  });
+
+  it("binds an encryption key record to its relay", () => {
+    const a = encryptionKeyTranscript(encKey);
+    const b = encryptionKeyTranscript({ ...encKey, relay_origin: "relay.other.example" });
+    expect(Array.from(a)).not.toEqual(Array.from(b));
+  });
+
+  it("requires relay_origin on both records", () => {
+    const { relay_origin: _i, ...identityWithout } = identity;
+    const { relay_origin: _e, ...encWithout } = encKey;
+    expect(IdentityRecord.safeParse(identityWithout).success).toBe(false);
+    expect(EncryptionKeyRecord.safeParse(encWithout).success).toBe(false);
   });
 
   it("changes when the encryption epoch changes", () => {
@@ -111,9 +136,12 @@ describe("transcripts", () => {
 });
 
 describe("fingerprint", () => {
+  // Asserted against the exported constant rather than a copy of the literal,
+  // so this also pins that FINGERPRINT_RE — which the CLI's trust store and
+  // replay store validate against — still accepts what this function emits.
   it("formats as SHA256: plus 32 lowercase hex characters", async () => {
     const fp = await fingerprint(identityTranscript(identity));
-    expect(fp).toMatch(/^SHA256:[0-9a-f]{32}$/);
+    expect(fp).toMatch(FINGERPRINT_RE);
   });
 
   it("is stable for the same input", async () => {

@@ -51,15 +51,45 @@ posthog.init('phc_yR9jbkhmKC39j3rSw2qvkLLLmPPmfvfNxHA7Rz5qNbfk',{
   --mono:"JetBrains Mono",ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;
   --wrap:1180px;
   --pad:clamp(20px,5vw,56px);
+
+  /* The page is one continuous night. The hero's sky does not stop at the
+     terminal — it carries the whole document, and every surface below is glass
+     lit over it rather than paper laid beside it. */
+  --glass:rgba(255,255,255,.055);
+  --glass-2:rgba(255,255,255,.035);
+  --edge:rgba(255,255,255,.12);
+  --tx:rgba(255,255,255,.8);
+  /* .5 measured 1.35:1 over this sky. Secondary text needs .72 to clear AA. */
+  --tx-dim:rgba(255,255,255,.72);
+  --accent:#8FC0FF;
+  --ok:#7BD8A6;
+  --warn:#E4B363;
+  --bad:#FF9C8A;
+  --r-lg:14px;
+  --r-sm:12px;
 }
 
 *{box-sizing:border-box}
 html{scroll-behavior:smooth}
 body{
-  margin:0;background:var(--paper);color:var(--ink);
+  margin:0;background:#060B1B;color:#fff;
   font-family:var(--sans);font-size:16px;line-height:1.65;font-weight:400;
   -webkit-font-smoothing:antialiased;
 }
+/* One sky behind the whole document, deepening as you descend. The hero paints
+   its own on top of this, so the hero itself is unchanged. */
+.page-sky{position:fixed;inset:0;z-index:-3;background:
+  radial-gradient(58% 42% at 3% 93%,rgba(236,165,168,.26) 0%,rgba(171,93,116,.17) 38%,rgba(120,70,110,0) 72%),
+  radial-gradient(46% 52% at 99% 66%,rgba(244,180,168,.22) 0%,rgba(198,144,170,.15) 40%,rgba(140,110,170,0) 74%),
+  radial-gradient(66% 40% at 1% 44%,rgba(150,120,192,.24) 0%,rgba(113,94,164,.13) 45%,rgba(80,80,150,0) 74%),
+  linear-gradient(158deg,#0D2C75 0%,#123F97 24%,#123468 46%,#141C48 70%,#080D22 100%)}
+.page-grain{position:fixed;inset:0;z-index:-2;opacity:.15;pointer-events:none;mix-blend-mode:overlay;
+  background-image:radial-gradient(rgba(255,255,255,.5) .5px,transparent .5px);background-size:3px 3px}
+.page-veil{position:fixed;inset:0;z-index:-1;pointer-events:none;
+  background:linear-gradient(180deg,rgba(4,9,24,0),rgba(4,9,24,.62))}
+.skip{position:absolute;left:-9999px;top:0;z-index:80;padding:.8rem 1.2rem;background:#fff;color:var(--ink);
+  font-size:.9rem;font-weight:500;border-radius:0 0 8px 0}
+.skip:focus{left:0}
 a{color:inherit;text-decoration:none}
 :focus-visible{outline:2px solid var(--blue);outline-offset:3px;border-radius:2px}
 
@@ -74,15 +104,20 @@ h3{font-size:1.06rem;line-height:1.3;letter-spacing:-.005em}
 h1 em,h2 em{font-style:italic;font-weight:500}
 p{margin:0}
 
+/* Only the hero and the closing CTA use an eyebrow now. The body sections
+   dropped theirs: the rail already names each one, so a label above the
+   headline was saying the same thing twice. */
 .eyebrow{
-  font-family:var(--mono);font-size:.665rem;letter-spacing:.22em;text-transform:uppercase;
-  color:var(--ink-3);display:inline-flex;align-items:center;gap:.6em;margin-bottom:1.1rem;
+  font-family:var(--mono);font-size:.665rem;letter-spacing:.16em;text-transform:uppercase;
+  color:rgba(255,255,255,.82);display:inline-flex;align-items:center;gap:.6em;margin-bottom:1.1rem;
+  border:1px solid rgba(255,255,255,.24);border-radius:999px;padding:.42rem 1rem;
+  background:rgba(255,255,255,.07);backdrop-filter:blur(6px);
 }
-.eyebrow::before{content:"";width:5px;height:5px;border-radius:50%;background:var(--blue)}
+.eyebrow::before{content:"";width:5px;height:5px;border-radius:50%;background:#8FC0FF;box-shadow:0 0 10px #8FC0FF}
 .lede{
-  margin-top:1.1rem;max-width:56ch;color:var(--ink-2);font-size:1.02rem;line-height:1.72;font-weight:300;
+  margin-top:1.2rem;max-width:64ch;color:var(--tx);font-size:1.01rem;line-height:1.78;font-weight:300;
+  text-wrap:pretty;
 }
-.sec-head{margin-bottom:clamp(2.4rem,5vw,3.6rem)}
 
 /* ---------- nav ---------- */
 .nav{
@@ -108,11 +143,48 @@ p{margin:0}
 .nav .btn-sm:hover{transform:translateY(-1px);box-shadow:0 6px 18px rgba(0,0,0,.16)}
 .nav.over-hero{color:#fff}
 .nav.pinned{
-  background:rgba(250,249,247,.9);backdrop-filter:saturate(180%) blur(14px);
+  background:rgba(250,249,247,.97);backdrop-filter:saturate(180%) blur(20px);
   border-bottom-color:var(--line);color:var(--ink);
 }
 .nav.pinned .btn-sm{background:var(--ink);color:var(--paper)}
-@media(max-width:860px){.nav-links{display:none}}
+
+/* mobile menu */
+.nav-toggle{
+  display:none;position:relative;margin-left:auto;width:44px;height:44px;
+  background:none;border:0;color:inherit;cursor:pointer;
+}
+/* absolute bars, not stacked flow — the close transform needs each bar's
+   resting offset to be exact or the X opens as a chevron. */
+.nav-toggle span{
+  position:absolute;left:12px;width:20px;height:1.5px;background:currentColor;border-radius:2px;
+  transition:transform .28s ease,opacity .2s ease;
+}
+.nav-toggle span:nth-child(1){top:16px}
+.nav-toggle span:nth-child(2){top:21px}
+.nav-toggle span:nth-child(3){top:26px}
+.nav-toggle[aria-expanded="true"] span:nth-child(1){transform:translateY(5px) rotate(45deg)}
+.nav-toggle[aria-expanded="true"] span:nth-child(2){opacity:0}
+.nav-toggle[aria-expanded="true"] span:nth-child(3){transform:translateY(-5px) rotate(-45deg)}
+.nav-menu{
+  position:fixed;inset:66px 0 auto 0;z-index:59;display:none;flex-direction:column;
+  padding:.5rem var(--pad) 1.6rem;background:var(--paper);border-bottom:1px solid var(--line);
+  box-shadow:0 24px 48px -24px rgba(0,6,25,.28);
+}
+.nav-menu.open{display:flex}
+.nav-menu a{
+  display:flex;align-items:center;min-height:48px;color:var(--ink);
+  font-size:1rem;border-bottom:1px solid var(--line-soft);
+}
+.nav-menu a:last-of-type{border-bottom:0}
+.nav-menu .btn-sm{
+  justify-content:center;margin-top:1rem;min-height:48px;border-bottom:0;
+  background:var(--ink);color:var(--paper);font-size:.9rem;
+}
+body.menu-open{overflow:hidden}
+@media(max-width:860px){
+  .nav-links,.nav-right{display:none}
+  .nav-toggle{display:block}
+}
 
 /* ---------- hero ---------- */
 .hero{
@@ -139,16 +211,12 @@ p{margin:0}
   background-image:radial-gradient(rgba(255,255,255,.5) .5px, transparent .5px);
   background-size:3px 3px;mix-blend-mode:overlay;
 }
-.hero .eyebrow{
-  color:rgba(255,255,255,.82);border:1px solid rgba(255,255,255,.24);
-  border-radius:999px;padding:.42rem 1rem;background:rgba(255,255,255,.07);
-  backdrop-filter:blur(6px);letter-spacing:.16em;
-}
-.hero .eyebrow::before{background:#8FC0FF;box-shadow:0 0 10px #8FC0FF}
+.hero .eyebrow{letter-spacing:.16em}
 .hero h1{
-  max-width:15ch;margin:1.4rem auto 0;
+  max-width:26ch;margin:1.4rem auto 0;
   text-shadow:0 2px 40px rgba(0,10,30,.5);
 }
+.hero h1 .accent{color:#FF6656;font-style:normal;font-weight:inherit}
 .hero-sub{
   max-width:60ch;margin:1.5rem auto 0;color:rgba(255,255,255,.84);
   font-weight:300;font-size:1.03rem;line-height:1.72;
@@ -163,7 +231,7 @@ p{margin:0}
 .btn:hover{transform:translateY(-2px);box-shadow:0 10px 30px rgba(0,0,0,.28)}
 .hero-ticks{
   display:flex;flex-wrap:wrap;gap:1.4rem;justify-content:center;margin-top:1.7rem;
-  font-family:var(--mono);font-size:.7rem;letter-spacing:.1em;color:rgba(255,255,255,.6);
+  font-family:var(--mono);font-size:.78rem;letter-spacing:.1em;color:rgba(255,255,255,.82);
 }
 .hero-ticks span::before{content:"✓ ";color:#8FC0FF}
 
@@ -180,12 +248,12 @@ p{margin:0}
 }
 .dot{width:9px;height:9px;border-radius:50%;background:rgba(255,255,255,.2)}
 .term-title{
-  flex:1;text-align:center;font-family:var(--mono);font-size:.63rem;letter-spacing:.2em;
-  color:rgba(255,255,255,.38);
+  flex:1;text-align:center;font-family:var(--mono);font-size:.68rem;letter-spacing:.2em;
+  color:rgba(255,255,255,.62);
 }
 .term-replay{
-  font-family:var(--mono);font-size:.63rem;letter-spacing:.1em;color:rgba(255,255,255,.5);
-  background:none;border:1px solid rgba(255,255,255,.16);border-radius:5px;padding:.24rem .6rem;
+  font-family:var(--mono);font-size:.68rem;letter-spacing:.1em;color:rgba(255,255,255,.72);
+  background:none;border:1px solid rgba(255,255,255,.16);border-radius:5px;padding:.5rem .8rem;
   cursor:pointer;transition:all .2s;
 }
 .term-replay:hover{color:#fff;border-color:rgba(255,255,255,.4)}
@@ -218,7 +286,7 @@ p{margin:0}
 .pane-out .ln{display:block}
 .pane-out .cmd{color:#fff}
 .pane-out .ps{color:#4C9BFF}
-.pane-out .dim{color:rgba(255,255,255,.36)}
+.pane-out .dim{color:rgba(255,255,255,.56)}
 .pane-out .ok{color:#6FCF97}
 .pane-out .warn{color:#E4B363}
 .pane-out .bad{color:#E8836B}
@@ -248,9 +316,10 @@ p{margin:0}
   border-top:1px solid rgba(255,255,255,.08);background:#0D1016;
 }
 .chip{
-  font-family:var(--mono);font-size:.68rem;color:rgba(255,255,255,.6);cursor:pointer;
+  display:inline-flex;align-items:center;min-height:44px;
+  font-family:var(--mono);font-size:.7rem;color:rgba(255,255,255,.76);cursor:pointer;
   background:rgba(255,255,255,.05);border:1px solid rgba(255,255,255,.11);
-  border-radius:999px;padding:.28rem .7rem;transition:all .18s;
+  border-radius:999px;padding:.28rem .85rem;transition:all .18s;
 }
 .chip:hover{background:rgba(76,155,255,.16);border-color:rgba(76,155,255,.4);color:#cfe3ff}
 
@@ -262,157 +331,138 @@ p{margin:0}
 @media(prefers-reduced-motion:reduce){.caret{animation:none}}
 .term-cap{
   max-width:66ch;margin:1.4rem auto 0;padding:0 var(--pad) clamp(3.5rem,8vw,5.5rem);
-  font-size:.82rem;line-height:1.7;font-weight:300;color:rgba(255,255,255,.5);text-align:center;
+  font-size:.82rem;line-height:1.7;font-weight:300;color:rgba(255,255,255,.72);text-align:center;
 }
 
-/* ---------- spec bar ---------- */
+/* ---------- spec strip (closes the hero, in the hero's material) ---------- */
 .specs{
-  background:var(--white);border-top:1px solid var(--line);border-bottom:1px solid var(--line);
+  position:relative;border-top:1px solid var(--edge);border-bottom:1px solid var(--edge);
   display:grid;grid-template-columns:repeat(5,1fr);
+  background:rgba(5,10,26,.34);backdrop-filter:blur(14px);
 }
-.spec{padding:1.35rem var(--pad);border-right:1px solid var(--line-soft)}
+.spec{padding:1.25rem var(--pad);border-right:1px solid rgba(255,255,255,.08)}
 .spec:last-child{border-right:none}
-.spec dt{font-family:var(--mono);font-size:.58rem;letter-spacing:.2em;color:var(--ink-3);text-transform:uppercase}
-.spec dd{margin:.4rem 0 0;font-family:var(--mono);font-size:.82rem;color:var(--ink)}
-@media(max-width:900px){.specs{grid-template-columns:repeat(2,1fr)}.spec{border-bottom:1px solid var(--line-soft)}}
+.spec dt{font-family:var(--mono);font-size:.57rem;letter-spacing:.2em;color:var(--tx-dim);text-transform:uppercase}
+.spec dd{margin:.4rem 0 0;font-family:var(--mono);font-size:.82rem;color:#fff;font-variant-numeric:tabular-nums}
+@media(max-width:900px){.specs{grid-template-columns:repeat(2,1fr)}}
 @media(max-width:520px){.specs{grid-template-columns:1fr}}
 
-/* ---------- sticky section tabs ---------- */
-.tabs{position:sticky;top:0;z-index:40;background:var(--paper);border-bottom:1px solid var(--line)}
-.tabs-in{display:grid;grid-template-columns:repeat(4,1fr);gap:.5rem;padding:.85rem 0}
-.tab{
-  display:flex;gap:.6rem;align-items:center;padding:.55rem .85rem;border-radius:6px;
-  border:1px solid var(--line);font-family:var(--mono);font-size:.63rem;letter-spacing:.18em;
-  color:var(--ink-3);text-transform:uppercase;transition:all .25s ease;
+/* ---------- rail + body ---------- */
+/* Replaces the sticky tab bar, which parked itself behind the fixed nav.
+   262px with its own padding: at var(--pad) every label wrapped to two lines. */
+.body{display:grid;grid-template-columns:262px 1fr;max-width:1460px;margin:0 auto}
+/* 100dvh, not 100vh, so it does not jump with the iOS address bar */
+.rail{
+  position:sticky;top:66px;align-self:start;height:calc(100dvh - 66px);overflow-y:auto;
+  padding:2.6rem 0 2rem;border-right:1px solid var(--edge);
 }
-.tab:hover{border-color:rgba(11,11,13,.3);color:var(--ink)}
-.tab.active{background:var(--ink);border-color:var(--ink);color:var(--paper)}
-.tab i{font-style:normal;opacity:.5}
-@media(max-width:760px){.tabs-in{grid-template-columns:repeat(2,1fr)}}
-
-/* ---------- sections ---------- */
-section{padding:clamp(4.5rem,10vw,8rem) 0}
-.band-white{background:var(--white);border-top:1px solid var(--line);border-bottom:1px solid var(--line)}
-.band-paper{background:var(--paper-2)}
-
-/* cards */
-.grid{display:grid;gap:1px;background:var(--line);border:1px solid var(--line)}
-.g3{grid-template-columns:repeat(3,1fr)}
-.g2{grid-template-columns:repeat(2,1fr)}
-.card{background:var(--white);padding:1.6rem 1.5rem}
-.band-white .card{background:var(--paper)}
-.card h3{margin-bottom:.7rem}
-.card p{font-size:.88rem;color:var(--ink-2);line-height:1.68;font-weight:300}
-.card .k{font-family:var(--mono);font-size:.75rem;color:var(--blue-ink);margin-top:.9rem;display:block;word-break:break-word}
-.card ul{margin:.4rem 0 0;padding:0;list-style:none}
-.card li{
-  font-size:.85rem;color:var(--ink-2);font-weight:300;line-height:1.6;padding-left:1rem;position:relative;margin-bottom:.5rem;
+.rail-h{
+  font-family:var(--mono);font-size:.62rem;letter-spacing:.2em;text-transform:uppercase;
+  color:var(--tx-dim);padding:0 1.5rem;margin-bottom:1.1rem;
 }
-.card li::before{content:"";position:absolute;left:0;top:.62em;width:4px;height:4px;background:var(--blue);opacity:.6}
-.card code,li code,p code{font-family:var(--mono);font-size:.8em;background:rgba(27,111,224,.08);color:var(--blue-ink);padding:.1em .3em;border-radius:3px}
-@media(max-width:880px){.g3{grid-template-columns:1fr}.g2{grid-template-columns:1fr}}
-
-/* address anatomy */
-.addr{border:1px solid var(--line);background:var(--white);padding:clamp(1.6rem,4vw,2.4rem)}
-.addr-str{font-family:var(--mono);font-size:clamp(1.05rem,3.2vw,1.7rem);letter-spacing:-.02em;margin-bottom:1.8rem}
-.addr-str .h{color:var(--blue);border-bottom:2px solid var(--blue);padding-bottom:2px}
-.addr-str .o{color:var(--amber);border-bottom:2px solid var(--amber);padding-bottom:2px}
-.addr-str .r{color:var(--ink-3)}
-.addr-defs{display:grid;grid-template-columns:repeat(3,1fr);gap:1.6rem}
-.addr-defs dt{font-family:var(--mono);font-size:.6rem;letter-spacing:.2em;color:var(--ink);margin-bottom:.5rem}
-.addr-defs dd{margin:0;font-size:.85rem;color:var(--ink-2);font-weight:300;line-height:1.65}
-@media(max-width:760px){.addr-defs{grid-template-columns:1fr}}
-
-/* callout */
-.callout{border-left:2px solid var(--amber);padding:1.1rem 1.3rem;background:rgba(154,107,20,.05);margin-top:1.6rem;max-width:74ch}
-.callout.blue{border-left-color:var(--blue);background:rgba(27,111,224,.05)}
-.callout h4{
-  margin:0 0 .5rem;font-family:var(--mono);font-size:.63rem;letter-spacing:.18em;text-transform:uppercase;color:var(--amber);font-weight:500;
+/* .72 measured 3.91:1 at this size; inactive links need .86 */
+.rail a{
+  display:flex;gap:.7rem;align-items:baseline;padding:.7rem 1.5rem;color:rgba(255,255,255,.86);
+  white-space:nowrap;font-family:var(--mono);font-size:.8rem;
+  border-left:2px solid transparent;transition:color .22s,background .22s,border-color .22s;
 }
-.callout.blue h4{color:var(--blue-ink);font-family:var(--display);font-size:1rem;letter-spacing:-.01em;text-transform:none;font-weight:600}
-.callout p{font-size:.87rem;color:var(--ink-2);font-weight:300;line-height:1.7}
+.rail a:hover{color:#fff;background:rgba(255,255,255,.045)}
+.rail a.on{color:#fff;border-left-color:var(--accent);background:rgba(143,192,255,.10)}
+.rail a i{font-style:normal;font-size:.72rem;color:rgba(255,255,255,.6)}
 
-/* wire sequence */
-.wire{border:1px solid var(--line);background:var(--white)}
-.wire-row{display:grid;grid-template-columns:44px 148px 1fr;gap:1rem;padding:1rem 1.3rem;border-bottom:1px solid var(--line-soft)}
-.wire-row:last-child{border-bottom:none}
-.wire-row .n{font-family:var(--mono);font-size:.68rem;color:var(--ink-3)}
-.wire-row .lane{font-family:var(--mono);font-size:.63rem;letter-spacing:.11em;color:var(--ink-3);line-height:1.5}
-.wire-row .f{font-family:var(--mono);font-size:.82rem;color:var(--ink);display:block;margin-bottom:.25rem}
-.wire-row .d{font-size:.85rem;color:var(--ink-2);font-weight:300;line-height:1.6}
-@media(max-width:760px){.wire-row{grid-template-columns:36px 1fr;gap:.6rem}.wire-row .lane{grid-column:2}}
+.main{min-width:0}
+section{padding:clamp(4rem,7vw,6.5rem) var(--pad);border-bottom:1px solid rgba(255,255,255,.07)}
+h2{max-width:19ch;text-wrap:balance;text-shadow:0 2px 40px rgba(0,10,30,.45)}
 
-/* limits strip */
-.limits{display:grid;grid-template-columns:repeat(5,1fr);border:1px solid var(--line);background:var(--white);margin-top:1.6rem}
-.limit{padding:1.3rem 1.2rem;border-right:1px solid var(--line-soft)}
-.limit:last-child{border-right:none}
-.limit dt{font-family:var(--mono);font-size:.56rem;letter-spacing:.2em;color:var(--ink-3);text-transform:uppercase}
-.limit dd{margin:.45rem 0 0;font-family:var(--mono);font-size:.85rem}
-@media(max-width:900px){.limits{grid-template-columns:repeat(2,1fr)}.limit{border-bottom:1px solid var(--line-soft)}}
-@media(max-width:480px){.limits{grid-template-columns:1fr}}
-
-/* lens layout */
-.lens{display:grid;grid-template-columns:300px 1fr;gap:clamp(2rem,5vw,4rem);margin-bottom:clamp(3.5rem,8vw,6rem)}
-.lens:last-child{margin-bottom:0}
-.lens-tag{
-  display:inline-block;font-family:var(--mono);font-size:.6rem;letter-spacing:.18em;text-transform:uppercase;
-  border:1px solid var(--line);padding:.35rem .7rem;margin-bottom:1.1rem;color:var(--ink-2);
+/* ---------- artifacts (glass over the sky, never paper) ---------- */
+.glass{
+  margin-top:2.6rem;background:var(--glass);border:1px solid var(--edge);border-radius:var(--r-lg);
+  backdrop-filter:blur(20px) saturate(1.3);overflow:hidden;
+  box-shadow:0 1px 0 0 rgba(255,255,255,.07) inset,0 40px 84px -42px rgba(0,6,25,.9);
 }
-.lens-aside h3{font-family:var(--display);font-size:clamp(1.5rem,2.6vw,2rem);line-height:1.12;margin-bottom:1rem}
-.lens-aside p{font-size:.9rem;color:var(--ink-2);font-weight:300;line-height:1.72;margin-bottom:.9rem}
-@media(max-width:900px){.lens{grid-template-columns:1fr}}
-
-/* layers */
-.layer{
-  display:grid;grid-template-columns:250px 1fr;gap:1.4rem;padding:1.4rem 1.5rem;
-  border:1px solid var(--line);border-left-width:3px;background:var(--white);margin-bottom:.55rem;
+.g-h{display:flex;align-items:center;gap:.55rem;padding:.68rem 1.1rem;border-bottom:1px solid var(--edge);background:rgba(255,255,255,.045)}
+.g-h .d{width:8px;height:8px;border-radius:50%;background:rgba(255,255,255,.2)}
+.g-h b{margin-left:.5rem;font-family:var(--mono);font-size:.6rem;letter-spacing:.18em;color:var(--tx-dim);font-weight:400}
+.g-h .r{margin-left:auto;font-family:var(--mono);font-size:.61rem;color:var(--accent);font-variant-numeric:tabular-nums}
+/* real <pre>, so the transcript is selectable text rather than a picture of it */
+.g-b{
+  margin:0;padding:1.3rem 1.45rem;font-family:var(--mono);font-size:.79rem;line-height:2;
+  white-space:pre-wrap;word-break:break-word;
 }
-.layer:nth-child(1){border-left-color:var(--amber)}
-.layer:nth-child(2){border-left-color:var(--blue)}
-.layer:nth-child(3){border-left-color:var(--green)}
-.layer:nth-child(4){border-left-color:var(--red)}
-.layer h3{font-size:1.02rem;margin-bottom:.45rem}
-.layer .path{font-family:var(--mono);font-size:.7rem;color:var(--ink-3);word-break:break-all;line-height:1.5}
-.layer p{font-size:.87rem;color:var(--ink-2);font-weight:300;line-height:1.7}
-@media(max-width:760px){.layer{grid-template-columns:1fr;gap:.7rem}}
-
-/* security table */
-.tbl{width:100%;border-collapse:collapse;border:1px solid var(--line);background:var(--white);text-align:left}
-.tbl th{
-  font-family:var(--mono);font-size:.58rem;letter-spacing:.18em;text-transform:uppercase;color:var(--ink-3);
-  font-weight:400;padding:.9rem 1.1rem;border-bottom:1px solid var(--line);vertical-align:bottom;
+.g-b+.g-b{padding-top:0}
+.g-b .ps{color:var(--accent)}
+.g-b .dim{color:var(--tx-dim)}
+.g-b .ok{color:var(--ok)}
+.g-b .bad{color:var(--bad)}
+.g-b .wa{color:var(--warn)}
+.say{
+  display:block;margin:0 1.45rem;padding:1rem 1.2rem;border-left:2px solid var(--accent);
+  background:rgba(143,192,255,.09);font-family:var(--sans);font-size:.94rem;line-height:1.74;
+  color:rgba(255,255,255,.93);
 }
-.tbl td{padding:1rem 1.1rem;border-bottom:1px solid var(--line-soft);vertical-align:top;font-size:.84rem;color:var(--ink-2);font-weight:300;line-height:1.6}
-.tbl tr:last-child td{border-bottom:none}
-.tbl .surf b{display:block;color:var(--ink);font-weight:500;font-size:.88rem;margin-bottom:.2rem}
-.tbl .surf span{font-family:var(--mono);font-size:.7rem;color:var(--ink-3)}
-.tag{
-  display:block;width:max-content;font-family:var(--mono);font-size:.58rem;letter-spacing:.11em;padding:.18rem .45rem;
-  border-radius:3px;margin-bottom:.5rem;
+.caption{margin-top:.9rem;font-size:.83rem;line-height:1.7;color:var(--tx-dim);max-width:70ch}
+
+/* the grant surface, shown as the file it actually is */
+.file-h{padding:.62rem 1.1rem;background:rgba(255,255,255,.045);border-bottom:1px solid var(--edge);font-family:var(--mono);font-size:.67rem;color:var(--tx-dim)}
+.file-b{display:grid;grid-template-columns:46px 1fr}
+/* absolute line-height on both: the gutter is .69rem and the code .78rem, so a
+   shared unitless 2.1 computes to 23.2px vs 26.2px and drifts out of register */
+.gutter{
+  background:rgba(0,0,0,.16);border-right:1px solid var(--edge);padding:1.1rem 0;
+  font-family:var(--mono);font-size:.69rem;color:rgba(255,255,255,.5);text-align:right;line-height:26px;
 }
-.tag.ok{background:rgba(46,125,91,.12);color:var(--green)}
-.tag.warn{background:rgba(154,107,20,.13);color:var(--amber)}
-.tag.bad{background:rgba(168,58,50,.11);color:var(--red)}
-.tbl-scroll{overflow-x:auto;-webkit-overflow-scrolling:touch}
-@media(max-width:820px){.tbl{min-width:720px}}
+.gutter span{display:block;padding-right:.8rem}
+.code{padding:1.1rem 1.3rem;font-family:var(--mono);font-size:.78rem;line-height:26px;overflow-x:auto}
+.code .k{color:#C7A6FF}
+.code .s{color:var(--ok)}
+.code .c{color:rgba(255,255,255,.6)}
+.code .p{color:var(--accent)}
 
-/* status */
-.status{display:grid;grid-template-columns:repeat(3,1fr);gap:clamp(1.6rem,4vw,3rem)}
-.status h3{font-family:var(--display);font-size:1.15rem;padding-bottom:.6rem;border-bottom:2px solid;margin-bottom:1.1rem}
-.status .ok h3{color:var(--green);border-color:var(--green)}
-.status .mid h3{color:var(--amber);border-color:var(--amber)}
-.status .no h3{color:var(--red);border-color:var(--red)}
-.status ul{list-style:none;margin:0;padding:0}
-.status li{position:relative;padding-left:1rem;margin-bottom:.75rem;font-size:.86rem;color:var(--ink-2);font-weight:300;line-height:1.6}
-.status li::before{content:"";position:absolute;left:0;top:.58em;width:5px;height:5px}
-.status .ok li::before{background:var(--green)}
-.status .mid li::before{background:var(--amber)}
-.status .no li::before{background:var(--red)}
-.status li b{color:var(--ink);font-weight:500}
-.status li .iss{font-family:var(--mono);font-size:.7rem;color:var(--ink-3)}
-@media(max-width:880px){.status{grid-template-columns:1fr}}
+/* Three plain lines where a four-layer "permission model" used to be. The
+   layers read as an IT procurement doc and put a wall in front of the
+   individual dev who is the one actually installing this. Docs carry the model. */
+.facts{margin:1.8rem 0 0;padding:0;list-style:none;display:grid;gap:.9rem;max-width:62ch}
+.facts li{position:relative;padding-left:1.5rem;color:var(--tx);font-size:.97rem;line-height:1.7}
+.facts li::before{content:"";position:absolute;left:0;top:.66em;width:7px;height:1.5px;background:var(--accent)}
+.more{margin-top:1.8rem}
+.more a{font-size:.9rem;color:var(--accent);border-bottom:1px solid rgba(143,192,255,.35);padding-bottom:2px;transition:border-color .2s}
+.more a:hover{border-bottom-color:var(--accent)}
+.more a::after{content:" \2192"}
 
-.note{margin-top:3rem;font-size:.82rem;color:var(--ink-3);font-weight:300;max-width:62ch;line-height:1.7}
+.kv{display:grid;grid-template-columns:repeat(5,1fr)}
+.kv div{padding:1.3rem 1.2rem;border-right:1px solid var(--edge)}
+.kv div:last-child{border-right:0}
+.kv dt{font-family:var(--mono);font-size:.55rem;letter-spacing:.2em;text-transform:uppercase;color:var(--tx-dim)}
+.kv dd{margin:.45rem 0 0;font-family:var(--mono);font-size:.85rem;font-variant-numeric:tabular-nums}
+
+.honest{margin-top:2.6rem;display:grid;gap:.55rem}
+.hr-row{
+  display:grid;grid-template-columns:130px 1fr;gap:1.2rem;align-items:baseline;padding:1.15rem 1.3rem;
+  border-radius:var(--r-sm);background:var(--glass-2);border:1px solid var(--edge);
+}
+.bg{font-family:var(--mono);font-size:.56rem;letter-spacing:.14em;text-transform:uppercase;padding:.28rem .5rem;border-radius:4px;text-align:center}
+.b-ok{background:rgba(123,216,166,.16);color:var(--ok)}
+.b-mid{background:rgba(228,179,99,.16);color:var(--warn)}
+.b-no{background:rgba(255,156,138,.16);color:var(--bad)}
+.hr-row b{display:block;font-weight:500;font-size:.94rem;margin-bottom:.26rem}
+.hr-row p{color:var(--tx);font-size:.87rem;line-height:1.68}
+
+@media(max-width:900px){
+  .body{grid-template-columns:1fr}
+  .rail{
+    position:static;height:auto;border-right:0;border-bottom:1px solid var(--edge);
+    display:flex;gap:.25rem;overflow-x:auto;padding:.75rem .6rem;
+  }
+  .rail-h{display:none}
+  .rail a{border-left:0;border-radius:8px;white-space:nowrap;padding:.6rem .9rem;min-height:44px;align-items:center}
+  .rail a.on{border-left:0}
+  .kv{grid-template-columns:repeat(2,1fr)}
+  .file-b{grid-template-columns:1fr}
+  .gutter{display:none}
+  .hr-row{grid-template-columns:1fr;gap:.55rem}
+  .bg{justify-self:start}
+}
+@media(max-width:520px){.kv{grid-template-columns:1fr}}
 
 /* ---------- closing CTA ---------- */
 .close{
@@ -433,8 +483,13 @@ section{padding:clamp(4.5rem,10vw,8rem) 0}
   font-family:var(--display);font-size:clamp(7rem,21vw,17rem);color:rgba(255,255,255,.045);
   white-space:nowrap;letter-spacing:-.04em;pointer-events:none;user-select:none;
 }
-.close .eyebrow{color:rgba(255,255,255,.6)}
-.close .eyebrow::before{background:#8FC0FF}
+/* The dark half uses the glass variant of the same pill. Without this it
+   inherits the light pill and renders white text on a white background. */
+.hero .eyebrow,.close .eyebrow{
+  color:rgba(255,255,255,.82);border-color:rgba(255,255,255,.24);
+  background:rgba(255,255,255,.07);backdrop-filter:blur(6px);box-shadow:none;
+}
+.hero .eyebrow::before,.close .eyebrow::before{background:#8FC0FF;box-shadow:0 0 10px #8FC0FF}
 .close h2{max-width:16ch;margin:0 auto}
 .close p{margin-top:1.2rem;color:rgba(255,255,255,.72);font-weight:300}
 .close .hero-cta{margin-top:2.2rem}
@@ -448,7 +503,7 @@ section{padding:clamp(4.5rem,10vw,8rem) 0}
   font:400 .92rem var(--sans);outline:none;
 }
 .waitlist-form input[type="email"]::placeholder{color:rgba(255,255,255,.5)}
-.waitlist-form button{border:0;cursor:pointer;white-space:nowrap}
+.waitlist-form button{border:0;cursor:pointer;white-space:nowrap;min-height:44px}
 .waitlist-form button:disabled{cursor:wait;opacity:.65;transform:none}
 .waitlist-status{min-height:1.5rem;margin:.75rem auto 0;color:rgba(255,255,255,.82);font-size:.84rem}
 .waitlist-status.success{color:#A9E8C5}
@@ -462,20 +517,32 @@ section{padding:clamp(4.5rem,10vw,8rem) 0}
 }
 
 /* ---------- footer ---------- */
-footer{background:var(--paper);padding:clamp(3rem,6vw,4.5rem) 0 2rem;border-top:1px solid var(--line)}
+/* Dark, like everything else. A cream footer under a dark CTA was the one
+   place the page still flipped theme mid-scroll. */
+footer{background:rgba(4,9,24,.55);padding:clamp(3rem,6vw,4.5rem) 0 2rem;border-top:1px solid var(--edge)}
 .foot{display:grid;grid-template-columns:1.6fr repeat(3,1fr);gap:2rem}
-.foot p{font-size:.84rem;color:var(--ink-2);font-weight:300;max-width:34ch;margin-top:1rem;line-height:1.7}
-.foot h4{font-family:var(--mono);font-size:.58rem;letter-spacing:.2em;text-transform:uppercase;color:var(--ink-3);margin:0 0 1rem;font-weight:400}
+.foot p{font-size:.84rem;color:var(--tx);font-weight:300;max-width:34ch;margin-top:1rem;line-height:1.7}
+.foot h4{font-family:var(--mono);font-size:.58rem;letter-spacing:.2em;text-transform:uppercase;color:var(--tx-dim);margin:0 0 1rem;font-weight:400}
 .foot ul{list-style:none;margin:0;padding:0}
 .foot li{margin-bottom:.55rem}
-.foot li a{font-size:.86rem;color:var(--ink-2);transition:color .2s}
-.foot li a:hover{color:var(--ink)}
+.foot li a{font-size:.86rem;color:var(--tx);transition:color .2s}
+.foot li a:hover{color:#fff}
 .foot-base{
   display:flex;justify-content:space-between;gap:1rem;flex-wrap:wrap;margin-top:3rem;padding-top:1.4rem;
-  border-top:1px solid var(--line);font-family:var(--mono);font-size:.63rem;letter-spacing:.06em;color:var(--ink-3);
+  border-top:1px solid var(--edge);font-family:var(--mono);font-size:.63rem;letter-spacing:.06em;color:var(--tx-dim);
 }
 @media(max-width:880px){.foot{grid-template-columns:1fr 1fr}}
 @media(max-width:520px){.foot{grid-template-columns:1fr}}
+
+/* ---------- touch targets ---------- */
+@media(max-width:860px){
+  .brand{min-height:44px}
+  .term-replay{min-height:44px}
+  .foot li{margin-bottom:0}
+  .foot li a{display:flex;align-items:center;min-height:44px}
+  .foot-base a{display:inline-flex;align-items:center;min-height:44px}
+  .more a{display:inline-flex;align-items:center;min-height:44px}
+}
 
 /* ---------- motion ---------- */
 .rise{opacity:1;transform:none}
@@ -489,6 +556,8 @@ footer{background:var(--paper);padding:clamp(3rem,6vw,4.5rem) 0 2rem;border-top:
 </style>
 </head>
 <body>
+<a class="skip" href="#main">Skip to content</a>
+<div class="page-sky"></div><div class="page-grain"></div><div class="page-veil"></div>
 
 <nav class="nav over-hero" id="nav">
   <div class="wrap">
@@ -504,8 +573,21 @@ footer{background:var(--paper);padding:clamp(3rem,6vw,4.5rem) 0 2rem;border-top:
       <a class="nav-gh" href="https://agentcall.mintlify.app/reference/cli">CLI reference ↗</a>
       <a class="btn-sm" href="#waitlist" data-track="nav_waitlist">Join waitlist</a>
     </div>
+    <button class="nav-toggle" id="nav-toggle" type="button"
+            aria-expanded="false" aria-controls="nav-menu" aria-label="Open menu">
+      <span></span><span></span><span></span>
+    </button>
   </div>
 </nav>
+<div class="nav-menu" id="nav-menu">
+  <a href="#identity">Product</a>
+  <a href="#callpath">Architecture</a>
+  <a href="#security">Security</a>
+  <a href="#status">Status</a>
+  <a href="https://agentcall.mintlify.app">Docs</a>
+  <a href="https://agentcall.mintlify.app/reference/cli">CLI reference ↗</a>
+  <a class="btn-sm" href="#waitlist" data-track="nav_waitlist_mobile">Join waitlist</a>
+</div>
 
 <header class="hero" id="top">
   <div class="hero-sky" aria-hidden="true"><img alt="" src="assets/hero-sky.webp" width="1000" height="666" decoding="async" fetchpriority="high"></div>
@@ -513,8 +595,8 @@ footer{background:var(--paper);padding:clamp(3rem,6vw,4.5rem) 0 2rem;border-top:
   <div class="hero-grain"></div>
   <div class="wrap">
     <span class="eyebrow mono">Architecture brief v0.4.0 · monorepo overview</span>
-    <h1>Your agents should know who to <em>call</em>.</h1>
-    <p class="hero-sub">AgentCall turns coworkers' coding agents into a connected team. Ask for context, recover decisions, and resolve blockers directly — under permissions you and IT control.</p>
+    <h1>I got a question,<br>let me ask <em class="accent">your</em> Claude.</h1>
+    <p class="hero-sub">Half of what your team knows lives in one person's head — and nobody else can reach it. Your agent asks theirs, and gets the real answer, under permissions you and IT control.</p>
     <div class="hero-cta">
       <a class="btn btn-primary" href="#waitlist" data-track="hero_waitlist">Join the waitlist</a>
       <a class="btn btn-ghost" href="https://agentcall.mintlify.app/get-started/install" data-track="hero_install">Install now</a>
@@ -561,343 +643,97 @@ footer{background:var(--paper);padding:clamp(3rem,6vw,4.5rem) 0 2rem;border-top:
   <div class="spec"><dt>Enrollment</dt><dd>Invite only</dd></div>
 </dl>
 
-<div class="tabs">
-  <div class="wrap">
-    <div class="tabs-in">
-      <a class="tab" href="#identity" data-tab="identity"><i>01</i> Identity</a>
-      <a class="tab" href="#callpath" data-tab="callpath"><i>02</i> Call path</a>
-      <a class="tab" href="#control" data-tab="control"><i>03</i> Control</a>
-      <a class="tab" href="#security" data-tab="security"><i>04</i> Security</a>
-    </div>
-  </div>
+<div class="body">
+  <nav class="rail" id="rail" aria-label="Sections">
+    <div class="rail-h">The brief</div>
+    <a href="#why" class="on"><i>01</i> why</a>
+    <a href="#control"><i>02</i> what you control</a>
+    <a href="#cost"><i>03</i> what it costs them</a>
+    <a href="#status"><i>04</i> where it stands</a>
+  </nav>
+
+  <main class="main" id="main">
+    <section id="why">
+      <h2 class="rise">The answer is on someone <em>else's</em> machine.</h2>
+      <p class="lede rise">Instead of interrupting a colleague, your agent asks theirs — and gets the answer from their real, current setup.</p>
+
+      <div class="glass rise">
+        <div class="g-h"><span class="d"></span><span class="d"></span><span class="d"></span><b>ONE CALL, START TO FINISH</b><span class="r">13.2s &middot; 412 B</span></div>
+        <pre class="g-b"><code><span class="ps">$</span> agentcall call ken <span class="dim">"why did CI fail on main after the auth migration?"</span>
+<span class="dim">ringing   @acme/ken</span>
+<span class="dim">answered  agent running on ken's machine</span></code></pre>
+        <p class="say">The migration renamed <code>session_token</code> but the fixture still seeds the old column, so every auth test 500s on a fresh database. It passes locally because your dev DB was never re-seeded.</p>
+        <pre class="g-b"><code><span class="ok">ALLOW</span> <span class="dim">Grep  src/auth/**</span>
+<span class="ok">ALLOW</span> <span class="dim">Read  auth.fixture.ts</span>
+<span class="bad">DENY</span>  <span class="dim">Read  ~/.ssh/id_ed25519</span>  <span class="wa">&larr; refused by the guard, logged</span></code></pre>
+      </div>
+      <p class="caption rise">Real commands, representative output. Timing is from one recorded call.</p>
+
+      <ul class="facts rise">
+        <li>The person who wrote the migration left the company — their agent still remembers why.</li>
+        <li>The one engineer who knows why the workaround exists is on PTO.</li>
+        <li>Nobody wrote down why staging uses a different flag. Their agent does.</li>
+      </ul>
+    </section>
+
+    <section id="control">
+      <h2 class="rise">You decide what your agent <em>answers</em>.</h2>
+      <p class="lede rise">One file per task: what it does, which tools it can touch, who can ask. That's the whole thing.</p>
+
+      <div class="glass rise">
+        <div class="file-h">~/.agentcall/tasks/repo-context/SKILL.md</div>
+        <div class="file-b">
+          <div class="gutter"><span>1</span><span>2</span><span>3</span><span>4</span><span>5</span><span>6</span><span>7</span></div>
+          <div class="code"><span class="c">--- the whole grant surface, in one file</span><br>
+<span class="k">name</span>: repo-context<br>
+<span class="k">description</span>: <span class="s">"Answer questions about this repo's history"</span><br>
+<span class="k">tools</span>: [<span class="s">Read</span>, <span class="s">Grep</span>, <span class="s">Glob</span>]<br>
+<span class="k">workdir</span>: <span class="p">~/work/api</span><br>
+<span class="k">allowed_callers</span>: [<span class="s">alex</span>, <span class="s">priya</span>]<br>
+<span class="k">blocked_callers</span>: [<span class="s">spammer</span>]</div>
+        </div>
+      </div>
+
+      <ul class="facts rise">
+        <li>Callers can narrow the job. They can't pick a different one.</li>
+        <li>Anything outside that folder is refused, and logged.</li>
+        <li>If your company runs a relay, IT can cap what's offerable.</li>
+      </ul>
+      <p class="more rise"><a href="https://agentcall.mintlify.app" data-track="docs_permissions">The permission model, in full</a></p>
+    </section>
+
+    <section id="cost">
+      <h2 class="rise">It costs them nothing but <em>compute</em>.</h2>
+      <p class="lede rise">Their agent answers on their machine, on their own subscription. They're never interrupted and never asked to approve anything.</p>
+      <dl class="glass kv rise">
+        <div><dt>Agent kill timer</dt><dd>5 min</dd></div>
+        <div><dt>Relay deadline</dt><dd>6 min</dd></div>
+        <div><dt>Concurrency</dt><dd>1 &middot; 0 queued</dd></div>
+        <div><dt>Rate limit</dt><dd>30 / hour</dd></div>
+        <div><dt>Payload</dt><dd>64 KB / 256 KB</dd></div>
+      </dl>
+    </section>
+
+    <section id="status">
+      <h2 class="rise">Pre-production, and <em>specific</em> about it.</h2>
+      <p class="lede rise">Exactly what has and hasn't been run against a live call.</p>
+      <div class="honest rise">
+        <div class="hr-row"><span class="bg b-ok">Live-tested</span><div><b>Claude</b><p>Run end to end against real calls, with the guard enforcing on every tool attempt.</p></div></div>
+        <div class="hr-row"><span class="bg b-mid">Unverified</span><div><b>Codex</b><p>Built and unit-tested, never tried against a live call. Its read boundary is weaker.</p></div></div>
+        <div class="hr-row"><span class="bg b-no">Removed</span><div><b>The OS sandbox</b><p>Gone on purpose. Your agent answers with your real context, so scoping does the work instead.</p></div></div>
+      </div>
+      <p class="more rise"><a href="https://agentcall.mintlify.app" data-track="docs_limitations">Limitations, in full</a></p>
+    </section>
+  </main>
 </div>
 
-<!-- 01 IDENTITY -->
-<section id="identity">
-  <div class="wrap">
-    <div class="sec-head rise">
-      <span class="eyebrow">Identity</span>
-      <h2>An address is a routing label, not a secret.</h2>
-      <p class="lede">Handles are unique inside an organization, not globally. Acme and Beta can both have a <code>ken</code>. Everything the relay stores — auth, cards, presence, calls, rosters, Durable Object state — is keyed by organization plus handle.</p>
-    </div>
-
-    <div class="addr rise">
-      <div class="addr-str"><span class="h">ken</span>@<span class="o">acme</span>.<span class="r">example.com</span></div>
-      <dl class="addr-defs">
-        <div><dt>Handle</dt><dd>The person. Chosen at setup, unique within the org, and currently permanent — there's no release or reclaim yet.</dd></div>
-        <div><dt>Organization</dt><dd>The reachability boundary. Any authenticated member can call any registered member; cross-org routing is rejected.</dd></div>
-        <div><dt>Relay host</dt><dd>Which relay serves that org. A self-hosted relay uses its own hostname instead.</dd></div>
-      </dl>
-    </div>
-
-    <div class="callout rise">
-      <h4>Read this as a limit, not a feature</h4>
-      <p>Because the org is the boundary, treat every colleague as able to reach your agent, and grant tasks accordingly. Rosters scope discovery, presence, and policy — they do not gate whether a call gets delivered.</p>
-    </div>
-  </div>
-</section>
-
-<!-- 02 CALL PATH -->
-<section id="callpath" class="band-white">
-  <div class="wrap">
-    <div class="sec-head rise">
-      <span class="eyebrow">The call path</span>
-      <h2>Three machines. One socket each.</h2>
-      <p class="lede">Nothing is polled. The callee holds an open socket to the relay, so a call arrives the instant it's placed and six minutes is the hard ceiling on an answer.</p>
-    </div>
-
-    <div class="grid g3 rise">
-      <div class="card">
-        <span class="eyebrow" style="margin-bottom:.6rem">Caller's machine</span>
-        <h3>Your agent, or you</h3>
-        <ul>
-          <li><code>agentcall call ken "…"</code></li>
-          <li>Resolves saved contacts</li>
-          <li>Prints the reply to stdout, status to stderr</li>
-          <li>Neutralizes terminal escapes from the remote agent</li>
-        </ul>
-      </div>
-      <div class="card">
-        <span class="eyebrow" style="margin-bottom:.6rem">Cloudflare</span>
-        <h3>The relay</h3>
-        <ul>
-          <li>Hono Worker — auth, register, cards, rosters</li>
-          <li><code>HandleDO</code> — one Durable Object per handle, holds both sockets</li>
-          <li>D1 — handles, invites, cards, rosters, audit events</li>
-          <li>Attests shared rosters; the caller can't claim them</li>
-        </ul>
-      </div>
-      <div class="card">
-        <span class="eyebrow" style="margin-bottom:.6rem">Callee's machine</span>
-        <h3>The listener</h3>
-        <ul>
-          <li><code>agentcall listen</code> via launchd or systemd</li>
-          <li>Resolves policy → task → capability envelope</li>
-          <li>Spawns a fresh one-shot agent in the task's workdir</li>
-          <li>Appends every call to <code>~/.agentcall/calls.log</code></li>
-        </ul>
-      </div>
-    </div>
-
-    <h3 class="rise" style="margin:3rem 0 1.2rem;font-size:1.4rem">Wire sequence</h3>
-    <div class="wire rise">
-      <div class="wire-row"><span class="n">01</span><span class="lane">CALLER →<br>RELAY</span><span><b class="f">call_request</b><span class="d">Routing metadata plus a signed HPKE envelope. The message, task id, and optional conversation id are encrypted for the callee.</span></span></div>
-      <div class="wire-row"><span class="n">02</span><span class="lane">RELAY →<br>CALLER</span><span><b class="f">call_status ringing</b><span class="d">Rate limit and 64 KB size check pass; a call record is written with a deadline.</span></span></div>
-      <div class="wire-row"><span class="n">03</span><span class="lane">RELAY →<br>LISTENER</span><span><b class="f">incoming_call</b><span class="d">Carries the ciphertext, verified routing identity, and roster ids the relay observed both sides sharing.</span></span></div>
-      <div class="wire-row"><span class="n">04</span><span class="lane">LISTENER →<br>RELAY</span><span><b class="f">call_accepted</b><span class="d">After decryption, signature verification, replay protection, and policy admission, the job is owned. Policy refusals return an encrypted failed outcome without spawning an agent.</span></span></div>
-      <div class="wire-row"><span class="n">05</span><span class="lane">LISTENER →<br>RELAY</span><span><b class="f">call_started</b><span class="d">The agent process is up, scoped to the task's tools and working directory.</span></span></div>
-      <div class="wire-row"><span class="n">06</span><span class="lane">LISTENER →<br>RELAY</span><span><b class="f">call_outcome</b><span class="d">An authenticated encrypted reply or peer failure, plus a conversation id when the task permits a follow-up.</span></span></div>
-      <div class="wire-row"><span class="n">07</span><span class="lane">RELAY →<br>CALLER</span><span><b class="f">call_outcome</b><span class="d">The relay routes ciphertext. The caller authenticates and decrypts it, then prints reply text to stdout or a peer failure to stderr.</span></span></div>
-    </div>
-
-    <div class="callout rise">
-      <h4>What the relay can still see</h4>
-      <p>End-to-end encryption hides prompts, replies, task content, and peer failure details from the relay. Routing still exposes organization and handles, call ids, lifecycle state, timing, source-network metadata where available, envelope headers, and ciphertext size.</p>
-    </div>
-
-    <dl class="limits rise">
-      <div class="limit"><dt>Agent kill timer</dt><dd>5 min</dd></div>
-      <div class="limit"><dt>Relay hard deadline</dt><dd>6 min</dd></div>
-      <div class="limit"><dt>Concurrency</dt><dd>1 running · 0 queued</dd></div>
-      <div class="limit"><dt>Rate limit</dt><dd>30 / hour</dd></div>
-      <div class="limit"><dt>Payload</dt><dd>64 KB in · 256 KB out</dd></div>
-    </dl>
-  </div>
-</section>
-
-<!-- REPOSITORY -->
-<section id="repo">
-  <div class="wrap">
-    <div class="sec-head rise">
-      <span class="eyebrow">Repository</span>
-      <h2>Three packages. One source of truth.</h2>
-      <p class="lede">A pnpm workspace in TypeScript and ESM. Both sides of every call agree on shapes defined once in Zod, in <code>packages/shared</code> — the relay and the CLI import them rather than redeclaring them.</p>
-    </div>
-    <div class="grid g3 rise">
-      <div class="card">
-        <h3 class="mono">packages/shared</h3>
-        <p>Every wire frame, every limit, every regex for a handle or task id. Changing a frame shape starts here or it doesn't happen. Also holds the A2A card mapping and the terminal-sanitizing helpers.</p>
-        <span class="k">@benree/agentcall-shared</span>
-      </div>
-      <div class="card">
-        <h3 class="mono">apps/relay</h3>
-        <p>Cloudflare Worker (Hono) plus two Durable Object classes — <code>HandleDO</code> for call routing and presence, <code>RateLimiterDO</code> for IP-keyed limits — over a D1 database of handles, invites, cards, rosters, and audit events.</p>
-        <span class="k">wrangler deploy</span>
-      </div>
-      <div class="card">
-        <h3 class="mono">packages/cli</h3>
-        <p>The whole product surface for a human: setup, call, listen, doctor, policy, card, roster, search, contacts, and task management. Also the tool guard that checks a spawned agent's tool attempts.</p>
-        <span class="k">npm install -g @benree/agentcall</span>
-      </div>
-    </div>
-  </div>
-</section>
-
-<!-- 03 LENSES -->
-<section id="control" class="band-white">
-  <div class="wrap">
-    <div class="sec-head rise">
-      <span class="eyebrow">Three lenses</span>
-      <h2>Useful to employees. Controllable by IT. Built to ship.</h2>
-    </div>
-
-    <div class="lens rise">
-      <div class="lens-aside">
-        <span class="lens-tag">Lens 1 — the employee</span>
-        <h3>What a person actually does with it</h3>
-        <p>One install, one address, then the vocabulary of a phone: call, check if they're in, look at what they offer, save a number, follow up.</p>
-        <p>Answering costs the callee's own model subscription, and their agent answers with their real context — that's the entire point, and also the reason the permission model below exists.</p>
-      </div>
-      <div class="grid g3">
-        <div class="card"><h3>Ask someone's agent</h3><p>Sends the message, waits, prints the reply. Add <code>--json</code> when your own agent is the one parsing it.</p><span class="k">agentcall call ken "why did CI fail on main?"</span></div>
-        <div class="card"><h3>Follow up without repeating yourself</h3><p>Resumes the last open conversation with that address. Expires 30 minutes after the last turn, capped at 10 turns, and tied to you and the task it started on.</p><span class="k">agentcall call ken "which commit?" --continue</span></div>
-        <div class="card"><h3>Find who to ask</h3><p>Search by what you need instead of who you know. The relay hands you a pre-filtered index and the ranking runs on your machine — your query text never leaves it.</p><span class="k">agentcall search "why did we pick this auth migration"</span></div>
-        <div class="card"><h3>Decide what you'll answer</h3><p>Each task is one <code>SKILL.md</code>: a description, keywords, and the tools it may use. Offer it to everyone, grant it to one person, or refuse someone outright.</p><span class="k">agentcall offer schedule-meeting · agentcall block spammer</span></div>
-        <div class="card"><h3>See your own menu the way callers see it</h3><p>Renders the effective policy after any IT ceiling, plus each runnable task's capabilities and the concrete directory it answers from.</p><span class="k">agentcall policy · agentcall card</span></div>
-        <div class="card"><h3>Fix it when calls stop arriving</h3><p>Checks the binary, auth, agent spawn, tool-guard telemetry, the listener, and a round-trip call to yourself. <code>!</code> means unproven this run, not broken.</p><span class="k">agentcall doctor</span></div>
-      </div>
-    </div>
-
-    <div class="lens rise">
-      <div class="lens-aside">
-        <span class="lens-tag">Lens 2 — IT</span>
-        <h3>What the department controls</h3>
-        <p>The design assumption is that an employee's agent is a company endpoint. So enrollment is gated, the ceiling on permissions is root-owned, and the policy file can carry assertions that fail the build when someone edits around them.</p>
-        <p>Some of what IT will eventually want — SSO, SCIM, and an admin console — is still open work. Organization audit export exists today; the remaining limits are listed honestly at the bottom.</p>
-      </div>
-      <div class="grid g3">
-        <div class="card"><h3>Nobody enrolls themselves</h3><p>The npm package is public, but organization enrollment is not. An administrator mints a one-time invite that enrolls exactly one identity and expires in seven days by default; outstanding ones can be listed and revoked.</p><span class="k">agentcall invite create --description contractor</span></div>
-        <div class="card"><h3>A ceiling users cannot raise</h3><p>A root-owned file at <code>/Library/Application Support/agentcall/policy.json</code> caps which tasks may ever be offered and adds blocks that can't be undone locally. Unreadable or malformed means no agent spawns at all.</p><span class="k">allowed_tasks · blocked_callers</span></div>
-        <div class="card"><h3>Policy you can prove, not just write</h3><p>Both the user's file and the managed file can carry assertions — this caller gets these tasks, that one gets nothing. A failed assertion fails lint, blocks the CLI from saving, and stops the listener from starting.</p><span class="k">agentcall lint</span></div>
-        <div class="card"><h3>Group grants the caller can't fake</h3><p>Roster names are local labels. On every connection the relay attests which rosters caller and callee actually share; an unknown or removed membership grants nothing, and an individual block always wins.</p><span class="k">agentcall roster expel acme &lt;handle&gt;</span></div>
-        <div class="card"><h3>Two audit trails</h3><p>Locally, every call — accepted or refused — is a JSONL line with caller, task, status, and duration. On the relay, org and roster events plus an access trail of who checked whose presence.</p><span class="k">~/.agentcall/calls.log · ~/.agentcall/tools.log</span></div>
-        <div class="card"><h3>A version you can pin</h3><p>In-product self-update stays disabled so a managed deployment can't be bypassed. Releases publish through npm's OIDC trusted publisher with provenance, checksums, and a CycloneDX SBOM.</p><span class="k">release.yml · environment: npm</span></div>
-      </div>
-    </div>
-
-    <div class="lens rise">
-      <div class="lens-aside">
-        <span class="lens-tag">Lens 3 — us</span>
-        <h3>How the work is run</h3>
-        <p>Built test-first and kept that way: schema round-trips in shared, Durable Object relay logic against fake sockets, CLI tests with mocked <code>ws</code> and <code>fs</code>. No live agent spawns in CI.</p>
-        <p>Open work lives in GitHub Issues, never in a markdown TODO. The assignee is the claim. Everything under <code>docs/superpowers/</code> is a dated historical record — right about why a decision was made, wrong about what the code does now.</p>
-      </div>
-      <div class="grid g2">
-        <div class="card"><h3>The gate before anything ships</h3><p>Build first, deliberately — the CLI typechecks against shared's built output, so running build last would check the previous run's types. CI runs exactly this order.</p><span class="k">pnpm -r build &amp;&amp; pnpm -r typecheck &amp;&amp; pnpm -r test</span></div>
-        <div class="card"><h3>Protocol changes start in shared</h3><p>New field, new frame, new limit — the Zod schema moves first, then the relay and CLI are updated to match. No local redeclaration on either side.</p><span class="k">packages/shared/src/protocol.ts</span></div>
-        <div class="card"><h3>Typecheck covers tests too</h3><p>Each package's typecheck includes <code>test/</code>. Without it, a signature change leaves typecheck green while every stale call site fails at runtime — vitest strips types without checking them.</p><span class="k">tsconfig.test.json</span></div>
-        <div class="card"><h3>Relay deploys are not reversible</h3><p>Durable Object lifecycle changes are atomic and can't be rolled back, and a dry run doesn't compare state with Cloudflare. Compare the exports map against the intended live classes first.</p><span class="k">wrangler deploy --dry-run</span></div>
-      </div>
-    </div>
-  </div>
-</section>
-
-<!-- PERMISSION MODEL -->
-<section id="permissions" class="band-paper">
-  <div class="wrap">
-    <div class="sec-head rise">
-      <span class="eyebrow">The permission model</span>
-      <h2>Four layers. One direction.</h2>
-      <p class="lede">They compose one way only: IT sets the ceiling, the owner grants under it, the task declares an envelope, and the guard checks each tool call at the moment it runs.</p>
-    </div>
-
-    <div class="rise">
-      <div class="layer">
-        <div><h3>1 · Administrator ceiling</h3><div class="path">/Library/Application Support/agentcall/policy.json</div></div>
-        <p>Filters every default, per-caller, and per-group grant down to <code>allowed_tasks</code>, and unions its <code>blocked_callers</code> into the owner's blocks. Absent means unmanaged; broken means fail closed.</p>
-      </div>
-      <div class="layer">
-        <div><h3>2 · Owner policy</h3><div class="path">~/.agentcall/policy.json</div></div>
-        <p>A default offer, per-caller grants and blocks, and roster-group grants keyed by opaque roster id. Individual blocks beat group and default offers — group membership can widen a menu, never resurrect a blocked caller.</p>
-      </div>
-      <div class="layer">
-        <div><h3>3 · Task envelope</h3><div class="path">~/AgentCall/&lt;line&gt;/tasks/&lt;id&gt;/SKILL.md</div></div>
-        <p>Frontmatter declares <code>tools</code> from read / write / fetch / exec, an optional absolute <code>workdir</code>, a timeout, and whether follow-ups are allowed. Claude maps this to <code>--allowedTools</code>; Codex maps it to a <code>--sandbox</code> level.</p>
-      </div>
-      <div class="layer">
-        <div><h3>4 · Tool guard</h3><div class="path">runs in-process on every tool call</div></div>
-        <p>For a Claude answering agent, file-shaped tools are refused outside the resolved workdir and at credential paths — <code>~/.ssh</code>, <code>~/.aws</code>, <code>.env</code>, Keychains, <code>~/.agentcall</code>, <code>~/.claude</code>, <code>~/.codex</code>, the guard's own code, the tasks directory, LaunchAgents, and shell startup files. Every attempt is logged.</p>
-      </div>
-    </div>
-
-    <div class="callout blue rise">
-      <h4>The invariant worth understanding</h4>
-      <p>Which task a caller may invoke is decided from the relay-verified caller handle and local files <em>before</em> their message is placed into any prompt. A caller's text therefore cannot influence what that text is allowed to do. If a caller supplies a conversation id, it's consulted only afterwards, and only to confirm the conversation was opened under the same task — it can narrow a call, never select one.</p>
-    </div>
-  </div>
-</section>
-
-<!-- 04 SECURITY -->
-<section id="security" class="band-white">
-  <div class="wrap">
-    <div class="sec-head rise">
-      <span class="eyebrow">Security model, stated plainly</span>
-      <h2>What is a boundary — and what only looks like one.</h2>
-      <p class="lede">There is no OS-level sandbox — that was removed on purpose, because the answering agent is meant to be the owner's real agent with the owner's real context. Enforcement is capability scoping plus the guard. Here is where that holds and where it doesn't.</p>
-    </div>
-
-    <div class="tbl-scroll rise">
-      <table class="tbl">
-        <thead><tr><th>Surface</th><th>Claude answering agent</th><th>Codex answering agent</th></tr></thead>
-        <tbody>
-          <tr>
-            <td class="surf"><b>File reads via tools</b><span>Read / Grep / Glob / LS</span></td>
-            <td><span class="tag ok">BOUNDED</span>Confined to the resolved task workdir, canonicalized paths and symlinks included.</td>
-            <td><span class="tag bad">NO FLOOR</span>Codex has no such tools; it reads through the shell, and <code>--sandbox read-only</code> still reads <code>~/.ssh</code>.</td>
-          </tr>
-          <tr>
-            <td class="surf"><b>Writes to executable config</b><span>~/.claude, LaunchAgents, shell rc</span></td>
-            <td><span class="tag ok">REFUSED</span>Including the guard's own package root, so a write can't neuter the next call's guard.</td>
-            <td><span class="tag bad">NOT ENFORCED</span>The guard runs in observe-only mode.</td>
-          </tr>
-          <tr>
-            <td class="surf"><b>Shell execution</b><span>a task granting exec</span></td>
-            <td><span class="tag warn">RECORDED ONLY</span>Commands are logged, not blocked. Pattern-matching a command string is too weak to be a boundary.</td>
-            <td><span class="tag warn">RECORDED ONLY</span>Same, on the pinned release where the session hook is trusted.</td>
-          </tr>
-          <tr>
-            <td class="surf"><b>Tool telemetry</b><span>~/.agentcall/tools.log</span></td>
-            <td><span class="tag ok">COMPLETE</span>Every tool call reaching the guard is written.</td>
-            <td><span class="tag warn">PARTIAL</span>Only what emits <code>PreToolUse</code>. <code>view_image</code> and <code>apply_patch</code> read files and appear in no log at all.</td>
-          </tr>
-          <tr>
-            <td class="surf"><b>Outbound data</b><span>bundled connectors</span></td>
-            <td><span class="tag ok">SCOPED BY TOOLS</span><code>fetch</code> is a declared capability a task either has or doesn't.</td>
-            <td><span class="tag bad">REACHABLE</span>Codex's own <code>codex_apps</code> connector works in this spawn shape and can publish a site — that traffic isn't the shell's, so <code>--sandbox</code> doesn't touch it.</td>
-          </tr>
-          <tr>
-            <td class="surf"><b>Message confidentiality</b><span>caller → callee</span></td>
-            <td colspan="2"><span class="tag ok">END-TO-END ENCRYPTED</span>Signed HPKE envelopes protect prompts, replies, task selection, conversation ids, and peer failure details. The relay still sees routing and traffic metadata.</td>
-          </tr>
-        </tbody>
-      </table>
-    </div>
-
-    <div class="callout rise">
-      <h4>How to read the table</h4>
-      <p>Capability scoping bounds <em>what kind</em> of action is possible, not <em>where</em>. The real control on a task that grants <code>exec</code> is which tasks you choose to write. Codex support is implemented and unit-tested but has not been verified against a live call — the Claude path is the one that has.</p>
-    </div>
-  </div>
-</section>
-
-<!-- STATUS -->
-<section id="status">
-  <div class="wrap">
-    <div class="sec-head rise">
-      <span class="eyebrow">Status</span>
-      <h2>Where the project actually stands.</h2>
-      <p class="lede">AgentCall is pre-production software for trusted teams. Claude is the live-tested answering path; Codex remains experimental and has a weaker read boundary.</p>
-    </div>
-
-    <div class="status rise">
-      <div class="ok">
-        <h3>Working today</h3>
-        <ul>
-          <li><b>Calls end to end</b> on the Claude path, live-tested</li>
-          <li><b>Signed end-to-end encrypted calls</b> with identity pinning and replay protection</li>
-          <li><b>Invite-only enrollment</b> with listing and revocation</li>
-          <li><b>Task, policy, and managed-ceiling model</b> with assertions enforced at lint, save, and call time</li>
-          <li><b>Rosters, join keys, and local-ranked search</b></li>
-          <li><b>Multi-turn conversations</b> with TTL, turn cap, and task binding</li>
-          <li><b>Tool guard and telemetry</b> for Claude, observe-only for pinned Codex</li>
-          <li><b>macOS and Linux listeners</b>, plus a customer-owned relay deployment path</li>
-          <li><b>Organization audit export</b> with retention policy and legal holds</li>
-          <li><b>Signed npm releases</b> with provenance and SBOM</li>
-        </ul>
-      </div>
-      <div class="mid">
-        <h3>Open, being worked</h3>
-        <ul>
-          <li><b>Codex read floor</b> via its own <code>deny_read</code> <span class="iss">#2</span></li>
-          <li><b>Stable identity cutover</b> separate from the reclaimable handle address <span class="iss">#154</span></li>
-          <li><b>Automated audit expiry and end-to-end erasure</b></li>
-          <li><b>Hosted enterprise controls</b> beyond today's CLI and audit APIs</li>
-        </ul>
-      </div>
-      <div class="no">
-        <h3>Not there yet</h3>
-        <ul>
-          <li><b>No native Windows listener.</b> Native services support macOS and Linux today</li>
-          <li><b>Handles can't be released or reclaimed yet</b> <span class="iss">#16 · #154</span></li>
-          <li><b>No SSO, SCIM, or admin console</b> <span class="iss">#15 · #17 · #27</span></li>
-          <li><b>No OS-level sandbox, egress allowlist, or governed nested delegation chain</b></li>
-          <li><b>One caller can monopolize your agent</b> — 30 long calls exceed an hour of listener time; the remedy is <code>block</code></li>
-        </ul>
-      </div>
-    </div>
-
-    <p class="note rise">Generated from the repository at v0.4.0 — README, protocol schemas, relay and listener source, and the open issue list. The README stays the authority on current behavior; where this page and the code disagree, the code wins.</p>
-  </div>
-</section>
-
-<!-- CLOSE -->
 <section class="close" id="waitlist">
   <div class="close-sky"></div>
   <div class="close-veil"></div>
   <div class="ghost">agentcall</div>
   <div class="wrap">
     <span class="eyebrow">Early access</span>
-    <h2>Give your agents each other's number.</h2>
+    <h2>Give your team someone else's memory to ask.</h2>
     <p>Join the waitlist for launch updates and early team access.</p>
     <form class="waitlist-form" id="waitlist-form" action="https://submit-form.com/36DfpcI7U" method="POST">
       <label class="hp" for="waitlist-honeypot">Leave this field empty</label>
@@ -916,13 +752,13 @@ footer{background:var(--paper);padding:clamp(3rem,6vw,4.5rem) 0 2rem;border-top:
     <div class="foot">
       <div>
         <a class="brand" href="#top"><span class="brand-mark">⌁</span> agentcall</a>
-        <p>A permissioned phone line between coworkers' coding agents. Built for real context, explicit control, and honest boundaries.</p>
+        <p>A permissioned way to ask a coworker's agent what only they'd know. Built for real context, explicit control, and honest boundaries.</p>
       </div>
       <div>
         <h4>Product</h4>
         <ul>
           <li><a href="https://agentcall.mintlify.app/overview/how-it-works">How it works</a></li>
-          <li><a href="#control">Use cases</a></li>
+          <li><a href="#why">Use cases</a></li>
           <li><a href="https://agentcall.mintlify.app/security/overview">Security</a></li>
           <li><a href="#status">Status</a></li>
         </ul>
@@ -1007,14 +843,46 @@ footer{background:var(--paper);padding:clamp(3rem,6vw,4.5rem) 0 2rem;border-top:
 
   var nav=document.getElementById('nav');
   var hero=document.getElementById('top');
+  var term=document.getElementById('term');
+
+  /* Pin before the terminal card reaches the bar, not at the end of the hero —
+     otherwise the transparent nav scrolls across the dark demo and its links
+     land on top of the pane headers. */
+  function pinAt(){
+    var heroEnd = hero.offsetHeight - 90;
+    if(!term) return heroEnd;
+    var termTop = term.getBoundingClientRect().top + window.scrollY;
+    return Math.min(heroEnd, termTop - nav.offsetHeight - 8);
+  }
 
   function onScroll(){
-    var over = window.scrollY < hero.offsetHeight - 90;
+    var over = window.scrollY < pinAt();
     nav.classList.toggle('over-hero', over);
     nav.classList.toggle('pinned', !over);
   }
   onScroll();
   window.addEventListener('scroll', onScroll, {passive:true});
+
+  var navToggle=document.getElementById('nav-toggle');
+  var navMenu=document.getElementById('nav-menu');
+  function setMenu(open){
+    navMenu.classList.toggle('open', open);
+    navToggle.setAttribute('aria-expanded', String(open));
+    navToggle.setAttribute('aria-label', open ? 'Close menu' : 'Open menu');
+    document.body.classList.toggle('menu-open', open);
+  }
+  navToggle.addEventListener('click', function(){
+    setMenu(navMenu.classList.contains('open') === false);
+  });
+  navMenu.addEventListener('click', function(e){
+    if(e.target.closest('a')) setMenu(false);
+  });
+  document.addEventListener('keydown', function(e){
+    if(e.key === 'Escape' && navMenu.classList.contains('open')){ setMenu(false); navToggle.focus(); }
+  });
+  window.addEventListener('resize', function(){
+    if(window.innerWidth > 860) setMenu(false);
+  });
 
   // subtle parallax on the hero sky
   var sky=document.querySelector('.hero-sky');
@@ -1032,17 +900,19 @@ footer{background:var(--paper);padding:clamp(3rem,6vw,4.5rem) 0 2rem;border-top:
   },{rootMargin:'0px 0px -8% 0px', threshold:0.06});
   document.querySelectorAll('.rise').forEach(function(el){ io.observe(el); });
 
-  // active section tab
-  var tabs=document.querySelectorAll('.tab');
-  var ids=['identity','callpath','control','security'];
-  var so=new IntersectionObserver(function(entries){
-    entries.forEach(function(e){
-      if(e.isIntersecting){
-        tabs.forEach(function(t){ t.classList.toggle('active', t.dataset.tab===e.target.id); });
-      }
-    });
-  },{rootMargin:'-45% 0px -45% 0px'});
-  ids.forEach(function(id){ var el=document.getElementById(id); if(el) so.observe(el); });
+  // active rail entry
+  var railLinks=[].slice.call(document.querySelectorAll('.rail a'));
+  var railSecs=railLinks.map(function(a){ return document.querySelector(a.getAttribute('href')); });
+  railSecs.forEach(function(sec, i){
+    if(!sec) return;
+    new IntersectionObserver(function(entries){
+      entries.forEach(function(e){
+        if(!e.isIntersecting) return;
+        railLinks.forEach(function(l){ l.classList.remove('on'); });
+        railLinks[i].classList.add('on');
+      });
+    },{rootMargin:'-40% 0px -55% 0px'}).observe(sec);
+  });
 })();
 </script>
 <script>
@@ -1133,9 +1003,9 @@ footer{background:var(--paper);padding:clamp(3rem,6vw,4.5rem) 0 2rem;border-top:
     var who=PEOPLE[handle];
 
     if(handle==='spammer'){
-      w(out,'  ringing   spammer@acme.example.com','dim');
+      w(out,'  ringing   @acme/spammer','dim');
       await sleep(500);
-      lg('incoming_call','from spammer@acme');
+      lg('incoming_call','from @acme/spammer');
       await sleep(420);
       lg('policy','blocked_callers → refuse','warn');
       await sleep(380);
@@ -1160,9 +1030,9 @@ footer{background:var(--paper);padding:clamp(3rem,6vw,4.5rem) 0 2rem;border-top:
 
     convo = cont ? convo+1 : 1;
 
-    w(out,'  ringing   '+handle+'@acme.example.com','dim');
+    w(out,'  ringing   @acme/'+handle,'dim');
     await sleep(430);
-    lg('incoming_call','from alex@acme');
+    lg('incoming_call','from @acme/alex');
     await sleep(340);
 
     if(cont){
@@ -1215,7 +1085,7 @@ footer{background:var(--paper);padding:clamp(3rem,6vw,4.5rem) 0 2rem;border-top:
       ['  "!" means unproven this run, not broken','dim']
     ],
     policy:[
-      ['  effective policy for alex@acme — after the IT ceiling','dim'],
+      ['  effective policy for @acme/alex — after the IT ceiling','dim'],
       ['',''],
       ['  default offer     repo-context, schedule-meeting',''],
       ['  ken               + release-notes',''],
@@ -1226,7 +1096,7 @@ footer{background:var(--paper);padding:clamp(3rem,6vw,4.5rem) 0 2rem;border-top:
       ['  yours    ~/.agentcall/policy.json','dim']
     ],
     card:[
-      ['  alex@acme.example.com','blue'],
+      ['  @acme/alex','blue'],
       ['',''],
       ['  repo-context      read,grep,glob   ~/work/api     5 min',''],
       ['  schedule-meeting  read,fetch       ~/notes        2 min',''],
@@ -1248,9 +1118,9 @@ footer{background:var(--paper);padding:clamp(3rem,6vw,4.5rem) 0 2rem;border-top:
       ['  a failing assertion blocks the save and stops the listener','dim']
     ],
     contacts:[
-      ['  ken   ken@acme.example.com   repo-context, schedule-meeting',''],
-      ['  mei   mei@acme.example.com   repo-context',''],
-      ['  raj   raj@acme.example.com   release-notes','']
+      ['  ken   @acme/ken   repo-context, schedule-meeting',''],
+      ['  mei   @acme/mei   repo-context',''],
+      ['  raj   @acme/raj   release-notes','']
     ],
     task:[
       ['  ~/AgentCall/claude/tasks/','dim'],
@@ -1263,9 +1133,9 @@ footer{background:var(--paper);padding:clamp(3rem,6vw,4.5rem) 0 2rem;border-top:
       ['  the relay returns a pre-filtered index; ranking runs here','dim'],
       ['  your query text never leaves this machine','dim'],
       ['',''],
-      ['  1  ken@acme    repo-context     owns auth/, wrote ADR-017',''],
-      ['  2  mei@acme    repo-context     reviewed the migration PR',''],
-      ['  3  raj@acme    release-notes    shipped v3.1','']
+      ['  1  @acme/ken   repo-context     owns auth/, wrote ADR-017',''],
+      ['  2  @acme/mei   repo-context     reviewed the migration PR',''],
+      ['  3  @acme/raj   release-notes    shipped v3.1','']
     ],
     invite:[
       ['  invite  ac_inv_7f3c9b21','blue'],
@@ -1361,7 +1231,7 @@ footer{background:var(--paper);padding:clamp(3rem,6vw,4.5rem) 0 2rem;border-top:
 
   async function intro(){
     out.innerHTML=''; log.innerHTML=''; clock=0; convo=0; busy=true; cmd.disabled=true;
-    w(out,'  agentcall v0.4.0 · alex@acme.example.com','dim');
+    w(out,'  agentcall v0.4.0 · @acme/alex','dim');
     w(out,'  type help, or run one of the commands below','dim');
     gap(out);
     w(log,'  listener up · socket open to the relay','dim');

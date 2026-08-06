@@ -1,17 +1,17 @@
 import type { Context, Hono, MiddlewareHandler } from "hono";
 // Type-only, so the index -> a2a -> index cycle is erased at compile time and
 // never exists at runtime. Do not turn this into a value import.
-import type { Env } from "./index.js";
 import {
   A2ACancelTaskRequest, A2A_VERSION_HEADER, a2aError, isSupportedA2AVersion,
   standardError, toAgentCard, toDirectoryCard, visibleTasks,
 } from "@benree/agentcall-shared";
-import { authenticateRequest, identityKey } from "./tenant.js";
+import { authenticateRequest, identityObjectName } from "./tenant.js";
+import { resolveAgentId } from "./identity.js";
 import { sharedRosterIds } from "./groups.js";
 import { NATIVE_READ } from "./ratelimit/index.js";
 import { parseStoredCard } from "./stored-card.js";
 import type { RelayAppEnv } from "./middleware.js";
-import { rateLimit } from "./middleware.js";
+import { jsonBody, rateLimit } from "./middleware.js";
 
 // The card endpoint is public and cheap; a short TTL keeps the TCK's
 // Cache-Control/ETag checks satisfied without making policy edits slow to
@@ -33,7 +33,14 @@ async function taskCursorKey(req: A2AContext["req"]): Promise<string> {
 async function authorizeTaskAccess(c: A2AContext): Promise<TaskAccess | Response> {
   const identity = c.var.identity;
   const target = c.req.param("handle") ?? "";
-  const cursorScope = identityKey(identity.org, target);
+  const targetAgentId = await resolveAgentId(c.env.DB, identity.org, target);
+  if (!targetAgentId) return c.json({ error: "not found" }, 404);
+  // cursorScope is persisted inside issued cursor tokens, so moving it to the
+  // stable identity also means a cursor keeps pointing at the same object
+  // across a future rename instead of silently addressing a fresh one. Any
+  // cursor issued under the old scope stops validating, which is correct: it
+  // named an object that is no longer the one being read.
+  const cursorScope = identityObjectName({ org: identity.org, agentId: targetAgentId });
   return {
     caller: identity.handle,
     cursorKey: await taskCursorKey(c.req),
@@ -128,9 +135,12 @@ export function mountA2A(app: Hono<RelayAppEnv>): void {
     const { org, handle: viewer } = identity;
 
     const handle = c.req.param("handle");
-    const row = await c.env.DB.prepare(
-      "SELECT card_json, updated_at FROM cards WHERE org = ? AND handle = ?",
-    ).bind(org, handle).first<{ card_json: string; updated_at: number }>();
+    const targetAgentId = await resolveAgentId(c.env.DB, org, handle);
+    const row = targetAgentId
+      ? await c.env.DB.prepare(
+        "SELECT card_json, updated_at FROM cards WHERE org = ? AND agent_id = ?",
+      ).bind(org, targetAgentId).first<{ card_json: string; updated_at: number }>()
+      : null;
 
     // §3.3.2 Resource category — a plain 404, NOT TaskNotFoundError, which is
     // an A2A-specific error about tasks and would be semantically wrong for a
@@ -189,8 +199,8 @@ export function mountA2A(app: Hono<RelayAppEnv>): void {
       const { status, body } = a2aError("ContentTypeNotSupported", "expected application/a2a+json");
       return c.json(body, status as 415, A2A_HEADERS);
     }
-    const body = A2ACancelTaskRequest.safeParse(await c.req.json().catch(() => null));
-    if (!body.success) {
+    const body = await jsonBody(c, A2ACancelTaskRequest);
+    if (!body) {
       const { status, body: error } = standardError(400, "invalid cancel request");
       return c.json(error, status as 400, A2A_HEADERS);
     }

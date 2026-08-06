@@ -109,7 +109,7 @@ async function sendIncoming(
   const issuedAt = Date.now();
   const request: E2EERequestPayloadType = {
     v: 1, direction: "request", relay_origin: "127.0.0.1",
-    from: `${frame.from}@127.0.0.1`, to: "ken@127.0.0.1",
+    from: `@acme/${frame.from}`, to: "@acme/ken",
     request_id: crypto.randomUUID().replaceAll("-", ""),
     sender_identity_key_id: await keyIdFor(callerKeys.identity_pub),
     recipient_encryption_key_id: await keyIdFor(listenerKeys.encryption_pub),
@@ -160,16 +160,17 @@ function baseDeps(relay: string) {
     codexToolTelemetryEnabled: () => true,
     fetchKeys: async (_relay: string, _auth: unknown, handle: string) => {
       const record: EncryptionKeyRecordType = {
-        v: 1, address: `${handle}@127.0.0.1`, key_id: await keyIdFor(callerKeys.encryption_pub),
+        v: 1, relay_origin: `${handle}@127.0.0.1`.slice(`${handle}@127.0.0.1`.indexOf("@") + 1), address: `${handle}@127.0.0.1`, key_id: await keyIdFor(callerKeys.encryption_pub),
         suite: HPKE_SUITE, pub: callerKeys.encryption_pub, epoch: callerKeys.epoch,
         not_before: 1, not_after: Date.now() + RELAY_CALL_TIMEOUT_MS, prev: null,
       };
       return {
-        identity: { v: 1 as const, address: `${handle}@127.0.0.1`, identity_pub: callerKeys.identity_pub },
+        identity: { v: 1 as const, relay_origin: `${handle}@127.0.0.1`.slice(`${handle}@127.0.0.1`.indexOf("@") + 1), address: `${handle}@127.0.0.1`, identity_pub: callerKeys.identity_pub },
         encryption: { record, signature: "unused" },
       };
     },
     verifyAndPinPeer: async (_machine: MachinePaths, address: string) => ({
+      relay_origin: "relay.test",
       address, identity_pub: callerKeys.identity_pub, fingerprint: `SHA256:${"a".repeat(32)}`,
       first_seen_at: 1, highest_encryption_epoch: callerKeys.epoch, call_count: 1,
     }),
@@ -307,6 +308,38 @@ describe("startListener", () => {
     });
     expect(statSync(paths.dir).mode & 0o777).toBe(0o700);
     expect(statSync(paths.callsLog).mode & 0o777).toBe(0o600);
+  });
+
+  // The reply is E2EE, so this process is the last place a credential the agent
+  // read can be caught. Redaction has to happen before the wire AND before the
+  // audit slice — calls.log is what gets pasted into a bug report.
+  it("redacts credentials from the reply on the wire and in the audit log", async () => {
+    let paths!: LinePaths;
+    // Assembled, not a literal — see the note in test/redact.test.ts.
+    const leaked = "ghp" + "_abcdefghijklmnopqrstuvwxyz0123456789AB";
+    const relayReady = new Promise<WsSocket>((resolveWs) => {
+      void fakeRelay((ws) => resolveWs(ws)).then((url) => {
+        const deps = baseDeps(url);
+        paths = deps.paths;
+        stopper = startListener({
+          ...deps,
+          run: async () => ({ text: `your key is ${leaked} — keep it safe` }),
+        });
+      });
+    });
+    const ws = await relayReady;
+    const expectFrames = frames(ws, 3);
+    await sendIncoming(ws, {
+      call_id: "c1", correlation_id: "c".repeat(32), from: "shusaku", message: "what is the key?",
+    });
+    const [, , result] = await expectFrames;
+    expect(result.text).not.toContain(leaked);
+    expect(result.text).toContain("[redacted]");
+    // The non-secret words around it must survive — a redactor that eats the
+    // whole reply is one the owner turns off.
+    expect(result.text).toContain("keep it safe");
+    const audit = readFileSync(paths.callsLog, "utf8").trim().split("\n").map((l) => JSON.parse(l));
+    expect(audit[0].reply).not.toContain(leaked);
   });
 
   it("audits a reply sealing failure once without retrying it as an agent failure", async () => {
@@ -1199,7 +1232,10 @@ describe("listener contexts", () => {
       },
     );
     const line = JSON.parse(readFileSync(paths.callsLog, "utf8").trim().split("\n").at(-1)!);
-    expect(line).toMatchObject({ status: "agent_error" });
+    // Audited as context_unknown, not agent_error: this exact message is a
+    // resume the CLI no longer holds (see isResumeFailure). The scrub below is
+    // what this test is really about and is unchanged by that.
+    expect(line).toMatchObject({ status: "context_unknown" });
     expect(line.error).not.toContain("real-agent-session");
     expect(line.error).toContain("<session>");
   });
@@ -1315,5 +1351,50 @@ describe("listener contexts", () => {
     expect(line).toMatchObject({ status: "context_unknown", from: "sota", task: "ask" });
     // The refusal path must not roll the binding forward or touch its turn count.
     expect(loadContexts(paths)[0]!.turns).toBe(1);
+  });
+
+  // Conversation state lives in the agent CLI's own session store, which
+  // AgentCall neither owns nor prunes -- so a binding can be admitted and THEN
+  // fail at spawn. That used to surface as "the agent hit an internal error",
+  // which points at the wrong thing entirely: the agent is fine, the
+  // conversation is over. It also left the dead binding in place, so the next
+  // --continue spawned the same doomed resume again.
+  it("reports a resume the agent CLI no longer holds as context_unknown, and drops the dead binding", async () => {
+    const { frames: f, paths } = await oneCall(
+      { message: "follow up", context_id: SEEDED_CTX },
+      {
+        seed: seedBinding(),
+        run: async () => {
+          throw new AgentRunError(
+            "agent exited 1: No conversation found with session ID: real-agent-session",
+            "agent_error",
+          );
+        },
+      },
+    );
+    expect(f.at(-1)).toMatchObject({ type: "call_failed", code: "context_unknown" });
+    // Same shape as every other context refusal -- no detail that would tell a
+    // caller this one failed late rather than at admission.
+    expect(f.at(-1)).not.toHaveProperty("detail");
+    expect(loadContexts(paths)).toEqual([]);
+  });
+
+  // The reclassification is bounded by "a resume was actually attempted". A
+  // fresh call must stay agent_error even when its failure text looks exactly
+  // like a dead session -- otherwise a caller could talk the agent into
+  // printing that string and have its own calls reclassified.
+  it("leaves a fresh call's failure as agent_error even when it reads like a dead session", async () => {
+    const { frames: f } = await oneCall(
+      { message: "hi" },
+      {
+        run: async () => {
+          throw new AgentRunError(
+            "agent exited 1: No conversation found with session ID: not-a-real-binding",
+            "agent_error",
+          );
+        },
+      },
+    );
+    expect(f.at(-1)).toMatchObject({ type: "call_failed", code: "agent_error" });
   });
 });

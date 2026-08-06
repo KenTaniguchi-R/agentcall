@@ -8,14 +8,15 @@ import { mountKeys } from "./keys.js";
 import { mountPresence } from "./presence.js";
 import { mountRoster } from "./roster.js";
 import { generateToken, sha256Hex } from "./auth.js";
-import { deploymentOrgAllows, identityKey, registrationAddressHost,
+import { generateAgentId, resolveAgentId } from "./identity.js";
+import { deploymentOrgAllows, identityObjectName,
   type DeploymentMode } from "./tenant.js";
 import { sharedRosterIds } from "./groups.js";
 import { checkLimit, NATIVE_CARD, NATIVE_READ, REGISTER, type RateLimitEnv } from "./ratelimit/index.js";
 import { parseStoredCard } from "./stored-card.js";
 import { drainRecoveryEvictions, mountRecovery } from "./recovery.js";
 import { mountRooms } from "./room/routes.js";
-import { rateLimit, requireIdentity, type RelayAppEnv } from "./middleware.js";
+import { jsonBody, rateLimit, requireIdentity, type RelayAppEnv } from "./middleware.js";
 
 export { HandleDO } from "./do.js";
 export { RateLimiterDO } from "./ratelimit/do.js";
@@ -64,9 +65,9 @@ function registrationDatabaseFailure(error: unknown) {
 app.post("/v1/register", async (c) => {
   const ip = c.req.header("cf-connecting-ip") ?? "unknown";
   if (!(await checkLimit(c.env, ip, REGISTER))) return c.json({ error: "rate limited" }, 429);
-  const body = RegisterRequest.safeParse(await c.req.json().catch(() => null));
-  if (!body.success) return c.json({ error: "invalid request" }, 400);
-  const { invite, handle, agent_kind } = body.data;
+  const body = await jsonBody(c, RegisterRequest);
+  if (!body) return c.json({ error: "invalid request" }, 400);
+  const { invite, handle, agent_kind } = body;
   const inviteHash = await sha256Hex(invite);
   let inviteRow: { org: string; org_role: OrgRoleType } | null;
   try {
@@ -87,12 +88,16 @@ app.post("/v1/register", async (c) => {
     const now = Date.now();
     const tokenHash = await sha256Hex(token);
     const results = await c.env.DB.batch([
+      // agent_id is minted inside this batch rather than in a follow-up write
+      // (#154, #319): the decision requires identity and address to be created
+      // atomically, so a partial failure consumes neither the invite nor the
+      // address and cannot leave an addressed handle with no identity.
       c.env.DB.prepare(
-        "INSERT INTO handles (org, handle, token_hash, agent_kind, created_at, org_role) " +
-          "SELECT org, ?, ?, ?, ?, org_role FROM invites " +
+        "INSERT INTO handles (org, handle, token_hash, agent_kind, created_at, org_role, agent_id) " +
+          "SELECT org, ?, ?, ?, ?, org_role, ? FROM invites " +
           "WHERE token_hash = ? AND used_at IS NULL AND revoked_at IS NULL AND expires_at > ? " +
           "ON CONFLICT(org, handle) DO NOTHING",
-      ).bind(handle, tokenHash, agent_kind ?? null, now, inviteHash, now),
+      ).bind(handle, tokenHash, agent_kind ?? null, now, generateAgentId(), inviteHash, now),
       c.env.DB.prepare(
         "UPDATE invites SET used_at = ?, used_by = ? " +
         "WHERE token_hash = ? AND used_at IS NULL AND revoked_at IS NULL AND EXISTS (" +
@@ -119,7 +124,7 @@ app.post("/v1/register", async (c) => {
       { "Retry-After": "5" },
     );
   }
-  return c.json({ org, token, address: `${handle}@${registrationAddressHost(org, c.req.url)}` });
+  return c.json({ org, token });
 });
 
 // Until this existed, a leaked token was permanent: register was the only
@@ -149,13 +154,22 @@ app.post("/v1/token/rotate", rateLimit(REGISTER, "identity", "rotate:"), async (
 
 app.put("/v1/card", rateLimit(NATIVE_CARD, "identity"), async (c) => {
   const identity = c.var.identity;
-  const { org, handle } = identity;
-  const body = CardUpload.safeParse(await c.req.json().catch(() => null));
-  if (!body.success) return c.json({ error: "invalid card" }, 400);
+  const { org } = identity;
+  // Deliberately NOT routed through jsonBody: the `inv_stored_cards` gate
+  // whitelists every direct parse of the card schema in the relay, and that is
+  // how it proves uploads validate here while stored reads go through
+  // parseStoredCard. Hiding this call behind a schema-generic helper would
+  // erase it from that grep and leave the gate blind to the upload path.
+  // (The gate greps for the schema name, so do not spell it out above.)
+  const parsed = CardUpload.safeParse(await c.req.json().catch(() => null));
+  if (!parsed.success) return c.json({ error: "invalid card" }, 400);
+  const body = parsed.data;
+  // The publisher's own identity, taken from the authenticated request rather
+  // than resolved from its address (#154 slice 5).
   await c.env.DB.prepare(
-    "INSERT INTO cards (org, handle, card_json, updated_at) VALUES (?, ?, ?, ?) " +
-      "ON CONFLICT(org, handle) DO UPDATE SET card_json = excluded.card_json, updated_at = excluded.updated_at",
-  ).bind(org, handle, JSON.stringify(body.data), Date.now()).run();
+    "INSERT INTO cards (org, agent_id, card_json, updated_at) VALUES (?, ?, ?, ?) " +
+      "ON CONFLICT(org, agent_id) DO UPDATE SET card_json = excluded.card_json, updated_at = excluded.updated_at",
+  ).bind(org, identity.agentId, JSON.stringify(body), Date.now()).run();
   return c.json({ ok: true });
 });
 
@@ -163,8 +177,12 @@ app.get("/v1/card/:handle", rateLimit(NATIVE_READ, "ip"), async (c) => {
   const identity = c.var.identity;
   const { org, handle: viewer } = identity;
   const handle = c.req.param("handle");
-  const row = await c.env.DB.prepare("SELECT card_json, updated_at FROM cards WHERE org = ? AND handle = ?")
-    .bind(org, handle).first<{ card_json: string; updated_at: number }>();
+  // A missing identity and a missing card are the same 404: the address is
+  // how a caller asks, but the card belongs to whoever holds that address now.
+  const targetAgentId = await resolveAgentId(c.env.DB, org, handle);
+  if (!targetAgentId) return c.json({ error: "no card" }, 404);
+  const row = await c.env.DB.prepare("SELECT card_json, updated_at FROM cards WHERE org = ? AND agent_id = ?")
+    .bind(org, targetAgentId).first<{ card_json: string; updated_at: number }>();
   if (!row) return c.json({ error: "no card" }, 404);
 
   const upload = parseStoredCard(row.card_json, org, handle);
@@ -184,10 +202,15 @@ app.get("/v1/ws", async (c) => {
   const identity = c.var.identity;
   const { org, handle } = identity;
 
+  // The address is what the caller asked for and what gets displayed; the
+  // agent id is what selects the object. They are tracked separately from
+  // here down so neither is used for the other's job.
   let target: string;
+  let targetAgentId: string;
   let groups: string[] = [];
   if (role === "listen") {
     target = handle;
+    targetAgentId = identity.agentId;
   } else if (role === "call") {
     // A call socket is one opaque attempt, even when the target is offline or
     // unknown. Meter upgrades before target lookup so it cannot be used as a
@@ -196,8 +219,13 @@ app.get("/v1/ws", async (c) => {
       return c.json({ error: "rate limited" }, 429);
     }
     const to = c.req.query("to") ?? "";
-    if (!(await handleExists(c.env.DB, org, to))) return c.json({ error: "unknown handle" }, 404);
+    // Replaces the previous handleExists check: resolving the identity proves
+    // existence and yields the object name in the same query, so the two
+    // cannot disagree. Same 404 as before for an unknown handle.
+    const resolved = await resolveAgentId(c.env.DB, org, to);
+    if (!resolved) return c.json({ error: "unknown handle" }, 404);
     target = to;
+    targetAgentId = resolved;
     // The caller cannot supply a policy selector. Group attestation is the
     // relay's observation that both identities are currently live members of
     // the same roster, taken before the DO accepts the caller socket.
@@ -206,13 +234,19 @@ app.get("/v1/ws", async (c) => {
     return c.json({ error: "bad role" }, 400);
   }
 
-  const stub = c.env.HANDLE_DO.get(c.env.HANDLE_DO.idFromName(identityKey(org, target)));
+  const stub = c.env.HANDLE_DO.get(
+    c.env.HANDLE_DO.idFromName(identityObjectName({ org, agentId: targetAgentId })),
+  );
   const fwd = new Request(`https://do/ws?role=${role}&test_timeout_ms=${c.req.query("test_timeout_ms") ?? ""}`, c.req.raw);
   fwd.headers.set("X-Verified-From", handle);
+  // The connecting party's stable identity. X-Verified-From stays the address
+  // because the object echoes it into call records and audit, where the name
+  // shown at the time is the point; this is what keys durable state.
+  fwd.headers.set("X-Verified-Agent-Id", identity.agentId);
   fwd.headers.set("X-Verified-Org", org);
   fwd.headers.set("X-Verified-Target", target);
   fwd.headers.set("X-Verified-Credential-Generation", String(identity.recoveryGeneration));
-  fwd.headers.set("X-Verified-Relay-Origin", registrationAddressHost(org, c.req.url));
+  fwd.headers.set("X-Verified-Relay-Origin", new URL(c.req.url).hostname);
   fwd.headers.set("X-Verified-Groups", JSON.stringify(groups));
   fwd.headers.set("X-Verified-Actor-IP", c.req.header("cf-connecting-ip") ?? "");
   const country = c.req.raw.cf?.country;

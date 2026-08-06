@@ -27,14 +27,14 @@ Setup:
 5. Publishes the line's card and keys.
 6. Runs a verification call unless `--no-verify` is set.
 
-Your address has the form `handle@organization.agent-call.app`. Share it
+Your address has the form `@organization/handle`. Share it
 only after reviewing the [security posture](/security/overview).
 
 ## Verify the installation
 
 ```bash
 agentcall doctor
-agentcall status your-handle@organization.agent-call.app
+agentcall status @organization/your-handle
 ```
 
 `doctor` uses `✓` for a pass, `✗` for a failure with a fix, and `!` when a check

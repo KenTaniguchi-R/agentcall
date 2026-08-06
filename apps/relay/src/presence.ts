@@ -1,9 +1,9 @@
 import type { Context, Hono } from "hono";
 import { HANDLE_RE } from "@benree/agentcall-shared";
-import type { Env } from "./index.js";
 import { sharedRosterIds } from "./groups.js";
 import { NATIVE_READ } from "./ratelimit/index.js";
-import { identityKey } from "./tenant.js";
+import { identityObjectName } from "./tenant.js";
+import { resolveAgentId } from "./identity.js";
 import { rateLimit, type RelayAppEnv } from "./middleware.js";
 
 type PresenceOutcome = "allowed" | "denied";
@@ -69,7 +69,14 @@ export function mountPresence(app: Hono<RelayAppEnv>): void {
     await recordStatusRead(c, allowed ? "allowed" : "denied");
     if (!allowed) return c.json({ error: "not found" }, 404);
 
-    const stub = c.env.HANDLE_DO.get(c.env.HANDLE_DO.idFromName(identityKey(org, target)));
+    // Resolved after the policy check above, so a missing identity returns
+    // the same 404 as a denied one and this stays closed as an enumeration
+    // oracle.
+    const targetAgentId = await resolveAgentId(c.env.DB, org, target);
+    if (!targetAgentId) return c.json({ error: "not found" }, 404);
+    const stub = c.env.HANDLE_DO.get(
+      c.env.HANDLE_DO.idFromName(identityObjectName({ org, agentId: targetAgentId })),
+    );
     return stub.fetch("https://do/status");
   });
 }

@@ -123,19 +123,27 @@ A 409 `"handle taken"` here is real. The route confirms the row exists via
 otherwise (`index.ts:110-113`), so it is not the migration symptom in disguise
 — an earlier revision of this note said it was.
 
-Before calling any task done: `pnpm -r build && pnpm -r typecheck && pnpm -r test`
-must all pass at the repo root. **Build first** — `packages/cli` typechecks against
-`packages/shared`'s built `dist`, so running build last checks the *previous* run's
-types. `.github/workflows/ci.yml` runs exactly this order when manually dispatched;
-automatic push and PR runs are temporarily paused while GitHub Actions billing is
-unavailable.
-
-While they are paused, `scripts/ci-local.sh` is the gate. It ports both workflows:
+**Before calling any task done: `pnpm verify` must pass at the repo root.** That is
+the whole gate and the only definition of done — `scripts/ci-local.sh fast`, which
+runs the `verify` job's six steps *and* every invariants check.
 
 ```bash
-scripts/ci-local.sh fast       # verify job + every invariants check (the pre-push default)
+pnpm verify                    # = scripts/ci-local.sh fast (the pre-push default)
 scripts/ci-local.sh packaged   # packed-cli-consumer job on Node 20/22/24 — slow, run before a release
 ```
+
+Running `pnpm -r build && pnpm -r typecheck && pnpm -r test` by hand is a *weaker*
+check than `pnpm verify`: it skips `pnpm lint`, `docs:check`, the wrangler bundle,
+and all eight invariants. It used to be quoted here as the done-criterion, which
+meant the stated bar was lower than the gate that actually blocks the push. Use
+`pnpm verify`.
+
+Step order inside it mirrors `ci.yml` and is load-bearing. **Lint first** — it reads
+source directly and needs nothing built, so the cheapest failures surface first.
+**Build second** — `packages/cli` typechecks against `packages/shared`'s built
+`dist`, so running build last checks the *previous* run's types. `.github/workflows/ci.yml` runs exactly this
+order when manually dispatched; automatic push and PR runs are temporarily paused
+while GitHub Actions billing is unavailable, which is why the local gate is the gate.
 
 A pre-push hook runs `fast` automatically once per clone — `git config core.hooksPath
 "$(git rev-parse --show-toplevel)/scripts/hooks"`. Use an absolute path: git resolves a
@@ -146,6 +154,28 @@ stops firing when you push from a subdirectory.
 than none, because it reports green for a rule CI would fail. When you add a check to
 `invariants.yml`, add it to `ci-local.sh` and confirm it actually fails on a planted
 violation — not just that it passes.
+
+That rule was aspirational until it wasn't: `docs:check` and the wrangler bundle step
+ran in CI and not locally, so the hook passed commits CI would have failed. The
+`inv_gate_mirrors_ci` check now enforces it in the one direction a script can. It
+classifies every shell step in ci.yml's `verify` job as either mirrored (the command
+must appear verbatim inside `run_verify`) or deliberately unmirrored with a reason. A
+step added to `ci.yml` is in neither list and fails the check until someone classifies
+it. Adding a step to `run_verify` alone still won't fail anything — that direction is
+harmless.
+
+`pnpm lint` is oxlint, pinned exactly in the root `devDependencies` and configured
+by `.oxlintrc.json`. It runs over `apps` and `packages` — src *and* test — at
+`--max-warnings 0`, so every finding fails the gate. The default rule set is on;
+the config turns off exactly two rules and says why in place. Add a disable there
+with its reason rather than a bare `oxlint-disable` comment at a call site, and
+never loosen a validator to quiet a rule.
+
+**What it does not cover: type-aware rules.** oxlint does not read the type
+checker, so `no-floating-promises` and `no-misused-promises` are not available —
+an unawaited D1 write or a dropped `ctx.waitUntil` in `apps/relay` still
+typechecks clean, lints clean, and fails in production. Closing that needs
+typescript-eslint, which is a separate decision (see #336).
 
 `typecheck` covers `src` *and* `test`. `shared` and `cli` each carry a
 `tsconfig.test.json` (`include: ["src", "test"]`, `noEmit`) that their `typecheck`

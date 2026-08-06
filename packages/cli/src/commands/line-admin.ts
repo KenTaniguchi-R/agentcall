@@ -1,6 +1,7 @@
 import type { Command } from "commander";
 import { getMachinePaths } from "../paths.js";
 import { removeLine, setPrimary } from "./line.js";
+import { fail } from "../errors.js";
 
 export function register(line: Command): void {
   line
@@ -14,8 +15,7 @@ export function register(line: Command): void {
         removeLine(getMachinePaths(), name, { confirm: o.yes, purge: o.purge });
         console.log(`Removed line "${name}".`);
       } catch (e) {
-        console.error(String(e instanceof Error ? e.message : e));
-        process.exitCode = 1;
+        fail(e);
       }
     });
 
@@ -28,8 +28,7 @@ export function register(line: Command): void {
         setPrimary(getMachinePaths(), name);
         console.log(`Primary line is now "${name}".`);
       } catch (e) {
-        console.error(String(e instanceof Error ? e.message : e));
-        process.exitCode = 1;
+        fail(e);
       }
     });
 }

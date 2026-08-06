@@ -23,7 +23,7 @@ async function activeRoom(seats: 2 | 3 | 6): Promise<{ room_id: string; members:
   }];
   const labels = ["C", "F", "I", "L", "O"];
   for (let index = 0; index < seats - 1; index++) {
-    const joined = await joinTestRoom(created.invites[index]!.invite, `Member ${index + 2}`, labels[index]!);
+    const joined = await joinTestRoom(created.invite.invite, `Member ${index + 2}`, labels[index]!);
     expect(joined.status).toBe(201);
     members.push({
       credential: joined.body.credential,
@@ -125,7 +125,7 @@ describe("targeted Room call routing", () => {
 
   it("fails unverified, departed, paused-sender, and wrong-epoch principals closed", async () => {
     const waiting = await createTestRoom(2);
-    const joined = await joinTestRoom(waiting.invites[0]!.invite, "Waiting peer", "C");
+    const joined = await joinTestRoom(waiting.invite.invite, "Waiting peer", "C");
     await mutateTestRoom(waiting.credential, "admit", {
       participant_id: joined.body.participant.participant_id,
     });

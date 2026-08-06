@@ -1,9 +1,9 @@
-import { fetchKeys, getRecoveryStatus, getStatus } from "./api.js";
+import { authOf, fetchKeys, getRecoveryStatus, getStatus } from "./api.js";
 import { lstatSync, readFileSync, realpathSync } from "node:fs";
 import { execFileSync } from "node:child_process";
 import { encryptionKeyTranscript, importIdentityPublicKey, keyIdFor, verifyTranscript } from "@benree/agentcall-shared";
 import { callAgent } from "./call-client.js";
-import { addressHost, relayUrl, resolveLineWorkdir, type LineConfig, type Workdir } from "./config.js";
+import { lineAddress, relayUrl, resolveLineWorkdir, type LineConfig, type Workdir } from "./config.js";
 import {
   inspectListenerService,
   type ListenerServiceStatus,
@@ -182,9 +182,9 @@ export async function checkLineKeyHealth(
   const checks: VerifyCheck[] = [{ name: "local identity keys", ok: true, detail: `epoch ${local.epoch}, permissions 600` }];
   try {
     const remote = await fetchFn(
-      relayUrl(cfg), { org: cfg.org, handle: cfg.handle, token: cfg.token }, cfg.handle,
+      relayUrl(cfg), authOf(cfg), cfg.handle,
     );
-    const expectedAddress = `${cfg.handle}@${addressHost(cfg)}`;
+    const expectedAddress = lineAddress(cfg);
     const signatureValid = await verifyTranscript(
       await importIdentityPublicKey(remote.identity.identity_pub),
       encryptionKeyTranscript(remote.encryption.record),
@@ -213,7 +213,7 @@ export async function checkRecoveryHealth(
 ): Promise<VerifyCheck> {
   try {
     const status = await fetchFn(
-      relayUrl(cfg), { org: cfg.org, handle: cfg.handle, token: cfg.token },
+      relayUrl(cfg), authOf(cfg),
     );
     return status.issued
       ? {
@@ -386,7 +386,7 @@ export async function runDoctor(deps: DoctorDeps): Promise<number> {
     if (relayValid) {
       try {
         online = (await (deps.getStatusFn ?? getStatus)(
-          relayUrl(cfg), cfg.handle, { org: cfg.org, handle: cfg.handle, token: cfg.token },
+          relayUrl(cfg), cfg.handle, authOf(cfg),
         )).online;
         report({
           name: "relay status",

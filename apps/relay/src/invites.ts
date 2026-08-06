@@ -3,12 +3,11 @@ import {
   BootstrapOrgInviteRequest, CreateOrgInviteRequest, MAX_ACTIVE_ORG_INVITES,
   MAX_LISTED_ORG_INVITES, ORG_INVITE_ID_RE, type OrgInviteMetadataType, type OrgRoleType,
 } from "@benree/agentcall-shared";
-import type { Env } from "./index.js";
 import { constantTimeEqual, generateToken, sha256Hex } from "./auth.js";
 import { orgAuditStatement, orgAuditTrimStatement, type OrgAuditActor } from "./events.js";
 import { checkLimit, REGISTER, ROSTER_WRITE } from "./ratelimit/index.js";
 import { deploymentOrgAllows } from "./tenant.js";
-import { rateLimit, requireAdmin, type RelayAppEnv } from "./middleware.js";
+import { jsonBody, rateLimit, requireAdmin, type RelayAppEnv } from "./middleware.js";
 
 const INVITE_RETENTION_MS = 30 * 86_400_000;
 
@@ -91,24 +90,24 @@ export function mountInvites(app: Hono<RelayAppEnv>): void {
     if (!constantTimeEqual(expectedHash, suppliedHash)) return c.json({ error: "unauthorized" }, 401);
     const ip = c.req.header("cf-connecting-ip") ?? "unknown";
     if (!(await checkLimit(c.env, `bootstrap:${ip}`, REGISTER))) return c.json({ error: "rate limited" }, 429);
-    const body = BootstrapOrgInviteRequest.safeParse(await c.req.json().catch(() => null));
-    if (!body.success) return c.json({ error: "invalid request" }, 400);
-    if (!deploymentOrgAllows(c.env.DEPLOYMENT_MODE, c.env.SELF_HOSTED_ORG, body.data.org)) {
+    const body = await jsonBody(c, BootstrapOrgInviteRequest);
+    if (!body) return c.json({ error: "invalid request" }, 400);
+    if (!deploymentOrgAllows(c.env.DEPLOYMENT_MODE, c.env.SELF_HOSTED_ORG, body.org)) {
       return c.json({ error: "organization does not match this relay" }, 400);
     }
     return createInvite(
-      c, body.data.org, null, "relay-operator", "bootstrap",
-      body.data.description, body.data.expires_in_days, "admin",
+      c, body.org, null, "relay-operator", "bootstrap",
+      body.description, body.expires_in_days, "admin",
     );
   });
 
   app.post("/v1/invites", rateLimit(REGISTER, "identity", "invite:"), requireAdmin, async (c) => {
     const identity = c.var.identity;
-    const body = CreateOrgInviteRequest.safeParse(await c.req.json().catch(() => null));
-    if (!body.success) return c.json({ error: "invalid request" }, 400);
+    const body = await jsonBody(c, CreateOrgInviteRequest);
+    if (!body) return c.json({ error: "invalid request" }, 400);
     return createInvite(
       c, identity.org, identity.handle, identity.handle, "handle",
-      body.data.description, body.data.expires_in_days, body.data.role,
+      body.description, body.expires_in_days, body.role,
     );
   });
 
