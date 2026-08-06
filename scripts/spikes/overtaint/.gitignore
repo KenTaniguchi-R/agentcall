@@ -1,0 +1,3 @@
+# Per-question path logs are raw intermediate output, regenerated on every run.
+.paths-*.jsonl
+run.log

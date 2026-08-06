@@ -202,7 +202,7 @@ describe("startListener workdir", () => {
         stopper = startListener({
           ...baseDeps(url), paths,
           loadConfig: () => ({ ...cfg, workdir: project }),
-          run: async (_k, prompt, workdir) => {
+          run: async ({ prompt, workdir }) => {
             seen.prompt = prompt; seen.workdir = workdir;
             return { text: "ok" };
           },
@@ -451,7 +451,7 @@ describe("startListener acceptance and cancellation", () => {
           // Production runAgent settles when its AbortSignal fires. Keep the
           // first call active for the busy assertion while preserving that
           // shutdown contract so afterEach can stop the listener cleanly.
-          run: (_kind, _prompt, _workdir, _timeout, _spec, _envelope, _callId, signal) =>
+          run: ({ signal }) =>
             new Promise((_resolve, reject) => signal?.addEventListener(
               "abort",
               () => reject(new AgentRunError("canceled", "canceled")),
@@ -478,7 +478,7 @@ describe("startListener acceptance and cancellation", () => {
         stopper = startListener({
           ...deps,
           // Mirrors runAgent: settles only once teardown completes.
-          run: (_k, _p, _w, _t, _s, _e, _c, signal?: AbortSignal) =>
+          run: ({ signal }) =>
             new Promise((_res, rej) => {
               signal?.addEventListener("abort", () => {
                 setTimeout(() => { exited = true; rej(new AgentRunError("canceled", "canceled")); }, 10);
@@ -617,8 +617,8 @@ describe("startListener task resolution", () => {
     expect(result).toMatchObject({ type: "call_result", call_id: "cg1", task: "schedule-meeting" });
   });
 
-  it("runs a granted task with its envelope and timeout, echoing task in call_result", async () => {
-    const seen: { prompt?: string; workdir?: string; timeout?: number; envelope?: unknown } = {};
+  it("runs a granted task with its timeout and clearance, echoing task in call_result", async () => {
+    const seen: { prompt?: string; workdir?: string; timeout?: number; clearance?: unknown } = {};
     let paths!: LinePaths;
     const relayReady = new Promise<WsSocket>((resolveWs) => {
       void fakeRelay((ws) => resolveWs(ws)).then((url) => {
@@ -628,16 +628,14 @@ describe("startListener task resolution", () => {
         mkdirSync(taskWorkdir, { recursive: true });
         seedTask(deps.paths, "schedule-meeting", [
           "description: d",
-          "tools: [read, fetch]",
-          "network: [calendar.google.com]",
           "timeout_s: 60",
           `workdir: ${taskWorkdir}`,
         ], "check the calendar\n");
         seedPolicy(deps.paths, { default_offer: ["ask"], callers: { shusaku: { offer: ["schedule-meeting"] } } });
         stopper = startListener({
           ...deps,
-          run: async (_k, prompt, workdir, timeoutMs, _spec, envelope) => {
-            seen.prompt = prompt; seen.workdir = workdir; seen.timeout = timeoutMs; seen.envelope = envelope;
+          run: async ({ prompt, workdir, timeoutMs, clearance }) => {
+            seen.prompt = prompt; seen.workdir = workdir; seen.timeout = timeoutMs; seen.clearance = clearance;
             return { text: "booked" };
           },
         });
@@ -652,18 +650,18 @@ describe("startListener task resolution", () => {
     expect(seen.prompt).toContain(join(paths.machine.stateRoot, "code", "calendar"));
     expect(seen.workdir).toBe(join(paths.machine.stateRoot, "code", "calendar"));
     expect(seen.timeout).toBe(60_000);
-    expect(seen.envelope).toEqual({ caps: ["read", "fetch"] });
+    expect(seen.clearance).toBe("public");
     const audit = readFileSync(paths.callsLog, "utf8").trim().split("\n").map((l) => JSON.parse(l));
     expect(audit[0]).toMatchObject({ call_id: "c3", task: "schedule-meeting", status: "ok" });
   });
 
-  it("falls back to the ask task (read-only envelope) for a plain message", async () => {
-    const seen: { envelope?: unknown } = {};
+  it("falls back to the ask task for a plain message", async () => {
+    const seen: { clearance?: unknown } = {};
     const relayReady = new Promise<WsSocket>((resolveWs) => {
       void fakeRelay((ws) => resolveWs(ws)).then((url) => {
         stopper = startListener({
           ...baseDeps(url),
-          run: async (_k, _prompt, _p, _t, _spec, envelope) => { seen.envelope = envelope; return { text: "hi" }; },
+          run: async ({ clearance }) => { seen.clearance = clearance; return { text: "hi" }; },
         });
       });
     });
@@ -672,7 +670,7 @@ describe("startListener task resolution", () => {
     await sendIncoming(ws, { call_id: "c4", from: "anyone", message: "q?" });
     const [, , result] = await expectFrames;
     expect(result).toMatchObject({ type: "call_result", task: "ask" });
-    expect(seen.envelope).toEqual({ caps: ["read"] });
+    expect(seen.clearance).toBe("public");
   });
 
   it("maps a corrupt policy file to call_failed agent_error without spawning, and without leaking the parse error", async () => {
@@ -746,9 +744,9 @@ describe("startListener line name propagation", () => {
               startedAtMs: 1_000, endedAtMs: 1_010, durationMs: 10,
             }],
           }),
-          run: async (kind, prompt, workdir, _timeoutMs, _specOverride, envelope, callId, _signal, lineName, _resume, correlationId, toolTelemetryFile) => {
+          run: async ({ kind, prompt, workdir, callId, lineName, correlationId, toolTelemetryFile }) => {
             captured.kind = kind; captured.prompt = prompt; captured.workdir = workdir;
-            captured.envelope = envelope; captured.callId = callId; captured.lineName = lineName;
+            captured.callId = callId; captured.lineName = lineName;
             captured.correlationId = correlationId;
             captured.toolTelemetryFile = toolTelemetryFile;
             return { text: "ok" };
@@ -782,14 +780,15 @@ describe("startListener line name propagation", () => {
     // default workdir (position 2, `captured.workdir`, 0-based like the
     // buildSpawnSpec positions cited below) resolves to
     // `<stateRoot>/AgentCall/sales/public` — which CONTAINS "sales" as a path
-    // segment. A 2<->8 argument swap (workdir <-> lineName) would only be
-    // caught because `toBe` requires exact equality; a looser matcher would
-    // let that specific swap through undetected, since the swapped-in
-    // workdir string still contains the line name as a substring.
-    const spec = buildSpawnSpec(
-      captured.kind!, captured.prompt!, captured.workdir!, () => "/fake/claude",
-      captured.envelope as never, captured.callId!, captured.lineName!,
-    );
+    // The workdir<->lineName swap this used to guard against is now a compile
+    // error rather than a runtime one, since both are named fields. Kept
+    // because it still pins that the listener passes the LINE name and not the
+    // handle, which no type can express.
+    const spec = buildSpawnSpec({
+      kind: captured.kind!, prompt: captured.prompt!, workdir: captured.workdir!,
+      resolveBin: () => "/fake/claude",
+      callId: captured.callId!, lineName: captured.lineName!, clearance: "internal",
+    });
     expect(spec.env?.AGENTCALL_LINE).toBe(paths.name);
     // Pins the callId position too. buildSpawnSpec's tail has 4 plain-`string`-
     // typed positions that a swap among them would compile clean: prompt,
@@ -825,7 +824,7 @@ describe("startListener line name propagation", () => {
           createToolEventSpool: () => ({
             file: "/private/state/active-tool-events.jsonl", dispose, collect: () => [],
           }),
-          run: async (_kind, _prompt, _workdir, _timeout, _spec, _envelope, _callId, signal) =>
+          run: async ({ signal }) =>
             new Promise((resolve) => signal?.addEventListener("abort", () => {
               runAborted = true;
               resolve({ text: "canceled" });
@@ -1140,12 +1139,10 @@ describe("listener contexts", () => {
       { message: "and the commit?", context_id: SEEDED_CTX },
       {
         seed: seedBinding(),
-        // run(...)'s positionals, per listener.ts: kind, prompt, workdir,
-        // timeoutMs, specOverride, envelope, callId, signal, lineName,
-        // resume — resume is index 9, not 8, now that lineName sits before
-        // it (see runner.ts's buildSpawnSpec/runAgent signatures).
-        run: async (...a: any[]) => {
-          sawResume = a[9] as string | undefined;
+        // Named now, not positional. This index moved twice inside #372 before
+        // runAgent became an options object; that is what it cost.
+        run: async ({ resume }) => {
+          sawResume = resume;
           return { text: "ok", session_id: "real-agent-session" };
         },
       },
@@ -1159,8 +1156,8 @@ describe("listener contexts", () => {
       { message: "and the commit?", context_id: SEEDED_CTX },
       {
         seed: seedBinding(),
-        run: async (...a: any[]) => {
-          prompt = a[1] as string;
+        run: async ({ prompt: p }) => {
+          prompt = p;
           return { text: "ok", session_id: "real-agent-session" };
         },
       },
@@ -1289,7 +1286,7 @@ describe("listener contexts", () => {
         frameCount: 1,
         run: async () => { spawned = true; return { text: "should not happen" }; },
         seed: (p) => {
-          seedTask(p, "notes", ["description: d", "tools: [read, exec]"]);
+          seedTask(p, "notes", ["description: d", "threadable: false"]);
           seedPolicy(p, { default_offer: ["ask", "notes"] });
           seedBinding({ task: "notes" })(p);
         },
@@ -1326,7 +1323,7 @@ describe("listener contexts", () => {
   it("does not mint a context for a non-threadable task", async () => {
     const { frames: f, paths } = await oneCall({ message: "hi", task: "risky" }, {
       seed: (p) => {
-        seedTask(p, "risky", ["description: d", "tools: [read, exec]"]);
+        seedTask(p, "risky", ["description: d", "threadable: false"]);
         seedPolicy(p, { default_offer: ["ask", "risky"] });
       },
     });

@@ -289,8 +289,11 @@ export function runRoomSafeAgent(
     workdir: options.workdir,
     env: options.env,
   });
-  return runAgent(
-    "claude", "", contract.spawn.cwd, options.timeoutMs, contract.spawn,
-    undefined, "room", options.signal, "room",
-  );
+  return runAgent({
+    kind: "claude", prompt: "", workdir: contract.spawn.cwd, timeoutMs: options.timeoutMs,
+    specOverride: contract.spawn, callId: "room", signal: options.signal, lineName: "room",
+    // A Room is accountless and short-lived: it carries no durable identity to
+    // hold a clearance against, so it gets the narrowest one.
+    clearance: "public",
+  });
 }

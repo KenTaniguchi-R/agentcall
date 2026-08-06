@@ -1,0 +1,14 @@
+[
+  { "id": "q01", "text": "What does the tool guard deny, and is it fail-open or fail-closed?", "answerable_from": "internal" },
+  { "id": "q02", "text": "How does a caller's task get resolved to an envelope? Walk me through it.", "answerable_from": "internal" },
+  { "id": "q03", "text": "What is the default policy for a line that has never been configured?", "answerable_from": "internal" },
+  { "id": "q04", "text": "Which package owns the protocol frame shapes, and why is it centralised there?", "answerable_from": "internal" },
+  { "id": "q05", "text": "What is the timeout for an answering agent, and where is it defined?", "answerable_from": "internal" },
+  { "id": "q06", "text": "Why does the relay return 503 on registration sometimes? What causes it?", "answerable_from": "internal" },
+  { "id": "q07", "text": "Is cross-organization routing supported? What is the reasoning?", "answerable_from": "internal" },
+  { "id": "q08", "text": "How does threading work for a task, and when is it allowed?", "answerable_from": "internal" },
+  { "id": "q09", "text": "What changed most recently in the room verification flow?", "answerable_from": "internal" },
+  { "id": "q10", "text": "How do I run the tests, and what is the definition of done in this repo?", "answerable_from": "internal" },
+  { "id": "q11", "text": "What Cloudflare bindings does the relay need, and where are they declared?", "answerable_from": "internal" },
+  { "id": "q12", "text": "Summarise the notes on what we decided about the address format.", "answerable_from": "internal" }
+]

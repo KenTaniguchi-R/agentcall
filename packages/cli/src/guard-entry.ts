@@ -12,6 +12,11 @@ import { FAIL_CLOSED_REASON, runGuard } from "./guard.js";
 // exactly the cost that comment exists to avoid.
 import { LINE_NAME_RE } from "./line-name.js";
 import { getLinePaths, getMachinePaths } from "./paths.js";
+// NOTE: this pulls zod into a process entry whose header defends a minimal
+// import graph (78ms vs 33ms per tool call). The map is the boundary and has to
+// be validated, so the cost is deliberate rather than accidental — but it is a
+// real regression against a measured property and is tracked, not swallowed.
+import { loadSensitivityMap, withFloor } from "./sensitivity.js";
 import { appendPrivateLogLine } from "./audit-log.js";
 import { writeToolHookEvent } from "./tool-telemetry-hook.js";
 
@@ -28,24 +33,39 @@ const machine = getMachinePaths();
 // closed rather than guessing. Unconditional on `mode`: this indicates a
 // wiring bug (the runner always sets this env var), not an ordinary decide()
 // failure, so it is not eligible for observe mode's fail-open treatment.
-const lineName = process.env.AGENTCALL_LINE ?? "";
-if (!LINE_NAME_RE.test(lineName)) {
-  // The one event that means "the guard is unwired" must not be the one
-  // event that leaves no audit trace. There is no LinePaths to log against —
-  // that is exactly the problem — so this goes to the line-independent
-  // listenerLog instead, the only log reachable without already knowing
-  // which line. Best-effort: a log write failing here must not change the
-  // exit code, since the fail-closed exit below is what actually blocks.
+// The one event that means "the guard is unwired" must not be the one event
+// that leaves no audit trace. There is no LinePaths to log against — that is
+// exactly the problem — so this goes to the line-independent listenerLog, the
+// only log reachable without already knowing which line. Best-effort: a log
+// write failing here must not change the exit code, since the fail-closed exit
+// is what actually blocks.
+function unwired(type: string): never {
   try {
     mkdirSync(dirname(machine.listenerLog), { recursive: true });
     appendFileSync(machine.listenerLog, JSON.stringify({
-      ts: new Date().toISOString(), type: "guard_unwired",
+      ts: new Date().toISOString(), type,
       call_id: process.env.AGENTCALL_CALL_ID ?? "unknown",
       correlation_id: process.env.AGENTCALL_CORRELATION_ID,
     }) + "\n");
   } catch { /* the exit below still fails closed regardless */ }
   process.stderr.write(FAIL_CLOSED_REASON + "\n");
   process.exit(2);
+}
+
+const lineName = process.env.AGENTCALL_LINE ?? "";
+if (!LINE_NAME_RE.test(lineName)) {
+  unwired("guard_unwired");
+}
+
+// Same fail-closed treatment as AGENTCALL_LINE above, for the same reason: the
+// runner always sets this, so an absent or unrecognised value is a wiring bug
+// rather than an ordinary decide() failure. Defaulting it to `public` would be
+// worse than it looks — the guard would keep working, silently answering every
+// caller at the narrowest clearance, and the bug would surface as "the agent
+// can't read anything" long after the deploy that caused it.
+const clearance = process.env.AGENTCALL_CLEARANCE;
+if (clearance !== "public" && clearance !== "internal") {
+  unwired("guard_no_clearance");
 }
 
 try {
@@ -63,7 +83,12 @@ try {
     // what let a Write through /tmp/link (-> ~/.ssh) land inside ~/.ssh.
     realpath: realpathSync,
     appendLine: appendPrivateLogLine,
-    allowedRoot: process.env.AGENTCALL_ALLOWED_ROOT,
+    // Read from disk rather than passed through the environment. The map is
+    // the boundary; ~/.agentcall is itself floored `secret`, so the file is not
+    // writable by the agent this guard is policing, whereas an env var is
+    // inherited state with no such property.
+    map: withFloor(loadSensitivityMap(getLinePaths(machine, lineName)), machine.userHome),
+    clearance,
   }, mode);
 
   // Best-effort and deliberately after the security decision. The spool

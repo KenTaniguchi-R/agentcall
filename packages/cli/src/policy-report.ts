@@ -1,6 +1,6 @@
 import type { CallableLineConfig } from "./config.js";
 import { offeredFor, stripPlus, type Policy } from "./policy.js";
-import { CAPS, type Cap, type Task } from "./tasks.js";
+import { type Task } from "./tasks.js";
 
 interface PolicyReportOptions {
   agentKind: CallableLineConfig["agent_kind"];
@@ -8,33 +8,17 @@ interface PolicyReportOptions {
   defaultWorkdir: string;
 }
 
-const CAPABILITY_TEXT: Record<Cap, string> = {
-  read: "inspect files",
-  write: "change files",
-  fetch: "use web tools",
-  exec: "run shell commands",
-};
-
-function taskCapabilities(task: Task): Cap[] {
-  const declared = new Set<Cap>(["read", ...task.envelope.caps]);
-  return CAPS.filter((cap) => declared.has(cap));
-}
-
 function renderTask(
   task: Task,
   defaultWorkdir: string,
-  agentKind: PolicyReportOptions["agentKind"],
 ): string[] {
   const lines = [
     `  ${task.id} — ${task.name}`,
     `    ${task.description}`,
   ];
-  for (const cap of taskCapabilities(task)) {
-    lines.push(`    ${cap} — ${CAPABILITY_TEXT[cap]}`);
-  }
-  if (agentKind === "claude" && task.envelope.caps.includes("exec")) {
-    lines.push("    WARNING: exec can read, change, and send data outside this working directory; shell actions are recorded, not blocked.");
-  }
+  // Every task reads and only reads (#372): the reply is the only sink, so
+  // there is no per-task capability list left to print.
+  lines.push("    inspect files — answers are read-only");
   lines.push(`    Follow-up calls: ${task.threadable ? "allowed" : "not allowed"}`);
   lines.push(`    Working directory: ${task.workdir ?? defaultWorkdir}`);
   if (task.timeout_s !== undefined) lines.push(`    Time limit: ${task.timeout_s} seconds`);
@@ -51,7 +35,6 @@ function renderAudience(
   offered: string[] | "blocked",
   tasks: readonly Task[],
   defaultWorkdir: string,
-  agentKind: PolicyReportOptions["agentKind"],
 ): string[] {
   const lines = [heading];
   if (offered === "blocked") {
@@ -63,7 +46,7 @@ function renderAudience(
     lines.push("  (no runnable tasks)");
     return lines;
   }
-  for (const task of runnable) lines.push(...renderTask(task, defaultWorkdir, agentKind));
+  for (const task of runnable) lines.push(...renderTask(task, defaultWorkdir));
   return lines;
 }
 
@@ -107,7 +90,7 @@ export function renderPolicyReport(
     lines.push(
       "  Codex only enforces the write boundary with a read-only or workspace-write sandbox;",
       "  fetch and exec are not separate Codex controls, and read access is not confined to the working directory.",
-      "  Codex can execute shell commands whether or not a task declares exec.",
+      "  Codex can execute shell commands on any task; --sandbox read-only stops writes, not reads or execution.",
       "  Bundled authenticated Codex apps, web search, and image generation are disabled with strict configuration on every spawn.",
       "  AgentCall does not impose or audit a domain allowlist on Codex network access.",
       "  On verified codex-cli 0.146.0, shell tool attempts are recorded by an observe-only hook unless managed-only hooks are required.",
@@ -124,7 +107,7 @@ export function renderPolicyReport(
     "",
     ...renderAudience(
       "Base rule: Everyone registered", offeredFor(policy, ""), tasks,
-      options.defaultWorkdir, options.agentKind,
+      options.defaultWorkdir,
     ),
   );
 
@@ -138,7 +121,6 @@ export function renderPolicyReport(
         offeredFor(policy, caller),
         tasks,
         options.defaultWorkdir,
-        options.agentKind,
       ),
     );
   }
@@ -154,7 +136,6 @@ export function renderPolicyReport(
         offeredFor(policy, "", [group.roster_id]),
         tasks,
         options.defaultWorkdir,
-        options.agentKind,
       ),
     );
   }

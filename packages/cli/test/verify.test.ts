@@ -5,8 +5,8 @@ import { describe, expect, it } from "vitest";
 import { tempDir } from "./helpers.js";
 import { runGuard } from "../src/guard.js";
 import { getLinePaths, getMachinePaths } from "../src/paths.js";
+import { SensitivityMapSchema, withFloor } from "../src/sensitivity.js";
 import { AgentRunError, type AgentKind } from "../src/runner.js";
-import { ASK_TASK } from "../src/tasks.js";
 import {
   checkAgentBinary,
   checkCodexAuth,
@@ -180,13 +180,15 @@ describe("checkAgentSpawn", () => {
     expect(c).toMatchObject({ name: "agent run", ok: true });
   });
 
-  it("invokes runFn with the verify prompt, timeout, and the read-only ask envelope", async () => {
+  it("invokes runFn with the verify prompt, timeout, and the narrowest clearance", async () => {
     const seen: unknown[] = [];
-    await checkAgentSpawn("claude", fakeWorkdir, async (kind, prompt, _p, timeoutMs, _specOverride, envelope) => {
-      seen.push(kind, prompt, timeoutMs, envelope);
+    await checkAgentSpawn("claude", fakeWorkdir, async ({ kind, prompt, timeoutMs, clearance }) => {
+      seen.push(kind, prompt, timeoutMs, clearance);
       return { text: "OK" };
     }, fakeResolveBin);
-    expect(seen).toEqual(["claude", VERIFY_PROMPT, VERIFY_TIMEOUT_MS, ASK_TASK.envelope]);
+    // "public": the doctor probe answers nobody, so it gets the clearance that
+    // reveals least rather than whatever the ask task used to carry.
+    expect(seen).toEqual(["claude", VERIFY_PROMPT, VERIFY_TIMEOUT_MS, "public"]);
   });
 
   it("classifies an auth failure into a hint", async () => {
@@ -221,7 +223,7 @@ describe("checkAgentSpawn", () => {
   // current code — there is no spec to inspect.
   it("spawns under a throwaway AGENTCALL_HOME so a real ~/.agentcall/lines/doctor-probe is never created", async () => {
     const seenSpecs: Array<{ env?: NodeJS.ProcessEnv } | undefined> = [];
-    await checkAgentSpawn("claude", fakeWorkdir, async (_kind, _prompt, _workdir, _timeoutMs, specOverride) => {
+    await checkAgentSpawn("claude", fakeWorkdir, async ({ specOverride }) => {
       seenSpecs.push(specOverride);
       return { text: "OK" };
     }, fakeResolveBin);
@@ -261,7 +263,7 @@ describe("checkAgentSpawn", () => {
   // clean up: a `finally` is the only place that covers both.
   it("removes the throwaway AGENTCALL_HOME after a successful probe", async () => {
     let seenHome: string | undefined;
-    const c = await checkAgentSpawn("claude", fakeWorkdir, async (_kind, _prompt, _workdir, _timeoutMs, specOverride) => {
+    const c = await checkAgentSpawn("claude", fakeWorkdir, async ({ specOverride }) => {
       seenHome = specOverride?.env?.AGENTCALL_HOME;
       return { text: "OK" };
     }, fakeResolveBin);
@@ -272,7 +274,7 @@ describe("checkAgentSpawn", () => {
 
   it("removes the throwaway AGENTCALL_HOME even when runFn throws", async () => {
     let seenHome: string | undefined;
-    const c = await checkAgentSpawn("claude", fakeWorkdir, async (_kind, _prompt, _workdir, _timeoutMs, specOverride) => {
+    const c = await checkAgentSpawn("claude", fakeWorkdir, async ({ specOverride }) => {
       seenHome = specOverride?.env?.AGENTCALL_HOME;
       throw new AgentRunError("boom", "agent_error");
     }, fakeResolveBin);
@@ -555,7 +557,13 @@ function realDenialStdout(): string {
   const line = getLinePaths(getMachinePaths(home, home), "probe-line");
   return runGuard(
     JSON.stringify({ tool_name: "Read", tool_input: { file_path: join(home, ".env") }, cwd: home }),
-    { line, callId: "probe", now: () => "2026-08-01T00:00:00.000Z", realpath: (p) => p, appendLine: () => {} },
+    {
+      line, callId: "probe", now: () => "2026-08-01T00:00:00.000Z", realpath: (p) => p, appendLine: () => {},
+      // Empty map: every path is secret by omission, so the .env probe below
+      // denies on sensitivity as well as on its basename. Either route emits
+      // the same stdout shape, which is the only thing this helper cares about.
+      map: withFloor(SensitivityMapSchema.parse({}), home), clearance: "internal",
+    },
   ).stdout;
 }
 

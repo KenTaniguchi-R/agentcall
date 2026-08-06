@@ -1,5 +1,5 @@
 import { execFile, execFileSync } from "node:child_process";
-import { readFileSync, statSync, writeFileSync } from "node:fs";
+import { mkdirSync, readFileSync, statSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 import { GUARD_TIMEOUT_S } from "../src/runner.js";
@@ -21,10 +21,27 @@ const logPath = (home: string, file: "tools.log" | "calls.log") =>
 // the situation the "no AGENTCALL_LINE" fail-closed path is in.
 const listenerLogPath = (home: string) => join(home, ".agentcall", "listener.log");
 
+
+// Seeds the line's sensitivity map. Without one every path classifies `secret`
+// and even an ordinary read is refused — the inversion #372 introduces, and the
+// reason these fixtures now have to say what the agent may reach rather than
+// relying on an allow-by-default floor.
+function seedMap(home: string, roots: string[]): string {
+  const dir = join(home, ".agentcall", "lines", LINE);
+  // 0o700 to match what the CLI itself creates: the log-permission assertions
+  // below check the directory the guard writes into, and a 0o755 fixture would
+  // fail them for a reason that has nothing to do with the guard.
+  mkdirSync(dir, { recursive: true, mode: 0o700 });
+  writeFileSync(join(dir, "sensitivity.json"), JSON.stringify({
+    sources: roots.map((path) => ({ path, sensitivity: "internal" })),
+  }));
+  return home;
+}
+
 type Run = { status: number; stdout: string; stderr: string };
 
 function runEntry(input: string, home: string, extraEnv: NodeJS.ProcessEnv = {}): Run {
-  const env = { ...process.env, AGENTCALL_HOME: home, AGENTCALL_CALL_ID: "call-abc", AGENTCALL_LINE: LINE, ...extraEnv };
+  const env = { ...process.env, AGENTCALL_HOME: home, AGENTCALL_CALL_ID: "call-abc", AGENTCALL_LINE: LINE, AGENTCALL_CLEARANCE: "internal", ...extraEnv };
   try {
     // Pipe stderr rather than inheriting it, so the reason text can be
     // asserted — it is what makes exit 2 blocking rather than "hook failed".
@@ -47,7 +64,7 @@ const runRaw = (raw: string, home: string): Run => runEntry(raw, home);
 // value — `run`'s extraEnv spread can only override the key, not delete it,
 // and an absent env var is a materially different case from an empty string.
 function runWithoutLine(input: string, home: string, extraEnv: NodeJS.ProcessEnv = {}): Run {
-  const env: NodeJS.ProcessEnv = { ...process.env, AGENTCALL_HOME: home, AGENTCALL_CALL_ID: "call-abc", ...extraEnv };
+  const env: NodeJS.ProcessEnv = { ...process.env, AGENTCALL_HOME: home, AGENTCALL_CALL_ID: "call-abc", AGENTCALL_CLEARANCE: "internal", ...extraEnv };
   delete env.AGENTCALL_LINE;
   try {
     const stdout = execFileSync(process.execPath, [ENTRY], {
@@ -64,7 +81,7 @@ function one(home: string, body: string): Promise<void> {
   return new Promise<void>((ok, fail) => {
     const child = execFile(
       process.execPath, [ENTRY],
-      { env: { ...process.env, AGENTCALL_HOME: home, AGENTCALL_CALL_ID: "call-abc", AGENTCALL_LINE: LINE } },
+      { env: { ...process.env, AGENTCALL_HOME: home, AGENTCALL_CALL_ID: "call-abc", AGENTCALL_LINE: LINE, AGENTCALL_CLEARANCE: "internal" } },
       (err) => (err ? fail(err) : ok()),
     );
     child.stdin?.end(body);
@@ -74,6 +91,7 @@ function one(home: string, body: string): Promise<void> {
 describe("guard-entry as a real process", () => {
   it("allows an ordinary read and writes tools.log", () => {
     const home = tempDir("guard-");
+    seedMap(home, [home]);
     const r = run(
       { tool_name: "Read", tool_input: { file_path: join(home, "a.ts") }, cwd: home },
       home,
@@ -92,6 +110,7 @@ describe("guard-entry as a real process", () => {
 
   it("spools a stable pre-tool id without arguments and without changing the verdict", () => {
     const home = tempDir("guard-");
+    seedMap(home, [home]);
     const spool = join(home, "tool-events.jsonl");
     writeFileSync(spool, "", { mode: 0o600 });
     const r = run({
@@ -225,6 +244,7 @@ describe("guard-entry requires AGENTCALL_LINE", () => {
 
   it("fails closed and records guard_unwired on a malformed line name too", () => {
     const home = tempDir("guard-");
+    seedMap(home, [home]);
     const r = run(
       { tool_name: "Read", tool_input: { file_path: join(home, "a.ts") }, cwd: home },
       home,

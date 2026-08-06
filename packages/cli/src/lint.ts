@@ -63,20 +63,19 @@ export function buildCardReport(cfg: LineConfig, p: LinePaths): CardReport {
   if (blocked.length > 0) menu.push(`  Blocked: ${blocked.join(", ")}`);
 
   // codex has no per-tool allowlist (see runner.ts's codex branch): only the
-  // `write` cap maps to anything (workspace-write vs read-only sandbox
-  // level). A task's `tools:` list excluding "exec" promises no shell
-  // execution, but under codex that promise doesn't hold — surface it here
-  // rather than leave the owner to discover it the hard way.
+  // Claude is held to a read-only tool list; codex has no per-tool restriction
+  // at all. `--sandbox read-only` stops it writing, but not reading or running
+  // commands, and the guard runs in observe mode there — so a codex line's
+  // answers are bounded by the sandbox and the clearance check on the reply,
+  // not by the tool list. Surface it rather than leave the owner to find out.
   if (cfg.agent_kind === "codex") {
     for (const t of tasks) {
       if (t.id === ASK_TASK.id) continue;
-      if (!t.envelope.caps.includes("exec")) {
-        notices.push(
-          `task "${t.id}": codex has no per-tool restriction, so this task can still execute arbitrary ` +
-          `shell commands regardless of its \`tools:\` list — only the \`write\` cap has any real effect ` +
-          `(it toggles codex's read-only vs workspace-write sandbox mode)`,
-        );
-      }
+      notices.push(
+        `task "${t.id}": codex has no per-tool restriction, so it can still run shell commands. ` +
+        `--sandbox read-only prevents writes but not reads or execution, and the guard only ` +
+        `observes on codex — the clearance check on the reply is what bounds what leaves.`,
+      );
     }
   }
 

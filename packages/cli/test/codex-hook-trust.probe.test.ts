@@ -111,18 +111,16 @@ describe.skipIf(!enabled)("codex exact-hook trust", () => {
     const state = mkdtempSync(join(tmpdir(), "agentcall-codex-tool-state-"));
     const spool = createToolEventSpool("probe-tool-lifecycle", state)!;
     try {
-      const spec = buildSpawnSpec(
-        "codex",
-        "Use the shell tool exactly once to run pwd, then reply with the single word done.",
+      const spec = buildSpawnSpec({
+        kind: "codex",
+        prompt: "Use the shell tool exactly once to run pwd, then reply with the single word done.",
         workdir,
-        () => "codex",
-        { caps: ["read"] },
-        "probe-tool-lifecycle",
-        "probe-line",
-        undefined,
-        undefined,
-        spool.file,
-      );
+        resolveBin: () => "codex",
+        callId: "probe-tool-lifecycle",
+        lineName: "probe-line",
+        clearance: "internal",
+        toolTelemetryFile: spool.file,
+      });
       spec.env = { ...spec.env, AGENTCALL_HOME: state };
       const result = spawnSync(spec.cmd, spec.args, {
         cwd: spec.cwd, env: spec.env, encoding: "utf8", timeout: 180_000,
@@ -168,10 +166,10 @@ describe.skipIf(!enabled)("codex exact-hook trust", () => {
         return result;
       };
       const specFor = (resume?: string) =>
-        buildSpawnSpec(
-          "codex", prompt, workdir, () => "codex", { caps: ["read"] },
-          "probe-boundary", "probe-line", resume,
-        );
+        buildSpawnSpec({
+          kind: "codex", prompt, workdir, resolveBin: () => "codex",
+          callId: "probe-boundary", lineName: "probe-line", clearance: "internal", resume,
+        });
       const eventsFrom = (spec: ReturnType<typeof buildSpawnSpec>) => {
         const result = spawnSpec(spec);
         expect(result.status, result.stderr).toBe(0);

@@ -6,6 +6,7 @@ import { authOf, publishEncryptionKey, publishIdentityKey, registerHandle } from
 import { publishCard } from "../card.js";
 import { resolveLineWorkdir, type LineConfig } from "../config.js";
 import { assertValidLineName, listLines, readyLines, saveLineConfig } from "../lines.js";
+import { defaultSensitivityMap } from "../sensitivity.js";
 import { listenerPathDirs } from "../listener-path.js";
 import { getLinePaths, type LinePaths, type MachinePaths } from "../paths.js";
 import { generateIdentityKeys, type StoredKeys } from "../keys.js";
@@ -146,6 +147,13 @@ export async function addLine(m: MachinePaths, opts: AddLineOpts): Promise<{ add
     ? { org, handle: opts.handle, token, relay: opts.relay, agent_kind: agentKind }
     : { org, handle: opts.handle, token, relay: opts.relay };
   saveLineConfig(paths, cfg);
+
+  // A line with no sensitivity map classifies every source `secret` and can
+  // therefore answer nothing. Seeding it with the repository setup ran inside
+  // is what makes a fresh line useful without making it generous: outside a
+  // repository this writes an empty map, and doctor reports the line as unable
+  // to answer rather than the line silently returning nothing.
+  writeJsonAtomic(paths.sensitivityFile, defaultSensitivityMap(process.cwd(), paths.machine.userHome));
 
   const publishKeys = opts.publishKeysFn ?? publishStoredKeys;
   try {

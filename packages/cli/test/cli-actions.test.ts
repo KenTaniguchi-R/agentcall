@@ -857,7 +857,6 @@ describe.sequential("CLI command actions", () => {
       "---",
       "name: Deploy production",
       "description: Build and deploy the service.",
-      "tools: [read, write, exec]",
       "---",
       "Deploy carefully.",
     ].join("\n"));
@@ -876,8 +875,9 @@ describe.sequential("CLI command actions", () => {
     expect(out.stdout).toContain("Effective capability policy");
     expect(out.stdout).toContain("does not restrict them to an AgentCall domain allowlist");
     expect(out.stdout).toMatch(new RegExp(`Everyone registered[\\s\\S]*ask — Ask a question[\\s\\S]*Working directory: ${paths.shareDir}`));
-    expect(out.stdout).toMatch(/Named caller rule: alice \(before roster grants\)[\s\S]*deploy — Deploy production[\s\S]*exec — run shell commands/);
-    expect(out.stdout).toContain("WARNING: exec can read, change, and send data outside this working directory");
+    expect(out.stdout).toMatch(/Named caller rule: alice \(before roster grants\)[\s\S]*deploy — Deploy production[\s\S]*inspect files — answers are read-only/);
+    // The exec warning is gone with the capability that caused it (#372).
+    expect(out.stdout).not.toContain("WARNING: exec");
     expect(out.stdout).toMatch(/Named caller rule: blocked-bot \(before roster grants\)[\s\S]*BLOCKED — no task can run/);
   });
 

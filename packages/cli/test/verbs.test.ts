@@ -5,7 +5,7 @@ import { ASK_TASK, type Task } from "../src/tasks.js";
 
 const meet: Task = {
   id: "schedule-meeting", name: "Schedule", description: "Book a time.",
-  examples: [], keywords: [], envelope: { caps: ["read"] }, threadable: true, skill: "",
+  examples: [], keywords: [], threadable: true, skill: "",
 };
 const TASKS = [ASK_TASK, meet];
 const base: Policy = { description: "", default_offer: ["ask"], callers: {}, groups: {} };
