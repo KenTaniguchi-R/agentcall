@@ -2,22 +2,34 @@
 // particular source contains. Sensitivity — how sensitive a source is — lives
 // in sensitivity.ts.
 //
-// This replaces policy.ts's task-menu machinery (`default_offer`, per-caller
-// `offer`, the derived menu). A task no longer has to be individually granted:
-// it declares which sources it reads, and clearance decides whether the result
+// This module is resolution only — the shape of a clearance table and the rules
+// for reading one. The FILE that happens to hold it (loading, the managed
+// layer, assertions, saving) is policy.ts's job, and policy.ts parses with the
+// schema declared here rather than a second one of its own. That split is what
+// let #379 delete the transitional `loadClearancePolicy` projection that used
+// to sit at the bottom of this file: it existed only because two different
+// schemas described one file.
+//
+// This replaced policy.ts's task-menu machinery (`default_offer`, per-caller
+// `offer`, the derived menu). A task is no longer individually granted: it
+// declares which sources it reads, and clearance decides whether the result
 // may reach this caller. One question instead of two lists.
 import { z } from "zod";
 import { ROSTER_ID_RE } from "@benree/agentcall-shared";
 import type { Sensitivity } from "./sensitivity.js";
 
-const GROUP_NAME_RE = /^[a-z0-9][a-z0-9-]{0,63}$/;
+// Exported so policy.ts's assertions constrain group names identically. Two
+// copies of this pattern would drift into a file that parses but whose
+// assertions cannot name half its groups.
+export const GROUP_NAME_RE = /^[a-z0-9][a-z0-9-]{0,63}$/;
 
 // `secret` is deliberately absent. It means "never leaves this machine", so a
 // grantable `secret` would turn the top of the lattice into a bypass any policy
 // edit could hand out. sensitivity.ts's `permits` refuses secret content
 // regardless; excluding it here makes the invariant structural rather than
 // merely enforced downstream.
-const GrantableClearance = z.enum(["public", "internal"]);
+export const GrantableClearance = z.enum(["public", "internal"]);
+export type GrantableClearanceType = z.infer<typeof GrantableClearance>;
 
 export const DEFAULT_CLEARANCE: Sensitivity = "public";
 
@@ -86,36 +98,16 @@ export function clearanceFor(
   return grants.reduce((acc, g) => (RANK[g] > RANK[acc] ? g : acc), "public" as Sensitivity);
 }
 
-// Reads clearance out of policy.json.
-//
-// Deliberately lenient where ClearancePolicySchema is strict: policy.json still
-// carries the task-menu keys (default_offer, per-caller offer) that #372 will
-// delete, and a strict parse would reject every existing file. This picks only
-// the clearance-relevant keys and ignores the rest, so both shapes coexist
-// while the menu is being removed. Delete the projection with the menu.
-export function loadClearancePolicy(file: string, read: (f: string) => string): ClearancePolicy {
-  let parsed: unknown;
-  try {
-    parsed = JSON.parse(read(file));
-  } catch (error) {
-    if ((error as NodeJS.ErrnoException).code === "ENOENT") {
-      return ClearancePolicySchema.parse({});
-    }
-    throw new Error(`policy is invalid: ${String(error)}`, { cause: error });
-  }
-  const raw = (parsed ?? {}) as Record<string, unknown>;
-  const callers = (raw.callers ?? {}) as Record<string, Record<string, unknown>>;
-  const groups = (raw.groups ?? {}) as Record<string, Record<string, unknown>>;
-  return ClearancePolicySchema.parse({
-    ...(typeof raw.description === "string" ? { description: raw.description } : {}),
-    ...(raw.default_clearance !== undefined ? { default_clearance: raw.default_clearance } : {}),
-    callers: Object.fromEntries(Object.entries(callers).map(([handle, entry]) => [handle, {
-      ...(entry?.clearance !== undefined ? { clearance: entry.clearance } : {}),
-      ...(entry?.block !== undefined ? { block: entry.block } : {}),
-    }])),
-    groups: Object.fromEntries(Object.entries(groups).map(([name, entry]) => [name, {
-      roster_id: entry?.roster_id,
-      ...(entry?.clearance !== undefined ? { clearance: entry.clearance } : {}),
-    }])),
-  });
+/**
+ * Lower a grant to an administrator ceiling.
+ *
+ * The managed-policy analogue of `clearanceFor`'s union: where the owner
+ * combines grants upward, the administrator clamps the result downward. Used by
+ * policy.ts's managed layer, and idempotent — applying a ceiling twice cannot
+ * change a verdict, which is what makes the layer safe to compose.
+ */
+export function capClearance(
+  value: GrantableClearanceType, ceiling: GrantableClearanceType,
+): GrantableClearanceType {
+  return RANK[value] > RANK[ceiling] ? ceiling : value;
 }

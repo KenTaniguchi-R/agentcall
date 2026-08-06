@@ -103,17 +103,23 @@ export const AGENT_TIMEOUT_MS = 300_000;
 // so this limit does not have to carry that weight.
 export const RATE_LIMIT_PER_HOUR = 30;
 
+// `task_not_offered` was removed by #379 with the task menu it described.
+// Nothing can emit it any more: a task is no longer individually granted, so a
+// caller is either blocked outright — which refuses before any task is named —
+// or the requested task exists on disk and resolves. Whether the ANSWER may
+// reach them is a separate, later decision made by clearance, and it is
+// reported through the reply's own fixed refusal reason, not as an error code.
 export const ErrorCode = z.enum([
   "unknown_handle", "offline", "busy", "timeout", "canceled", "agent_error",
   "unauthorized", "rate_limited", "message_too_large", "protocol_error",
-  "blocked", "task_not_offered", "task_unknown", "context_unknown",
+  "blocked", "task_unknown", "context_unknown",
 ]);
 export const RelayOperationalErrorCode = z.enum([
   "unknown_handle", "offline", "timeout", "canceled", "unauthorized",
   "rate_limited", "message_too_large", "protocol_error",
 ]);
 export const PeerFailureCode = z.enum([
-  "busy", "timeout", "agent_error", "blocked", "task_not_offered", "task_unknown", "context_unknown",
+  "busy", "timeout", "agent_error", "blocked", "task_unknown", "context_unknown",
 ]);
 
 export const CallStatus = z.object({

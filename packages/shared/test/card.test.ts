@@ -29,8 +29,23 @@ describe("CardTask.keywords", () => {
 
   it("requires the complete current upload shape", () => {
     expect(CardUpload.safeParse({
-      description: "d", agent_kind: "claude", tasks: [TASK], default_offer: ["ask"],
+      description: "d", agent_kind: "claude", tasks: [TASK],
     }).success).toBe(false);
+  });
+
+  // #379 deleted the per-caller menu from the card. A file still carrying it
+  // must fail rather than parse with the menu silently ignored — a card that
+  // quietly drops `grants` would advertise every task to callers the owner
+  // believed were restricted.
+  it("rejects an upload still carrying the deleted task menu", () => {
+    const base = { description: "d", agent_kind: "claude", tasks: [TASK], blocked: [] };
+    for (const menu of [
+      { default_offer: ["ask"] },
+      { grants: { mia: ["ask"] } },
+      { group_grants: { ["g".repeat(22)]: ["ask"] } },
+    ]) {
+      expect(CardUpload.safeParse({ ...base, ...menu }).success).toBe(false);
+    }
   });
 });
 
@@ -41,51 +56,31 @@ const UPLOAD = CardUpload.parse({
     { id: "adr", name: "ADR", description: "Why.", examples: [], keywords: [] },
     { id: "payroll", name: "Payroll", description: "Secret.", examples: [], keywords: [] },
   ],
-  default_offer: ["ask"],
-  // mia's grants are deliberately out of card order (payroll before adr):
-  // with a single granted task, grant order and card order always coincide
-  // and the "card order, not grant order" test below can't tell them apart.
-  // With two, a grant-order implementation would produce ask, payroll, adr —
-  // distinct from the card-order ask, adr, payroll both tests assert below.
-  grants: { mia: ["payroll", "adr"] },
-  group_grants: { ["g".repeat(22)]: ["adr"] },
   blocked: ["blocked-user"],
 });
 
 describe("visibleTasks", () => {
-  it("gives an anonymous viewer only default_offer", () => {
-    expect(visibleTasks(UPLOAD, "").map((t) => t.id)).toEqual(["ask"]);
+  // The whole rule after #379: blocked sees nothing, everyone else sees
+  // everything. A task is no longer individually granted, so there is no
+  // per-viewer difference left for the card to encode — what an ANSWER may
+  // contain is decided on the callee's machine, by clearance, and is never
+  // published here.
+  it("gives every unblocked viewer the whole task list", () => {
+    for (const viewer of ["", "mia", "bob"]) {
+      expect(visibleTasks(UPLOAD, viewer).map((t) => t.id)).toEqual(["ask", "adr", "payroll"]);
+    }
   });
-  it("unions default_offer with the viewer's own grants", () => {
+  it("gives a blocked viewer nothing at all", () => {
+    expect(visibleTasks(UPLOAD, "blocked-user")).toEqual([]);
+  });
+  it("returns tasks in card order", () => {
     expect(visibleTasks(UPLOAD, "mia").map((t) => t.id)).toEqual(["ask", "adr", "payroll"]);
   });
-  it("never leaks a task granted to someone else", () => {
-    expect(visibleTasks(UPLOAD, "bob").map((t) => t.id)).toEqual(["ask"]);
-  });
-  it("unions only relay-attested group grants", () => {
-    expect(visibleTasks(UPLOAD, "bob", ["g".repeat(22)]).map((t) => t.id)).toEqual(["ask", "adr"]);
-    expect(visibleTasks(UPLOAD, "bob", ["x".repeat(22)]).map((t) => t.id)).toEqual(["ask"]);
-  });
-  it("lets an individual block outrank defaults and group grants", () => {
-    expect(visibleTasks(UPLOAD, "blocked-user", ["g".repeat(22)])).toEqual([]);
-  });
-  it("rejects more than the bounded number of group grants", () => {
-    const group_grants = Object.fromEntries(Array.from(
-      { length: 51 }, (_, i) => [`${String(i).padStart(2, "0")}${"g".repeat(20)}`, ["ask"]],
-    ));
-    expect(CardUpload.safeParse({ ...UPLOAD, group_grants }).success).toBe(false);
-  });
-  it("returns tasks in card order, not grant order", () => {
-    // mia's grants are ["payroll", "adr"] — grant order. A buggy
-    // implementation that appended grants in THAT order (rather than
-    // filtering the card's own task list) would produce
-    // ["ask", "payroll", "adr"] here instead.
-    expect(visibleTasks(UPLOAD, "mia").map((t) => t.id)).toEqual(["ask", "adr", "payroll"]);
-  });
-  // Regression: `grants` is a zod record inheriting Object.prototype, and
-  // HANDLE_RE accepts "constructor". A bare grants[viewer] lookup returns the
-  // Object constructor, which is not iterable and 500s the caller.
-  it("does not hand back Object.prototype members for a viewer named constructor", () => {
-    expect(visibleTasks(UPLOAD, "constructor").map((t) => t.id)).toEqual(["ask"]);
+  // Regression, kept from the menu era: HANDLE_RE accepts "constructor", and
+  // the old `grants[viewer]` lookup handed back the Object constructor — not
+  // iterable, 500ing the endpoint. There is no record lookup left to trip on,
+  // and this pins that a prototype-shaped viewer stays an ordinary one.
+  it("treats a viewer named constructor as an ordinary viewer", () => {
+    expect(visibleTasks(UPLOAD, "constructor").map((t) => t.id)).toEqual(["ask", "adr", "payroll"]);
   });
 });

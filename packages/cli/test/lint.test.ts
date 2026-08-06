@@ -45,27 +45,21 @@ describe("buildCardReport", () => {
     expect(r.problems.join("\n")).toContain("broken");
   });
 
-  it("flags policy references to tasks that do not exist", () => {
+  // Replaces "flags policy references to tasks that do not exist" and "flags
+  // group grants to missing tasks even when an assertion accepts them". Both
+  // pinned the dangling-grant check, which #379 removed along with the only
+  // way policy.json could name a task at all. The failure they guarded against
+  // is now unrepresentable rather than merely unreported — pinned here as a
+  // parse failure, which is the stronger outcome.
+  it("rejects a policy that still tries to name a task, at parse time", () => {
     const h = home();
     const p = linePaths(h);
     writeFileSync(p.policyFile, JSON.stringify({
       default_offer: ["ask", "gone"], callers: { mia: { offer: ["also-gone"], block: false } },
     }));
     const r = buildCardReport(cfg, p);
-    expect(r.problems.join("\n")).toContain('"gone"');
-    expect(r.problems.join("\n")).toContain('"also-gone"');
-  });
-
-  it("flags group grants to missing tasks even when an assertion accepts them", () => {
-    const h = home();
-    const p = linePaths(h);
-    writeFileSync(p.policyFile, JSON.stringify({
-      default_offer: ["ask"],
-      groups: { eng: { roster_id: "e".repeat(22), offer: ["group-gone"] } },
-      tests: [{ caller: "mia", groups: ["eng"], accept: ["group-gone"] }],
-    }));
-    const r = buildCardReport(cfg, p);
-    expect(r.problems.join("\n")).toContain('grant for group eng references "group-gone"');
+    expect(r.problems.join("\n")).toContain("policy.json");
+    expect(r.menu).toEqual([]);
   });
 
   it("reports a malformed policy file as a problem instead of throwing", () => {
@@ -78,10 +72,10 @@ describe("buildCardReport", () => {
   it("reports a broken policy assertion as a problem", () => {
     const p = linePaths(home());
     writeFileSync(p.policyFile, JSON.stringify({
-      default_offer: ["ask"], tests: [{ caller: "mia", deny: ["ask"] }],
+      default_clearance: "public", tests: [{ caller: "mia", expect_clearance: "internal" }],
     }));
     const r = buildCardReport(cfg, p);
-    expect(r.problems.join("\n")).toMatch(/assertion 1.*ask/i);
+    expect(r.problems.join("\n")).toMatch(/assertion 1.*expected internal.*got public/i);
   });
 
   it("is quiet after a push and stale after a change", async () => {
@@ -90,7 +84,7 @@ describe("buildCardReport", () => {
     await publishCard(cfg, p, async () => {});
     expect(buildCardReport(cfg, p).notices).toEqual([]);
     writeSkill(h, "intro", "---\ndescription: d\n---\nbody\n");
-    writeFileSync(p.policyFile, JSON.stringify({ default_offer: ["ask", "intro"], callers: {} }));
+    writeFileSync(p.policyFile, JSON.stringify({ default_clearance: "public", callers: {} }));
     const r = buildCardReport(cfg, p);
     expect(r.notices.join("\n")).toContain("out of date");
   });
@@ -107,7 +101,7 @@ describe("buildCardReport", () => {
     const h = home();
     writeSkill(h, "intro", "---\ndescription: d\n---\n");
     const p = linePaths(h);
-    writeFileSync(p.policyFile, JSON.stringify({ default_offer: ["ask", "intro"], callers: {} }));
+    writeFileSync(p.policyFile, JSON.stringify({ default_clearance: "public", callers: {} }));
     const codexCfg: LineConfig = { ...cfg, agent_kind: "codex" };
     const r = buildCardReport(codexCfg, p);
     expect(r.notices.join("\n")).toMatch(/intro/);
@@ -118,7 +112,7 @@ describe("buildCardReport", () => {
     const h = home();
     writeSkill(h, "intro", "---\ndescription: d\n---\n");
     const p = linePaths(h);
-    writeFileSync(p.policyFile, JSON.stringify({ default_offer: ["ask", "intro"], callers: {} }));
+    writeFileSync(p.policyFile, JSON.stringify({ default_clearance: "public", callers: {} }));
     const r = buildCardReport(cfg, p);
     expect(r.notices.join("\n")).not.toMatch(/codex/i);
   });
@@ -131,7 +125,7 @@ describe("buildCardReport", () => {
     const h = home();
     writeSkill(h, "runner", "---\ndescription: d\n---\n");
     const p = linePaths(h);
-    writeFileSync(p.policyFile, JSON.stringify({ default_offer: ["ask", "runner"], callers: {} }));
+    writeFileSync(p.policyFile, JSON.stringify({ default_clearance: "public", callers: {} }));
     const codexCfg: LineConfig = { ...cfg, agent_kind: "codex" };
     const r = buildCardReport(codexCfg, p);
     const notices = r.notices.join("\n");
@@ -139,28 +133,43 @@ describe("buildCardReport", () => {
     expect(notices).not.toMatch(/task "ask"/);
   });
 
-  it("lists per-caller grants and blocked callers in the menu", () => {
+  // Was "lists per-caller grants and blocked callers in the menu". The grant
+  // half is gone with the menu; what the owner needs to read now is each named
+  // caller's RESOLVED clearance, which is what a block actually changes.
+  it("lists the task list, the default clearance, and each named caller's resolved level", () => {
     const h = home();
     const p = linePaths(h);
     writeSkill(h, "intro", "---\ndescription: d\n---\n");
     writeFileSync(p.policyFile, JSON.stringify({
-      default_offer: ["ask"],
-      callers: { mia: { offer: ["intro"], block: false }, spammer: { offer: [], block: true } },
+      default_clearance: "public",
+      callers: { mia: { clearance: "internal" }, spammer: { clearance: "internal", block: true } },
     }));
     const text = buildCardReport(cfg, p).menu.join("\n");
-    expect(text).toContain("mia: intro");
-    expect(text).toContain("Blocked: spammer");
+    expect(text).toContain("Every caller who is not blocked can request:");
+    expect(text).toContain("intro — d");
+    expect(text).toContain("Anyone registered can be told: public");
+    expect(text).toContain("mia: internal");
+    // Resolved, not stored: spammer's saved `internal` is inert under a block,
+    // and printing it would tell the owner a grant is live when it is not.
+    expect(text).toContain("spammer: blocked");
   });
 
-  it("renders the administrator-filtered menu rather than raw user grants", () => {
+  // Was "renders the administrator-filtered menu rather than raw user grants".
+  // `allowed_tasks` became `max_clearance` in #379 — same administrator
+  // ceiling, applied to how much a caller may be told rather than to which
+  // tasks they may run — so this pins the same property on the new lever.
+  it("renders the administrator-capped clearance rather than the raw user grant", () => {
     const h = home();
     const p = managedLinePaths(h);
     writeSkill(h, "intro", "---\ndescription: d\n---\n");
-    writeFileSync(p.policyFile, JSON.stringify({ default_offer: ["ask", "intro"] }));
-    writeFileSync(p.machine.managedPolicyFile, JSON.stringify({ version: 1, allowed_tasks: ["ask"] }));
+    writeFileSync(p.policyFile, JSON.stringify({
+      default_clearance: "internal", callers: { mia: { clearance: "internal" } },
+    }));
+    writeFileSync(p.machine.managedPolicyFile, JSON.stringify({ version: 1, max_clearance: "public" }));
 
     const text = buildCardReport(cfg, p).menu.join("\n");
-    expect(text).toContain("ask");
-    expect(text).not.toContain("intro");
+    expect(text).toContain("Anyone registered can be told: public");
+    expect(text).toContain("mia: public");
+    expect(text).not.toContain("internal");
   });
 });

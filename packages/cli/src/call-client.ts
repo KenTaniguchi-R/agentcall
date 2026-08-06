@@ -37,7 +37,6 @@ const HUMAN: Record<string, string> = {
   message_too_large: "Your message is too large (64KB max).",
   protocol_error: "Protocol error.",
   blocked: "This agent's owner has blocked calls from your handle.",
-  task_not_offered: "That task isn't offered to you.",
   task_unknown: "That task doesn't exist on this agent.",
   context_unknown: "That conversation is no longer available. Start a new call.",
 };
@@ -53,8 +52,8 @@ export interface CallOpts {
   traceparent?: string;
   // Interval for the caller-side keepalive ping below; overridable for tests.
   pingIntervalMs?: number;
-  // Task id from the callee's card to perform; omitted lets the callee's
-  // policy pick a default (single offered task, or "ask").
+  // Task id from the callee's card to perform; omitted lands on the callee's
+  // built-in "ask" task.
   task?: string;
   /** Internal test seams; production always uses the real trust/key stores. */
   keyDeps?: {

@@ -2,7 +2,6 @@ import type { Command } from "commander";
 import { assertCallableLine } from "../config.js";
 import { getMachinePaths } from "../paths.js";
 import { resolveLine, type LineContext } from "../line-context.js";
-import { loadTasks } from "../tasks.js";
 import { execVerb, type Verb } from "../verbs.js";
 import { loadUserPolicy, savePolicy, validatePolicy } from "../policy.js";
 import { publishCard } from "../card.js";
@@ -19,7 +18,7 @@ async function runPolicyVerb(verb: Verb, a: string, b: string | undefined, opts:
     return;
   }
   try {
-    const { policy, lines } = execVerb(loadUserPolicy(ctx.paths), loadTasks(ctx.paths), verb, a, b);
+    const { policy, lines } = execVerb(loadUserPolicy(ctx.paths), verb, a, b);
     validatePolicy(ctx.paths, policy);
     savePolicy(ctx.paths, policy);
     for (const line of lines) console.log(line);
@@ -34,23 +33,43 @@ async function runPolicyVerb(verb: Verb, a: string, b: string | undefined, opts:
   }
 }
 
+interface ClearanceOptions { line?: string; default?: string; reset?: boolean }
+
+// One command, three forms, because there is exactly one thing to set and
+// three scopes to set it at. Which form was used is decided here rather than
+// in verbs.ts, so execVerb stays a pure function of an unambiguous verb.
+async function clearanceVerb(
+  handle: string | undefined, level: string | undefined, o: ClearanceOptions,
+): Promise<void> {
+  if (o.default !== undefined) {
+    if (handle !== undefined) {
+      fail(new Error("clearance --default sets the line default and takes no handle."));
+      return;
+    }
+    await runPolicyVerb("clearance-default", o.default, undefined, o);
+    return;
+  }
+  if (handle === undefined) {
+    fail(new Error("clearance needs a handle, or --default <level>."));
+    return;
+  }
+  await runPolicyVerb(o.reset ? "clearance-reset" : "clearance", handle, o.reset ? undefined : level, o);
+}
+
 export function register(program: Command): void {
-  program.command("allow").description("grant a caller an extra task (and republish your card)")
-    .argument("<handle>").argument("<task-id>").option("--line <name>", "line to use (defaults to the primary line)")
-    .action((handle: string, taskId: string, o: { line?: string }) => runPolicyVerb("allow", handle, taskId, o));
-  program.command("revoke").description("remove a caller's task grant")
-    .argument("<handle>").argument("<task-id>").option("--line <name>", "line to use (defaults to the primary line)")
-    .action((handle: string, taskId: string, o: { line?: string }) => runPolicyVerb("revoke", handle, taskId, o));
+  program.command("clearance")
+    .description("set how much a caller may be told (and republish your card)")
+    .argument("[handle]", "caller handle; omit when using --default")
+    .argument("[level]", "public or internal; omit when using --reset")
+    .option("--default <level>", "set the level anyone registered gets, instead of one caller")
+    .option("--reset", "drop a caller's own level, returning them to the line default")
+    .option("--line <name>", "line to use (defaults to the primary line)")
+    .action((handle: string | undefined, level: string | undefined, o: ClearanceOptions) =>
+      clearanceVerb(handle, level, o));
   program.command("block").description("refuse all calls from a handle")
     .argument("<handle>").option("--line <name>", "line to use (defaults to the primary line)")
     .action((handle: string, o: { line?: string }) => runPolicyVerb("block", handle, undefined, o));
   program.command("unblock").description("lift a block")
     .argument("<handle>").option("--line <name>", "line to use (defaults to the primary line)")
     .action((handle: string, o: { line?: string }) => runPolicyVerb("unblock", handle, undefined, o));
-  program.command("offer").description("offer a task to any registered caller")
-    .argument("<task-id>").option("--line <name>", "line to use (defaults to the primary line)")
-    .action((taskId: string, o: { line?: string }) => runPolicyVerb("offer", taskId, undefined, o));
-  program.command("unoffer").description("stop offering a task publicly")
-    .argument("<task-id>").option("--line <name>", "line to use (defaults to the primary line)")
-    .action((taskId: string, o: { line?: string }) => runPolicyVerb("unoffer", taskId, undefined, o));
 }

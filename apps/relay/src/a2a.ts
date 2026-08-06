@@ -7,7 +7,6 @@ import {
 } from "@benree/agentcall-shared";
 import { authenticateRequest, identityObjectName } from "./tenant.js";
 import { resolveAgentId } from "./identity.js";
-import { sharedRosterIds } from "./groups.js";
 import { NATIVE_READ } from "./ratelimit/index.js";
 import { parseStoredCard } from "./stored-card.js";
 import type { RelayAppEnv } from "./middleware.js";
@@ -161,7 +160,8 @@ export function mountA2A(app: Hono<RelayAppEnv>): void {
     const card = toAgentCard({
       handle,
       description: upload.description,
-      tasks: visibleTasks(upload, viewer, await sharedRosterIds(c.env.DB, org, viewer, handle)),
+      // No roster lookup: a card carries no per-group task grants since #379.
+      tasks: visibleTasks(upload, viewer),
       baseUrl: `${origin}/v1/a2a/${handle}`,
     });
 

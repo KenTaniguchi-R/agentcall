@@ -270,13 +270,13 @@ describe("callAgent", () => {
     const relay = await fakeRelay((ws) => ws.on("message", async (raw) => {
       if (String(raw) === "ping") return;
       ws.send(JSON.stringify(await fx.outcomeFrame(JSON.parse(String(raw)), {
-        kind: "failure", code: "task_not_offered",
+        kind: "failure", code: "task_unknown",
         detail: "\u001b[2Jchoose another", offered: ["ask", "owner-introduction"],
       })));
     }));
     fx = await fixture(relay, { task: "deploy" });
     const error = await callAgent(fx.opts).then(() => null, (caught) => caught as CallError);
-    expect(error).toMatchObject({ code: "task_not_offered", origin: "peer", offered: ["ask", "owner-introduction"] });
+    expect(error).toMatchObject({ code: "task_unknown", origin: "peer", offered: ["ask", "owner-introduction"] });
     expect(error?.message).toContain("Authenticated peer response");
     expect(error?.message).not.toContain("\u001b");
   });

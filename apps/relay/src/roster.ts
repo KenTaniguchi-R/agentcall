@@ -7,7 +7,7 @@ import { constantTimeEqual, generateToken, sha256Hex } from "./auth.js";
 import {
   AdminSecretRequest, DEFAULT_ROSTER_JOIN_KEY_EXPIRY_DAYS, ExpelRosterRequest,
   IssueRosterJoinKeyRequest, JoinRosterRequest, MAX_ACTIVE_ROSTER_JOIN_KEYS,
-  MAX_BUNDLE_TASKS_PER_CARD, MAX_CALLER_GROUPS, MAX_LISTED_ROSTER_JOIN_KEYS, MAX_ROSTER_MEMBERS,
+  MAX_BUNDLE_TASKS_PER_CARD, MAX_LISTED_ROSTER_JOIN_KEYS, MAX_ROSTER_MEMBERS,
   randomBase64Url, RevokeRosterJoinKeyRequest, ROSTER_ID_RE, visibleTasks,
 } from "@benree/agentcall-shared";
 import { jsonBody, rateLimit, type RelayAppEnv } from "./middleware.js";
@@ -430,36 +430,30 @@ export function mountRoster(app: Hono<RelayAppEnv>): void {
     ).bind(id, org, viewer).first();
     if (!member) return c.json(NOT_FOUND, 404);
 
-    // One query, never one shared-group query per member. ranked_shared mirrors
-    // sharedRosterIds exactly: roster_id ascending, first MAX_CALLER_GROUPS.
-    // ROW_NUMBER applies the cap independently for each target before
-    // GROUP_CONCAT, so discovery cannot attest a group call admission omits.
+    // One query, never one per member.
+    //
+    // This used to carry two further CTEs computing each target's shared
+    // rosters under a windowed cap, because visibleTasks needed them to apply
+    // per-group task grants. #379 deleted those grants from the card, so the
+    // column had no reader left and the machinery went with it. What it was
+    // guarding — that discovery cannot attest a group that call admission
+    // omits — is now moot rather than merely satisfied: discovery attests
+    // nothing, because nothing here varies by group.
     const { results } = await c.env.DB.prepare(
       "WITH target_handles AS (" +
         "SELECT handle, org FROM roster_members WHERE roster_id = ? AND org = ?" +
-      "), ranked_shared AS (" +
-        "SELECT target.handle, viewer_membership.roster_id, " +
-          "ROW_NUMBER() OVER (PARTITION BY target.handle ORDER BY viewer_membership.roster_id) AS group_rank " +
-        "FROM target_handles target " +
-        "JOIN roster_members shared ON shared.org = target.org AND shared.handle = target.handle " +
-        "JOIN roster_members viewer_membership ON viewer_membership.org = shared.org " +
-          "AND viewer_membership.roster_id = shared.roster_id AND viewer_membership.handle = ?" +
-      "), capped_shared AS (" +
-        "SELECT handle, GROUP_CONCAT(roster_id) AS shared_rosters FROM ranked_shared " +
-        "WHERE group_rank <= ? GROUP BY handle" +
       ") " +
       // Two hops via handles, temporarily: roster membership is still keyed by
       // address while cards have moved to the identity (#154 slice 5). The
       // middle join disappears when membership moves in slice 6 and this
       // becomes members.agent_id -> cards.agent_id directly.
-      "SELECT target.handle AS handle, c.card_json, c.updated_at, capped_shared.shared_rosters " +
+      "SELECT target.handle AS handle, c.card_json, c.updated_at " +
         "FROM target_handles target " +
         "JOIN handles h ON h.org = target.org AND h.handle = target.handle " +
         "JOIN cards c ON c.org = h.org AND c.agent_id = h.agent_id " +
-        "LEFT JOIN capped_shared ON capped_shared.handle = target.handle " +
         "ORDER BY target.handle",
-    ).bind(id, org, viewer, MAX_CALLER_GROUPS).all<{
-      handle: string; card_json: string; updated_at: number; shared_rosters: string | null;
+    ).bind(id, org).all<{
+      handle: string; card_json: string; updated_at: number;
     }>();
 
     const entries = [];
@@ -471,7 +465,7 @@ export function mountRoster(app: Hono<RelayAppEnv>): void {
         skipped++;
         continue;
       }
-      const visible = visibleTasks(upload, viewer, row.shared_rosters?.split(",") ?? []);
+      const visible = visibleTasks(upload, viewer);
       // Zero visible tasks means omitted entirely, not an empty entry: an
       // entry carrying a handle would disclose membership. This endpoint is
       // a search index, not an org directory.
@@ -491,9 +485,10 @@ export function mountRoster(app: Hono<RelayAppEnv>): void {
 
     const payload = { roster_id: id, entries, skipped };
     const serialized = JSON.stringify(payload);
-    // Membership changes can alter group-granted tasks without touching the
-    // card timestamp or entry count. Hash the actual projection plus viewer
-    // identity so a conditional request cannot retain stale authorization.
+    // A card push can block this viewer without touching the entry count, and
+    // #379 did not change that — it only reduced what else can vary. Hash the
+    // actual projection plus viewer identity so a conditional request cannot
+    // retain stale authorization.
     const etag = `"${await sha256Hex(`${org}\0${viewer}\0${serialized}`)}"`;
     if (c.req.header("If-None-Match") === etag) {
       return new Response(null, { status: 304, headers: { ETag: etag, "Cache-Control": "private, no-store" } });
