@@ -65,40 +65,30 @@ describe("runRoomHost", () => {
     const deps = baseDeps();
     const checkEligibility = vi.fn().mockReturnValue({ supported: false, reason: "no evidence" });
     await expect(runRoomHost({
-      seats: 2, relay: "https://relay.test", checkEligibility,
+      relay: "https://relay.test", checkEligibility,
       createRoomFn: deps.createRoomFn, poll: deps.poll, mutate: deps.mutate,
       createListener: deps.listener.factory, runVerification: deps.runVerification,
     })).rejects.toThrow(/no evidence/);
     expect(deps.createRoomFn).not.toHaveBeenCalled();
   });
 
-  it("rejects seat counts outside 2-6 without any network call", async () => {
-    const deps = baseDeps();
-    await expect(runRoomHost({ seats: 7, relay: "https://relay.test", createRoomFn: deps.createRoomFn }))
-      .rejects.toThrow(/2 and 6/);
-    expect(deps.createRoomFn).not.toHaveBeenCalled();
-  });
-
-  it("admits on a 'y' line and hands off to verification once locked", async () => {
+  it("auto-admits a pending joiner and hands off to verification once locked", async () => {
     const deps = baseDeps();
     const checkEligibility = vi.fn().mockReturnValue({ supported: true, evidence: { cliVersion: "9.9.9" } });
     const resultPromise = runRoomHost({
-      seats: 2, relay: "https://relay.test", checkEligibility,
+      relay: "https://relay.test", checkEligibility,
       createRoomFn: deps.createRoomFn, poll: deps.poll, mutate: deps.mutate,
       createListener: deps.listener.factory, runVerification: deps.runVerification,
     });
 
-    // onSnapshot blocks on the admit answer, so it must not be awaited yet --
-    // awaiting it here would deadlock on an answer nobody has given.
-    const admitting = deps.deliver(waitingSnapshot([
+    // Unlike the old manual gate, onSnapshot no longer blocks on stdin, so
+    // awaiting deliver() directly is safe -- it resolves once the automatic
+    // admit mutation has already gone out.
+    await deps.deliver(waitingSnapshot([
       { participant_id: "rp_guest", state: "pending", display_name: "sota" },
     ]));
-    await vi.waitFor(() => expect(deps.listener.printed.join("")).toContain("sota wants to join. Admit?"));
-    deps.listener.emit("y");
-    await vi.waitFor(() => expect(deps.mutate).toHaveBeenCalledWith(
-      "https://relay.test", created.credential, "admit", "rp_guest",
-    ));
-    await admitting;
+    expect(deps.mutate).toHaveBeenCalledWith("https://relay.test", created.credential, "admit", "rp_guest");
+    expect(deps.listener.printed.join("")).toContain("sota joined.");
 
     await deps.deliver({ room: { room_id: "room_x", state: "verifying", membership_epoch: 1 }, participants: [] } as never);
     const result = await resultPromise;
@@ -107,31 +97,10 @@ describe("runRoomHost", () => {
     expect(deps.listener.close).toHaveBeenCalled();
   });
 
-  it("denies on anything other than an empty or 'y' line", async () => {
-    const deps = baseDeps();
-    const resultPromise = runRoomHost({
-      seats: 2, relay: "https://relay.test",
-      checkEligibility: () => ({ supported: true, evidence: { cliVersion: "9.9.9" } } as never),
-      createRoomFn: deps.createRoomFn, poll: deps.poll, mutate: deps.mutate,
-      createListener: deps.listener.factory, runVerification: deps.runVerification,
-    });
-    const denying = deps.deliver(waitingSnapshot([
-      { participant_id: "rp_guest", state: "pending", display_name: "sota" },
-    ]));
-    await vi.waitFor(() => expect(deps.listener.printed.join("")).toContain("sota wants to join. Admit?"));
-    deps.listener.emit("n");
-    await vi.waitFor(() => expect(deps.mutate).toHaveBeenCalledWith(
-      "https://relay.test", created.credential, "deny", "rp_guest",
-    ));
-    await denying;
-    await deps.deliver({ room: { room_id: "room_x", state: "closed", close_reason: "insufficient_participants" }, participants: [] } as never);
-    expect(await resultPromise).toEqual({ outcome: "closed", reason: "insufficient_participants" });
-  });
-
   it("resolves closed without calling runVerification if the Room closes while waiting", async () => {
     const deps = baseDeps();
     const resultPromise = runRoomHost({
-      seats: 2, relay: "https://relay.test",
+      relay: "https://relay.test",
       checkEligibility: () => ({ supported: true, evidence: { cliVersion: "9.9.9" } } as never),
       createRoomFn: deps.createRoomFn, poll: deps.poll, mutate: deps.mutate,
       createListener: deps.listener.factory, runVerification: deps.runVerification,
@@ -144,7 +113,7 @@ describe("runRoomHost", () => {
   it("/start with fewer than 2 admitted warns instead of locking", async () => {
     const deps = baseDeps();
     const resultPromise = runRoomHost({
-      seats: 3, relay: "https://relay.test",
+      relay: "https://relay.test",
       checkEligibility: () => ({ supported: true, evidence: { cliVersion: "9.9.9" } } as never),
       createRoomFn: deps.createRoomFn, poll: deps.poll, mutate: deps.mutate,
       createListener: deps.listener.factory, runVerification: deps.runVerification,
@@ -164,7 +133,7 @@ describe("runRoomHost", () => {
   it("/start with at least one admitted guest locks early", async () => {
     const deps = baseDeps();
     const resultPromise = runRoomHost({
-      seats: 3, relay: "https://relay.test",
+      relay: "https://relay.test",
       checkEligibility: () => ({ supported: true, evidence: { cliVersion: "9.9.9" } } as never),
       createRoomFn: deps.createRoomFn, poll: deps.poll, mutate: deps.mutate,
       createListener: deps.listener.factory, runVerification: deps.runVerification,

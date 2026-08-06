@@ -6,6 +6,18 @@ which are released together.
 
 ## Unreleased
 
+### Room auto-admits joiners and drops `--seats` (#367)
+
+- `agentcall room` no longer stops on a blocking `<name> wants to join. Admit?
+  [Y/n]` prompt for every guest. The host now auto-admits anyone who redeems the
+  invite, up to the Room's seat capacity, which is still enforced relay-side.
+- The membership fingerprint compare after everyone joins is unchanged — it
+  catches a network-level mismatch on the transcript, not identity, and was
+  never what the admit gate was checking.
+- `--seats <n>` is removed. Room capacity is now a fixed 6-person ceiling —
+  not a target to size upfront, just the max the invite will admit before
+  fingerprint verification and the call itself begin.
+
 ### Conversations say when they have ended (#364)
 
 - Keep one outbound conversation per address **per task**. Calling the same peer

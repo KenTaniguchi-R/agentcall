@@ -64,10 +64,6 @@ exports[`CLI command tree > pins command paths, aliases, descriptions, and optio
       "name": "room",
       "options": [
         {
-          "description": "Room size including you (2-6)",
-          "flags": "--seats <n>",
-        },
-        {
           "description": "relay URL",
           "flags": "--relay <url>",
         },
