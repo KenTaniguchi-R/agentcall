@@ -415,33 +415,69 @@ describe("runDoctor", () => {
     }
   });
 
-  // A bad workdir stops startListener dead, so doctor has to name it rather
-  // than leave the owner with a listener that won't stay up. It must still be
-  // informational: the agent checks below it run either way.
-  it("reports a broken workdir but still runs the agent checks", async () => {
+  // Was "reports a broken workdir but still runs the agent checks". #372
+  // deleted config.json's `workdir`; the spawn directory is derived from the
+  // sensitivity map. That derivation deliberately SKIPS a source that no longer
+  // exists rather than throwing — one stale entry must not take a line offline
+  // — which trades a loud failure for a quiet fallback to an empty directory.
+  // This is where that trade is paid back, so it still has to be named, and
+  // still has to be informational: the agent checks below it run either way.
+  it("names a labelled source that has gone missing, but still runs the agent checks", async () => {
     const m = freshMachine();
-    saveLineConfig(getLinePaths(m, LINE), {
+    const paths = getLinePaths(m, LINE);
+    saveLineConfig(paths, {
       org: "acme", handle: "ken", token: "t", agent_kind: "claude", relay: "https://relay.example",
-      workdir: "/no/such/project",
     });
+    mkdirSync(paths.dir, { recursive: true });
+    writeFileSync(paths.sensitivityFile, JSON.stringify({
+      sources: [{ path: "/no/such/project", sensitivity: "internal" }],
+    }));
     const lines: string[] = [];
     const code = await runDoctor({ ...baseDeps, machine: m, log: (l) => lines.push(l) });
     expect(code).toBe(1);
     const out = lines.join("\n");
-    expect(out).toContain("✗ workdir");
-    expect(out).toContain("config.json");
+    expect(out).toContain("✗ sensitivity map");
+    expect(out).toContain("/no/such/project");
+    expect(out).toContain("sensitivity.json");
     expect(out).toContain("✓ agent run");
   });
 
-  it("reports a configured workdir by path when it is valid", async () => {
+  // Was "reports a configured workdir by path when it is valid". The path is
+  // now derived rather than configured, so what the owner needs to see is which
+  // directory the derivation actually picked.
+  it("reports the derived workdir by path", async () => {
+    const m = freshMachine();
+    const paths = getLinePaths(m, LINE);
+    saveLineConfig(paths, {
+      org: "acme", handle: "ken", token: "t", agent_kind: "claude", relay: "https://relay.example",
+    });
+    const repo = join(m.userHome, "code", "payments");
+    mkdirSync(repo, { recursive: true });
+    mkdirSync(paths.dir, { recursive: true });
+    writeFileSync(paths.sensitivityFile, JSON.stringify({
+      sources: [{ path: repo, sensitivity: "internal" }],
+    }));
+    const lines: string[] = [];
+    await runDoctor({ ...baseDeps, machine: m, log: (l) => lines.push(l) });
+    expect(lines.join("\n")).toContain(`✓ workdir — ${repo} (derived, at internal clearance)`);
+  });
+
+  // A line whose map names nothing can read nothing — the fresh-install state
+  // #372 opened by describing. It is a real finding, and must not read as a
+  // clean bill of health.
+  it("warns about an unlabelled map rather than passing it silently", async () => {
     const m = freshMachine();
     saveLineConfig(getLinePaths(m, LINE), {
       org: "acme", handle: "ken", token: "t", agent_kind: "claude", relay: "https://relay.example",
-      workdir: m.userHome,
     });
     const lines: string[] = [];
     await runDoctor({ ...baseDeps, machine: m, log: (l) => lines.push(l) });
-    expect(lines.join("\n")).toContain(`✓ workdir — ${m.userHome}`);
+    const out = lines.join("\n");
+    // A warning, not a failure: this is the fail-closed end of the model
+    // working as designed, and `setup` reaches it legitimately when it runs
+    // outside a git repository. Exiting 1 on an empty line would be wrong.
+    expect(out).toContain("! sensitivity map");
+    expect(out).toMatch(/no source is labelled/i);
   });
 
   it("exits 1 with a setup hint when there is no config", async () => {

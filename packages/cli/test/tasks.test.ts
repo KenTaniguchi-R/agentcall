@@ -107,25 +107,26 @@ describe("loadTasks", () => {
     writeSkill(home, "intro", "---\nname: Owner introduction\ndescription: d\n---\nbody\n");
     expect(loadTasks(linePaths(home), () => {}).find((t) => t.id === "intro")!.name).toBe("Owner introduction");
   });
-  it("loads an absolute existing workdir", () => {
+  // Replaces "loads an absolute existing workdir" and "skips task workdirs that
+  // are relative, missing, or not directories". #372 deleted task `workdir`:
+  // where the agent runs is derived from the sensitivity map, so a task naming
+  // its own directory could only contradict it. The three skip cases those
+  // tests covered (relative, missing, not-a-directory) now live on the
+  // derivation instead — see workdirFor in sensitivity.test.ts.
+  //
+  // Pinned as a REJECTION rather than dropped: SkillFrontmatter is `.strict()`,
+  // so a SKILL.md still carrying `workdir:` fails to load with a named warning.
+  // Silently ignoring it would leave an author believing the task still runs
+  // somewhere it does not.
+  it("refuses a SKILL.md still carrying the deleted workdir field", () => {
     const home = tempHome();
     const project = join(home, "code", "payments");
     mkdirSync(project, { recursive: true });
     writeSkill(home, "payments", `---\ndescription: d\nworkdir: ${project}\n---\nbody\n`);
-    expect(loadTasks(linePaths(home), () => {}).find((t) => t.id === "payments")!.workdir).toBe(project);
-  });
-
-  it("skips task workdirs that are relative, missing, or not directories", () => {
-    const home = tempHome();
-    const file = join(home, "not-a-directory");
-    writeFileSync(file, "x");
-    writeSkill(home, "relative", "---\ndescription: d\nworkdir: code/api\n---\n");
-    writeSkill(home, "missing", "---\ndescription: d\nworkdir: /no/such/project\n---\n");
-    writeSkill(home, "file", `---\ndescription: d\nworkdir: ${file}\n---\n`);
     const warnings: string[] = [];
-    const ids = loadTasks(linePaths(home), (warning) => warnings.push(warning)).map((t) => t.id);
+    const ids = loadTasks(linePaths(home), (w) => warnings.push(w)).map((t) => t.id);
     expect(ids).toEqual(["ask"]);
-    expect(warnings).toHaveLength(3);
+    expect(warnings.join("\n")).toMatch(/payments.*invalid SKILL\.md frontmatter/);
   });
   it("skips missing SKILL.md, missing frontmatter, bad YAML, and schema violations — each with a warning", () => {
     const home = tempHome();

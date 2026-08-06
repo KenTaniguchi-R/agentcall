@@ -22,7 +22,7 @@ function renderTask(
   // there is no per-task capability list left to print.
   lines.push("    inspect files — answers are read-only");
   lines.push(`    Follow-up calls: ${task.threadable ? "allowed" : "not allowed"}`);
-  lines.push(`    Working directory: ${task.workdir ?? defaultWorkdir}`);
+  lines.push(`    Working directory: ${defaultWorkdir}`);
   if (task.timeout_s !== undefined) lines.push(`    Time limit: ${task.timeout_s} seconds`);
   return lines;
 }

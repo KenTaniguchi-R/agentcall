@@ -1,0 +1,96 @@
+---
+title: Listener and sensitivity labels
+description: Operate the AgentCall listener on macOS, Linux, or in a container, and label which sources an answering agent may draw on.
+---
+
+## Listener modes
+
+| Platform | Normal mode | Definition | Log |
+| --- | --- | --- | --- |
+| macOS | launchd agent | `~/Library/LaunchAgents/tech.benree.agentcall.listener.plist` | `~/.agentcall/listener.log` |
+| Linux | systemd user service | `~/.config/systemd/user/agentcall-listener.service` | `~/.agentcall/listener.log` |
+| Container/other supervisor | `agentcall listen` | Owned by the supervisor | Supervisor output |
+
+On a headless Linux account, an administrator may need to enable lingering so
+the user manager survives logout. `agentcall doctor` distinguishes a missing,
+installed-but-stopped, and running native service.
+
+## What the agent may read
+
+There is no `workdir` setting. What an answering agent can draw on is decided by
+one file, `~/.agentcall/lines/<line>/sensitivity.json`:
+
+```json
+{
+  "sources": [
+    { "path": "/Users/ken/code/payments-api", "sensitivity": "internal" },
+    { "path": "/Users/ken/AgentCall/ken/public", "sensitivity": "public" }
+  ],
+  "mcp": { "jira": "internal" },
+  "skills": { "obsidian": "internal" }
+}
+```
+
+**Anything not named here is `secret` and never leaves the machine**, for any
+caller. `setup` seeds one entry — the git repository it was run in, labelled
+`internal` — so a new line can answer something without being handed your whole
+home directory.
+
+Three levels, and only the first two can be granted to a caller:
+
+| Level | Meaning |
+| --- | --- |
+| `public` | Safe for any caller in your organization |
+| `internal` | The normal working level: repositories, engineering notes |
+| `secret` | Never leaves this machine. No clearance grants it |
+
+Labels nest, and the **most specific one wins** — so a `secret` carve-out inside
+an `internal` repository holds, regardless of the order they appear in the file.
+
+<Warning>
+  The risk runs the other way from what you might expect. Forgetting to label
+  something is safe: it stays `secret`. Labelling a *parent* is what leaks —
+  `{"path": "~", "sensitivity": "internal"}` labels everything beneath it,
+  including whatever a subdirectory acquires later. Label projects, not homes.
+
+  A short list of paths is `secret` no matter what your map says — `~/.ssh`,
+  `~/.aws`, `~/.agentcall`, `~/.claude`, `~/.codex`, shell startup files, and
+  similar. That floor is not overridable from this file.
+</Warning>
+
+## Where the agent starts
+
+The spawn directory is derived, not configured: it is the richest labelled
+source **that caller** is cleared for, and `~/AgentCall/<line>/public/` when the
+map names nothing they may see.
+
+So with the map above, a caller cleared for `internal` starts in
+`payments-api`, while a `public` caller starts in the share folder — the same
+line, two directories, decided by clearance. That is deliberate: a public caller
+spawned inside internal content would fill its context with material it can only
+be refused on.
+
+Set a caller's clearance with `agentcall clearance <handle> <level>`; see
+[tasks and policy](/guides/tasks-and-policy).
+
+## The reply is the boundary
+
+The directory is orientation, not enforcement. Two things actually bound an
+answer:
+
+1. Reading a path above the caller's clearance is **refused at the tool call**.
+2. The running context takes the sensitivity of the most sensitive source it
+   read, and the reply is **refused unless that is at or below the caller's
+   clearance**.
+
+Shell execution is not constrained to any directory, and Codex has no enforced
+read boundary at all — so on a Codex line, the check on the reply is the only
+thing bounding what leaves.
+
+## Success check
+
+Run `agentcall doctor` and confirm, for every callable line, that it reports the
+labelled source count, names no missing source, and shows the derived working
+directory you expect.
+
+Source of truth: [README callee behavior](https://github.com/KenTaniguchi-R/agentcall#receive-calls-safely).

@@ -5,7 +5,8 @@ import {
 } from "@benree/agentcall-shared";
 import { fetchKeys } from "./api.js";
 import { clearanceFor } from "./clearance.js";
-import { resolveLineWorkdir, type CallableLineConfig } from "./config.js";
+import { readableSources, workdirFor } from "./sensitivity.js";
+import { type CallableLineConfig } from "./config.js";
 import type { LinePaths } from "./paths.js";
 import { buildPrompt } from "./prompt.js";
 import { redactOutbound } from "./redact.js";
@@ -90,8 +91,7 @@ export function startListener(deps: ListenerDeps): { stop(): Promise<void> } {
   // effective policy (user layer + the machine's managed ceiling) is malformed
   // or contradicts an assertion. Throwing here is contained to this one line:
   // startAllListeners catches per-line startup failures so the other lines'
-  // sockets survive (listenAll.ts). The workdir gets the same up-front check,
-  // but per-connect rather than here — see connect() below.
+  // sockets survive (listenAll.ts).
   loadPolicy(deps.paths);
 
   const queue = new SerialQueue(deps.maxPending ?? 0);
@@ -146,10 +146,10 @@ export function startListener(deps: ListenerDeps): { stop(): Promise<void> } {
     }
   };
 
-  // Config (and therefore workdir) is re-read on every (re)connect, not just
-  // once at startup: a rotated token (`agentcall rotate`) or an edited
-  // workdir then takes effect on the next reconnect instead of needing the
-  // whole multi-line process restarted. A bad workdir/config still stops the
+  // Config is re-read on every (re)connect, not just once at startup: a
+  // rotated token (`agentcall rotate`) then takes effect on the next reconnect
+  // instead of needing the whole multi-line process restarted. A bad config
+  // still stops the
   // FIRST connect() (called synchronously below, not through
   // scheduleReconnect) with a thrown error — same "fail loudly at start"
   // contract `agentcall listen` had before lines existed. A config that goes
@@ -167,10 +167,9 @@ export function startListener(deps: ListenerDeps): { stop(): Promise<void> } {
         ? startupCodexCanReportTools
         : (deps.codexToolTelemetryEnabled ?? codexToolTelemetryEnabled)(),
     );
-    const workdir = resolveLineWorkdir(config, deps.paths);
     // `deps.relay`, not `config.relay`: the relay host is fixed at
     // `startListener()` entry (set by `startAllListeners` from the config it
-    // read at process startup), so unlike the token/handle/workdir above,
+    // read at process startup), so unlike the token/handle above,
     // a changed relay host in config.json does NOT take effect on
     // reconnect — only a full listener restart picks up a new relay. This is
     // spec-faithful, not an oversight: `ListenerDeps.relay` was never
@@ -251,9 +250,7 @@ export function startListener(deps: ListenerDeps): { stop(): Promise<void> } {
       // policy.ts). Refusals never enqueue and never spawn: no tokens are
       // burned by blocked callers or task probing.
 
-      const admission = resolveAdmission({
-        paths: deps.paths, from, requestedTask, groups, workdir, agentKind: config.agent_kind,
-      });
+      const admission = resolveAdmission({ paths: deps.paths, from, requestedTask, groups });
       if (!admission.ok) {
         if (admission.code === "policy_error") {
           admissionOutcome = "policy_error";
@@ -266,7 +263,24 @@ export function startListener(deps: ListenerDeps): { stop(): Promise<void> } {
         audit({ call_id, ...correlation, from, message: message.slice(0, 500), task: requestedTask, status: admission.code, duration_ms: 0, outcome_delivery_error: outcomeDeliveryError });
         return;
       }
-      const { task, taskWorkdir, policy } = admission;
+      const { task, policy, map } = admission;
+
+      // Clearance, then the directory it implies. Deliberately AFTER
+      // resolveAdmission and from the objects it returned: a corrupt
+      // policy.json or sensitivity.json has a failure path there
+      // (policy_error -> call_failed), and loading either earlier would throw
+      // first and report corruption as a rejection.
+      //
+      // "blocked" is unreachable here — resolveAdmission refuses a blocked
+      // caller before this line — but narrowing it to the least-revealing
+      // clearance is the safe way to say so.
+      const resolved = clearanceFor(policy, from, groups);
+      const clearance = resolved === "blocked" ? "public" : resolved;
+      // #372 deleted line and task `workdir`. Where the agent runs is now the
+      // richest labelled source THIS caller is cleared for, so a public caller
+      // is never spawned inside internal content they could only be refused
+      // on. shareDir is the fallback when the map names nothing they may see.
+      const workdirDir = workdirFor(map, clearance, deps.paths.shareDir);
 
       // Task resolution above ran on the verified `from` and local files only
       // (see policy.ts's CaMeL invariant). context_id is caller-controlled, so
@@ -276,7 +290,12 @@ export function startListener(deps: ListenerDeps): { stop(): Promise<void> } {
       const admitted = admitBinding({
         paths: deps.paths, from, taskId: task.id, contextId: context_id,
         threadable: task.threadable, agentKind: config.agent_kind, codexCanThread,
-        workdirDir: taskWorkdir.dir,
+        // Still pinned on the binding, and a stronger check than before: the
+        // directory is now derived from clearance, so a caller whose clearance
+        // changed since the binding was minted no longer matches it and the
+        // resume is refused. That is the same reasoning admitBinding already
+        // applies to threadable and the codex gate.
+        workdirDir,
       });
       if (!admitted.ok) {
         admissionOutcome = "context_unknown";
@@ -332,20 +351,12 @@ export function startListener(deps: ListenerDeps): { stop(): Promise<void> } {
           telemetrySafely(() => invocationSpan?.end(outcome, contextId));
         };
         try {
-          // Resolved from the same relay-verified identity as the task, and on
-          // the same side of the CaMeL line: the caller's message must not be
-          // able to influence what the answering agent may reach.
-          //
-          // From the SAME policy object resolveAdmission loaded, not a second
-          // read of policy.json. That keeps the corrupt-file failure path
-          // inside resolveAdmission — where it reports as policy_error rather
-          // than as a rejection — and makes it impossible for admission and
-          // clearance to disagree because the file changed between two loads.
-          const clearance = clearanceFor(policy, from, groups);
           const out = await run({
             kind: config.agent_kind,
-            prompt: buildPrompt(config.handle, from, message, task, taskWorkdir, binding !== undefined),
-            workdir: taskWorkdir.dir,
+            prompt: buildPrompt(config.handle, from, message, task, {
+              dir: workdirDir, readable: readableSources(map, clearance),
+            }, binding !== undefined),
+            workdir: workdirDir,
             timeoutMs,
             callId: call_id,
             signal,
@@ -356,10 +367,8 @@ export function startListener(deps: ListenerDeps): { stop(): Promise<void> } {
             resume: binding?.agent_session_id,
             correlationId: correlation_id,
             toolTelemetryFile: toolSpool?.file,
-            // A blocked caller never reaches here (resolveAdmission refuses
-            // first), so "blocked" would be unreachable — but narrowing it to
-            // the least-revealing clearance is the safe way to say so.
-            clearance: clearance === "blocked" ? "public" : clearance,
+            // Already narrowed above, where the workdir was derived from it.
+            clearance,
           });
 
           // Mint on a fresh threadable call; roll the existing binding forward
@@ -385,7 +394,7 @@ export function startListener(deps: ListenerDeps): { stop(): Promise<void> } {
               caller: from,
               task: task.id,
               agent_kind: config.agent_kind,
-              workdir: taskWorkdir.dir,
+              workdir: workdirDir,
               turns: (binding?.turns ?? 0) + 1,
               created_at: binding?.created_at ?? now,
               last_used_at: now,
@@ -515,8 +524,8 @@ export function startListener(deps: ListenerDeps): { stop(): Promise<void> } {
         try {
           connect();
         } catch (e) {
-          // loadConfig/resolveLineWorkdir threw on this reconnect attempt —
-          // corrupt config.json, a workdir deleted out from under a running
+          // loadConfig threw on this reconnect attempt — a
+          // corrupt config.json, or the file deleted out from under a running
           // listener, etc. See the comment above connect(): this must not
           // propagate, or one line's bad config takes down every other
           // line's socket in this same process — an unhandled throw here is

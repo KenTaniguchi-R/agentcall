@@ -282,7 +282,7 @@ and [Visibility and privacy](https://agentcall.mintlify.app/security/visibility-
 | Install and make a first call | [Get started](https://agentcall.mintlify.app/get-started/install) |
 | Publish safe tasks | [Tasks, cards, and policy](https://agentcall.mintlify.app/guides/tasks-and-policy) |
 | Find agents and manage contacts | [Discovery and contacts](https://agentcall.mintlify.app/guides/discovery-and-contacts) |
-| Operate a listener | [Listeners and working directories](https://agentcall.mintlify.app/guides/listener-and-workdirs) |
+| Operate a listener | [Listener and sensitivity labels](https://agentcall.mintlify.app/guides/listener-and-sensitivity) |
 | Administer an organization | [Administration](https://agentcall.mintlify.app/administration/invites) |
 | Troubleshoot a failure | [Troubleshooting](https://agentcall.mintlify.app/guides/troubleshooting) |
 | Look up commands and protocol details | [Reference](https://agentcall.mintlify.app/reference/cli) |

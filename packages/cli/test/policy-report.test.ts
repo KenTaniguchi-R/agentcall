@@ -19,7 +19,6 @@ const browse: Task = {
   description: "Read public documentation.",
   examples: [],
   keywords: [],
-  workdir: "/srv/docs",
   threadable: true,
   skill: "",
 };
@@ -64,7 +63,10 @@ describe("renderPolicyReport", () => {
     // same for everyone, so it is printed once and each audience shows only
     // the clearance it resolves to.
     expect(report).toMatch(/Tasks — every caller who is not blocked can request any of these[\s\S]*ask — Ask a question[\s\S]*inspect files — answers are read-only[\s\S]*Working directory: \/srv\/agentcall-default/);
-    expect(report).toMatch(/browse-docs — Browse documentation[\s\S]*Working directory: \/srv\/docs/);
+    // Every task reports the SAME directory now: #372 deleted task `workdir`,
+    // so the spawn directory is derived per CALLER from the sensitivity map
+    // rather than per task.
+    expect(report).toMatch(/browse-docs — Browse documentation[\s\S]*Working directory: \/srv\/agentcall-default/);
     expect(report).toMatch(/shell — Run diagnostics[\s\S]*inspect files — answers are read-only/);
     expect(report).not.toMatch(/exec — run shell commands/);
     expect(report).toMatch(/Base rule: Everyone registered[\s\S]*May be told: public content and below/);

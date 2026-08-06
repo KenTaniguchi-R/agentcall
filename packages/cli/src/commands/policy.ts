@@ -3,7 +3,8 @@ import { loadPolicy } from "../policy.js";
 import { loadTasks } from "../tasks.js";
 import { renderPolicyReport } from "../policy-report.js";
 import { resolveLine, type LineContext } from "../line-context.js";
-import { assertCallableLine, resolveLineWorkdir } from "../config.js";
+import { assertCallableLine } from "../config.js";
+import { loadSensitivityMap, withFloor, workdirFor } from "../sensitivity.js";
 import { getMachinePaths } from "../paths.js";
 import { fail } from "../errors.js";
 
@@ -28,7 +29,15 @@ export function register(program: { command(name: string): any }): void {
           // Machine-scoped, not line-scoped: the administrator ceiling applies
           // to every line on this machine (see paths.ts).
           managed: existsSync(ctx.paths.machine.managedPolicyFile),
-          defaultWorkdir: resolveLineWorkdir(cfg, ctx.paths).dir,
+          // Derived from the sensitivity map since #372, at `internal` — the
+          // most permissive grantable clearance, so this is the best case. A
+          // caller cleared only for `public` may land somewhere narrower, which
+          // is the point of deriving it per caller rather than configuring it.
+          defaultWorkdir: workdirFor(
+            withFloor(loadSensitivityMap(ctx.paths), ctx.paths.machine.userHome),
+            "internal",
+            ctx.paths.shareDir,
+          ),
         });
         console.log(report.trimEnd());
       } catch (e) {

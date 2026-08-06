@@ -30,7 +30,10 @@ export const LineConfigSchema = z.object({
   token: z.string().min(1),
   relay: z.string().min(1),
   agent_kind: AgentKindSchema.optional(),
-  workdir: z.string().optional(),
+  // No `workdir` since #372 — see config.ts's LineConfig. `.strict()` is
+  // deliberately NOT added here: a config.json still carrying one from before
+  // must keep the line loadable, because the field is now inert rather than
+  // dangerous, and failing to load would take a working line offline over it.
 });
 
 export function loadLineConfig(l: LinePaths): LineConfig {

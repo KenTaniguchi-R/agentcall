@@ -178,30 +178,28 @@ function baseDeps(relay: string) {
   };
 }
 
-describe("startListener workdir", () => {
-  // Resolved once at startup so a typo'd workdir stops `agentcall listen`
-  // with a clear message instead of failing every inbound call individually.
-  it("throws at start rather than per call when workdir is unusable", () => {
-    expect(() =>
-      startListener({
-        relay: "http://127.0.0.1:1", paths: seededPaths(),
-        loadConfig: () => ({ ...cfg, workdir: "/no/such/project" }),
-        run: async () => ({ text: "unused" }),
-      }),
-    ).toThrow(/does not exist/i);
-  });
-
-  it("spawns in the configured workdir and tells Claude the guard confines it there", async () => {
+// Was "startListener workdir". #372 deleted config.json's `workdir`, so there
+// is no longer a value to validate at startup and no confinement to claim. The
+// spawn directory is derived per call from the sensitivity map at the caller's
+// clearance, which is what these two now drive instead.
+describe("startListener spawn directory", () => {
+  // Replaces "throws at start rather than per call when workdir is unusable".
+  // A missing labelled source is no longer fatal at startup — the map is read
+  // per call, and one stale entry must not take the line offline — so the
+  // property that matters is that it falls back rather than spawning into a
+  // directory that is not there. `doctor` is where the stale entry gets named.
+  it("falls back to the share directory when the map names nothing usable", async () => {
     const machine = freshMachine();
     const paths = getLinePaths(machine, "claude");
-    const project = join(machine.stateRoot, "code", "api");
-    mkdirSync(project, { recursive: true });
+    mkdirSync(paths.dir, { recursive: true });
+    writeFileSync(paths.sensitivityFile, JSON.stringify({
+      sources: [{ path: join(machine.stateRoot, "deleted-repo"), sensitivity: "internal" }],
+    }));
     const seen: { workdir?: string; prompt?: string } = {};
     const relayReady = new Promise<WsSocket>((resolveWs) => {
       void fakeRelay((ws) => resolveWs(ws)).then((url) => {
         stopper = startListener({
           ...baseDeps(url), paths,
-          loadConfig: () => ({ ...cfg, workdir: project }),
           run: async ({ prompt, workdir }) => {
             seen.prompt = prompt; seen.workdir = workdir;
             return { text: "ok" };
@@ -210,12 +208,74 @@ describe("startListener workdir", () => {
       });
     });
     const ws = await relayReady;
-    const done = frames(ws, 3); // accepted, started, result
+    const done = frames(ws, 3);
+    await sendIncoming(ws, { call_id: "c1", from: "shusaku", message: "hi" });
+    await done;
+    expect(seen.workdir).toBe(paths.shareDir);
+    expect(seen.prompt).toContain("No source has been labelled for this caller");
+  });
+
+  // Replaces "spawns in the configured workdir and tells Claude the guard
+  // confines it there". Nothing confines it to a directory any more, so the
+  // prompt states what it may READ — and the directory comes from the map, at
+  // this caller's clearance, rather than from config.
+  it("spawns in the labelled source and tells the agent what it may read", async () => {
+    const machine = freshMachine();
+    const paths = getLinePaths(machine, "claude");
+    const project = join(machine.stateRoot, "code", "api");
+    mkdirSync(project, { recursive: true });
+    mkdirSync(paths.dir, { recursive: true });
+    writeFileSync(paths.sensitivityFile, JSON.stringify({
+      sources: [{ path: project, sensitivity: "public" }],
+    }));
+    const seen: { workdir?: string; prompt?: string } = {};
+    const relayReady = new Promise<WsSocket>((resolveWs) => {
+      void fakeRelay((ws) => resolveWs(ws)).then((url) => {
+        stopper = startListener({
+          ...baseDeps(url), paths,
+          run: async ({ prompt, workdir }) => {
+            seen.prompt = prompt; seen.workdir = workdir;
+            return { text: "ok" };
+          },
+        });
+      });
+    });
+    const ws = await relayReady;
+    const done = frames(ws, 3);
     await sendIncoming(ws, { call_id: "c1", from: "shusaku", message: "hi" });
     await done;
     expect(seen.workdir).toBe(project);
-    expect(seen.prompt).toContain(project);
-    expect(seen.prompt).toMatch(/do not access anything outside it/i);
+    expect(seen.prompt).toContain(`You may read files under: ${project}`);
+    expect(seen.prompt).not.toMatch(/do not access anything outside it/i);
+  });
+
+  // The reason cwd is derived from CLEARANCE and not merely from the map: an
+  // internal source must not become a public caller's working directory, or
+  // every such call fills its context with material it can only be refused on.
+  it("does not spawn a public caller inside an internal source", async () => {
+    const machine = freshMachine();
+    const paths = getLinePaths(machine, "claude");
+    const project = join(machine.stateRoot, "code", "internal-api");
+    mkdirSync(project, { recursive: true });
+    mkdirSync(paths.dir, { recursive: true });
+    writeFileSync(paths.sensitivityFile, JSON.stringify({
+      sources: [{ path: project, sensitivity: "internal" }],
+    }));
+    seedPolicy(paths, { default_clearance: "public", callers: {} });
+    const seen: { workdir?: string } = {};
+    const relayReady = new Promise<WsSocket>((resolveWs) => {
+      void fakeRelay((ws) => resolveWs(ws)).then((url) => {
+        stopper = startListener({
+          ...baseDeps(url), paths,
+          run: async ({ workdir }) => { seen.workdir = workdir; return { text: "ok" }; },
+        });
+      });
+    });
+    const ws = await relayReady;
+    const done = frames(ws, 3);
+    await sendIncoming(ws, { call_id: "c1", from: "shusaku", message: "hi" });
+    await done;
+    expect(seen.workdir).toBe(paths.shareDir);
   });
 });
 
@@ -656,19 +716,25 @@ describe("startListener task resolution", () => {
     expect(seen.clearance).toBe("public");
   });
 
-  it("runs a task with its timeout, workdir, and the caller's clearance, echoing task in call_result", async () => {
+  it("runs a task with its timeout, derived workdir, and the caller's clearance, echoing task in call_result", async () => {
     const seen: { prompt?: string; workdir?: string; timeout?: number; clearance?: unknown } = {};
     let paths!: LinePaths;
     const relayReady = new Promise<WsSocket>((resolveWs) => {
       void fakeRelay((ws) => resolveWs(ws)).then((url) => {
         const deps = baseDeps(url);
         paths = deps.paths;
-        const taskWorkdir = join(paths.machine.stateRoot, "code", "calendar");
-        mkdirSync(taskWorkdir, { recursive: true });
+        // Labelled in the map, not declared on the task: #372 deleted task
+        // `workdir`, so the same directory now has to arrive through the
+        // sensitivity map at the caller's clearance.
+        const calendar = join(paths.machine.stateRoot, "code", "calendar");
+        mkdirSync(calendar, { recursive: true });
+        mkdirSync(deps.paths.dir, { recursive: true });
+        writeFileSync(deps.paths.sensitivityFile, JSON.stringify({
+          sources: [{ path: calendar, sensitivity: "internal" }],
+        }));
         seedTask(deps.paths, "schedule-meeting", [
           "description: d",
           "timeout_s: 60",
-          `workdir: ${taskWorkdir}`,
         ], "check the calendar\n");
         seedPolicy(deps.paths, { default_clearance: "public", callers: { shusaku: { clearance: "internal" } } });
         stopper = startListener({
