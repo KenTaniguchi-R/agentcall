@@ -12,6 +12,7 @@ import {
 } from "@benree/agentcall-shared";
 import { jsonBody, rateLimit, type RelayAppEnv } from "./middleware.js";
 import { NATIVE_ROSTER_READ, REGISTER, ROSTER_WRITE } from "./ratelimit/index.js";
+import { resolveAgentId } from "./identity.js";
 import { parseStoredCard } from "./stored-card.js";
 import { MAX_ROSTER_AUDIT_EVENTS, rosterAuditStatement } from "./events.js";
 
@@ -150,8 +151,8 @@ export function mountRoster(app: Hono<RelayAppEnv>): void {
           "VALUES (?, ?, ?, ?, ?, ?, ?, ?, 1)",
       ).bind(prefix, roster_id, org, await sha256Hex(secret), "initial", handle, now, expiresAt),
       c.env.DB.prepare(
-        "INSERT INTO roster_members (roster_id, org, handle, joined_at, joined_via_prefix) VALUES (?, ?, ?, ?, NULL)",
-      ).bind(roster_id, org, handle, now),
+        "INSERT INTO roster_members (roster_id, org, agent_id, joined_at, joined_via_prefix) VALUES (?, ?, ?, ?, NULL)",
+      ).bind(roster_id, org, identity.agentId, now),
       rosterAuditStatement(c, {
         event: "roster.create", action: "C", rosterId: roster_id, org, actor: handle, actorType: "handle",
         targetType: "roster", targetId: null, description: `${handle} created roster ${roster_id}`, at: now,
@@ -189,14 +190,14 @@ export function mountRoster(app: Hono<RelayAppEnv>): void {
     const now = Date.now();
     const [inserted] = await c.env.DB.batch([
       c.env.DB.prepare(
-      "INSERT OR IGNORE INTO roster_members (roster_id, org, handle, joined_at, joined_via_prefix) " +
+      "INSERT OR IGNORE INTO roster_members (roster_id, org, agent_id, joined_at, joined_via_prefix) " +
         "SELECT r.id, r.org, ?, ?, k.prefix FROM rosters r " +
         "JOIN roster_join_keys k ON k.roster_id = r.id AND k.org = r.org " +
         "WHERE r.id = ? AND r.org = ? AND k.prefix = ? AND k.secret_hash = ? " +
         "AND k.revoked_at IS NULL AND k.expires_at > ? AND (k.reusable = 1 OR k.used = 0) " +
         "AND r.audit_budget_used < ? " +
         "AND (SELECT COUNT(*) FROM roster_members WHERE roster_id = r.id) < ?",
-      ).bind(handle, now, id, org, prefix, supplied, now, MAX_ROSTER_AUDIT_EVENTS, MAX_ROSTER_MEMBERS),
+      ).bind(identity.agentId, now, id, org, prefix, supplied, now, MAX_ROSTER_AUDIT_EVENTS, MAX_ROSTER_MEMBERS),
       c.env.DB.prepare(
         "UPDATE roster_join_keys SET used = CASE WHEN reusable = 0 THEN 1 ELSE used END " +
           "WHERE prefix = ? AND roster_id = ? AND org = ? AND changes() = 1",
@@ -217,10 +218,10 @@ export function mountRoster(app: Hono<RelayAppEnv>): void {
     const state = await c.env.DB.prepare(
       "SELECT k.secret_hash, k.expires_at, k.revoked_at, k.reusable, k.used, r.audit_budget_used, " +
         "EXISTS(SELECT 1 FROM roster_members m " +
-          "WHERE m.roster_id = r.id AND m.org = r.org AND m.handle = ?) AS member " +
+          "WHERE m.roster_id = r.id AND m.org = r.org AND m.agent_id = ?) AS member " +
         "FROM rosters r JOIN roster_join_keys k ON k.roster_id = r.id AND k.org = r.org " +
         "WHERE r.id = ? AND r.org = ? AND k.prefix = ?",
-    ).bind(handle, id, org, prefix).first<{
+    ).bind(identity.agentId, id, org, prefix).first<{
       secret_hash: string; expires_at: number; revoked_at: number | null; reusable: number;
       used: number; audit_budget_used: number; member: number;
     }>();
@@ -243,14 +244,14 @@ export function mountRoster(app: Hono<RelayAppEnv>): void {
     const id = c.req.param("id");
     if (!ROSTER_ID_RE.test(id)) return c.json({ error: "invalid roster id" }, 400);
     const member = await c.env.DB.prepare(
-      "SELECT 1 FROM roster_members WHERE roster_id = ? AND org = ? AND handle = ?",
-    ).bind(id, identity.org, identity.handle).first();
+      "SELECT 1 FROM roster_members WHERE roster_id = ? AND org = ? AND agent_id = ?",
+    ).bind(id, identity.org, identity.agentId).first();
     if (!member) return c.json(NOT_FOUND, 404);
     const now = Date.now();
     const [deleted] = await c.env.DB.batch([
       c.env.DB.prepare(
-        "DELETE FROM roster_members WHERE roster_id = ? AND org = ? AND handle = ?",
-      ).bind(id, identity.org, identity.handle),
+        "DELETE FROM roster_members WHERE roster_id = ? AND org = ? AND agent_id = ?",
+      ).bind(id, identity.org, identity.agentId),
       rosterAuditStatement(c, {
         event: "roster.leave", action: "D", rosterId: id, org: identity.org,
         actor: identity.handle, actorType: "handle", targetType: "handle", targetId: identity.handle,
@@ -289,14 +290,21 @@ export function mountRoster(app: Hono<RelayAppEnv>): void {
     const id = c.req.param("id");
     const body = await jsonBody(c, ExpelRosterRequest);
     if (!body) return c.json(NOT_FOUND, 404);
-    const member = await c.env.DB.prepare(
-      "SELECT 1 FROM roster_members WHERE roster_id = ? AND org = ? AND handle = ?",
-    ).bind(id, identity.org, body.handle).first();
+    // An admin names the subject by address, so this is a routing lookup: the
+    // address resolves to a principal before anything is authorized against
+    // it. That direction is what the decision requires — what it rejects is
+    // selecting the AUTHENTICATED principal from a caller-supplied handle, and
+    // that comes from `identity` above. An address bound to nobody expels
+    // nobody, and is indistinguishable from naming a non-member.
+    const subjectAgentId = await resolveAgentId(c.env.DB, identity.org, body.handle);
+    const member = subjectAgentId === null ? null : await c.env.DB.prepare(
+      "SELECT 1 FROM roster_members WHERE roster_id = ? AND org = ? AND agent_id = ?",
+    ).bind(id, identity.org, subjectAgentId).first();
     if (!member) return c.json({ error: "member not found" }, 404);
     const now = Date.now();
     const [deleted] = await c.env.DB.batch([
-      c.env.DB.prepare("DELETE FROM roster_members WHERE roster_id = ? AND org = ? AND handle = ?")
-        .bind(id, identity.org, body.handle),
+      c.env.DB.prepare("DELETE FROM roster_members WHERE roster_id = ? AND org = ? AND agent_id = ?")
+        .bind(id, identity.org, subjectAgentId),
       rosterAuditStatement(c, {
         event: "roster.expel", action: "D", rosterId: id, org: identity.org,
         actor: identity.handle, actorType: "admin_secret", targetType: "handle", targetId: body.handle,
@@ -426,8 +434,8 @@ export function mountRoster(app: Hono<RelayAppEnv>): void {
     // the roster exists, and a non-member gets the same NOT_FOUND an unknown
     // roster gets.
     const member = await c.env.DB.prepare(
-      "SELECT 1 FROM roster_members WHERE roster_id = ? AND org = ? AND handle = ?",
-    ).bind(id, org, viewer).first();
+      "SELECT 1 FROM roster_members WHERE roster_id = ? AND org = ? AND agent_id = ?",
+    ).bind(id, org, identity.agentId).first();
     if (!member) return c.json(NOT_FOUND, 404);
 
     // One query, never one per member.
@@ -440,18 +448,23 @@ export function mountRoster(app: Hono<RelayAppEnv>): void {
     // omits — is now moot rather than merely satisfied: discovery attests
     // nothing, because nothing here varies by group.
     const { results } = await c.env.DB.prepare(
-      "WITH target_handles AS (" +
-        "SELECT handle, org FROM roster_members WHERE roster_id = ? AND org = ?" +
+      "WITH target_ids AS (" +
+        "SELECT agent_id, org FROM roster_members WHERE roster_id = ? AND org = ?" +
       ") " +
-      // Two hops via handles, temporarily: roster membership is still keyed by
-      // address while cards have moved to the identity (#154 slice 5). The
-      // middle join disappears when membership moves in slice 6 and this
-      // becomes members.agent_id -> cards.agent_id directly.
-      "SELECT target.handle AS handle, c.card_json, c.updated_at " +
-        "FROM target_handles target " +
-        "JOIN handles h ON h.org = target.org AND h.handle = target.handle " +
-        "JOIN cards c ON c.org = h.org AND c.agent_id = h.agent_id " +
-        "ORDER BY target.handle",
+      // Both joins key on the identity now (#154 slice 6), which is what the
+      // hop through `handles` was standing in for. `handles` is still joined,
+      // but for DISPLAY rather than to resolve ownership: it supplies the
+      // address the member is reachable at right now, so a rename shows the
+      // new address instead of one frozen at join time.
+      //
+      // Deliberately an INNER join. A member holding no active address cannot
+      // be called, so listing them in a discovery index would advertise an
+      // unreachable agent.
+      "SELECT h.handle AS handle, c.card_json, c.updated_at " +
+        "FROM target_ids target " +
+        "JOIN cards c ON c.org = target.org AND c.agent_id = target.agent_id " +
+        "JOIN handles h ON h.org = target.org AND h.agent_id = target.agent_id " +
+        "ORDER BY h.handle",
     ).bind(id, org).all<{
       handle: string; card_json: string; updated_at: number;
     }>();

@@ -2,7 +2,7 @@ import { env, SELF } from "cloudflare:test";
 import { describe, expect, it, vi } from "vitest";
 import app from "../src/index.js";
 import {
-  closed, encryptedCallRequest, fixedRateLimit, issueInvite, nextFrame, openWs, registerHandle, wsAuth,
+  agentIdFor, closed, encryptedCallRequest, fixedRateLimit, issueInvite, nextFrame, openWs, registerHandle, wsAuth,
 } from "./helpers.js";
 import { recordCallPresenceRead } from "../src/do.js";
 
@@ -148,12 +148,12 @@ describe("listener attach + status", () => {
       "INSERT INTO rosters (id, org, admin_secret_hash, created_at) VALUES (?, 'acme', 'a', 1)",
     );
     const member = env.DB.prepare(
-      "INSERT INTO roster_members (roster_id, org, handle, joined_at) VALUES (?, 'acme', ?, 1)",
+      "INSERT INTO roster_members (roster_id, org, agent_id, joined_at) VALUES (?, 'acme', ?, 1)",
     );
     await env.DB.batch([
       roster.bind(shared), roster.bind(callerOnly),
-      member.bind(shared, "group-target"), member.bind(shared, "group-caller"),
-      member.bind(callerOnly, "group-caller"),
+      member.bind(shared, await agentIdFor("group-target")), member.bind(shared, await agentIdFor("group-caller")),
+      member.bind(callerOnly, await agentIdFor("group-caller")),
     ]);
 
     const incoming = nextFrame(listener);
@@ -175,11 +175,11 @@ describe("listener attach + status", () => {
       "INSERT INTO rosters (id, org, admin_secret_hash, created_at) VALUES (?, 'acme', 'a', 1)",
     );
     const member = env.DB.prepare(
-      "INSERT INTO roster_members (roster_id, org, handle, joined_at) VALUES (?, 'acme', ?, 1)",
+      "INSERT INTO roster_members (roster_id, org, agent_id, joined_at) VALUES (?, 'acme', ?, 1)",
     );
     await env.DB.batch([
       roster.bind(callerRoster), roster.bind(targetRoster),
-      member.bind(callerRoster, "open-caller"), member.bind(targetRoster, "open-target"),
+      member.bind(callerRoster, await agentIdFor("open-caller")), member.bind(targetRoster, await agentIdFor("open-target")),
     ]);
 
     const incoming = nextFrame(listener);
@@ -254,11 +254,11 @@ describe("listener attach + status", () => {
         "INSERT INTO rosters (id, org, admin_secret_hash, created_at) VALUES (?, 'acme', 'a', 1)",
       ).bind(roster),
       env.DB.prepare(
-        "INSERT INTO roster_members (roster_id, org, handle, joined_at) VALUES (?, 'acme', ?, 1)",
-      ).bind(roster, "s-target4"),
+        "INSERT INTO roster_members (roster_id, org, agent_id, joined_at) VALUES (?, 'acme', ?, 1)",
+      ).bind(roster, await agentIdFor("s-target4")),
       env.DB.prepare(
-        "INSERT INTO roster_members (roster_id, org, handle, joined_at) VALUES (?, 'acme', ?, 1)",
-      ).bind(roster, "s-viewer4"),
+        "INSERT INTO roster_members (roster_id, org, agent_id, joined_at) VALUES (?, 'acme', ?, 1)",
+      ).bind(roster, await agentIdFor("s-viewer4")),
     ]);
     const res = await SELF.fetch("https://relay.test/v1/status/s-target4", {
       headers: wsAuth("s-viewer4", viewer),
