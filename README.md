@@ -87,11 +87,17 @@ Pin a peer's identity and compare the fingerprint through another channel:
 agentcall verify @acme/ken
 ```
 
-Continue the last open conversation with that address:
+Continue the open conversation with that address:
 
 ```bash
 agentcall call @acme/ken "Which commit introduced it?" --continue
 ```
+
+One conversation stays open per address *per task*. When more than one is open,
+`--continue` asks which rather than guessing — add `--task <id>` to pick one.
+When the callee reports that a conversation has ended, the stored context is
+cleared, so the next `--continue` says to start a fresh call instead of retrying
+a dead one.
 
 Save frequently used addresses locally:
 

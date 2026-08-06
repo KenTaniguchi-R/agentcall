@@ -1179,8 +1179,99 @@ describe.sequential("CLI command actions", () => {
 
     expect(out.code).toBe(1);
     expect(out.stdout).toBe("");
-    expect(out.stderr).toMatch(/conversation is on task.*resolved-task.*not.*other-task/i);
+    // The store keys by task now, so there may be several open conversations
+    // and "that conversation is on X, not Y" can no longer name them. Listing
+    // the open tasks keeps the information the old message carried.
+    expect(out.stderr).toMatch(/No open conversation with local-sota on task "other-task"/);
+    expect(out.stderr).toMatch(/Open: resolved-task/);
     expect(callRelay.connections()).toBe(0);
+  });
+
+  it("keeps one conversation per task and refuses to guess between them", async () => {
+    const callRelay = await startCallRelay(() => {});
+    routing.host = new URL(callRelay.relay).host;
+    const testHome = home();
+    const paths = seedConfig(testHome, callRelay.relay);
+    rememberOutbound(paths, {
+      relay: callRelay.relay, from: "ken", to: "sota", task: "review",
+      context_id: "ctx_AAAAAAAAAAAAAAAAAAAAAA", at: 1,
+    });
+    rememberOutbound(paths, {
+      relay: callRelay.relay, from: "ken", to: "sota", task: "triage",
+      context_id: "ctx_BBBBBBBBBBBBBBBBBBBBBB", at: 2,
+    });
+
+    // Keyed on the callee alone, the second call silently discarded the first.
+    expect(loadOutbound(paths)).toHaveLength(2);
+
+    const out = await runCommand(testHome, ["call", "local-sota", "follow up", "--continue"]);
+
+    expect(out.code).toBe(1);
+    expect(out.stdout).toBe("");
+    expect(out.stderr).toMatch(/Several open conversations/i);
+    expect(out.stderr).toContain("review");
+    expect(out.stderr).toContain("triage");
+    expect(callRelay.connections()).toBe(0);
+  });
+
+  it("resumes the conversation --task names when several are open", async () => {
+    const frames: Record<string, unknown>[] = [];
+    const callRelay = await startCallRelay(async (frame, reply) => {
+      frames.push(frame);
+      await reply({ kind: "reply", text: "ok", task: "triage", context_id: "ctx_BBBBBBBBBBBBBBBBBBBBBB" });
+    });
+    routing.host = new URL(callRelay.relay).host;
+    const testHome = home();
+    const paths = seedConfig(testHome, callRelay.relay);
+    rememberOutbound(paths, {
+      relay: callRelay.relay, from: "ken", to: "sota", task: "review",
+      context_id: "ctx_AAAAAAAAAAAAAAAAAAAAAA", at: 1,
+    });
+    rememberOutbound(paths, {
+      relay: callRelay.relay, from: "ken", to: "sota", task: "triage",
+      context_id: "ctx_BBBBBBBBBBBBBBBBBBBBBB", at: 2,
+    });
+
+    const out = await runCommand(testHome, ["call", "local-sota", "follow up", "--continue", "--task", "triage"]);
+
+    expect(out.code).toBe(0);
+    expect(frames).toHaveLength(1);
+    expect(frames[0]).toMatchObject({ task: "triage", context_id: "ctx_BBBBBBBBBBBBBBBBBBBBBB" });
+    // The other conversation is untouched, not replaced by this turn.
+    expect(loadOutbound(paths).map((e) => e.task).sort()).toEqual(["review", "triage"]);
+  });
+
+  // The callee ends a conversation on its own schedule -- the turn cap, the
+  // TTL, or a session its agent CLI has dropped -- and says so only ever as
+  // context_unknown. rememberOutbound runs on the success path alone, so
+  // without forgetOutbound the caller's half outlived the callee's binding and
+  // every later --continue re-sent the same dead context id, failing
+  // identically forever.
+  it("clears the stored conversation when the callee reports context_unknown", async () => {
+    const callRelay = await startCallRelay(async (_frame, reply) => {
+      await reply({ kind: "failure", code: "context_unknown" });
+    });
+    routing.host = new URL(callRelay.relay).host;
+    const testHome = home();
+    const paths = seedConfig(testHome, callRelay.relay);
+    rememberOutbound(paths, {
+      relay: callRelay.relay, from: "ken", to: "sota", task: "resolved-task",
+      context_id: "ctx_AAAAAAAAAAAAAAAAAAAAAA", at: 1,
+    });
+
+    const out = await runCommand(testHome, ["call", "local-sota", "follow up", "--continue"]);
+
+    expect(out.code).toBe(1);
+    expect(out.stdout).toBe("");
+    expect(out.stderr).toMatch(/has ended/i);
+    expect(out.stderr).toMatch(/without --continue/);
+    expect(loadOutbound(paths)).toEqual([]);
+
+    // And the follow-up after that is the "start one" message rather than the
+    // same failure against an id the callee has already forgotten.
+    const again = await runCommand(testHome, ["call", "local-sota", "again", "--continue"]);
+    expect(again.code).toBe(1);
+    expect(again.stderr).toMatch(/No open conversation/);
   });
 
   it("stores a returned context and continues it with the resolved task while keeping stdout parseable", async () => {

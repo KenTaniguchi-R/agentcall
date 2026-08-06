@@ -10,7 +10,7 @@ import { buildPrompt } from "./prompt.js";
 import { redactOutbound } from "./redact.js";
 import {
   AgentRunError, codexThreadingEnabled, codexToolTelemetryEnabled,
-  CODEX_THREADING_VERIFIED_VERSION, runAgent,
+  CODEX_THREADING_VERIFIED_VERSION, isResumeFailure, runAgent,
 } from "./runner.js";
 import { mintContextId, pruneContexts, saveContexts, upsertContext } from "./contexts.js";
 import { SerialQueue } from "./queue.js";
@@ -430,7 +430,31 @@ export function startListener(deps: ListenerDeps): { stop(): Promise<void> } {
             audit({ call_id, ...correlation, from, message: message.slice(0, 500), task: task.id, status: "canceled", duration_ms: Date.now() - started });
             return;
           }
-          const outcomeDeliveryError = await trySendOutcome({ kind: "failure", code, detail: "The agent hit an internal error while answering." });
+          // A binding the agent CLI will no longer resume is an ENDED
+          // conversation, not an internal fault — same outcome the caller would
+          // have got had the binding expired a minute earlier, and the same
+          // single `context_unknown` code, so this discloses nothing that
+          // admitBinding didn't already. Only reachable when a resume was
+          // actually attempted (`binding !== undefined`), so a fresh call can
+          // never be reclassified. The telemetry outcome above stays
+          // "agent_error": the invocation did fail, and that is what an
+          // operator is counting.
+          const resumeGone = binding !== undefined && isResumeFailure(config.agent_kind, e);
+          if (resumeGone) {
+            // Drop the dead binding, or the next --continue re-spawns a resume
+            // already known to fail. Best-effort for the same reason the mint
+            // path is: a store we cannot write must not change what the caller
+            // is told.
+            try {
+              persistContexts(deps.paths, pruneContexts(contexts.filter((b) => b.context_id !== binding.context_id), now));
+            } catch (persistError) {
+              console.error(`Warning: could not drop the ended call context: ${String(persistError).slice(0, 2000)}`);
+            }
+          }
+          const failureCode = resumeGone ? "context_unknown" : code;
+          const outcomeDeliveryError = await trySendOutcome(resumeGone
+            ? { kind: "failure", code: "context_unknown" }
+            : { kind: "failure", code, detail: "The agent hit an internal error while answering." });
           // The agent's own error text can echo the session id back at us: a
           // stale binding makes `claude --resume <id>` print that id, and
           // runAgent folds the child's stderr/stdout into its message. Scrubbed
@@ -445,7 +469,7 @@ export function startListener(deps: ListenerDeps): { stop(): Promise<void> } {
             [config.token],
           );
           audit({
-            call_id, ...correlation, from, message: message.slice(0, 500), task: task.id, status: code,
+            call_id, ...correlation, from, message: message.slice(0, 500), task: task.id, status: failureCode,
             duration_ms: Date.now() - started, error: err.slice(0, 2000),
             outcome_delivery_error: outcomeDeliveryError,
           });
