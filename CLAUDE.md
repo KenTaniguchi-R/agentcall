@@ -207,6 +207,20 @@ protocol-client/runner/config tests with mocked `ws`/`fs` in `packages/cli`. No 
 `claude`/`codex` spawn in CI — `packages/cli/test/runner.test.ts` uses a fake agent
 binary.
 
+**Test files are yours to edit; the grader is not.** `scripts/guard-verification-gate.sh`
+is a `PreToolUse` hard deny (registered in `.claude/settings.json`) covering
+`scripts/ci-local.sh`, `.github/workflows/`, the hook itself, and the settings that
+register it. It fires before the permission check, so it holds even under
+`--dangerously-skip-permissions`, and the only way through is a human editing those
+files outside Claude Code. Tests are deliberately outside that set — blocking them
+blocked writing the failing test first, which is the workflow above. The direction
+that actually matters is caught at push instead: `inv_test_churn` fails the gate when
+an existing test file loses more lines than it gains on a branch that also changed
+`src/`, and warns when `src/` changed with no test lines added. When that fires,
+confirm by eye that it is a real simplification and not a weakened check, then push
+with `--no-verify`. See #335 for why the layer exists and #374 for why it is scoped
+this way.
+
 ## Git
 
 Stage files explicitly (`git add <file> <file>`) — never `git add -A` or `git add .`.
