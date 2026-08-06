@@ -137,16 +137,35 @@ describe("guard-entry as a real process", () => {
     expect(JSON.parse(calls)).toMatchObject({ type: "tool_denied" });
   });
 
-  it("denies a file-shaped read outside AGENTCALL_ALLOWED_ROOT", () => {
+  // Was "denies a file-shaped read outside AGENTCALL_ALLOWED_ROOT". #372
+  // deleted that env var, and the test kept passing for a reason unrelated to
+  // its name: it seeded no sensitivity map, so EVERY path classified `secret`
+  // and the guard would have denied anything. Confirmed by running it with the
+  // env var removed (still denies) and against a file INSIDE the supposedly
+  // allowed root (also denies). It discriminated nothing.
+  //
+  // The property that replaced confinement is the labelled/unlabelled split,
+  // so that is what this drives: one seeded map, one clearance, two sibling
+  // paths, opposite verdicts. A guard that denied everything — which the old
+  // test could not tell from a working one — fails the first assertion.
+  it("allows a labelled path and denies its unlabelled sibling", () => {
     const home = tempDir("guard-");
-    const allowed = join(home, "code", "payments");
-    const r = run(
-      { tool_name: "Read", tool_input: { file_path: join(home, "code", "payroll", "salary.ts") }, cwd: allowed },
+    const labelled = join(home, "code", "payments");
+    seedMap(home, [labelled]);
+
+    const inside = run(
+      { tool_name: "Read", tool_input: { file_path: join(labelled, "ledger.ts") }, cwd: labelled },
       home,
-      { AGENTCALL_ALLOWED_ROOT: allowed },
     );
-    expect(r.status).toBe(0);
-    expect(JSON.parse(r.stdout).hookSpecificOutput.permissionDecision).toBe("deny");
+    expect(inside.status).toBe(0);
+    expect(inside.stdout).toBe("");
+
+    const outside = run(
+      { tool_name: "Read", tool_input: { file_path: join(home, "code", "payroll", "salary.ts") }, cwd: labelled },
+      home,
+    );
+    expect(outside.status).toBe(0);
+    expect(JSON.parse(outside.stdout).hookSpecificOutput.permissionDecision).toBe("deny");
   });
 
   it("exits 2 on unparseable input", () => {
