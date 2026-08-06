@@ -30,10 +30,21 @@ export interface PromptWorkdir {
 // from reading sources it is explicitly permitted to read.
 //
 // It now states what is actually true — the labelled sources this caller is
-// cleared for, and that the reply is checked. Every path listed is at or below
-// the caller's clearance by construction (readableSources filters on exactly
-// that), so naming them here cannot disclose anything the answer could not
-// already contain.
+// cleared for. Every path listed is at or below the caller's clearance by
+// construction (readableSources filters on exactly that), so naming them here
+// cannot disclose anything the answer could not already contain.
+//
+// It deliberately does NOT claim the reply is checked, because it is not. The
+// only thing that happens to an answer is redactOutbound (listener.ts), which
+// replaces credential-SHAPED strings and this line's own relay token. Nothing
+// compares the answer against the caller's clearance. An earlier revision of
+// this sentence said otherwise, which repeated the exact mistake it had just
+// fixed: the confinement claim it replaced was also false.
+//
+// Overstating a guardrail is worse than stating none. The model relaxes in
+// proportion to what it believes is catching it, so the honest version — the
+// read boundary is real, the reply boundary is you — is also the one that
+// produces more careful behaviour.
 export function buildPrompt(
   handle: string, from: string, message: string, task?: Task, workdir?: PromptWorkdir,
   threaded: boolean = false,
@@ -52,7 +63,8 @@ export function buildPrompt(
       (workdir.readable.length > 0
         ? `You may read files under: ${workdir.readable.join(", ")}. `
         : `No source has been labelled for this caller, so you cannot read anything outside that directory. `) +
-      `Everything else is refused when you try to read it, and your reply is checked before it is sent. `
+      `Everything else is refused when you try to read it. Your answer itself is not checked, ` +
+      `so include only what this caller may see. `
     : "";
 
   // "one-shot" is false on a resumed turn and the model acts on it. The

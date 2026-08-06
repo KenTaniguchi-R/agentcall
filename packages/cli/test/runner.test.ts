@@ -114,10 +114,29 @@ describe("buildPrompt", () => {
     expect(p).not.toMatch(/do not access anything outside it/i);
   });
 
-  it("says the reply is checked, which is the boundary that actually exists", () => {
+  // Was "says the reply is checked, which is the boundary that actually exists".
+  // It is not, and never was: listener.ts runs redactOutbound over the answer,
+  // which replaces credential-SHAPED strings and the line's own relay token.
+  // Nothing compares the answer against the caller's clearance.
+  //
+  // The read boundary is real and is what the agent should be told about. The
+  // reply boundary was invented by the same commit that deleted the previous
+  // false claim ("Do not access anything outside it"), so this pins the absence
+  // rather than only the presence — a prompt that overstates its guardrails
+  // makes the model LESS careful, which is the opposite of what it is for.
+  it("states the read boundary and does not claim a reply check that does not exist", () => {
     const p = buildPrompt("ken", "shusaku", "q?", undefined, { dir: "/h/x", readable: ["/h/x"] });
     expect(p).toMatch(/refused when you try to read it/i);
-    expect(p).toMatch(/reply is checked before it is sent/i);
+    expect(p).not.toMatch(/reply is checked/i);
+    expect(p).not.toMatch(/checked before it is sent/i);
+  });
+
+  // Since nothing checks the answer, the model is the only thing standing
+  // between a secret it was allowed to read and the wire. Say so.
+  it("puts responsibility for the answer's contents on the agent", () => {
+    const p = buildPrompt("ken", "shusaku", "q?", undefined, { dir: "/h/x", readable: ["/h/x"] });
+    expect(p).toMatch(/not checked/i);
+    expect(p).toMatch(/only what this caller may see/i);
   });
 
   // The fresh-install case: nothing labelled, so `readable` is empty. Listing
