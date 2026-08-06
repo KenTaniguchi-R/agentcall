@@ -1,5 +1,6 @@
 {
   "name": "agentcall-relay",
+  "account_id": "3dcd1e12b47fa566e1420769be5c10f8",
   "main": "src/index.ts",
   "compatibility_date": "2026-06-01",
   // Prevents a future `wrangler deploy` from silently re-enabling the
@@ -10,7 +11,7 @@
   "d1_databases": [{
     "binding": "DB",
     "database_name": "agentcall",
-    "database_id": "f67097f0-2521-4c41-a9d4-1402682038aa",
+    "database_id": "7fe0f64a-f146-455c-8099-4116b6d79593",
     "migrations_dir": "migrations"
   }],
   "analytics_engine_datasets": [{
@@ -31,7 +32,7 @@
   // which is where every other copy of this host now lives. JSONC cannot import
   // the constant, so this literal is the one deliberate duplicate — the
   // hosted-relay-host invariant in scripts/ci-local.sh fails if the two drift.
-  "routes": [{ "pattern": "agentcall.benree.tech", "custom_domain": true }],
+  "routes": [{ "pattern": "agent-call.app", "custom_domain": true }],
   // Durable recovery eviction delivery. Each alarm drains a bounded page and
   // failed jobs retain exponential backoff state in D1.
   "triggers": { "crons": ["*/5 * * * *"] },

@@ -72,7 +72,7 @@ describe("addLine", () => {
     const keys = await generateIdentityKeys(paths);
     const relays: string[] = [];
     await publishStoredKeys(
-      { org: "acme", handle: "ken", token: "t", relay: "https://agentcall.benree.tech" },
+      { org: "acme", handle: "ken", token: "t", relay: "https://agent-call.app" },
       keys,
       paths,
       {
@@ -80,7 +80,7 @@ describe("addLine", () => {
         encryption: async (relay) => { relays.push(relay); },
       },
     );
-    expect(relays).toEqual(["https://agentcall.benree.tech", "https://agentcall.benree.tech"]);
+    expect(relays).toEqual(["https://agent-call.app", "https://agent-call.app"]);
   });
   it("persists identity keys before registration and config immediately after", async () => {
     let keysExistedAtRegistration = false;

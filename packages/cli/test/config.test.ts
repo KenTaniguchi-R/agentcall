@@ -18,7 +18,7 @@ describe("relayUrl", () => {
   it("env > config > default", () => {
     const cfg = { org: "acme", handle: "k", token: "t", agent_kind: "claude" as const, relay: "https://custom.example" };
     expect(relayUrl(cfg)).toBe("https://custom.example");
-    expect(relayUrl(undefined)).toBe("https://agentcall.benree.tech");
+    expect(relayUrl(undefined)).toBe("https://agent-call.app");
     process.env.AGENTCALL_RELAY = "http://localhost:8787";
     try { expect(relayUrl(cfg)).toBe("http://localhost:8787"); }
     finally { delete process.env.AGENTCALL_RELAY; }
@@ -40,8 +40,8 @@ describe("relayUrl", () => {
 
 describe("relayAddressHost", () => {
   it("uses the tenant hostname for the hosted relay and the literal host elsewhere", () => {
-    expect(relayAddressHost("https://agentcall.benree.tech", "acme"))
-      .toBe("acme.agentcall.benree.tech");
+    expect(relayAddressHost("https://agent-call.app", "acme"))
+      .toBe("acme.agent-call.app");
     expect(relayAddressHost("https://relay.example:8787", "acme")).toBe("relay.example");
   });
 });

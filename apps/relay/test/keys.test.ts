@@ -347,7 +347,7 @@ describe("key publication endpoints", () => {
     // port); the reverted bug used URL.host, which includes a port when one
     // is present. relay.test and the bare-apex test above never carry a port,
     // so neither exercises this half of the divergence.
-    const APEX = "agentcall.benree.tech";
+    const APEX = "agent-call.app";
     const handle = "kp-apex-port";
     const address = `@acme/${handle}`;
     const origin = `https://${APEX}:8443`;

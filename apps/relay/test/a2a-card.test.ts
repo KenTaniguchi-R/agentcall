@@ -192,7 +192,7 @@ describe("GET /v1/a2a/:handle/agent-card.json", () => {
   });
 
   it("401s an anonymous per-agent card read", async () => {
-    const res = await SELF.fetch("https://acme.agentcall.benree.tech/v1/a2a/ken/agent-card.json");
+    const res = await SELF.fetch("https://acme.agent-call.app/v1/a2a/ken/agent-card.json");
     expect(res.status).toBe(401);
     expect(res.headers.get("content-type")).toBe("application/a2a+json");
   });
