@@ -8,6 +8,7 @@ import { runRoomVerification, type RoomVerificationResult } from "./room-verific
 import { createLineListener } from "./tty.js";
 
 const AGENT_ADAPTER_RE = /^(?:claude|codex)@(\d+\.\d+\.\d+):(\w+)\/(\w+)$/;
+const ROOM_SEATS = 6 as const;
 
 function agentAdapterString(agent: "claude" | "codex", version: string): string {
   const adapter = `${agent}@${version}:${process.platform}/${process.arch}`;
@@ -16,7 +17,6 @@ function agentAdapterString(agent: "claude" | "codex", version: string): string 
 }
 
 export interface RoomHostOptions {
-  seats: number;
   relay: string;
   displayName?: string;
   agent?: "claude" | "codex";
@@ -32,12 +32,11 @@ export interface RoomHostOptions {
 
 export async function runRoomHost(options: RoomHostOptions): Promise<RoomVerificationResult> {
   const {
-    seats, relay, displayName, agent = "claude", log = (line: string) => console.log(line),
+    relay, displayName, agent = "claude", log = (line: string) => console.log(line),
     checkEligibility = checkRoomSafetyEligibility, createRoomFn = createRoom,
     poll = pollRoomState, mutate = mutateRoom, createListener = createLineListener,
     runVerification = runRoomVerification, generateKeys = generateRoomKeys,
   } = options;
-  if (seats < 2 || seats > 6) throw new Error("Room seats must be between 2 and 6.");
 
   const eligibility = checkEligibility({ agent });
   if (!eligibility.supported) {
@@ -48,7 +47,7 @@ export async function runRoomHost(options: RoomHostOptions): Promise<RoomVerific
   const keys = await generateKeys();
   const name = resolveHostDisplayName(displayName);
   const created = await createRoomFn(relay, {
-    expected_participants: seats as 2 | 3 | 4 | 5 | 6,
+    expected_participants: ROOM_SEATS,
     display_name: name,
     signing_public_key: keys.signingPublicKey,
     encryption_public_key: keys.encryptionPublicKey,
@@ -58,32 +57,25 @@ export async function runRoomHost(options: RoomHostOptions): Promise<RoomVerific
   if (!own) throw new Error("The relay returned a Room credential this CLI could not parse.");
 
   log("");
-  log(`This creates a private ${seats}-person Room for up to 30 minutes.`);
+  log(`This creates a private Room for up to ${ROOM_SEATS} people and 30 minutes.`);
   log("No account, Team, address, saved identity, or background listener will be created.");
   log("");
   log("Ask each person to run:");
   log("  agentcall room join");
   log("");
   for (const line of formatInviteLines(created.invite)) log(line);
-  log(`Waiting for ${seats - 1} people…  Ctrl-C closes the Room.`);
+  log(`Waiting for up to ${ROOM_SEATS - 1} more people…  Ctrl-C closes the Room.`);
 
   const listener = createListener();
   const seenPending = new Set<string>();
-  let pendingAdmitResolve: ((line: string) => void) | undefined;
   let startRequested = false;
   listener.onLine((line) => {
-    if (pendingAdmitResolve) {
-      pendingAdmitResolve(line);
-      pendingAdmitResolve = undefined;
-      return;
-    }
     if (line.trim() === "/start") startRequested = true;
   });
 
   const waitingResult = await new Promise<
     { locked: true } | { closed: true; reason: RoomCloseReasonType | "unknown" }
   >((resolve) => {
-    let admitting = false;
     const handle = poll({
       relay, credential: created.credential, ownParticipantId: own.participantId,
       onSnapshot: async (snapshot) => {
@@ -97,18 +89,13 @@ export async function runRoomHost(options: RoomHostOptions): Promise<RoomVerific
           resolve({ locked: true });
           return;
         }
-        if (admitting) return;
         const newlyPending = snapshot.participants.filter(
           (p) => p.state === "pending" && !seenPending.has(p.participant_id),
         );
         for (const guest of newlyPending) {
           seenPending.add(guest.participant_id);
-          admitting = true;
-          listener.print(`${guest.display_name} wants to join. Admit? [Y/n] `);
-          const answer = await new Promise<string>((res) => { pendingAdmitResolve = res; });
-          const admit = answer.trim() === "" || answer.trim().toLowerCase().startsWith("y");
-          await mutate(relay, created.credential, admit ? "admit" : "deny", guest.participant_id).catch(() => {});
-          admitting = false;
+          await mutate(relay, created.credential, "admit", guest.participant_id).catch(() => {});
+          listener.print(`${guest.display_name} joined.\n`);
         }
         const admittedCount = snapshot.participants.filter((p) => p.state === "admitted").length + 1; // +1 = host
         if (startRequested) {
