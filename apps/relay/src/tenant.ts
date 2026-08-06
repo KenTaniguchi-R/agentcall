@@ -1,7 +1,12 @@
 import { ORG_RE, type OrgRoleType } from "@benree/agentcall-shared";
 import { authenticatedHandle } from "./auth.js";
 
-type RequestLike = { header(name: string): string | undefined; url: string };
+// Headers only, deliberately. This carried `url` while the hostname was a
+// fallback source of the org; narrowing it to what is actually read means a
+// hostname cannot reach `requestOrg` to be trusted again, which the comment in
+// that function argues for and this type now enforces. Hono's `c.req` is
+// wider, so it still satisfies this.
+type RequestLike = { header(name: string): string | undefined };
 export type DeploymentMode = "hosted" | "self-hosted";
 type TenantAuthEnv = { DB: D1Database; DEPLOYMENT_MODE?: string; SELF_HOSTED_ORG?: string };
 // agentId is the stable principal (#154); handle is the routing address

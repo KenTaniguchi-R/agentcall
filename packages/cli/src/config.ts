@@ -88,8 +88,3 @@ export function relayHostOf(relay: string): string {
 export function lineAddress(cfg: LineConfig): string {
   return formatAddress(cfg.org, cfg.handle);
 }
-
-export function relayAddressHost(relay: string, org: string): string {
-  const host = new URL(relay).hostname;
-  return host === HOSTED_RELAY_HOST ? `${org}.${host}` : host;
-}

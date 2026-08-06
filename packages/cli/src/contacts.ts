@@ -78,12 +78,17 @@ export type Resolved =
 
 // The single resolution path shared by `call`, `status`, and `card`, so the
 // three commands cannot drift: "@" means a literal address, anything else is
-// a contact-book lookup. `relay` is the URL the caller will actually dial;
-// pass it so the host check above applies uniformly to all three.
+// a contact-book lookup.
+//
+// It used to take the relay URL as well, because the tenant check derived the
+// target org from the dialled hostname. The org is a field of the address now,
+// so nothing here reads the relay and the parameter is gone — a caller cannot
+// pass one relay while dialling another.
+//
 // `org` is the calling LINE's tenant, not the machine's: the contact book is
 // shared across lines (person-scoped) but the tenant check is per-call, so the
 // caller passes the org of whichever line is placing this call.
-export function resolveAddress(p: MachinePaths, arg: string, _relay?: string, org?: string): Resolved {
+export function resolveAddress(p: MachinePaths, arg: string, org?: string): Resolved {
   const check = (address: string, label?: string): Resolved => {
     const parsed = parseAddress(address);
     if (!parsed) {

@@ -28,7 +28,7 @@ export function register(program: { command(name: string): any }): void {
       }
       const cfg = ctx.config;
       const cfgRelay = relayUrl(cfg);
-      const parsed = resolveAddress(machine, address, cfgRelay, cfg.org);
+      const parsed = resolveAddress(machine, address, cfg.org);
       if (!parsed.ok) {
         fail(parsed.error);
         return;

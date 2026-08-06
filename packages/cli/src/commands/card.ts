@@ -71,7 +71,7 @@ export function registerCard(program: Command): void {
         return;
       }
       const cfg = ctx.config;
-      const parsed = resolveAddress(machine, target, relayUrl(cfg), cfg.org);
+      const parsed = resolveAddress(machine, target, cfg.org);
       if (!parsed.ok) {
         console.error(`${parsed.error} (or 'push')`);
         process.exitCode = 1;

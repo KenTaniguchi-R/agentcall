@@ -19,7 +19,7 @@ export function register(program: { command(name: string): any }): void {
         if (!first.ok) throw new Error(first.error);
         const ctx = pickOutboundLine(machine, first.org, { as: o.as });
         const cfg = ctx.config;
-        const resolved = resolveAddress(machine, address, relayUrl(cfg), cfg.org);
+        const resolved = resolveAddress(machine, address, cfg.org);
         if (!resolved.ok) throw new Error(resolved.error);
         const bundle = await fetchKeys(
           relayUrl(cfg), authOf(cfg), resolved.handle,
