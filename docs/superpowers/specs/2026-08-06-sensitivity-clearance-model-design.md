@@ -149,7 +149,7 @@ Free-text `ask` cannot; it emits `string`, which is unbounded.
 | Today | Fate |
 |---|---|
 | `CAPS`, `Cap`, `Envelope`, `FULL_ACCESS_ENVELOPE` (`tasks.ts:8-28`) | **deleted** — no write/exec/read distinction remains |
-| `guard.ts` denylist as a special case | **deleted** — those paths are unlabeled, therefore `secret` |
+| `guard.ts` denylist as a special case | **re-expressed as floor rules** — see below |
 | `AGENTCALL_ALLOWED_ROOT` / `allowedRoot` | **deleted** — "unlabeled is secret" is strictly more general |
 | `deriveThreadable` (`tasks.ts:93-96`) | **deleted** — threading is safe when the only sink is a clearance-checked reply |
 | task and line `workdir` (`config.ts:53-64`, `listener-stages.ts:206`) | **deleted** — the sensitivity map replaces a single working directory |
@@ -159,6 +159,26 @@ Free-text `ask` cannot; it emits `string`, which is unbounded.
 `guard.ts` does not disappear — it becomes the enforcement point for
 "is this path's sensitivity ≤ clearance", which is the same hook seam it already
 occupies. The net is fewer mechanisms, not more.
+
+### Correction: the denylist becomes floor rules, not nothing
+
+The first draft of this spec said `DENIED_DIRS` could simply be deleted, because
+those paths are unlabeled and therefore `secret`. **That is wrong**, and it was
+caught while implementing: it holds only while nobody labels a *parent*. An
+owner who writes `{ "path": "~", "sensitivity": "internal" }` would classify
+`~/.ssh/id_rsa` as `internal` and hand it to any `internal`-cleared caller.
+
+The fix keeps one mechanism rather than restoring two. Those paths are merged in
+as built-in `secret` **sources** (`builtinSecretSources`, `withFloor`), so:
+
+- longest-prefix-wins makes `~/.ssh` beat a broader `~` automatically
+- the most-restrictive tie-break makes the floor **non-overridable** from the
+  owner's map, even by an exact-path label
+- `withFloor` is idempotent, so double application cannot change a verdict
+
+The denylist stops being a parallel mechanism and becomes data in the one that
+remains. That is a better outcome than the original deletion and it preserves
+every property `guard.ts` had.
 
 ### The change is contained to `packages/cli`
 

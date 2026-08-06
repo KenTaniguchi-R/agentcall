@@ -6,6 +6,7 @@
 // every source: how sensitive is it. Everything not named is `secret`, so the
 // failure mode of an unconfigured or half-configured line is a refusal to
 // answer rather than a leak — which is what makes a generous default safe.
+import { join } from "node:path";
 import { z } from "zod";
 import { canonical, expandHome, isInside } from "./path-canon.js";
 
@@ -93,6 +94,48 @@ function lookup(record: Record<string, Sensitivity>, name: string): Sensitivity 
 
 export function classifyMcp(map: SensitivityMap, server: string): Sensitivity {
   return lookup(map.mcp, server);
+}
+
+// Home-relative paths that are `secret` no matter what the owner's map says.
+// These are guard.ts's DENIED_DIRS and DENIED_FILES, carried over verbatim.
+//
+// They exist as sensitivity rules rather than as a second, parallel denylist
+// because "unlabelled is secret" alone does not cover them: an owner who labels
+// `~` internal would otherwise classify ~/.ssh/id_rsa as internal. Expressed as
+// rules, longest-prefix-wins protects them automatically, and the
+// most-restrictive tie-break makes the floor non-overridable from the map.
+const FLOOR_DIRS = [
+  ".ssh", ".gnupg", ".aws", ".config/gcloud", "Library/Keychains",
+  ".agentcall",             // holds config.json and the relay token
+  ".claude",                // executable configuration; cf. CVE-2025-59536
+  ".codex",                 // auth.json, plus a config.toml that routinely holds API keys
+  "Library/LaunchAgents",   // how the listener itself gets launched
+  ".config/systemd/user",   // Linux user units can replace the listener command
+];
+
+const FLOOR_FILES = [
+  ".netrc", ".npmrc", ".docker/config.json", ".claude.json",
+  // Shell startup files: sourced on every new shell, so writing one is a
+  // persistence mechanism as durable as a LaunchAgent.
+  ".zshrc", ".zprofile", ".bashrc", ".bash_profile", ".profile",
+];
+
+export function builtinSecretSources(home: string): SensitivityMap["sources"] {
+  return [...FLOOR_DIRS, ...FLOOR_FILES].map((p) => ({
+    path: join(home, p),
+    sensitivity: "secret" as const,
+  }));
+}
+
+/**
+ * Merge the non-overridable floor into an owner's map.
+ *
+ * Idempotent: the floor entries are identical on every application, and
+ * duplicate rules of equal length combine toward the more restrictive value, so
+ * applying it twice cannot change a verdict.
+ */
+export function withFloor(map: SensitivityMap, home: string): SensitivityMap {
+  return { ...map, sources: [...map.sources, ...builtinSecretSources(home)] };
 }
 
 export function classifySkill(map: SensitivityMap, skill: string): Sensitivity {
