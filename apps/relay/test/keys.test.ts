@@ -8,11 +8,11 @@ import {
 import app from "../src/index.js";
 import { fixedRateLimit, registerHandle } from "./helpers.js";
 
-// The address in a record is `handle@registrationAddressHost(org, url)`, and
-// registrationAddressHost returns the request hostname unchanged for any host
-// that is not the hosted relay. So for these tests the address host is exactly
-// the host fetched below — which is the whole point: publication and service
-// derive it the same way.
+// A record's `address` is `@org/handle` and names no host, so the relay a
+// record was published on is a separate signed field: `relay_origin`. These
+// tests fetch from the same host they sign into it, which is the point — the
+// relay serves `relay_origin` exactly as stored rather than reconstructing it
+// from the live request, and the two must agree for verification to pass.
 const HOST = "relay.test";
 
 async function newIdentity(handle: string) {

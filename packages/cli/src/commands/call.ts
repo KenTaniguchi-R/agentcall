@@ -40,7 +40,7 @@ export function register(program: Command): void {
         return;
       }
       const cfg = ctx.config;
-      const parsed = resolveAddress(machine, address, relayUrl(cfg), cfg.org);
+      const parsed = resolveAddress(machine, address, cfg.org);
       if (!parsed.ok) {
         fail(parsed.error);
         return;

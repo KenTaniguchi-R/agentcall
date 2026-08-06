@@ -2,7 +2,7 @@ import { mkdirSync } from "node:fs";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 import { getLinePaths, getMachinePaths } from "../src/paths.js";
-import { assertCallableLine, relayAddressHost, relayUrl, resolveLineWorkdir } from "../src/config.js";
+import { assertCallableLine, relayUrl, resolveLineWorkdir } from "../src/config.js";
 import { saveLineConfig } from "../src/lines.js";
 import { tempDir } from "./helpers.js";
 
@@ -35,14 +35,6 @@ describe("relayUrl", () => {
     process.env.AGENTCALL_RELAY = "";
     try { expect(relayUrl(cfg)).toBe("https://custom.example"); }
     finally { delete process.env.AGENTCALL_RELAY; }
-  });
-});
-
-describe("relayAddressHost", () => {
-  it("uses the tenant hostname for the hosted relay and the literal host elsewhere", () => {
-    expect(relayAddressHost("https://agent-call.app", "acme"))
-      .toBe("acme.agent-call.app");
-    expect(relayAddressHost("https://relay.example:8787", "acme")).toBe("relay.example");
   });
 });
 

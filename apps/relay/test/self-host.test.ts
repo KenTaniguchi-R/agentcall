@@ -5,8 +5,7 @@ import { sha256Hex } from "../src/auth.js";
 import { deploymentOrgAllows, requestOrg } from "../src/tenant.js";
 import { issueInvite, wsAuth } from "./helpers.js";
 
-const requestLike = (host: string, org?: string) => ({
-  url: `https://${host}/v1/card/ken`,
+const requestLike = (org?: string) => ({
   header: (name: string) => name === "X-AgentCall-Org" ? org : undefined,
 });
 const selfHostEnv = (org: string) => ({
@@ -15,14 +14,14 @@ const selfHostEnv = (org: string) => ({
 
 describe("single-organization self-host boundary", () => {
   it("uses the configured organization without encoding it in the hostname", () => {
-    expect(requestOrg(requestLike("relay.example.com"), "self-hosted", "acme")).toBe("acme");
-    expect(requestOrg(requestLike("relay.example.com", "acme"), "self-hosted", "acme")).toBe("acme");
+    expect(requestOrg(requestLike(), "self-hosted", "acme")).toBe("acme");
+    expect(requestOrg(requestLike("acme"), "self-hosted", "acme")).toBe("acme");
   });
 
   it("fails closed on a conflicting header or malformed deployment organization", () => {
-    expect(requestOrg(requestLike("relay.example.com", "other"), "self-hosted", "acme")).toBe("");
-    expect(requestOrg(requestLike("relay.example.com"), "self-hosted", "Not Valid")).toBe("");
-    expect(requestOrg(requestLike("relay.example.com"), undefined, "acme")).toBe("");
+    expect(requestOrg(requestLike("other"), "self-hosted", "acme")).toBe("");
+    expect(requestOrg(requestLike(), "self-hosted", "Not Valid")).toBe("");
+    expect(requestOrg(requestLike(), undefined, "acme")).toBe("");
   });
 
   it("prevents bootstrap and invite redemption from creating another tenant", () => {
@@ -35,11 +34,12 @@ describe("single-organization self-host boundary", () => {
   });
 
   // Was: a hosted request derives its org from the tenant subdomain. That
-  // fallback is deleted — the org comes only from the credential path, so a
-  // hostname that names a tenant and carries no org header resolves to nothing.
-  it("no longer derives the org from a tenant subdomain", () => {
-    expect(requestOrg(requestLike("acme.agentcall.benree.tech"), "hosted")).toBe("");
-    expect(requestOrg(requestLike("relay.example.com"), "hosted")).toBe("");
+  // fallback is deleted, and `RequestLike` no longer carries a URL at all — a
+  // hostname cannot reach `requestOrg` to be trusted, so the subdomain case is
+  // unrepresentable rather than merely asserted against. What is still worth
+  // asserting is that the header is the only source: no header, no org.
+  it("resolves no org for a hosted request without the org header", () => {
+    expect(requestOrg(requestLike(), "hosted")).toBe("");
   });
 
   it("rejects an invite from another tenant without consuming it", async () => {

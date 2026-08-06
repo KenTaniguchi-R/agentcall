@@ -153,7 +153,7 @@ describe("resolveAddress", () => {
   // host being spelled a particular way.
   it("rejects a literal address belonging to a different organization", () => {
     const p = getMachinePaths(tempHome());
-    const r = resolveAddress(p, "@other/ken", undefined, "acme");
+    const r = resolveAddress(p, "@other/ken", "acme");
     expect(r.ok).toBe(false);
     if (!r.ok) expect(r.error).toMatch(/organization "other".*"acme"/);
   });
@@ -161,14 +161,14 @@ describe("resolveAddress", () => {
   it("rejects a contact-book hit belonging to a different organization", () => {
     const p = getMachinePaths(tempHome());
     addContact(p, "ken", "@other/ken");
-    const r = resolveAddress(p, "ken", undefined, "acme");
+    const r = resolveAddress(p, "ken", "acme");
     expect(r.ok).toBe(false);
     if (!r.ok) expect(r.error).toMatch(/organization "other".*"acme"/);
   });
 
   it("accepts an address in the caller's own organization", () => {
     const p = getMachinePaths(tempHome());
-    const r = resolveAddress(p, "@acme/ken", undefined, "acme");
+    const r = resolveAddress(p, "@acme/ken", "acme");
     expect(r.ok).toBe(true);
   });
 
@@ -181,24 +181,11 @@ describe("resolveAddress", () => {
     if (!r.ok) expect(r.error.toLowerCase()).toContain("invalid address");
   });
 
-  it("rejects a hosted address belonging to another tenant", () => {
-    const r = resolveAddress(
-      getMachinePaths(tempHome()),
-      "@other/ken",
-      "https://agentcall.benree.tech",
-      "acme",
-    );
-    expect(r.ok).toBe(false);
-    if (!r.ok) expect(r.error).toMatch(/other.*acme/);
-  });
-
-  it("accepts a hosted address in the install's tenant", () => {
-    const r = resolveAddress(
-      getMachinePaths(tempHome()),
-      "@acme/ken",
-      "https://agentcall.benree.tech",
-      "acme",
-    );
-    expect(r.ok).toBe(true);
-  });
+  // Two cases used to sit here, passing a hosted relay URL alongside the same
+  // two addresses the pair above already covers. They existed because the
+  // tenant check read the dialled hostname, so "hosted relay" and "some other
+  // relay" were genuinely different inputs. `resolveAddress` takes no relay
+  // now, which made them character-for-character duplicates of those two
+  // rather than weaker versions of them. Do not reintroduce a relay-shaped
+  // case: there is no relay input left for it to vary.
 });
