@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import {
-  formatCloseReason, formatFingerprintPrompt, formatInviteLines, formatRoomStatusBoard,
+  formatCloseReason, formatInviteLines, formatMembershipCode, formatRoomStatusBoard,
   resolveHostDisplayName, sanitizeDisplayName, suggestAlternateDisplayName,
 } from "../src/room-render.js";
 import type { RoomCloseReasonType } from "@benree/agentcall-shared";
@@ -36,13 +36,21 @@ describe("formatCloseReason", () => {
   });
 });
 
-describe("formatFingerprintPrompt", () => {
+describe("formatMembershipCode", () => {
   it("lists every member's display name and the fingerprint", () => {
-    const text = formatFingerprintPrompt("ABC-123-XYZ-789", [
+    const text = formatMembershipCode("ABC-123-XYZ-789", [
       { display_name: "ken" }, { display_name: "sota" },
     ]);
     expect(text).toContain("ken, sota");
     expect(text).toContain("ABC-123-XYZ-789");
+  });
+
+  // #369: the code is reported, never asked. A question mark here would mean
+  // something is waiting on an answer, which is the whole failure mode removed.
+  it("asks nothing, so nothing can block on an answer", () => {
+    const text = formatMembershipCode("ABC-123-XYZ-789", [{ display_name: "ken" }]);
+    expect(text).not.toContain("[y/N]");
+    expect(text).not.toContain("?");
   });
 });
 

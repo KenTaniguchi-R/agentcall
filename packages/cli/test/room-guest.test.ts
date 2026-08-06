@@ -49,7 +49,7 @@ describe("runRoomGuest", () => {
   it("joins, waits while pending, then hands off to verification once admitted", async () => {
     const { poll, deliver } = fakePoll();
     const join = vi.fn().mockResolvedValue(joinedResponse() as never);
-    const runVerification = vi.fn().mockResolvedValue({ outcome: "active", snapshot: { participants: [1, 2] } });
+    const runVerification = vi.fn().mockResolvedValue({ outcome: "active", snapshot: { participants: [1, 2] }, fingerprint: "ABC-123-XYZ-789" });
     const resultPromise = runRoomGuest({
       relay: "https://relay.test", checkEligibility: baseEligibility(),
       askInvite: async () => VALID_INVITE, askName: async () => "sota",
@@ -63,7 +63,7 @@ describe("runRoomGuest", () => {
     } as never);
     const result = await resultPromise;
     expect(runVerification).toHaveBeenCalledWith(expect.objectContaining({ credential: joinedResponse().credential }));
-    expect(result).toEqual({ outcome: "active", snapshot: { participants: [1, 2] } });
+    expect(result).toEqual({ outcome: "active", snapshot: { participants: [1, 2] }, fingerprint: "ABC-123-XYZ-789" });
   });
 
   it("resolves closed if the Room closes while still pending admission", async () => {
@@ -85,7 +85,7 @@ describe("runRoomGuest", () => {
       .mockRejectedValueOnce(new RoomApiError("display name taken", "conflict"))
       .mockResolvedValueOnce(joinedResponse() as never);
     const askName = vi.fn().mockResolvedValueOnce("sota").mockResolvedValueOnce("sota2");
-    const runVerification = vi.fn().mockResolvedValue({ outcome: "active", snapshot: { participants: [1, 2] } });
+    const runVerification = vi.fn().mockResolvedValue({ outcome: "active", snapshot: { participants: [1, 2] }, fingerprint: "ABC-123-XYZ-789" });
     const resultPromise = runRoomGuest({
       relay: "https://relay.test", checkEligibility: baseEligibility(),
       askInvite: async () => VALID_INVITE, askName, join, poll, runVerification,

@@ -2,7 +2,7 @@ import type { Command } from "commander";
 import { normalizeRelay, relayUrl } from "../config.js";
 import { runRoomHost } from "../room-host.js";
 import { runRoomGuest } from "../room-guest.js";
-import { formatCloseReason } from "../room-render.js";
+import { formatCloseReason, formatMembershipCode } from "../room-render.js";
 
 interface RoomHostFlags {
   relay?: string;
@@ -26,7 +26,7 @@ export function register(program: Command): void {
         process.exitCode = 1;
         return;
       }
-      console.log(`Room active · ${result.snapshot.participants.length} people`);
+      console.log(formatMembershipCode(result.fingerprint, result.snapshot.participants));
     });
 
   room.command("join")
@@ -40,6 +40,6 @@ export function register(program: Command): void {
         process.exitCode = 1;
         return;
       }
-      console.log(`Room active · ${result.snapshot.participants.length} people`);
+      console.log(formatMembershipCode(result.fingerprint, result.snapshot.participants));
     });
 }

@@ -31,14 +31,16 @@ export function formatCloseReason(reason: RoomCloseReasonType): string {
   return CLOSE_REASON_COPY[reason];
 }
 
-export function formatFingerprintPrompt(
+// Reported, never asked (#369). A terminal has no shield icon to go looking
+// behind, so the code is printed where Zoom would hide one — but nothing waits
+// on it, and nobody has to answer it for the Room to start.
+export function formatMembershipCode(
   fingerprint: string, members: readonly Pick<RoomPublicParticipantType, "display_name">[],
 ): string {
   const names = members.map((m) => m.display_name).join(", ");
   return [
-    `Room members: ${names}`,
-    `Compare this code with everyone: ${fingerprint}`,
-    "Does everyone see the same code? [y/N] ",
+    `Room active · ${names}`,
+    `Membership code ${fingerprint} — the same on every screen unless someone was substituted.`,
   ].join("\n");
 }
 
