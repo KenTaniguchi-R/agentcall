@@ -204,7 +204,7 @@ exports[`CLI command tree > pins command paths, aliases, descriptions, and optio
           "flags": "--as <line>",
         },
         {
-          "description": "continue the last conversation with this address",
+          "description": "continue the open conversation with this address (add --task when several are open)",
           "flags": "--continue",
         },
         {

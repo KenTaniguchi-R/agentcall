@@ -30,15 +30,23 @@ agentcall call @acme/ken "Why did CI fail?"
 agentcall call @acme/ken "Which commit introduced it?" --continue
 ```
 
-Use `--context <id>` to select a specific context instead of the most recent one.
-Do not combine `--continue` and `--context`.
+One conversation stays open per address per task. `--continue` resumes it when
+that is unambiguous; when several are open it lists them and asks for a
+`--task <id>` rather than picking one. Use `--context <id>` to select a specific
+context by id. Do not combine `--continue` and `--context`.
 
 Contexts:
 
 - expire 30 minutes after the last turn;
 - stop after 10 turns;
 - stay bound to the caller, callee, task, and calling line;
-- end when the callee changes agent kind or working directory.
+- end when the callee changes agent kind or working directory;
+- end when the callee's agent no longer holds the underlying session.
+
+Every one of those reaches the caller as the same `context_unknown` — the callee
+deliberately does not say which. A `--continue` that gets it clears the stored
+context, so the next call starts a fresh conversation rather than retrying a
+dead one.
 
 Tasks with `write` or `exec` are not threadable by default. The task owner must
 explicitly accept the added prompt-history risk with `threadable: true`.

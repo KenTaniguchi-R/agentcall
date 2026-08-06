@@ -1232,7 +1232,10 @@ describe("listener contexts", () => {
       },
     );
     const line = JSON.parse(readFileSync(paths.callsLog, "utf8").trim().split("\n").at(-1)!);
-    expect(line).toMatchObject({ status: "agent_error" });
+    // Audited as context_unknown, not agent_error: this exact message is a
+    // resume the CLI no longer holds (see isResumeFailure). The scrub below is
+    // what this test is really about and is unchanged by that.
+    expect(line).toMatchObject({ status: "context_unknown" });
     expect(line.error).not.toContain("real-agent-session");
     expect(line.error).toContain("<session>");
   });
@@ -1348,5 +1351,50 @@ describe("listener contexts", () => {
     expect(line).toMatchObject({ status: "context_unknown", from: "sota", task: "ask" });
     // The refusal path must not roll the binding forward or touch its turn count.
     expect(loadContexts(paths)[0]!.turns).toBe(1);
+  });
+
+  // Conversation state lives in the agent CLI's own session store, which
+  // AgentCall neither owns nor prunes -- so a binding can be admitted and THEN
+  // fail at spawn. That used to surface as "the agent hit an internal error",
+  // which points at the wrong thing entirely: the agent is fine, the
+  // conversation is over. It also left the dead binding in place, so the next
+  // --continue spawned the same doomed resume again.
+  it("reports a resume the agent CLI no longer holds as context_unknown, and drops the dead binding", async () => {
+    const { frames: f, paths } = await oneCall(
+      { message: "follow up", context_id: SEEDED_CTX },
+      {
+        seed: seedBinding(),
+        run: async () => {
+          throw new AgentRunError(
+            "agent exited 1: No conversation found with session ID: real-agent-session",
+            "agent_error",
+          );
+        },
+      },
+    );
+    expect(f.at(-1)).toMatchObject({ type: "call_failed", code: "context_unknown" });
+    // Same shape as every other context refusal -- no detail that would tell a
+    // caller this one failed late rather than at admission.
+    expect(f.at(-1)).not.toHaveProperty("detail");
+    expect(loadContexts(paths)).toEqual([]);
+  });
+
+  // The reclassification is bounded by "a resume was actually attempted". A
+  // fresh call must stay agent_error even when its failure text looks exactly
+  // like a dead session -- otherwise a caller could talk the agent into
+  // printing that string and have its own calls reclassified.
+  it("leaves a fresh call's failure as agent_error even when it reads like a dead session", async () => {
+    const { frames: f } = await oneCall(
+      { message: "hi" },
+      {
+        run: async () => {
+          throw new AgentRunError(
+            "agent exited 1: No conversation found with session ID: not-a-real-binding",
+            "agent_error",
+          );
+        },
+      },
+    );
+    expect(f.at(-1)).toMatchObject({ type: "call_failed", code: "agent_error" });
   });
 });
