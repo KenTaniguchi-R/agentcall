@@ -6,6 +6,38 @@ which are released together.
 
 ## Unreleased
 
+### You can ask someone in a Room a question (#347)
+
+- A Room no longer stops at "Room active" with nothing to do in it. `ask <name>
+  <question>` sends a question to that person's agent and prints the answer.
+  `/members`, `/pause`, `/resume`, `/leave` and `/help` round out the loop.
+- **The name is the address.** A Room fixes by context everything a durable
+  address carries — the relay, the organization (a Room has none), and the Room
+  itself — so all that is left to say is which person, which the display name
+  already answers uniquely. There is no Room handle and no Room-scoped address,
+  and deliberately never will be: an address-shaped Room identity is what
+  invites "can I save it and call it again tomorrow", which a 30-minute
+  accountless Room cannot honour.
+- Because `formatAddress` is `@org/handle`, every durable address begins with
+  `@` and no display name may contain one. Typing `@acme/sota` in a Room says
+  so and points at `agentcall call` rather than reporting an unknown name.
+- Each question is signed and sealed to exactly one participant, bound to the
+  Room, the membership epoch, the sender, the recipient, and the call — so a
+  sealed question cannot be replayed into another Room, another epoch, another
+  recipient, or attributed to anyone else. The relay only ever holds an opaque
+  blob, and the digest it stores for idempotency is over the ciphertext, never
+  the prompt.
+- An answering agent runs in safe mode in a fresh empty directory that is
+  deleted afterwards: no repository, no tools, no MCP, no shell, no inherited
+  session. The existing per-tuple probe gate still decides whether this machine
+  may answer at all.
+- The relay's limits are surfaced rather than discovered: 5 questions per person
+  for the life of the Room, one in-flight call per recipient, a 3-second
+  cooldown, 4 KiB per question, 16 KiB per answer, 90 seconds per agent.
+- A dropped connection ends the session. A Room credential cannot resume, so
+  there is no reconnect path — in-flight answering work is cancelled and the
+  Room is over for that participant.
+
 ### The Room membership code is reported, not asked (#369)
 
 - Joining a Room no longer stops on `Does everyone see the same code? [y/N]`.

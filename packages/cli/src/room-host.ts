@@ -3,8 +3,9 @@ import { checkRoomSafetyEligibility } from "./room-safety.js";
 import { generateRoomKeys, parseRoomCapability } from "./room-crypto.js";
 import { createRoom, mutateRoom } from "./room-api.js";
 import { pollRoomState } from "./room-poll.js";
-import { formatInviteLines, resolveHostDisplayName } from "./room-render.js";
-import { runRoomVerification, type RoomVerificationResult } from "./room-verification.js";
+import { formatInviteLines, formatMembershipCode, resolveHostDisplayName } from "./room-render.js";
+import { runRoomVerification } from "./room-verification.js";
+import { runRoomConversation, type RoomConversationResult } from "./room-repl.js";
 import { createLineListener } from "./tty.js";
 
 const AGENT_ADAPTER_RE = /^(?:claude|codex)@(\d+\.\d+\.\d+):(\w+)\/(\w+)$/;
@@ -28,14 +29,16 @@ export interface RoomHostOptions {
   createListener?: typeof createLineListener;
   runVerification?: typeof runRoomVerification;
   generateKeys?: typeof generateRoomKeys;
+  converse?: typeof runRoomConversation;
 }
 
-export async function runRoomHost(options: RoomHostOptions): Promise<RoomVerificationResult> {
+export async function runRoomHost(options: RoomHostOptions): Promise<RoomConversationResult> {
   const {
     relay, displayName, agent = "claude", log = (line: string) => console.log(line),
     checkEligibility = checkRoomSafetyEligibility, createRoomFn = createRoom,
     poll = pollRoomState, mutate = mutateRoom, createListener = createLineListener,
     runVerification = runRoomVerification, generateKeys = generateRoomKeys,
+    converse = runRoomConversation,
   } = options;
 
   const eligibility = checkEligibility({ agent });
@@ -116,7 +119,14 @@ export async function runRoomHost(options: RoomHostOptions): Promise<RoomVerific
     return { outcome: "closed", reason: waitingResult.reason };
   }
 
-  return runVerification({
+  const verified = await runVerification({
     relay, credential: created.credential, ownParticipantId: own.participantId,
+  });
+  if (verified.outcome === "closed") return { outcome: "closed", reason: verified.reason };
+
+  log(formatMembershipCode(verified.fingerprint, verified.snapshot.participants));
+  return converse({
+    relay, credential: created.credential, ownParticipantId: own.participantId,
+    keys, snapshot: verified.snapshot, agent,
   });
 }

@@ -14,3 +14,4 @@ export * from "./signing.js";
 export * from "./signed-token.js";
 export * from "./e2ee.js";
 export * from "./room.js";
+export * from "./room-call.js";

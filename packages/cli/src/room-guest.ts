@@ -3,8 +3,9 @@ import { checkRoomSafetyEligibility } from "./room-safety.js";
 import { generateRoomKeys, signRoomJoinProof, type RoomJoinProofInput } from "./room-crypto.js";
 import { joinRoom, RoomApiError } from "./room-api.js";
 import { pollRoomState } from "./room-poll.js";
-import { suggestAlternateDisplayName } from "./room-render.js";
-import { runRoomVerification, type RoomVerificationResult } from "./room-verification.js";
+import { formatMembershipCode, suggestAlternateDisplayName } from "./room-render.js";
+import { runRoomVerification } from "./room-verification.js";
+import { runRoomConversation, type RoomConversationResult } from "./room-repl.js";
 import { ask, hiddenAsk } from "./tty.js";
 
 const AGENT_ADAPTER_RE = /^(?:claude|codex)@(\d+\.\d+\.\d+):(\w+)\/(\w+)$/;
@@ -27,14 +28,15 @@ export interface RoomGuestOptions {
   poll?: typeof pollRoomState;
   runVerification?: typeof runRoomVerification;
   generateKeys?: typeof generateRoomKeys;
+  converse?: typeof runRoomConversation;
 }
 
-export async function runRoomGuest(options: RoomGuestOptions): Promise<RoomVerificationResult> {
+export async function runRoomGuest(options: RoomGuestOptions): Promise<RoomConversationResult> {
   const {
     relay, agent = "claude", log = (line: string) => console.log(line),
     askInvite = hiddenAsk, askName = ask, checkEligibility = checkRoomSafetyEligibility,
     join = joinRoom, poll = pollRoomState, runVerification = runRoomVerification,
-    generateKeys = generateRoomKeys,
+    generateKeys = generateRoomKeys, converse = runRoomConversation,
   } = options;
 
   const eligibility = checkEligibility({ agent });
@@ -89,8 +91,15 @@ export async function runRoomGuest(options: RoomGuestOptions): Promise<RoomVerif
       if ("closed" in admission) {
         return { outcome: "closed", reason: admission.reason };
       }
-      return runVerification({
+      const verified = await runVerification({
         relay, credential: joined.credential, ownParticipantId: joined.participant.participant_id,
+      });
+      if (verified.outcome === "closed") return { outcome: "closed", reason: verified.reason };
+
+      log(formatMembershipCode(verified.fingerprint, verified.snapshot.participants));
+      return converse({
+        relay, credential: joined.credential, ownParticipantId: joined.participant.participant_id,
+        keys, snapshot: verified.snapshot, agent,
       });
     } catch (error) {
       if (error instanceof RoomApiError && error.code === "conflict" && attempt < MAX_NAME_RETRIES) {
