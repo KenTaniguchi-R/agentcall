@@ -15,7 +15,7 @@ import { loadKeys, type StoredKeys } from "./keys.js";
 import { reserveReplay } from "./replay-store.js";
 import type { LinePaths, MachinePaths } from "./paths.js";
 import { loadPolicy, resolveTask, type Policy, type TaskResolution } from "./policy.js";
-import { loadSensitivityMap, withFloor, type SensitivityMap } from "./sensitivity.js";
+import { loadScope, type Scope } from "./scope.js";
 import { loadTasks, type Task } from "./tasks.js";
 import {
   admitContext, loadContexts, pruneContexts, type ContextBinding,
@@ -171,7 +171,7 @@ export function makeOutcomeSender(
 }
 
 // ---------------------------------------------------------------------------
-// Stage 6: policy resolution — loadPolicy -> loadSensitivityMap -> resolveTask.
+// Stage 6: policy resolution — loadPolicy -> loadScope -> resolveTask.
 //
 // CaMeL invariant, preserved from listener.ts: this runs on the verified
 // `from` and local files only, BEFORE the caller's message is placed in any
@@ -187,7 +187,7 @@ export function makeOutcomeSender(
 // ---------------------------------------------------------------------------
 
 type AdmissionDecision =
-  | { ok: true; task: Task; policy: Policy; map: SensitivityMap }
+  | { ok: true; task: Task; policy: Policy; scope: Scope }
   | { ok: false; code: "policy_error"; error: unknown }
   | { ok: false; code: "blocked" | "task_unknown"; offered: string[] };
 
@@ -195,19 +195,19 @@ export function resolveAdmission(
   input: { paths: LinePaths; from: string; requestedTask?: string; groups: readonly string[] },
 ): AdmissionDecision {
   let policy: Policy;
-  let map: SensitivityMap;
+  let scope: Scope;
   let resolution: TaskResolution;
   try {
     policy = loadPolicy(input.paths);
     // Loaded here, inside the policy_error boundary, and returned like the
     // policy. #372 made this file decide where the agent runs and what it may
     // read, so it is now load-bearing for the CALL and not only for the guard
-    // subprocess. Before, a corrupt sensitivity.json surfaced as every tool
+    // subprocess. Before, a corrupt scope.json surfaced as every tool
     // call failing closed — an agent silently unable to read anything,
     // diagnosable only from the guard's own log. Reading it here turns that
     // into one clean call_failed carrying the parse error, which is the same
     // treatment a corrupt policy.json already gets.
-    map = withFloor(loadSensitivityMap(input.paths), input.paths.machine.userHome);
+    scope = loadScope(input.paths);
     resolution = resolveTask(policy, loadTasks(input.paths), input.from, input.requestedTask, input.groups);
   } catch (error) {
     return { ok: false, code: "policy_error", error };
@@ -215,12 +215,11 @@ export function resolveAdmission(
   if (!resolution.ok) {
     return { ok: false, code: resolution.code, offered: resolution.offered };
   }
-  // No workdir here any more. It depends on the caller's CLEARANCE, which is
-  // resolved from `policy` by the caller of this function — deliberately after
-  // admission, so a corrupt policy reports as policy_error rather than as a
-  // rejection. Returning the map and the policy lets that happen without a
-  // second read of either file.
-  return { ok: true, task: resolution.task, policy, map };
+  // No workdir here. It is derived from the scope by the caller of this
+  // function — deliberately after admission, so a corrupt file reports as
+  // policy_error rather than as a rejection. Returning the scope and the policy
+  // lets that happen without a second read of either.
+  return { ok: true, task: resolution.task, policy, scope };
 }
 
 // ---------------------------------------------------------------------------

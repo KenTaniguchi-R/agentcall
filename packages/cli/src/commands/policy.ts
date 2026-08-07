@@ -3,7 +3,7 @@ import { loadTasks } from "../tasks.js";
 import { renderPolicyReport } from "../policy-report.js";
 import { resolveLine, type LineContext } from "../line-context.js";
 import { assertCallableLine } from "../config.js";
-import { loadSensitivityMap, withFloor, workdirFor } from "../sensitivity.js";
+import { loadScope, workdirFor } from "../scope.js";
 import { getMachinePaths } from "../paths.js";
 import { fail } from "../errors.js";
 
@@ -30,8 +30,7 @@ export function register(program: { command(name: string): any }): void {
           // caller cleared only for `public` may land somewhere narrower, which
           // is the point of deriving it per caller rather than configuring it.
           defaultWorkdir: workdirFor(
-            withFloor(loadSensitivityMap(ctx.paths), ctx.paths.machine.userHome),
-            ctx.paths.shareDir,
+            loadScope(ctx.paths), ctx.paths.shareDir, ctx.paths.machine.userHome,
           ),
         });
         console.log(report.trimEnd());

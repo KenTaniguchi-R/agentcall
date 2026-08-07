@@ -26,15 +26,13 @@ const listenerLogPath = (home: string) => join(home, ".agentcall", "listener.log
 // and even an ordinary read is refused — the inversion #372 introduces, and the
 // reason these fixtures now have to say what the agent may reach rather than
 // relying on an allow-by-default floor.
-function seedMap(home: string, roots: string[]): string {
+function seedScope(home: string, roots: string[]): string {
   const dir = join(home, ".agentcall", "lines", LINE);
   // 0o700 to match what the CLI itself creates: the log-permission assertions
   // below check the directory the guard writes into, and a 0o755 fixture would
   // fail them for a reason that has nothing to do with the guard.
   mkdirSync(dir, { recursive: true, mode: 0o700 });
-  writeFileSync(join(dir, "sensitivity.json"), JSON.stringify({
-    sources: roots.map((path) => ({ path, sensitivity: "shared" })),
-  }));
+  writeFileSync(join(dir, "scope.json"), JSON.stringify({ roots }));
   return home;
 }
 
@@ -91,7 +89,7 @@ function one(home: string, body: string): Promise<void> {
 describe("guard-entry as a real process", () => {
   it("allows an ordinary read and writes tools.log", () => {
     const home = tempDir("guard-");
-    seedMap(home, [home]);
+    seedScope(home, [home]);
     const r = run(
       { tool_name: "Read", tool_input: { file_path: join(home, "a.ts") }, cwd: home },
       home,
@@ -132,7 +130,7 @@ describe("guard-entry as a real process", () => {
   it("allows a labelled path and denies its unlabelled sibling", () => {
     const home = tempDir("guard-");
     const labelled = join(home, "code", "payments");
-    seedMap(home, [labelled]);
+    seedScope(home, [labelled]);
 
     const inside = run(
       { tool_name: "Read", tool_input: { file_path: join(labelled, "ledger.ts") }, cwd: labelled },
@@ -250,7 +248,7 @@ describe("guard-entry import budget", () => {
     expect([...bare.keys()].sort()).toEqual(["zod"]);
     // Named, not just counted. zod arriving through a second module would mean
     // a new module in the hot graph, which is the thing being bounded.
-    expect([...bare.get("zod")!]).toEqual(["sensitivity.js"]);
+    expect([...bare.get("zod")!]).toEqual(["scope.js"]);
   });
 });
 
@@ -280,7 +278,7 @@ describe("guard-entry requires AGENTCALL_LINE", () => {
 
   it("fails closed and records guard_unwired on a malformed line name too", () => {
     const home = tempDir("guard-");
-    seedMap(home, [home]);
+    seedScope(home, [home]);
     const r = run(
       { tool_name: "Read", tool_input: { file_path: join(home, "a.ts") }, cwd: home },
       home,

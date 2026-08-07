@@ -1,9 +1,9 @@
-import { basename, dirname, isAbsolute, join, resolve, sep } from "node:path";
+import { dirname, isAbsolute, join, sep } from "node:path";
 import { fileURLToPath } from "node:url";
 import { lineTaskDirs } from "./line-task-dirs.js";
 import { canonical, expandHome, fold, isAncestorOf, isInside } from "./path-canon.js";
 import { getMachinePaths, type LinePaths } from "./paths.js";
-import { classifyPath, classifySkill, permits, type SensitivityMap } from "./sensitivity.js";
+import { deniedBasename, deniedRoots, isReadable, type Scope } from "./scope.js";
 
 export type GuardInput = {
   tool_name: string;
@@ -48,16 +48,6 @@ export const FAIL_CLOSED_REASON =
 // tests can assert against a synthetic root instead of the machine's real one.
 const DEFAULT_PACKAGE_ROOT = dirname(dirname(fileURLToPath(import.meta.url)));
 
-// Basenames denied anywhere on disk. `.env.example` and friends are
-// deliberately excluded: they are not secrets, and denying them is the
-// false-positive failure the spec warns about.
-const DENIED_BASENAMES: RegExp[] = [
-  /^\.env$/,
-  /^\.env\.(?!example$|sample$|template$)/,
-  /^id_rsa$/, /^id_ed25519$/, /^id_ecdsa$/,
-  /\.pem$/, /\.p12$/, /\.pfx$/,
-];
-
 // Every tool the envelope can grant (see CLAUDE_TOOLS in runner.ts). A tool
 // absent from all four groups is DENIED, not allowed: an unclassified tool has
 // an argument shape this function cannot inspect. `LS` was missed exactly that
@@ -77,28 +67,6 @@ const NO_PATH_SURFACE = new Set(["WebSearch"]);
 // Both can name a denied basename under an otherwise permitted root, and both
 // can climb out of that root entirely. LS has no selector.
 const SELECTOR_KEY: Record<string, string> = { Grep: "glob", Glob: "pattern" };
-
-// Unreachable roots are canonicalized alongside the targets they get compared
-// with. Such a root can itself be a symlink — ~/.aws onto an encrypted volume —
-// and a canonical target is never "inside" a lexical alias, so comparing the
-// two silently allows the read. BOTH forms are kept: the Bash branch matches
-// this list as text, where the literal ~/.aws is the form that appears in a
-// command, while the path branches need the resolved form.
-function unreachableRoots(
-  sources: SensitivityMap["sources"],
-  home: string,
-  realpath: (p: string) => string,
-): string[] {
-  const lexical = sources
-    .filter((s) => !permits(s.sensitivity))
-    .map((s) => resolve(expandHome(s.path, home)));
-  return [...new Set([...lexical, ...lexical.map((d) => canonical(d, home, home, realpath))])];
-}
-
-function basenameDenied(p: string): boolean {
-  const b = fold(basename(p));
-  return DENIED_BASENAMES.some((re) => re.test(b));
-}
 
 // Everything before the first magic character, trimmed back to a directory.
 // Glob carries its path inside `pattern`, so "/Users/o/.ssh/*" must be checked
@@ -121,8 +89,8 @@ export interface DecideContext {
    *  while the real ~/.ssh stood open. */
   userHome: string;
   realpath: (p: string) => string;
-  /** The owner's map with the secret floor already merged (see withFloor). */
-  map: SensitivityMap;
+  /** What this line may read: roots plus the denylist. */
+  scope: Scope;
   guardRoot?: string;
   /** Paths that are `secret` for this run regardless of the map — the guard's
    *  own package root and every line's tasks directory. */
@@ -136,26 +104,21 @@ export function decide(input: GuardInput, ctx: DecideContext): GuardVerdict {
     return { allow: false, rule: "unparseable-input", detail: tool };
   }
   const canon = (p: string) => canonical(p, cwd, userHome, realpath);
-  const map: SensitivityMap = {
-    ...ctx.map,
-    sources: [
-      ...ctx.map.sources,
-      ...[ctx.guardRoot ?? DEFAULT_PACKAGE_ROOT, ...(ctx.extraSecretRoots ?? [])]
-        .map((path) => ({ path, sensitivity: "secret" as const })),
+  const scope: Scope = {
+    ...ctx.scope,
+    denied: [
+      ...ctx.scope.denied,
+      ctx.guardRoot ?? DEFAULT_PACKAGE_ROOT,
+      ...(ctx.extraSecretRoots ?? []),
     ],
   };
 
-  // A path is reachable unless it classifies `secret`. Unlabelled classifies
-  // `secret`, so this denies by default rather than allowing by default — the
-  // inversion the whole model rests on.
+  // Readable = inside a root and not denied. Both on the canonical path, so a
+  // symlink cannot be used to leave a root or enter the denylist.
   const unreachable = (target: string) =>
-    !permits(classifyPath(map, target, { home: userHome, cwd, realpath }));
+    !isReadable(scope, target, { home: userHome, cwd, realpath });
 
-  // Enumerable because it only has to cover rules NARROWER than the root: a
-  // permitted root's subtree inherits its label, so the only way secret content
-  // hides under it is an explicit narrower rule. Unlabelled space cannot be
-  // "inside" a permitted root without such a rule.
-  const denied = unreachableRoots(map.sources, userHome, realpath);
+  const denied = deniedRoots(scope, userHome, realpath);
 
   // A scan reads every file beneath its root in ONE tool call, so the hook
   // never sees the individual files. A root that merely contains something
@@ -176,27 +139,17 @@ export function decide(input: GuardInput, ctx: DecideContext): GuardVerdict {
 
   if (NO_PATH_SURFACE.has(tool)) return { allow: true };
 
-  // Skills are dispatched by NAME — tool_input is {"skill": "<name>"} — so this
-  // is a lookup, not a path check.
+  // Skills are dispatched by NAME, and under #412 there is no per-name label to
+  // check: a skill's own files sit under a root (or under the ~/.claude/skills
+  // exception) and its reads — references/, Read, Grep — arrive here as ordinary
+  // tool calls checked like any other. Withholding one now means denying its
+  // directory, not labelling its name.
   //
-  // It gets its own branch and MUST NOT be moved into NO_PATH_SURFACE. That set
-  // returns allow unconditionally, and the SKILL.md body reaches the model with
-  // no tool call of its own, so this branch is the only check that body ever
-  // passes through. Everything else a skill does — references/, Read, Grep —
-  // arrives here as an ordinary tool call and is checked normally.
-  //
-  // Note that `--allowedTools` does not gate Skill at all (measured 2026-08-06),
-  // so before this branch existed the unclassified-tool deny below was the only
-  // thing holding it closed.
-  if (tool === "Skill") {
-    const name = args.skill;
-    if (typeof name !== "string" || name === "") {
-      return { allow: false, rule: "unparseable-skill", detail: String(name) };
-    }
-    return permits(classifySkill(map, name))
-      ? { allow: true }
-      : { allow: false, rule: "skill-is-secret", detail: name };
-  }
+  // Kept as its own named branch rather than an entry in NO_PATH_SURFACE so the
+  // reason is visible. `--allowedTools` does not gate Skill at all (measured
+  // 2026-08-06), so this deliberate allow is what makes it reachable; the
+  // unclassified-tool deny below is what held it closed before.
+  if (tool === "Skill") return { allow: true };
 
   // WebFetch's `url` is safe to allow unread only if Claude Code itself
   // rejects a non-http(s) scheme before this hook fires — an unstated
@@ -214,7 +167,7 @@ export function decide(input: GuardInput, ctx: DecideContext): GuardVerdict {
     // Fail closed: a path-shaped tool with no usable path is not understood.
     if (typeof raw !== "string" || raw === "") return { allow: false, rule: "unparseable-target", detail: String(raw) };
     const target = canon(raw);
-    if (basenameDenied(target)) return { allow: false, rule: "denied-basename", detail: target };
+    if (deniedBasename(target)) return { allow: false, rule: "denied-basename", detail: target };
     const hit = targetInsideSecret(target);
     // Distinct from `above-clearance` on purpose, and both are audit-only. This
     // one means "inside a source you labelled above this caller's clearance";
@@ -236,7 +189,7 @@ export function decide(input: GuardInput, ctx: DecideContext): GuardVerdict {
     }
     const rawRoot = typeof args.path === "string" && args.path !== "" ? args.path : cwd;
     const root = canon(rawRoot);
-    if (basenameDenied(root)) return { allow: false, rule: "denied-basename", detail: root };
+    if (deniedBasename(root)) return { allow: false, rule: "denied-basename", detail: root };
     if (scanReachesSecret(root)) return { allow: false, rule: "root-reaches-denied-path", detail: root };
     if (unreachable(root)) return { allow: false, rule: "source-is-secret", detail: root };
 
@@ -255,7 +208,7 @@ export function decide(input: GuardInput, ctx: DecideContext): GuardVerdict {
     // A selector that climbs out of its root defeats a root-only check.
     if (selector.split("/").includes("..")) return { allow: false, rule: "escaping-pattern", detail: selector };
     // "**/.env" and "**/*.pem" enumerate denied basenames under a permitted root.
-    if (basenameDenied(selector)) return { allow: false, rule: "denied-basename-pattern", detail: selector };
+    if (deniedBasename(selector)) return { allow: false, rule: "denied-basename-pattern", detail: selector };
     const prefix = globLiteralPrefix(selector);
     if (prefix === "") return { allow: true };
     const selectorRoot = canon(isAbsolute(expandHome(prefix, userHome)) ? prefix : join(rawRoot, prefix));
@@ -278,9 +231,8 @@ export interface GuardDeps {
   now: () => string;
   realpath: (p: string) => string;
   appendLine: (file: string, line: string) => void;
-  /** The owner's sensitivity map, floor already merged. */
-  map: SensitivityMap;
-  /** What the caller of this run may receive. */
+  /** What this line may read: roots plus the denylist. */
+  scope: Scope;
 }
 
 type GuardOutput = { exitCode: number; stdout: string; stderr: string };
@@ -333,7 +285,7 @@ export function runGuard(raw: string, deps: GuardDeps): GuardOutput {
     const verdict = decide(input, {
       userHome,
       realpath: deps.realpath,
-      map: deps.map,
+      scope: deps.scope,
       extraSecretRoots: taskRoots,
     });
     const ts = deps.now();

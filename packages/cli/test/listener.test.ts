@@ -180,12 +180,12 @@ describe("startListener spawn directory", () => {
   // per call, and one stale entry must not take the line offline — so the
   // property that matters is that it falls back rather than spawning into a
   // directory that is not there. `doctor` is where the stale entry gets named.
-  it("falls back to the share directory when the map names nothing usable", async () => {
+  it("falls back to the share directory when no root is usable", async () => {
     const machine = freshMachine();
     const paths = getLinePaths(machine, "claude");
     mkdirSync(paths.dir, { recursive: true });
-    writeFileSync(paths.sensitivityFile, JSON.stringify({
-      sources: [{ path: join(machine.stateRoot, "deleted-repo"), sensitivity: "shared" }],
+    writeFileSync(paths.scopeFile, JSON.stringify({
+      roots: [join(machine.stateRoot, "deleted-repo")],
     }));
     const seen: { workdir?: string; prompt?: string } = {};
     const relayReady = new Promise<WsSocket>((resolveWs) => {
@@ -217,9 +217,7 @@ describe("startListener spawn directory", () => {
     const project = join(machine.stateRoot, "code", "api");
     mkdirSync(project, { recursive: true });
     mkdirSync(paths.dir, { recursive: true });
-    writeFileSync(paths.sensitivityFile, JSON.stringify({
-      sources: [{ path: project, sensitivity: "shared" }],
-    }));
+    writeFileSync(paths.scopeFile, JSON.stringify({ roots: [project] }));
     const seen: { workdir?: string; prompt?: string } = {};
     const relayReady = new Promise<WsSocket>((resolveWs) => {
       void fakeRelay((ws) => resolveWs(ws)).then((url) => {
@@ -250,9 +248,7 @@ describe("startListener spawn directory", () => {
     const project = join(machine.stateRoot, "code", "internal-api");
     mkdirSync(project, { recursive: true });
     mkdirSync(paths.dir, { recursive: true });
-    writeFileSync(paths.sensitivityFile, JSON.stringify({
-      sources: [{ path: project, sensitivity: "secret" }],
-    }));
+    writeFileSync(paths.scopeFile, JSON.stringify({ roots: [], denied: [project] }));
     seedPolicy(paths, { default_access: "allowed", callers: {} });
     const seen: { workdir?: string } = {};
     const relayReady = new Promise<WsSocket>((resolveWs) => {
@@ -699,9 +695,7 @@ describe("startListener task resolution", () => {
         const calendar = join(paths.machine.stateRoot, "code", "calendar");
         mkdirSync(calendar, { recursive: true });
         mkdirSync(deps.paths.dir, { recursive: true });
-        writeFileSync(deps.paths.sensitivityFile, JSON.stringify({
-          sources: [{ path: calendar, sensitivity: "shared" }],
-        }));
+        writeFileSync(deps.paths.scopeFile, JSON.stringify({ roots: [calendar] }));
         seedTask(deps.paths, "schedule-meeting", [
           "description: d",
           "timeout_s: 60",

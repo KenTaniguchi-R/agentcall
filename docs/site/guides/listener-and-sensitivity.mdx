@@ -1,5 +1,5 @@
 ---
-title: Listener and sensitivity labels
+title: Listener and scope
 description: Operate the AgentCall listener on macOS, Linux, or in a container, and label which sources an answering agent may draw on.
 ---
 
@@ -18,58 +18,50 @@ installed-but-stopped, and running native service.
 ## What the agent may read
 
 There is no `workdir` setting. What an answering agent can draw on is decided by
-one file, `~/.agentcall/lines/<line>/sensitivity.json`:
+one file, `~/.agentcall/lines/<line>/scope.json`:
 
 ```json
 {
-  "sources": [
-    { "path": "/Users/ken", "sensitivity": "shared" },
-    { "path": "/Users/ken/code/payments-api/vendor-contracts", "sensitivity": "secret" }
-  ],
-  "skills": { "journal": "secret" }
+  "roots": ["/Users/ken"],
+  "denied": ["/Users/ken/coding/acme/contracts"]
 }
 ```
 
-**Anything not named here is `secret` and never leaves the machine**, for any
-caller — except skills, which default to `shared`. `setup` seeds one entry:
-`$HOME`, labelled `shared`, so a new line can answer from your real context on
-day one. The non-overridable floor below is what makes that safe to say.
+**Anything under a root is readable unless the denylist refuses it.** `setup`
+writes one root — `$HOME` — so a new line can answer from the owner's real
+context on day one. `denied` is for the subtrees you never want answered from;
+it is added to a built-in list you cannot override.
 
-There is no `mcp` map. An MCP server's I/O is invisible to the read guard, so a
-label on one would be a promise that cannot be kept; the servers you have
-configured are granted to the spawn by enumeration instead.
+The failure direction is worth being clear about: a path nobody thought about
+is **readable**, not refused. A denylist can never be complete, and anything
+that lands under a root later is in scope without you deciding so.
 
-Two states, not a scale:
+The built-in denylist covers `~/.ssh`, `~/.aws`, `~/.gnupg`, keychains,
+`~/.agentcall`, `~/.codex`, `~/.claude`, the launch-agent and systemd unit
+directories, the shell startup files, and `.env`/`*.pem`-shaped names anywhere
+under a root. `~/.claude/skills` is excepted so skills keep working.
 
-| Label | Meaning |
-| --- | --- |
-| `shared` | Reachable by any caller this line answers |
-| `secret` | Never leaves this machine. Nothing grants it |
-
-Labels nest, and the **most specific one wins** — so a `secret` carve-out inside
-a `shared` repository holds, regardless of the order they appear in the file.
+Longest match wins, so a narrower rule beats a broader one regardless of the
+order they appear in the file.
 
 <Warning>
-  The risk runs the other way from what you might expect. Forgetting to label
-  something is safe: it stays `secret`. Labelling a *parent* is what leaks —
-  `{"path": "~", "sensitivity": "shared"}` labels everything beneath it,
-  including whatever a subdirectory acquires later. Label projects, not homes.
+  **Forgetting to deny something is not safe.** This is a denylist: a path you
+  never thought about is readable. The default root is `$HOME`, so everything
+  beneath it is in scope, including whatever a subdirectory acquires later.
 
-  A short list of paths is `secret` no matter what your map says — `~/.ssh`,
-  `~/.aws`, `~/.agentcall`, `~/.claude`, `~/.codex`, shell startup files, and
-  similar. That floor is not overridable from this file.
+  The built-in denials hold no matter what your roots say — adding `~` or even
+  `~/.ssh` as a root does not make a credential readable. That part is not
+  overridable from this file.
+
+  Narrow the root, or add to `denied`, for anything you would not want a
+  colleague's question to reach.
 </Warning>
 
 ## Where the agent starts
 
-The spawn directory is derived, not configured: it is the shortest `shared`
-source in the map, and `~/AgentCall/<line>/public/` when the map names nothing
-reachable. It is the same for every caller the line answers — there is no
-per-caller level left to vary it by.
-
-A `secret` source is never chosen, which is what keeps the built-in floor
-(`~/.ssh`, `~/.aws`, and friends) out of the selection without a second
-exclusion list.
+The spawn directory is derived, not configured: it is the shortest root, and
+`~/AgentCall/<line>/public/` when no root is usable. It is the same for every
+caller the line answers.
 
 Block a caller with `agentcall block <handle>`, or close the line by default
 with `agentcall access --default blocked`; see
@@ -78,7 +70,7 @@ with `agentcall access --default blocked`; see
 ## The read is the boundary
 
 The directory is orientation, not enforcement. **One** thing bounds an answer:
-reading a `secret` path is **refused at the tool call**, before the agent ever
+reading a denied path, or anything outside every root, is **refused at the tool call**, before the agent ever
 sees the content.
 
 The answer itself is **not** inspected. Credential-shaped strings and this

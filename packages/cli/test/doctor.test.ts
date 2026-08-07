@@ -405,23 +405,21 @@ describe("runDoctor", () => {
   // — which trades a loud failure for a quiet fallback to an empty directory.
   // This is where that trade is paid back, so it still has to be named, and
   // still has to be informational: the agent checks below it run either way.
-  it("names a labelled source that has gone missing, but still runs the agent checks", async () => {
+  it("names a root that has gone missing, but still runs the agent checks", async () => {
     const m = freshMachine();
     const paths = getLinePaths(m, LINE);
     saveLineConfig(paths, {
       org: "acme", handle: "ken", token: "t", agent_kind: "claude", relay: "https://relay.example",
     });
     mkdirSync(paths.dir, { recursive: true });
-    writeFileSync(paths.sensitivityFile, JSON.stringify({
-      sources: [{ path: "/no/such/project", sensitivity: "shared" }],
-    }));
+    writeFileSync(paths.scopeFile, JSON.stringify({ roots: ["/no/such/project"] }));
     const lines: string[] = [];
     const code = await runDoctor({ ...baseDeps, machine: m, log: (l) => lines.push(l) });
     expect(code).toBe(1);
     const out = lines.join("\n");
-    expect(out).toContain("✗ sensitivity map");
+    expect(out).toContain("✗ scope");
     expect(out).toContain("/no/such/project");
-    expect(out).toContain("sensitivity.json");
+    expect(out).toContain("scope.json");
     expect(out).toContain("✓ agent run");
   });
 
@@ -437,18 +435,16 @@ describe("runDoctor", () => {
     const repo = join(m.userHome, "code", "payments");
     mkdirSync(repo, { recursive: true });
     mkdirSync(paths.dir, { recursive: true });
-    writeFileSync(paths.sensitivityFile, JSON.stringify({
-      sources: [{ path: repo, sensitivity: "shared" }],
-    }));
+    writeFileSync(paths.scopeFile, JSON.stringify({ roots: [repo] }));
     const lines: string[] = [];
     await runDoctor({ ...baseDeps, machine: m, log: (l) => lines.push(l) });
-    expect(lines.join("\n")).toContain(`✓ workdir — ${repo} (derived, at internal clearance)`);
+    expect(lines.join("\n")).toContain(`✓ workdir — ${repo} (derived from the first root)`);
   });
 
   // A line whose map names nothing can read nothing — the fresh-install state
   // #372 opened by describing. It is a real finding, and must not read as a
   // clean bill of health.
-  it("warns about an unlabelled map rather than passing it silently", async () => {
+  it("warns about a scope with no root rather than passing it silently", async () => {
     const m = freshMachine();
     saveLineConfig(getLinePaths(m, LINE), {
       org: "acme", handle: "ken", token: "t", agent_kind: "claude", relay: "https://relay.example",
@@ -459,8 +455,8 @@ describe("runDoctor", () => {
     // A warning, not a failure: this is the fail-closed end of the model
     // working as designed, and `setup` reaches it legitimately when it runs
     // outside a git repository. Exiting 1 on an empty line would be wrong.
-    expect(out).toContain("! sensitivity map");
-    expect(out).toMatch(/no source is labelled/i);
+    expect(out).toContain("! scope");
+    expect(out).toMatch(/no root is declared/i);
   });
 
   it("exits 1 with a setup hint when there is no config", async () => {

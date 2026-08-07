@@ -4,7 +4,7 @@ import {
   requestTranscript, safeParseFrame, transcriptHash,
 } from "@benree/agentcall-shared";
 import { fetchKeys } from "./api.js";
-import { readableSources, workdirFor } from "./sensitivity.js";
+import { readableRoots, workdirFor } from "./scope.js";
 import { type CallableLineConfig } from "./config.js";
 import type { LinePaths } from "./paths.js";
 import { buildPrompt } from "./prompt.js";
@@ -225,7 +225,7 @@ export function startListener(deps: ListenerDeps): { stop(): Promise<void> } {
         audit({ call_id, ...correlation, from, message: message.slice(0, 500), task: requestedTask, status: admission.code, duration_ms: 0, outcome_delivery_error: outcomeDeliveryError });
         return;
       }
-      const { task, map } = admission;
+      const { task, scope } = admission;
 
       // Clearance, then the directory it implies. Deliberately AFTER
       // resolveAdmission and from the objects it returned: a corrupt
@@ -241,7 +241,7 @@ export function startListener(deps: ListenerDeps): { stop(): Promise<void> } {
       // richest labelled source THIS caller is cleared for, so a public caller
       // is never spawned inside internal content they could only be refused
       // on. shareDir is the fallback when the map names nothing they may see.
-      const workdirDir = workdirFor(map, deps.paths.shareDir);
+      const workdirDir = workdirFor(scope, deps.paths.shareDir, deps.paths.machine.userHome);
 
       // Task resolution above ran on the verified `from` and local files only
       // (see policy.ts's CaMeL invariant). context_id is caller-controlled, so
@@ -286,7 +286,7 @@ export function startListener(deps: ListenerDeps): { stop(): Promise<void> } {
           const out = await run({
             kind: config.agent_kind,
             prompt: buildPrompt(config.handle, from, message, task, {
-              dir: workdirDir, readable: readableSources(map),
+              dir: workdirDir, readable: readableRoots(scope, deps.paths.machine.userHome),
             }, binding !== undefined),
             workdir: workdirDir,
             timeoutMs,

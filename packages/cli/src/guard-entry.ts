@@ -42,7 +42,7 @@ import { LINE_NAME_RE } from "./line-name.js";
 import { getLinePaths, getMachinePaths } from "./paths.js";
 // The one import that costs a package (13ms; see the header). It is here
 // because the map is the boundary and a parsed boundary has to be validated.
-import { loadSensitivityMap, withFloor } from "./sensitivity.js";
+import { loadScope } from "./scope.js";
 import { appendPrivateLogLine } from "./audit-log.js";
 
 const machine = getMachinePaths();
@@ -100,11 +100,11 @@ try {
     // what let a Write through /tmp/link (-> ~/.ssh) land inside ~/.ssh.
     realpath: realpathSync,
     appendLine: appendPrivateLogLine,
-    // Read from disk rather than passed through the environment. The map is
-    // the boundary; ~/.agentcall is itself floored `secret`, so the file is not
-    // writable by the agent this guard is policing, whereas an env var is
-    // inherited state with no such property.
-    map: withFloor(loadSensitivityMap(getLinePaths(machine, lineName)), machine.userHome),
+    // Read from disk rather than passed through the environment. The scope is
+    // the boundary; ~/.agentcall is itself denied, so the file is not writable
+    // by the agent this guard is policing, whereas an env var is inherited
+    // state with no such property.
+    scope: loadScope(getLinePaths(machine, lineName)),
   });
 
 

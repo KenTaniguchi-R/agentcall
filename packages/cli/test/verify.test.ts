@@ -5,7 +5,7 @@ import { describe, expect, it } from "vitest";
 import { tempDir } from "./helpers.js";
 import { runGuard } from "../src/guard.js";
 import { getLinePaths, getMachinePaths } from "../src/paths.js";
-import { SensitivityMapSchema, withFloor } from "../src/sensitivity.js";
+import { ScopeSchema } from "../src/scope.js";
 import { AgentRunError, type AgentKind } from "../src/runner.js";
 import {
   checkAgentBinary,
@@ -363,10 +363,10 @@ function realDenialStdout(): string {
     JSON.stringify({ tool_name: "Read", tool_input: { file_path: join(home, ".env") }, cwd: home }),
     {
       line, callId: "probe", now: () => "2026-08-01T00:00:00.000Z", realpath: (p) => p, appendLine: () => {},
-      // Empty map: every path is secret by omission, so the .env probe below
-      // denies on sensitivity as well as on its basename. Either route emits
-      // the same stdout shape, which is the only thing this helper cares about.
-      map: withFloor(SensitivityMapSchema.parse({}), home),
+      // No roots: every path is outside scope, so the .env probe below denies
+      // on the root check as well as on its basename. Either route emits the
+      // same stdout shape, which is the only thing this helper cares about.
+      scope: ScopeSchema.parse({}),
     },
   ).stdout;
 }

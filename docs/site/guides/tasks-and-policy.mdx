@@ -98,13 +98,12 @@ A failed assertion blocks policy edits and listener startup rather than falling
 back to the last-looking configuration.
 
 <Warning>
-  Anything absent from `sensitivity.json` is `secret` and never leaves — but the
-  reverse is the real risk: labelling a parent directory `shared` labels
-  everything beneath it, including anything a subdirectory later acquires.
+  `scope.json` names a root the agent may read under, and a denylist that holds
+  regardless. **A path you never thought about is readable** — the default root
+  is `$HOME`, so anything a subdirectory later acquires is in scope too.
   **On a Codex line none of this is enforced.** There is no read guard there at
-  all, so nothing stops a `secret` read, and nothing inspects the answer. The
-  labels describe intent on a Codex line, not a boundary.
-  Review the [security model](/security/overview) before widening a label.
+  all, so nothing stops a denied read, and nothing inspects the answer.
+  Review the [security model](/security/overview) before widening a root.
 </Warning>
 
 ## Success check

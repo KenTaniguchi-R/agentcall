@@ -124,9 +124,10 @@ agentcall policy
 
 Tasks are Markdown files with YAML frontmatter, and any caller you have not
 blocked can request any of them. What bounds an answer is not which task ran
-but what it read: every source is either **shared** or **secret**, and a secret
-path is refused **at the read** — before the agent ever sees it. The answer
-itself is not inspected.
+but what it read, and that is two facts: a **root** the agent may read under
+(`$HOME` by default), and a **denylist** that holds regardless of the roots. A
+path outside every root, or on the denylist, is refused **at the read** —
+before the agent ever sees it. The answer itself is not inspected.
 
 Who gets answered is a separate, yes/no question. Everyone the relay lets
 through is answered by default; the organization is the boundary, and everyone
@@ -139,15 +140,19 @@ agentcall access --default blocked   # answer only named callers and rosters
 ```
 
 > [!WARNING]
-> A fresh line labels **`$HOME` shared**, minus a non-overridable floor
+> A fresh line roots at **`$HOME`**, minus a denylist you cannot override
 > (`~/.ssh`, `~/.aws`, `~/.gnupg`, keychains, `~/.agentcall`, `~/.codex`, the
-> shell rc files). That default is **credential-safe, not confidential**:
-> `redactOutbound` strips credential-shaped strings from the reply, but nothing
-> bounds confidential *content* — a salary figure or an unreleased plan has no
-> shape to match. What carries confidentiality is the organization boundary.
+> shell rc files, and `.env`/`*.pem`-shaped names anywhere).
+>
+> **A denylist can never be complete**, and the failure direction is now a leak
+> rather than a refusal: anything you put under `$HOME` later is in scope
+> without you deciding so. The default is **credential-safe, not confidential**
+> — `redactOutbound` strips credential-shaped strings from the reply, but a
+> salary figure or an unreleased plan has no shape to match. What carries
+> confidentiality is the organization boundary.
 >
 > **A Codex line has no read guard at all.** Nothing stops the agent reading a
-> `secret` path, and nothing inspects the answer. Use Claude for anything you
+> denied path, and nothing inspects the answer. Use Claude for anything you
 > actually need bounded.
 
 The [receive-a-call guide](https://agentcall.mintlify.app/get-started/receive-calls)
@@ -290,7 +295,7 @@ and [Visibility and privacy](https://agentcall.mintlify.app/security/visibility-
 | Install and make a first call | [Get started](https://agentcall.mintlify.app/get-started/install) |
 | Publish safe tasks | [Tasks, cards, and policy](https://agentcall.mintlify.app/guides/tasks-and-policy) |
 | Find agents and manage contacts | [Discovery and contacts](https://agentcall.mintlify.app/guides/discovery-and-contacts) |
-| Operate a listener | [Listener and sensitivity labels](https://agentcall.mintlify.app/guides/listener-and-sensitivity) |
+| Operate a listener | [Listener and scope](https://agentcall.mintlify.app/guides/listener-and-sensitivity) |
 | Administer an organization | [Administration](https://agentcall.mintlify.app/administration/invites) |
 | Troubleshoot a failure | [Troubleshooting](https://agentcall.mintlify.app/guides/troubleshooting) |
 | Look up commands and protocol details | [Reference](https://agentcall.mintlify.app/reference/cli) |
