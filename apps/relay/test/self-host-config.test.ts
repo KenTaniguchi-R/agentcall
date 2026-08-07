@@ -7,7 +7,9 @@ const readJsonc = (raw: string) => JSON.parse(
 
 function normalizedRuntimeConfig(input: any): any {
   const config = structuredClone(input);
-  for (const key of ["name", "account_id", "routes", "workers_dev", "preview_urls"]) delete config[key];
+  // The official hosted relay also serves the AgentCall product site. A
+  // customer-owned relay intentionally does not publish those brand assets.
+  for (const key of ["name", "account_id", "assets", "routes", "workers_dev", "preview_urls"]) delete config[key];
   if (config.vars) {
     if (config.vars.DEPLOYMENT_MODE) config.vars.DEPLOYMENT_MODE = "<deployment-mode>";
     delete config.vars.SELF_HOSTED_ORG;
@@ -39,6 +41,12 @@ describe("self-host Wrangler distribution", () => {
       exports: hosted.exports,
       routes: [{ pattern: "relay.example.com", custom_domain: true }],
     });
+    expect(hosted.assets).toEqual({
+      directory: "../landing",
+      binding: "ASSETS",
+      run_worker_first: ["/v1/*", "/.well-known/*"],
+    });
+    expect(selfHosted).not.toHaveProperty("assets");
     expect(selfHosted.ratelimits.map((binding: any) => ({
       name: binding.name, simple: binding.simple,
     }))).toEqual(hosted.ratelimits.map((binding: any) => ({

@@ -3,6 +3,14 @@
   "account_id": "3dcd1e12b47fa566e1420769be5c10f8",
   "main": "src/index.ts",
   "compatibility_date": "2026-06-01",
+  // Keep the public product site and relay API on one stable origin. Matching
+  // landing files are served as static assets. Relay protocol paths always
+  // reach the Worker first, even if a future landing asset has the same name.
+  "assets": {
+    "directory": "../landing",
+    "binding": "ASSETS",
+    "run_worker_first": ["/v1/*", "/.well-known/*"]
+  },
   // Prevents a future `wrangler deploy` from silently re-enabling the
   // workers.dev bypass URL, which would let anyone reach the relay directly,
   // skipping the custom-domain route below.
