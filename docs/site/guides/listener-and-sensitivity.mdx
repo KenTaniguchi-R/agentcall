@@ -1,5 +1,5 @@
 ---
-title: Listener and sensitivity labels
+title: Listener and scope
 description: Operate the AgentCall listener on macOS, Linux, or in a container, and label which sources an answering agent may draw on.
 ---
 
@@ -18,77 +18,70 @@ installed-but-stopped, and running native service.
 ## What the agent may read
 
 There is no `workdir` setting. What an answering agent can draw on is decided by
-one file, `~/.agentcall/lines/<line>/sensitivity.json`:
+one file, `~/.agentcall/lines/<line>/scope.json`:
 
 ```json
 {
-  "sources": [
-    { "path": "/Users/ken/code/payments-api", "sensitivity": "internal" },
-    { "path": "/Users/ken/AgentCall/ken/public", "sensitivity": "public" }
-  ],
-  "mcp": { "jira": "internal" },
-  "skills": { "obsidian": "internal" }
+  "roots": ["/Users/ken"],
+  "denied": ["/Users/ken/coding/acme/contracts"]
 }
 ```
 
-**Anything not named here is `secret` and never leaves the machine**, for any
-caller. `setup` seeds one entry — the git repository it was run in, labelled
-`internal` — so a new line can answer something without being handed your whole
-home directory.
+**Anything under a root is readable unless the denylist refuses it.** `setup`
+writes one root — `$HOME` — so a new line can answer from the owner's real
+context on day one. `denied` is for the subtrees you never want answered from;
+it is added to a built-in list you cannot override.
 
-Three levels, and only the first two can be granted to a caller:
+The failure direction is worth being clear about: a path nobody thought about
+is **readable**, not refused. A denylist can never be complete, and anything
+that lands under a root later is in scope without you deciding so.
 
-| Level | Meaning |
-| --- | --- |
-| `public` | Safe for any caller in your organization |
-| `internal` | The normal working level: repositories, engineering notes |
-| `secret` | Never leaves this machine. No clearance grants it |
+The built-in denylist covers `~/.ssh`, `~/.aws`, `~/.gnupg`, keychains,
+`~/.agentcall`, `~/.codex`, `~/.claude`, the launch-agent and systemd unit
+directories, the shell startup files, and `.env`/`*.pem`-shaped names anywhere
+under a root. `~/.claude/skills` is excepted so skills keep working.
 
-Labels nest, and the **most specific one wins** — so a `secret` carve-out inside
-an `internal` repository holds, regardless of the order they appear in the file.
+Longest match wins, so a narrower rule beats a broader one regardless of the
+order they appear in the file.
 
 <Warning>
-  The risk runs the other way from what you might expect. Forgetting to label
-  something is safe: it stays `secret`. Labelling a *parent* is what leaks —
-  `{"path": "~", "sensitivity": "internal"}` labels everything beneath it,
-  including whatever a subdirectory acquires later. Label projects, not homes.
+  **Forgetting to deny something is not safe.** This is a denylist: a path you
+  never thought about is readable. The default root is `$HOME`, so everything
+  beneath it is in scope, including whatever a subdirectory acquires later.
 
-  A short list of paths is `secret` no matter what your map says — `~/.ssh`,
-  `~/.aws`, `~/.agentcall`, `~/.claude`, `~/.codex`, shell startup files, and
-  similar. That floor is not overridable from this file.
+  The built-in denials hold no matter what your roots say — adding `~` or even
+  `~/.ssh` as a root does not make a credential readable. That part is not
+  overridable from this file.
+
+  Narrow the root, or add to `denied`, for anything you would not want a
+  colleague's question to reach.
 </Warning>
 
 ## Where the agent starts
 
-The spawn directory is derived, not configured: it is the richest labelled
-source **that caller** is cleared for, and `~/AgentCall/<line>/public/` when the
-map names nothing they may see.
+The spawn directory is derived, not configured: it is the shortest root, and
+`~/AgentCall/<line>/public/` when no root is usable. It is the same for every
+caller the line answers.
 
-So with the map above, a caller cleared for `internal` starts in
-`payments-api`, while a `public` caller starts in the share folder — the same
-line, two directories, decided by clearance. That is deliberate: a public caller
-spawned inside internal content would fill its context with material it can only
-be refused on.
-
-Set a caller's clearance with `agentcall clearance <handle> <level>`; see
+Block a caller with `agentcall block <handle>`, or close the line by default
+with `agentcall access --default blocked`; see
 [tasks and policy](/guides/tasks-and-policy).
 
 ## The read is the boundary
 
 The directory is orientation, not enforcement. **One** thing bounds an answer:
-reading a path above the caller's clearance is **refused at the tool call**,
-before the agent ever sees the content.
+reading a denied path, or anything outside every root, is **refused at the tool call**, before the agent ever
+sees the content.
 
 The answer itself is **not** inspected. Credential-shaped strings and this
 line's own relay token are redacted from it, and nothing else looks at it. If
 the agent was permitted to read something, it is permitted to repeat it.
 
 <Warning>
-  **On a Codex line, none of this is enforced.** The guard runs in observe mode
-  there, so a read above the caller's clearance is recorded and then allowed;
-  `--sandbox read-only` stops writes but not reads; and nothing inspects the
-  answer. Clearances on a Codex line describe intent, not a boundary. Use Claude
-  for anything you need actually bounded.
+  **On a Codex line, none of this is enforced.** There is no read guard there at
+  all; `--sandbox read-only` stops writes but not reads; and nothing inspects
+  the answer. A Codex line can be told to read anything on this machine. Use
+  Claude for anything you need actually bounded.
 </Warning>
 
 ## Success check

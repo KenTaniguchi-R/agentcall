@@ -26,22 +26,20 @@ const listenerLogPath = (home: string) => join(home, ".agentcall", "listener.log
 // and even an ordinary read is refused — the inversion #372 introduces, and the
 // reason these fixtures now have to say what the agent may reach rather than
 // relying on an allow-by-default floor.
-function seedMap(home: string, roots: string[]): string {
+function seedScope(home: string, roots: string[]): string {
   const dir = join(home, ".agentcall", "lines", LINE);
   // 0o700 to match what the CLI itself creates: the log-permission assertions
   // below check the directory the guard writes into, and a 0o755 fixture would
   // fail them for a reason that has nothing to do with the guard.
   mkdirSync(dir, { recursive: true, mode: 0o700 });
-  writeFileSync(join(dir, "sensitivity.json"), JSON.stringify({
-    sources: roots.map((path) => ({ path, sensitivity: "internal" })),
-  }));
+  writeFileSync(join(dir, "scope.json"), JSON.stringify({ roots }));
   return home;
 }
 
 type Run = { status: number; stdout: string; stderr: string };
 
 function runEntry(input: string, home: string, extraEnv: NodeJS.ProcessEnv = {}): Run {
-  const env = { ...process.env, AGENTCALL_HOME: home, AGENTCALL_CALL_ID: "call-abc", AGENTCALL_LINE: LINE, AGENTCALL_CLEARANCE: "internal", ...extraEnv };
+  const env = { ...process.env, AGENTCALL_HOME: home, AGENTCALL_CALL_ID: "call-abc", AGENTCALL_LINE: LINE, ...extraEnv };
   try {
     // Pipe stderr rather than inheriting it, so the reason text can be
     // asserted — it is what makes exit 2 blocking rather than "hook failed".
@@ -64,7 +62,7 @@ const runRaw = (raw: string, home: string): Run => runEntry(raw, home);
 // value — `run`'s extraEnv spread can only override the key, not delete it,
 // and an absent env var is a materially different case from an empty string.
 function runWithoutLine(input: string, home: string, extraEnv: NodeJS.ProcessEnv = {}): Run {
-  const env: NodeJS.ProcessEnv = { ...process.env, AGENTCALL_HOME: home, AGENTCALL_CALL_ID: "call-abc", AGENTCALL_CLEARANCE: "internal", ...extraEnv };
+  const env: NodeJS.ProcessEnv = { ...process.env, AGENTCALL_HOME: home, AGENTCALL_CALL_ID: "call-abc", ...extraEnv };
   delete env.AGENTCALL_LINE;
   try {
     const stdout = execFileSync(process.execPath, [ENTRY], {
@@ -91,7 +89,7 @@ function one(home: string, body: string): Promise<void> {
 describe("guard-entry as a real process", () => {
   it("allows an ordinary read and writes tools.log", () => {
     const home = tempDir("guard-");
-    seedMap(home, [home]);
+    seedScope(home, [home]);
     const r = run(
       { tool_name: "Read", tool_input: { file_path: join(home, "a.ts") }, cwd: home },
       home,
@@ -108,25 +106,6 @@ describe("guard-entry as a real process", () => {
     expect(statSync(logPath(home, "tools.log")).mode & 0o777).toBe(0o600);
   });
 
-  it("spools a stable pre-tool id without arguments and without changing the verdict", () => {
-    const home = tempDir("guard-");
-    seedMap(home, [home]);
-    const spool = join(home, "tool-events.jsonl");
-    writeFileSync(spool, "", { mode: 0o600 });
-    const r = run({
-      hook_event_name: "PreToolUse",
-      tool_name: "Read",
-      tool_use_id: "toolu_123",
-      tool_input: { file_path: join(home, "private-name.ts") },
-      cwd: home,
-    }, home, { AGENTCALL_TOOL_TELEMETRY_FILE: spool });
-    expect(r).toMatchObject({ status: 0, stdout: "", stderr: "" });
-    const event = JSON.parse(readFileSync(spool, "utf8").trim());
-    expect(event).toMatchObject({
-      phase: "pre", call_id: "call-abc", tool_use_id: "toolu_123", tool_name: "Read",
-    });
-    expect(JSON.stringify(event)).not.toContain("private-name.ts");
-  });
 
   it("denies a credential read and emits the structured decision", () => {
     const home = tempDir("guard-");
@@ -151,7 +130,7 @@ describe("guard-entry as a real process", () => {
   it("allows a labelled path and denies its unlabelled sibling", () => {
     const home = tempDir("guard-");
     const labelled = join(home, "code", "payments");
-    seedMap(home, [labelled]);
+    seedScope(home, [labelled]);
 
     const inside = run(
       { tool_name: "Read", tool_input: { file_path: join(labelled, "ledger.ts") }, cwd: labelled },
@@ -184,29 +163,7 @@ describe("guard-entry as a real process", () => {
     expect(r.stderr.trim()).not.toBe("");
   });
 
-  it("observes without denying when AGENTCALL_GUARD_MODE is observe", () => {
-    const home = tempDir("guard-");
-    const r = run(
-      { tool_name: "Read", tool_input: { file_path: join(home, ".ssh/id_rsa") }, cwd: home },
-      home,
-      { AGENTCALL_GUARD_MODE: "observe" },
-    );
-    expect(r.status).toBe(0);
-    expect(r.stdout).toBe("");
-    const calls = readFileSync(logPath(home, "calls.log"), "utf8").trim();
-    expect(JSON.parse(calls)).toMatchObject({ type: "tool_attempt_flagged" });
-  });
 
-  // An unrecognised value must not silently downgrade enforcement.
-  it("enforces when the mode env var is set to anything unrecognised", () => {
-    const home = tempDir("guard-");
-    const r = run(
-      { tool_name: "Read", tool_input: { file_path: join(home, ".ssh/id_rsa") }, cwd: home },
-      home,
-      { AGENTCALL_GUARD_MODE: "off" },
-    );
-    expect(JSON.parse(r.stdout).hookSpecificOutput.permissionDecision).toBe("deny");
-  });
 
   // Guards the fail-open-on-timeout path, and does it under concurrency:
   // Copilot's documented bug is specifically parallel — the timeout expires,
@@ -281,7 +238,7 @@ describe("guard-entry import budget", () => {
     expect([...bare.keys()].sort()).toEqual(["zod"]);
     // Named, not just counted. zod arriving through a second module would mean
     // a new module in the hot graph, which is the thing being bounded.
-    expect([...bare.get("zod")!]).toEqual(["sensitivity.js"]);
+    expect([...bare.get("zod")!]).toEqual(["scope.js"]);
   });
 });
 
@@ -311,7 +268,7 @@ describe("guard-entry requires AGENTCALL_LINE", () => {
 
   it("fails closed and records guard_unwired on a malformed line name too", () => {
     const home = tempDir("guard-");
-    seedMap(home, [home]);
+    seedScope(home, [home]);
     const r = run(
       { tool_name: "Read", tool_input: { file_path: join(home, "a.ts") }, cwd: home },
       home,
@@ -323,17 +280,4 @@ describe("guard-entry requires AGENTCALL_LINE", () => {
     expect(JSON.parse(listenerLog)).toMatchObject({ type: "guard_unwired" });
   });
 
-  // Unconditional on mode: a missing AGENTCALL_LINE is a wiring bug, not an
-  // ordinary decide() failure, so it is not eligible for observe mode's
-  // fail-open treatment (which exists so a broken guard doesn't take a
-  // healthy codex spawn down with it).
-  it("fails closed even when AGENTCALL_GUARD_MODE is observe", () => {
-    const home = tempDir("guard-");
-    const r = runWithoutLine(
-      JSON.stringify({ tool_name: "Read", tool_input: { file_path: join(home, "a.ts") }, cwd: home }),
-      home,
-      { AGENTCALL_GUARD_MODE: "observe" },
-    );
-    expect(r.status).toBe(2);
-  });
 });

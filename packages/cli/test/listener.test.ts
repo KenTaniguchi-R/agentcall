@@ -9,7 +9,7 @@ import {
   keyIdFor, requestTranscript, transcriptHash, type E2EERequestPayloadType,
   type EncryptionKeyRecordType,
 } from "@benree/agentcall-shared";
-import { runtimeToolTelemetryEnabled, startListener } from "../src/listener.js";
+import { startListener } from "../src/listener.js";
 import { getLinePaths, getMachinePaths, type LinePaths, type MachinePaths } from "../src/paths.js";
 import { AgentRunError, buildSpawnSpec } from "../src/runner.js";
 import { loadContexts, mintContextId, saveContexts, type ContextBinding } from "../src/contexts.js";
@@ -25,13 +25,6 @@ let callerKeys: StoredKeys;
 let listenerKeys: StoredKeys;
 const requestByCall = new Map<string, E2EERequestPayloadType>();
 
-describe("runtime tool telemetry gate", () => {
-  it("follows a hot-edited runtime instead of the startup runtime", () => {
-    expect(runtimeToolTelemetryEnabled("codex", false)).toBe(false);
-    expect(runtimeToolTelemetryEnabled("codex", true)).toBe(true);
-    expect(runtimeToolTelemetryEnabled("claude", false)).toBe(true);
-  });
-});
 
 beforeAll(async () => {
   cryptoRoot = mkdtempSync(join(tmpdir(), "agentcall-listener-crypto-"));
@@ -143,7 +136,7 @@ function freshMachine(): MachinePaths {
 }
 
 // No policy/task seeded — loadPolicy and loadTasks both fall back to their
-// built-in defaults (default_clearance: "public", the built-in "ask" task),
+// built-in defaults (default_the built-in "ask" task),
 // which is enough for a plain message to resolve.
 function seededPaths(): LinePaths {
   return tempLine("claude", "agentcall-l-");
@@ -157,7 +150,6 @@ function baseDeps(relay: string) {
   const paths = seededPaths();
   return {
     paths, relay, loadConfig: () => ({ ...cfg, relay }), codexThreadingEnabled: () => true,
-    codexToolTelemetryEnabled: () => true,
     fetchKeys: async (_relay: string, _auth: unknown, handle: string) => {
       const record: EncryptionKeyRecordType = {
         v: 1, relay_origin: `${handle}@127.0.0.1`.slice(`${handle}@127.0.0.1`.indexOf("@") + 1), address: `${handle}@127.0.0.1`, key_id: await keyIdFor(callerKeys.encryption_pub),
@@ -188,12 +180,12 @@ describe("startListener spawn directory", () => {
   // per call, and one stale entry must not take the line offline — so the
   // property that matters is that it falls back rather than spawning into a
   // directory that is not there. `doctor` is where the stale entry gets named.
-  it("falls back to the share directory when the map names nothing usable", async () => {
+  it("falls back to the share directory when no root is usable", async () => {
     const machine = freshMachine();
     const paths = getLinePaths(machine, "claude");
     mkdirSync(paths.dir, { recursive: true });
-    writeFileSync(paths.sensitivityFile, JSON.stringify({
-      sources: [{ path: join(machine.stateRoot, "deleted-repo"), sensitivity: "internal" }],
+    writeFileSync(paths.scopeFile, JSON.stringify({
+      roots: [join(machine.stateRoot, "deleted-repo")],
     }));
     const seen: { workdir?: string; prompt?: string } = {};
     const relayReady = new Promise<WsSocket>((resolveWs) => {
@@ -225,9 +217,7 @@ describe("startListener spawn directory", () => {
     const project = join(machine.stateRoot, "code", "api");
     mkdirSync(project, { recursive: true });
     mkdirSync(paths.dir, { recursive: true });
-    writeFileSync(paths.sensitivityFile, JSON.stringify({
-      sources: [{ path: project, sensitivity: "public" }],
-    }));
+    writeFileSync(paths.scopeFile, JSON.stringify({ roots: [project] }));
     const seen: { workdir?: string; prompt?: string } = {};
     const relayReady = new Promise<WsSocket>((resolveWs) => {
       void fakeRelay((ws) => resolveWs(ws)).then((url) => {
@@ -252,16 +242,14 @@ describe("startListener spawn directory", () => {
   // The reason cwd is derived from CLEARANCE and not merely from the map: an
   // internal source must not become a public caller's working directory, or
   // every such call fills its context with material it can only be refused on.
-  it("does not spawn a public caller inside an internal source", async () => {
+  it("does not spawn a caller inside a secret source", async () => {
     const machine = freshMachine();
     const paths = getLinePaths(machine, "claude");
     const project = join(machine.stateRoot, "code", "internal-api");
     mkdirSync(project, { recursive: true });
     mkdirSync(paths.dir, { recursive: true });
-    writeFileSync(paths.sensitivityFile, JSON.stringify({
-      sources: [{ path: project, sensitivity: "internal" }],
-    }));
-    seedPolicy(paths, { default_clearance: "public", callers: {} });
+    writeFileSync(paths.scopeFile, JSON.stringify({ roots: [], denied: [project] }));
+    seedPolicy(paths, { default_access: "allowed", callers: {} });
     const seen: { workdir?: string } = {};
     const relayReady = new Promise<WsSocket>((resolveWs) => {
       void fakeRelay((ws) => resolveWs(ws)).then((url) => {
@@ -282,11 +270,11 @@ describe("startListener spawn directory", () => {
 describe("startListener policy assertions", () => {
   it("refuses to start before opening a socket when an assertion is broken", () => {
     const paths = seededPaths();
-    seedPolicy(paths, { default_clearance: "public", tests: [{ caller: "mia", expect_clearance: "internal" }] });
+    seedPolicy(paths, { tests: [{ caller: "mia", expect_access: "blocked" }] });
     expect(() => startListener({
       relay: "http://127.0.0.1:1", paths, loadConfig: () => cfg,
       run: async () => ({ text: "unused" }),
-    })).toThrow(/assertion 1.*expected internal.*got public/i);
+    })).toThrow(/assertion 1.*expected blocked.*got allowed/i);
   });
 });
 
@@ -591,7 +579,7 @@ describe("startListener task resolution", () => {
       void fakeRelay((ws) => resolveWs(ws)).then((url) => {
         const deps = baseDeps(url);
         paths = deps.paths;
-        seedPolicy(paths, { default_clearance: "public", callers: { spammer: { block: true } } });
+        seedPolicy(paths, { default_access: "allowed", callers: { spammer: { access: "blocked" } } });
         stopper = startListener({ ...deps, run: async () => { spawned = true; return { text: "x" }; } });
       });
     });
@@ -608,32 +596,6 @@ describe("startListener task resolution", () => {
     });
   });
 
-  it("enforces an administrator block even when user policy allows the caller", async () => {
-    let spawned = false;
-    const relayReady = new Promise<WsSocket>((resolveWs) => {
-      void fakeRelay((ws) => resolveWs(ws)).then((url) => {
-        const deps = baseDeps(url);
-        seedPolicy(deps.paths, { default_clearance: "public", callers: {} });
-        // The ceiling lives on the MACHINE, not the line — overridden here
-        // because its production path is deliberately unredirectable.
-        const paths = {
-          ...deps.paths,
-          machine: { ...deps.paths.machine, managedPolicyFile: join(deps.paths.dir, "managed-policy.json") },
-        };
-        writeFileSync(paths.machine.managedPolicyFile, JSON.stringify({
-          version: 1,
-          blocked_callers: ["spammer"],
-        }));
-        stopper = startListener({ ...deps, paths, run: async () => { spawned = true; return { text: "x" }; } });
-      });
-    });
-    const ws = await relayReady;
-    const expectFrames = frames(ws, 1);
-    await sendIncoming(ws, { call_id: "managed-block", from: "spammer", message: "hi" });
-    const [failed] = await expectFrames;
-    expect(failed).toMatchObject({ type: "call_failed", call_id: "managed-block", code: "blocked" });
-    expect(spawned).toBe(false);
-  });
 
   // Was "refuses an ungranted task with the caller's offered menu, without
   // spawning". #379 deleted the menu, so a task no policy names now runs for
@@ -645,7 +607,7 @@ describe("startListener task resolution", () => {
       void fakeRelay((ws) => resolveWs(ws)).then((url) => {
         const deps = baseDeps(url);
         seedTask(deps.paths, "schedule-meeting", ["description: d"]);
-        seedPolicy(deps.paths, { default_clearance: "public", callers: {} });
+        seedPolicy(deps.paths, { default_access: "allowed", callers: {} });
         stopper = startListener({ ...deps, run: async () => { spawned = true; return { text: "x" }; } });
       });
     });
@@ -657,23 +619,23 @@ describe("startListener task resolution", () => {
     expect(spawned).toBe(true);
   });
 
-  // Was "runs a task granted by a locally recognized relay-attested group".
-  // A group no longer grants a task — it raises clearance — so what an
-  // attestation must still do is reach the spawn with the higher level.
-  it("raises clearance for a locally recognized relay-attested group", async () => {
+  // Was "raises clearance for a relay-attested group". A group no longer raises
+  // an amount — with one grantable level it decides whether the line answers at
+  // all — so what an attestation must still do is open a line the default closes.
+  it("answers an attested group member on a line that is closed by default", async () => {
     const rosterId = "g".repeat(22);
-    const seen: { clearance?: unknown } = {};
+    const seen: { ran?: boolean } = {};
     const relayReady = new Promise<WsSocket>((resolveWs) => {
       void fakeRelay((ws) => resolveWs(ws)).then((url) => {
         const deps = baseDeps(url);
         seedTask(deps.paths, "schedule-meeting", ["description: d"]);
         seedPolicy(deps.paths, {
-          default_clearance: "public", callers: {},
-          groups: { eng: { roster_id: rosterId, clearance: "internal" } },
+          default_access: "blocked", callers: {},
+          groups: { eng: { roster_id: rosterId, access: "allowed" } },
         });
         stopper = startListener({
           ...deps,
-          run: async ({ clearance }) => { seen.clearance = clearance; return { text: "booked" }; },
+          run: async () => { seen.ran = true; return { text: "booked" }; },
         });
       });
     });
@@ -683,41 +645,45 @@ describe("startListener task resolution", () => {
       call_id: "cg1", from: "stranger", groups: [rosterId], message: "book", task: "schedule-meeting",
     });
     const [, , result] = await expectFrames;
-    expect(seen.clearance).toBe("internal");
+    expect(seen.ran).toBe(true);
     expect(result).toMatchObject({ type: "call_result", call_id: "cg1", task: "schedule-meeting" });
   });
 
-  // The mirror of the above: an un-attested claim must not raise anything.
+  // The mirror of the above: an un-attested claim must not open anything.
   // `groups` comes from the relay, but the un-attested path is what a caller
   // could otherwise assert about themselves.
-  it("leaves clearance at the default when the group is not attested", async () => {
+  it("leaves an unattested caller at the default", async () => {
     const rosterId = "g".repeat(22);
-    const seen: { clearance?: unknown } = {};
+    const seen: { ran?: boolean } = {};
     const relayReady = new Promise<WsSocket>((resolveWs) => {
       void fakeRelay((ws) => resolveWs(ws)).then((url) => {
         const deps = baseDeps(url);
         seedTask(deps.paths, "schedule-meeting", ["description: d"]);
         seedPolicy(deps.paths, {
-          default_clearance: "public", callers: {},
-          groups: { eng: { roster_id: rosterId, clearance: "internal" } },
+          default_access: "blocked", callers: {},
+          groups: { eng: { roster_id: rosterId, access: "allowed" } },
         });
         stopper = startListener({
           ...deps,
-          run: async ({ clearance }) => { seen.clearance = clearance; return { text: "booked" }; },
+          run: async () => { seen.ran = true; return { text: "booked" }; },
         });
       });
     });
     const ws = await relayReady;
-    const expectFrames = frames(ws, 3);
+    // One frame, not three: a refused caller never reaches accepted/started.
+    const expectFrames = frames(ws, 1);
     await sendIncoming(ws, {
       call_id: "cg2", from: "stranger", message: "book", task: "schedule-meeting",
     });
-    await expectFrames;
-    expect(seen.clearance).toBe("public");
+    const [failed] = await expectFrames;
+    // The roster would have opened the line, but nothing attested it — so the
+    // caller stays at the closed default and no agent runs at all.
+    expect(failed).toMatchObject({ type: "call_failed", call_id: "cg2", code: "blocked" });
+    expect(seen.ran).toBeUndefined();
   });
 
-  it("runs a task with its timeout, derived workdir, and the caller's clearance, echoing task in call_result", async () => {
-    const seen: { prompt?: string; workdir?: string; timeout?: number; clearance?: unknown } = {};
+  it("runs a task with its timeout and derived workdir, echoing task in call_result", async () => {
+    const seen: { prompt?: string; workdir?: string; timeout?: number } = {};
     let paths!: LinePaths;
     const relayReady = new Promise<WsSocket>((resolveWs) => {
       void fakeRelay((ws) => resolveWs(ws)).then((url) => {
@@ -729,18 +695,16 @@ describe("startListener task resolution", () => {
         const calendar = join(paths.machine.stateRoot, "code", "calendar");
         mkdirSync(calendar, { recursive: true });
         mkdirSync(deps.paths.dir, { recursive: true });
-        writeFileSync(deps.paths.sensitivityFile, JSON.stringify({
-          sources: [{ path: calendar, sensitivity: "internal" }],
-        }));
+        writeFileSync(deps.paths.scopeFile, JSON.stringify({ roots: [calendar] }));
         seedTask(deps.paths, "schedule-meeting", [
           "description: d",
           "timeout_s: 60",
         ], "check the calendar\n");
-        seedPolicy(deps.paths, { default_clearance: "public", callers: { shusaku: { clearance: "internal" } } });
+        seedPolicy(deps.paths, { default_access: "allowed", callers: { shusaku: { access: "allowed" } } });
         stopper = startListener({
           ...deps,
-          run: async ({ prompt, workdir, timeoutMs, clearance }) => {
-            seen.prompt = prompt; seen.workdir = workdir; seen.timeout = timeoutMs; seen.clearance = clearance;
+          run: async ({ prompt, workdir, timeoutMs }) => {
+            seen.prompt = prompt; seen.workdir = workdir; seen.timeout = timeoutMs;
             return { text: "booked" };
           },
         });
@@ -758,18 +722,19 @@ describe("startListener task resolution", () => {
     // The caller's OWN clearance, not the line default: this is the value
     // resolveAdmission's policy object carries through to the spawn, so a
     // per-caller grant that never reached the runner would show up here.
-    expect(seen.clearance).toBe("internal");
+    // clearance is gone from RunOptions (2026-08-07); workdir and timeout above
+    // are what the map and the task still decide.
     const audit = readFileSync(paths.callsLog, "utf8").trim().split("\n").map((l) => JSON.parse(l));
     expect(audit[0]).toMatchObject({ call_id: "c3", task: "schedule-meeting", status: "ok" });
   });
 
   it("falls back to the ask task for a plain message", async () => {
-    const seen: { clearance?: unknown } = {};
+    const seen: { ran?: boolean } = {};
     const relayReady = new Promise<WsSocket>((resolveWs) => {
       void fakeRelay((ws) => resolveWs(ws)).then((url) => {
         stopper = startListener({
           ...baseDeps(url),
-          run: async ({ clearance }) => { seen.clearance = clearance; return { text: "hi" }; },
+          run: async () => { seen.ran = true; return { text: "hi" }; },
         });
       });
     });
@@ -778,7 +743,7 @@ describe("startListener task resolution", () => {
     await sendIncoming(ws, { call_id: "c4", from: "anyone", message: "q?" });
     const [, , result] = await expectFrames;
     expect(result).toMatchObject({ type: "call_result", task: "ask" });
-    expect(seen.clearance).toBe("public");
+    expect(seen.ran).toBe(true);
   });
 
   it("maps a corrupt policy file to call_failed agent_error without spawning, and without leaking the parse error", async () => {
@@ -808,55 +773,21 @@ describe("startListener task resolution", () => {
 });
 
 describe("startListener line name propagation", () => {
-  // Task 7 made the PreToolUse guard fail closed without AGENTCALL_LINE: no
-  // env var, no tool call succeeds, for every task on that call. If
-  // listener.ts:139's `deps.paths.name` ever regresses back to the old
-  // hardcoded `""` — or `run`'s nine positional arguments get reordered,
-  // which is a live risk given how many there are — every answered call on
-  // every line dies at its first tool use, silently, with the generic
-  // DENY_REASON that deliberately gives no path and no rule name. That
-  // failure mode is too silent to trust to "the two halves of this chain are
-  // each covered by their own unit test" (runner.test.ts's "AGENTCALL_LINE
-  // propagation" proves buildSpawnSpec maps a given lineName into
-  // env.AGENTCALL_LINE; this only needs to prove the listener still passes
-  // it) — a refactor can keep both halves individually green while the
-  // wiring between them silently rots. This goes through startListener end
-  // to end and lands the assertion on the actual env var a spawned process
-  // would see, not on an intermediate string.
   it("regressing this breaks the PreToolUse guard fail-closed on every answered call: line name must reach AGENTCALL_LINE", async () => {
     const paths = getLinePaths(freshMachine(), "sales");
     const captured: {
       kind?: "claude" | "codex"; prompt?: string; workdir?: string;
       envelope?: unknown; callId?: string; lineName?: string; correlationId?: string;
-      toolTelemetryFile?: string;
     } = {};
-    const recordTool = vi.fn();
-    const endInvocation = vi.fn();
     const relayReady = new Promise<WsSocket>((resolveWs) => {
       void fakeRelay((ws) => resolveWs(ws)).then((url) => {
         stopper = startListener({
           ...baseDeps(url), paths,
           loadConfig: () => ({ ...cfg, relay: url }),
-          telemetry: {
-            startInbound: () => ({
-              context: {} as never,
-              endAdmission: () => {},
-              startInvocation: () => ({ recordTool, end: endInvocation }),
-            }),
-          } as never,
-          createToolEventSpool: () => ({
-            file: "/private/tmp/agentcall-tool-events-test.jsonl",
-            dispose: () => {},
-            collect: () => [{
-              callId: "c1", toolCallId: "tool-1", toolName: "Read", outcome: "success" as const,
-              startedAtMs: 1_000, endedAtMs: 1_010, durationMs: 10,
-            }],
-          }),
-          run: async ({ kind, prompt, workdir, callId, lineName, correlationId, toolTelemetryFile }) => {
+          run: async ({ kind, prompt, workdir, callId, lineName, correlationId }) => {
             captured.kind = kind; captured.prompt = prompt; captured.workdir = workdir;
             captured.callId = callId; captured.lineName = lineName;
             captured.correlationId = correlationId;
-            captured.toolTelemetryFile = toolTelemetryFile;
             return { text: "ok" };
           },
         });
@@ -895,7 +826,7 @@ describe("startListener line name propagation", () => {
     const spec = buildSpawnSpec({
       kind: captured.kind!, prompt: captured.prompt!, workdir: captured.workdir!,
       resolveBin: () => "/fake/claude",
-      callId: captured.callId!, lineName: captured.lineName!, clearance: "internal",
+      callId: captured.callId!, lineName: captured.lineName!,
     });
     expect(spec.env?.AGENTCALL_LINE).toBe(paths.name);
     // Pins the callId position too. buildSpawnSpec's tail has 4 plain-`string`-
@@ -906,50 +837,9 @@ describe("startListener line name propagation", () => {
     // runtime assertion here the way callId/workdir/lineName do.
     expect(spec.env?.AGENTCALL_CALL_ID).toBe("c1");
     expect(captured.correlationId).toBe("a".repeat(32));
-    expect(captured.toolTelemetryFile).toBe("/private/tmp/agentcall-tool-events-test.jsonl");
-    expect(recordTool).toHaveBeenCalledWith(expect.objectContaining({
-      callId: "c1", toolCallId: "tool-1", toolName: "Read",
-    }));
-    expect(endInvocation).toHaveBeenCalledWith("success", undefined);
   });
 
-  it("disposes an active tool spool and aborts the answering run before graceful stop returns", async () => {
-    const paths = getLinePaths(freshMachine(), "shutdown");
-    const dispose = vi.fn();
-    let runAborted = false;
-    const relayReady = new Promise<WsSocket>((resolveWs) => {
-      void fakeRelay((ws) => resolveWs(ws)).then((url) => {
-        stopper = startListener({
-          ...baseDeps(url), paths,
-          loadConfig: () => ({ ...cfg, relay: url }),
-          telemetry: {
-            startInbound: () => ({
-              context: {} as never,
-              endAdmission: () => {},
-              startInvocation: () => ({ recordTool: () => {}, end: () => {} }),
-            }),
-          } as never,
-          createToolEventSpool: () => ({
-            file: "/private/state/active-tool-events.jsonl", dispose, collect: () => [],
-          }),
-          run: async ({ signal }) =>
-            new Promise((resolve) => signal?.addEventListener("abort", () => {
-              runAborted = true;
-              resolve({ text: "canceled" });
-            }, { once: true })),
-        });
-      });
-    });
-    const ws = await relayReady;
-    const started = frames(ws, 2);
-    await sendIncoming(ws, { call_id: "stop-call", from: "shusaku", message: "hi" });
-    await started;
 
-    await stopper!.stop();
-    stopper = undefined;
-    expect(dispose).toHaveBeenCalledOnce();
-    expect(runAborted).toBe(true);
-  });
 });
 
 // Minimal fake WebSocket for tests that need to assert on what each
@@ -1395,7 +1285,7 @@ describe("listener contexts", () => {
         run: async () => { spawned = true; return { text: "should not happen" }; },
         seed: (p) => {
           seedTask(p, "notes", ["description: d", "threadable: false"]);
-          seedPolicy(p, { default_clearance: "public" });
+          seedPolicy(p, { default_access: "allowed" });
           seedBinding({ task: "notes" })(p);
         },
       },
@@ -1432,7 +1322,7 @@ describe("listener contexts", () => {
     const { frames: f, paths } = await oneCall({ message: "hi", task: "risky" }, {
       seed: (p) => {
         seedTask(p, "risky", ["description: d", "threadable: false"]);
-        seedPolicy(p, { default_clearance: "public" });
+        seedPolicy(p, { default_access: "allowed" });
       },
     });
     expect(f.find((x) => x.type === "call_result").context_id).toBeUndefined();

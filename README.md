@@ -124,27 +124,36 @@ agentcall policy
 
 Tasks are Markdown files with YAML frontmatter, and any caller you have not
 blocked can request any of them. What bounds an answer is not which task ran
-but what it read: every source carries a **sensitivity**, every caller a
-**clearance**, and a path above that clearance is refused **at the read** —
-before the agent ever sees it. The answer itself is not inspected. The listener
-resolves clearance from the relay-verified caller before placing their message
-in the prompt, so the message can never influence it.
+but what it read, and that is two facts: a **root** the agent may read under
+(`$HOME` by default), and a **denylist** that holds regardless of the roots. A
+path outside every root, or on the denylist, is refused **at the read** —
+before the agent ever sees it. The answer itself is not inspected.
+
+Who gets answered is a separate, yes/no question. Everyone the relay lets
+through is answered by default; the organization is the boundary, and everyone
+answered sees the same thing.
 
 ```bash
-agentcall clearance ken internal     # ken may be told internal content
-agentcall clearance --default public
-agentcall block spammer              # beats every grant, including a roster's
+agentcall block spammer              # beats the default and every roster rule
+agentcall unblock spammer
+agentcall access --default blocked   # answer only named callers and rosters
 ```
 
 > [!WARNING]
-> Anything absent from `sensitivity.json` is `secret` and never leaves — but
-> the reverse is the real risk: labelling a parent directory `internal` labels
-> everything beneath it, including whatever it acquires later.
+> A fresh line roots at **`$HOME`**, minus a denylist you cannot override
+> (`~/.ssh`, `~/.aws`, `~/.gnupg`, keychains, `~/.agentcall`, `~/.codex`, the
+> shell rc files, and `.env`/`*.pem`-shaped names anywhere).
 >
-> **On a Codex line none of this is enforced.** The guard runs in observe mode,
-> so a read above the caller's clearance is recorded and then allowed, and
-> nothing inspects the answer. Clearances on a Codex line describe intent, not
-> a boundary. Use Claude for anything you actually need bounded.
+> **A denylist can never be complete**, and the failure direction is now a leak
+> rather than a refusal: anything you put under `$HOME` later is in scope
+> without you deciding so. The default is **credential-safe, not confidential**
+> — `redactOutbound` strips credential-shaped strings from the reply, but a
+> salary figure or an unreleased plan has no shape to match. What carries
+> confidentiality is the organization boundary.
+>
+> **A Codex line has no read guard at all.** Nothing stops the agent reading a
+> denied path, and nothing inspects the answer. Use Claude for anything you
+> actually need bounded.
 
 The [receive-a-call guide](https://agentcall.mintlify.app/get-started/receive-calls)
 and [tasks and policy guide](https://agentcall.mintlify.app/guides/tasks-and-policy)
@@ -286,7 +295,7 @@ and [Visibility and privacy](https://agentcall.mintlify.app/security/visibility-
 | Install and make a first call | [Get started](https://agentcall.mintlify.app/get-started/install) |
 | Publish safe tasks | [Tasks, cards, and policy](https://agentcall.mintlify.app/guides/tasks-and-policy) |
 | Find agents and manage contacts | [Discovery and contacts](https://agentcall.mintlify.app/guides/discovery-and-contacts) |
-| Operate a listener | [Listener and sensitivity labels](https://agentcall.mintlify.app/guides/listener-and-sensitivity) |
+| Operate a listener | [Listener and scope](https://agentcall.mintlify.app/guides/listener-and-sensitivity) |
 | Administer an organization | [Administration](https://agentcall.mintlify.app/administration/invites) |
 | Troubleshoot a failure | [Troubleshooting](https://agentcall.mintlify.app/guides/troubleshooting) |
 | Look up commands and protocol details | [Reference](https://agentcall.mintlify.app/reference/cli) |
@@ -320,46 +329,6 @@ Before taking an issue, follow the claim and worktree protocol in
 [CONTRIBUTING.md](./CONTRIBUTING.md). Open work is tracked in
 [GitHub Issues](https://github.com/KenTaniguchi-R/agentcall/issues).
 
-### Local OpenTelemetry (opt-in)
-
-AgentCall initializes no telemetry SDK by default. Set `AGENTCALL_OTEL=1` in
-the caller/listener process to enable its manual OpenTelemetry instrumentation,
-then use the standard `OTEL_SERVICE_NAME`, `OTEL_EXPORTER_OTLP_*`, timeout, and
-sampling environment variables to select an OTLP/HTTP collector. A supervised
-background listener needs these variables in its supervisor environment; a
-shell-only export affects only foreground commands.
-
-The local implementation exports bounded call metadata and span timing. When
-enabled, paired runtime hooks also emit `execute_tool <name>` child spans and
-`gen_ai.execute_tool.duration` only for tool lifecycles with the same stable
-pre/post tool-call ID. Claude supplies explicit success/failure and native
-duration events. Codex tool spans are currently disabled: the 0.146.0 live
-probe showed its default code-mode tool path can complete without emitting
-either lifecycle hook, and telemetry does not change the runtime's tool surface
-to force an observable path. Duplicate, mismatched, oversized, and incomplete
-local observations are discarded.
-Pairs with non-allowlisted tool names or timestamps outside the invocation's
-spool lifetime are omitted as well.
-
-The hook spool is a mode-0600 file in AgentCall's private state, outside the
-configured task worktree and Codex's writable sandbox. It is bounded to 256 KiB and consumed and
-deleted when the invocation ends. It contains only call ID, tool-call ID, bounded
-allowlisted tool name, timestamps, duration, and a low-cardinality outcome—never messages,
-replies, handles, tool arguments/results, paths, policy/error details, or agent
-session IDs. Raw provider tool-call IDs are paired locally and exported only as
-per-invocation keyed digests. Claude `exec` has no OS filesystem boundary, so
-spool observations are treated as untrusted: inode/mode checks, strict tool-name
-allowlisting, keyed IDs, and bounded timing prevent attacker-chosen strings from
-becoming span attributes or metric labels, but do not make tool telemetry an
-audit-grade record. Collector headers and all other `OTEL_*`/`AGENTCALL_OTEL*`
-settings are removed from the Claude/Codex and hook subprocess environments.
-Remote sampling flags cannot override the listener's locally bounded sampler;
-`AGENTCALL_OTEL_MAX_ROOT_SPANS_PER_MINUTE` sets its absolute root-span token
-bucket (default 60). Export or shutdown failure never changes a call result.
-The listener records only aggregate trace-export failures, metric-export
-failures, and span-queue drops in `~/.agentcall/telemetry-health.json`;
-`agentcall doctor` reports a warning from that local file without making
-telemetry health a call-health requirement.
 See the living [data-residency map](./docs/security/data-residency.md) and
 [employee transparency statement](./docs/security/employee-transparency.md)
 for the current privacy, export, and Cloudflare separation contracts. The dated

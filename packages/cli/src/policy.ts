@@ -10,9 +10,8 @@ import { readFileSync } from "node:fs";
 import { z } from "zod";
 import { HANDLE_RE, MAX_CARD_BLOCKED_CALLERS } from "@benree/agentcall-shared";
 import {
-  ClearancePolicySchema, GROUP_NAME_RE, GrantableClearance, capClearance, clearanceFor,
-  type GrantableClearanceType,
-} from "./clearance.js";
+  AccessPolicySchema, GROUP_NAME_RE, AccessSchema, accessFor,
+} from "./access.js";
 import { writeJsonAtomic } from "./json-store.js";
 import type { LinePaths } from "./paths.js";
 import type { Task } from "./tasks.js";
@@ -25,37 +24,24 @@ const MAX_POLICY_ASSERTIONS = 100;
 // `deny: ["*"]` — "this caller gets nothing" — maps onto "blocked" exactly.
 //
 // `secret` is absent for the same structural reason it is absent from
-// GrantableClearance: no clearance grants it, so no assertion can expect it.
+// AccessSchema: no clearance grants it, so no assertion can expect it.
 const PolicyAssertionSchema = z.object({
   caller: z.string().regex(HANDLE_RE),
   groups: z.array(z.string().regex(GROUP_NAME_RE)).max(20).default([]),
-  expect_clearance: z.enum([...GrantableClearance.options, "blocked"]),
+  expect_access: AccessSchema,
 }).strict();
 type PolicyAssertion = z.infer<typeof PolicyAssertionSchema>;
 
 // The whole file: clearance.ts's shape plus the assertions, which are a
 // property of the file rather than of resolution. `.extend` on a strict object
 // stays strict, so a typo anywhere still fails the parse.
-const PolicySchema = ClearancePolicySchema.extend({
+const PolicySchema = AccessPolicySchema.extend({
   tests: z.array(PolicyAssertionSchema).max(MAX_POLICY_ASSERTIONS).optional(),
 });
 export type Policy = z.infer<typeof PolicySchema>;
 
-const ManagedPolicySchema = z.object({
-  version: z.literal(1),
-  // Omitted means the administrator does not cap clearance. This is the
-  // successor to the task-menu era's `allowed_tasks`: that bounded which tasks
-  // the owner could grant, this bounds how much any grant can reveal. There is
-  // no deny-all value because `blocked_callers` is the deny-all lever, and
-  // because `secret` is not grantable in the first place.
-  max_clearance: GrantableClearance.optional(),
-  blocked_callers: z.array(z.string().regex(HANDLE_RE)).default([]),
-  tests: z.array(PolicyAssertionSchema).max(MAX_POLICY_ASSERTIONS).optional(),
-}).strict();
-type ManagedPolicy = z.infer<typeof ManagedPolicySchema>;
-
 export const DEFAULT_POLICY: Policy = {
-  description: "", default_clearance: "public", callers: {}, groups: {},
+  description: "", default_access: "allowed", callers: {}, groups: {},
 };
 
 // Missing file -> safe default (fresh install). Malformed file -> THROW:
@@ -81,35 +67,8 @@ export function loadUserPolicy(p: LinePaths): Policy {
   return readOptionalJson(p.policyFile, "user policy", PolicySchema) ?? DEFAULT_POLICY;
 }
 
-function applyManagedPolicy(user: Policy, managed: ManagedPolicy): Policy {
-  const ceiling = managed.max_clearance;
-  const cap = (value: GrantableClearanceType | undefined) =>
-    value === undefined || ceiling === undefined ? value : capClearance(value, ceiling);
-
-  const callerEntries = new Map(Object.entries(user.callers).map(([handle, entry]) => {
-    const clearance = cap(entry.clearance);
-    return [handle, { ...(clearance === undefined ? {} : { clearance }), block: entry.block }] as const;
-  }));
-  for (const handle of managed.blocked_callers) {
-    const entry = callerEntries.get(handle) ?? { block: false };
-    callerEntries.set(handle, { ...entry, block: true });
-  }
-
-  const assertions = [...(user.tests ?? []), ...(managed.tests ?? [])];
-  return {
-    description: user.description,
-    default_clearance: cap(user.default_clearance) ?? user.default_clearance,
-    callers: Object.fromEntries(callerEntries),
-    groups: Object.fromEntries(Object.entries(user.groups).map(([name, group]) => {
-      const clearance = cap(group.clearance);
-      return [name, { roster_id: group.roster_id, ...(clearance === undefined ? {} : { clearance }) }];
-    })),
-    ...(assertions.length > 0 ? { tests: assertions } : {}),
-  };
-}
-
 function validateEffectivePolicy(policy: Policy): Policy {
-  const blocked = Object.values(policy.callers).filter((entry) => entry.block).length;
+  const blocked = Object.values(policy.callers).filter((entry) => entry.access === "blocked").length;
   if (blocked > MAX_CARD_BLOCKED_CALLERS) {
     throw new Error(
       `effective policy blocks ${blocked} callers; at most ${MAX_CARD_BLOCKED_CALLERS} can be enforced and published`,
@@ -125,19 +84,20 @@ export function loadPolicy(p: LinePaths): Policy {
   return validatePolicy(p, loadUserPolicy(p));
 }
 
-// Validate a proposed user policy against the installed managed layer before
-// writing it. CLI mutations use this to reject a change that would break an
-// assertion, preserving the last known-good file and listener availability.
+// Validate a proposed user policy before writing it. CLI mutations use this to
+// reject a change that would break an assertion, preserving the last known-good
+// file and listener availability.
 //
-// The user half is per-LINE (p.policyFile); the managed half is per-MACHINE
-// (p.machine.managedPolicyFile). An administrator ceiling that lived on the
-// line would be escaped by `agentcall line add`, and its path is deliberately
-// independent of AGENTCALL_HOME — see paths.ts.
+// There was a machine-scoped administrator ceiling here until 2026-08-07
+// (max_clearance + blocked_callers + its own assertions, merged by
+// applyManagedPolicy). It was READ but never WRITTEN: no command produced the
+// file, so an administrator had to hand-author JSON into a platform-specific
+// path they could only find by reading this source. An enterprise control with
+// no tooling is one nobody can use. Restore it from git history alongside a
+// command that writes it, not on its own.
 export function validatePolicy(p: LinePaths, user: Policy): Policy {
-  const managed = readOptionalJson(p.machine.managedPolicyFile, "managed policy", ManagedPolicySchema);
-  const effective = validateEffectivePolicy(managed === undefined ? user : applyManagedPolicy(user, managed));
+  const effective = validateEffectivePolicy(user);
   validatePolicyAssertions(effective, user.tests ?? [], "user policy");
-  if (managed !== undefined) validatePolicyAssertions(effective, managed.tests ?? [], "managed policy");
   return effective;
 }
 
@@ -161,7 +121,7 @@ export function callerEntry(policy: Policy, handle: string): CallerEntry | undef
 }
 
 function validatePolicyAssertions(
-  effective: Policy, assertions: readonly PolicyAssertion[], source: "user policy" | "managed policy",
+  effective: Policy, assertions: readonly PolicyAssertion[], source: "user policy",
 ): void {
   for (const [index, assertion] of assertions.entries()) {
     const unknownGroups = assertion.groups.filter((name) => !Object.hasOwn(effective.groups, name));
@@ -171,11 +131,11 @@ function validatePolicyAssertions(
       );
     }
     const attestedGroups = assertion.groups.map((name) => effective.groups[name]!.roster_id);
-    const actual = clearanceFor(effective, assertion.caller, attestedGroups);
-    if (actual === assertion.expect_clearance) continue;
+    const actual = accessFor(effective, assertion.caller, attestedGroups);
+    if (actual === assertion.expect_access) continue;
     throw new Error(
       `${source} assertion ${index + 1} for "${assertion.caller}" failed: ` +
-      `expected ${assertion.expect_clearance}, got ${actual}`,
+      `expected ${assertion.expect_access}, got ${actual}`,
     );
   }
 }
@@ -191,7 +151,7 @@ export type TaskResolution =
 // Since #379 there is no menu to consult. A task is not individually granted,
 // so the only two questions here are whether the caller is blocked outright
 // and whether the requested task exists on disk. What the resulting answer may
-// CONTAIN is decided afterwards, by clearanceFor against the sensitivity of
+// CONTAIN is decided afterwards, by accessFor against the sensitivity of
 // whatever the task actually read — one question where there used to be two.
 export function resolveTask(
   policy: Policy, tasks: Task[], from: string, requested?: string, attestedGroups: readonly string[] = [],
@@ -199,7 +159,7 @@ export function resolveTask(
   // Blocked is the one rule clearance cannot express as a level: it beats every
   // grant, including an attested group's, and it refuses before any task is
   // named so a blocked caller learns nothing about what exists.
-  if (clearanceFor(policy, from, attestedGroups) === "blocked") {
+  if (accessFor(policy, from, attestedGroups) === "blocked") {
     return { ok: false, code: "blocked", offered: [] };
   }
   if (requested !== undefined) {

@@ -38,33 +38,30 @@ agentcall card
 ```
 
 `lint` checks task manifests, effective policy assertions, and the rendered
-card. The other commands make the effective clearances and working directories
+card. The other commands make the effective access rules and working directories
 visible for human review.
 
-## 3. Set clearance
+## 3. Decide who is answered
 
 Any caller you have not blocked can request any task. What bounds the answer is
-what the task read, not which task ran: every source carries a **sensitivity**
-(`public`, `internal`, `secret`), every caller a **clearance**, and a path above
-that clearance is refused **at the read** — before the agent sees it. The answer
-itself is not inspected.
+what the task read, not which task ran: every source is either **shared** or
+**secret**, and a secret path is refused **at the read** — before the agent sees
+it. The answer itself is not inspected.
+
+Who gets answered is a separate, yes/no question. **Everyone answered sees the
+same thing** — the organization is the boundary, not a per-caller level.
 
 ```bash
-# What anyone in the organization may be told
-agentcall clearance --default public
-
-# One caller may be told more
-agentcall clearance ken internal
-
-# Back to the line default
-agentcall clearance ken --reset
-
-# Deny a caller completely — beats every grant, including a roster's
+# Deny a caller completely — beats the default and every roster rule
 agentcall block spammer
+agentcall unblock spammer
+
+# Answer only named callers and attested rosters
+agentcall access --default blocked
 ```
 
 `secret` is not grantable. It means "never leaves this machine", so no caller
-and no roster can be cleared for it.
+and no roster can reach it.
 
 Policy verbs republish the card automatically. `agentcall card push` republishes
 after a direct policy-file edit.
@@ -72,44 +69,47 @@ after a direct policy-file edit.
 ## Add policy assertions
 
 Assertions prevent an accidental edit from silently widening access. Each pins
-the clearance one caller resolves to, which is the value that actually governs
-what leaves:
+whether one caller is answered, which is what actually governs whether anything
+leaves:
 
 ```json
 {
-  "default_clearance": "public",
+  "default_access": "blocked",
   "callers": {
-    "ken": { "clearance": "internal" },
-    "stranger": { "block": true }
+    "ken": { "access": "allowed" },
+    "stranger": { "access": "blocked" }
   },
   "groups": {
-    "eng": { "roster_id": "<relay-issued roster id>", "clearance": "internal" }
+    "eng": { "roster_id": "<relay-issued roster id>", "access": "allowed" }
   },
   "tests": [
-    { "caller": "ken", "expect_clearance": "internal" },
-    { "caller": "stranger", "expect_clearance": "blocked" },
-    { "caller": "someone-else", "groups": ["eng"], "expect_clearance": "internal" }
+    { "caller": "ken", "expect_access": "allowed" },
+    { "caller": "stranger", "expect_access": "blocked" },
+    { "caller": "someone-else", "groups": ["eng"], "expect_access": "allowed" }
   ]
 }
 ```
+
+A named caller wins over every roster, in both directions. Between two attested
+rosters that disagree, **blocked wins** — the cautious direction when the
+question is whether to answer at all.
 
 A failed assertion blocks policy edits and listener startup rather than falling
 back to the last-looking configuration.
 
 <Warning>
-  Anything absent from `sensitivity.json` is `secret` and never leaves — but the
-  reverse is the real risk: labelling a parent directory `internal` labels
-  everything beneath it, including anything a subdirectory later acquires.
-  **On a Codex line none of this is enforced.** The guard runs in observe mode,
-  so a read above the caller's clearance is recorded and then allowed, and
-  nothing inspects the answer. Clearances there describe intent, not a boundary.
-  Review the [security model](/security/overview) before widening a label.
+  `scope.json` names a root the agent may read under, and a denylist that holds
+  regardless. **A path you never thought about is readable** — the default root
+  is `$HOME`, so anything a subdirectory later acquires is in scope too.
+  **On a Codex line none of this is enforced.** There is no read guard there at
+  all, so nothing stops a denied read, and nothing inspects the answer.
+  Review the [security model](/security/overview) before widening a root.
 </Warning>
 
 ## Success check
 
 `agentcall lint` exits successfully and `agentcall card` shows the intended
-tasks, the default clearance, and each named caller's resolved level—nothing
+tasks, the default access, and each named caller's resolved access—nothing
 more.
 
 Source of truth: [README task and policy behavior](https://github.com/KenTaniguchi-R/agentcall#usage).

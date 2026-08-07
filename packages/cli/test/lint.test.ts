@@ -12,12 +12,6 @@ const cfg: LineConfig = { org: "acme", handle: "ken", token: "t", agent_kind: "c
 function linePaths(h: string) {
   return getLinePaths(getMachinePaths(h, h), "line");
 }
-// The managed ceiling is machine-scoped and unredirectable in production, so
-// tests override it on MachinePaths rather than through AGENTCALL_HOME.
-function managedLinePaths(h: string) {
-  const m = getMachinePaths(h, h);
-  return getLinePaths({ ...m, managedPolicyFile: join(h, "managed-policy.json") }, "line");
-}
 function home() {
   const h = tempDir("agentcall-lint-");
   mkdirSync(linePaths(h).dir, { recursive: true });
@@ -55,7 +49,7 @@ describe("buildCardReport", () => {
     const h = home();
     const p = linePaths(h);
     writeFileSync(p.policyFile, JSON.stringify({
-      default_offer: ["ask", "gone"], callers: { mia: { offer: ["also-gone"], block: false } },
+      default_offer: ["ask", "gone"], callers: { mia: { offer: ["also-gone"] } },
     }));
     const r = buildCardReport(cfg, p);
     expect(r.problems.join("\n")).toContain("policy.json");
@@ -72,10 +66,10 @@ describe("buildCardReport", () => {
   it("reports a broken policy assertion as a problem", () => {
     const p = linePaths(home());
     writeFileSync(p.policyFile, JSON.stringify({
-      default_clearance: "public", tests: [{ caller: "mia", expect_clearance: "internal" }],
+      tests: [{ caller: "mia", expect_access: "blocked" }],
     }));
     const r = buildCardReport(cfg, p);
-    expect(r.problems.join("\n")).toMatch(/assertion 1.*expected internal.*got public/i);
+    expect(r.problems.join("\n")).toMatch(/assertion 1.*expected blocked.*got allowed/i);
   });
 
   it("is quiet after a push and stale after a change", async () => {
@@ -84,7 +78,7 @@ describe("buildCardReport", () => {
     await publishCard(cfg, p, async () => {});
     expect(buildCardReport(cfg, p).notices).toEqual([]);
     writeSkill(h, "intro", "---\ndescription: d\n---\nbody\n");
-    writeFileSync(p.policyFile, JSON.stringify({ default_clearance: "public", callers: {} }));
+    writeFileSync(p.policyFile, JSON.stringify({ default_access: "allowed", callers: {} }));
     const r = buildCardReport(cfg, p);
     expect(r.notices.join("\n")).toContain("out of date");
   });
@@ -101,7 +95,7 @@ describe("buildCardReport", () => {
     const h = home();
     writeSkill(h, "intro", "---\ndescription: d\n---\n");
     const p = linePaths(h);
-    writeFileSync(p.policyFile, JSON.stringify({ default_clearance: "public", callers: {} }));
+    writeFileSync(p.policyFile, JSON.stringify({ default_access: "allowed", callers: {} }));
     const codexCfg: LineConfig = { ...cfg, agent_kind: "codex" };
     const r = buildCardReport(codexCfg, p);
     expect(r.notices.join("\n")).toMatch(/intro/);
@@ -112,7 +106,7 @@ describe("buildCardReport", () => {
     const h = home();
     writeSkill(h, "intro", "---\ndescription: d\n---\n");
     const p = linePaths(h);
-    writeFileSync(p.policyFile, JSON.stringify({ default_clearance: "public", callers: {} }));
+    writeFileSync(p.policyFile, JSON.stringify({ default_access: "allowed", callers: {} }));
     const r = buildCardReport(cfg, p);
     expect(r.notices.join("\n")).not.toMatch(/codex/i);
   });
@@ -125,7 +119,7 @@ describe("buildCardReport", () => {
     const h = home();
     writeSkill(h, "runner", "---\ndescription: d\n---\n");
     const p = linePaths(h);
-    writeFileSync(p.policyFile, JSON.stringify({ default_clearance: "public", callers: {} }));
+    writeFileSync(p.policyFile, JSON.stringify({ default_access: "allowed", callers: {} }));
     const codexCfg: LineConfig = { ...cfg, agent_kind: "codex" };
     const r = buildCardReport(codexCfg, p);
     const notices = r.notices.join("\n");
@@ -141,35 +135,16 @@ describe("buildCardReport", () => {
     const p = linePaths(h);
     writeSkill(h, "intro", "---\ndescription: d\n---\n");
     writeFileSync(p.policyFile, JSON.stringify({
-      default_clearance: "public",
-      callers: { mia: { clearance: "internal" }, spammer: { clearance: "internal", block: true } },
+      default_access: "allowed", callers: { mia: { access: "allowed" }, spammer: { access: "blocked" } },
     }));
     const text = buildCardReport(cfg, p).menu.join("\n");
     expect(text).toContain("Every caller who is not blocked can request:");
     expect(text).toContain("intro — d");
-    expect(text).toContain("Anyone registered can be told: public");
-    expect(text).toContain("mia: internal");
+    expect(text).toContain("Anyone registered by default: allowed");
+    expect(text).toContain("mia: allowed");
     // Resolved, not stored: spammer's saved `internal` is inert under a block,
     // and printing it would tell the owner a grant is live when it is not.
     expect(text).toContain("spammer: blocked");
   });
 
-  // Was "renders the administrator-filtered menu rather than raw user grants".
-  // `allowed_tasks` became `max_clearance` in #379 — same administrator
-  // ceiling, applied to how much a caller may be told rather than to which
-  // tasks they may run — so this pins the same property on the new lever.
-  it("renders the administrator-capped clearance rather than the raw user grant", () => {
-    const h = home();
-    const p = managedLinePaths(h);
-    writeSkill(h, "intro", "---\ndescription: d\n---\n");
-    writeFileSync(p.policyFile, JSON.stringify({
-      default_clearance: "internal", callers: { mia: { clearance: "internal" } },
-    }));
-    writeFileSync(p.machine.managedPolicyFile, JSON.stringify({ version: 1, max_clearance: "public" }));
-
-    const text = buildCardReport(cfg, p).menu.join("\n");
-    expect(text).toContain("Anyone registered can be told: public");
-    expect(text).toContain("mia: public");
-    expect(text).not.toContain("internal");
-  });
 });

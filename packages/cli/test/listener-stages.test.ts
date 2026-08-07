@@ -276,26 +276,28 @@ describe("resolveAdmission", () => {
   // directory is no longer a boundary for either runtime, so there is nothing
   // left to claim. What resolveAdmission owes its caller instead is the map,
   // which is what the spawn directory is derived from.
-  it("returns the sensitivity map, which is what the workdir is derived from", () => {
+  it("returns the scope, which is what the workdir is derived from", () => {
     const paths = seededPaths();
     const result = resolveAdmission({
       paths, from: "shusaku", requestedTask: undefined, groups: [],
     });
     expect(result.ok).toBe(true);
     if (!result.ok) throw new Error("expected ok");
-    // withFloor is applied here, not by the caller: ~/.ssh and friends must be
-    // secret in the map every consumer sees, not only in the guard's copy.
-    expect(result.map.sources.some((s) => s.path.endsWith("/.ssh"))).toBe(true);
+    // The scope is read here, not by the caller, so every consumer sees the
+    // same roots — the denylist itself is built in and needs no merging.
+    // Whatever seededPaths wrote — the point is that resolveAdmission returns
+    // the parsed scope rather than making the caller read the file again.
+    expect(result.scope).toEqual(expect.objectContaining({ roots: expect.any(Array), denied: expect.any(Array) }));
   });
 
-  // The map is load-bearing for the CALL now, not only for the guard
+  // The scope is load-bearing for the CALL now, not only for the guard
   // subprocess, so a corrupt one must fail the same way a corrupt policy does:
   // one clean call_failed, rather than every tool call failing closed and the
   // owner diagnosing it from the guard's log.
-  it("fails closed with policy_error when the sensitivity map is corrupt", () => {
+  it("fails closed with policy_error when scope.json is corrupt", () => {
     const paths = seededPaths();
     mkdirSync(paths.dir, { recursive: true });
-    writeFileSync(paths.sensitivityFile, "{not valid json");
+    writeFileSync(paths.scopeFile, "{not valid json");
     const result = resolveAdmission({
       paths, from: "shusaku", requestedTask: undefined, groups: [],
     });
@@ -304,7 +306,7 @@ describe("resolveAdmission", () => {
 
   it("blocks a caller policy has denied, offering nothing", () => {
     const paths = seededPaths();
-    seedPolicy(paths, { default_clearance: "public", callers: { spammer: { block: true } } });
+    seedPolicy(paths, { default_access: "allowed", callers: { spammer: { access: "blocked" } } });
     const result = resolveAdmission({
       paths, from: "spammer", requestedTask: undefined, groups: [],
     });
@@ -326,7 +328,7 @@ describe("resolveAdmission", () => {
   it("admits a task no policy names, since a task is no longer granted", () => {
     const paths = seededPaths();
     seedTask(paths, "secret", ["description: shh"]);
-    seedPolicy(paths, { default_clearance: "public", callers: {} });
+    seedPolicy(paths, { default_access: "allowed", callers: {} });
     const result = resolveAdmission({
       paths, from: "shusaku", requestedTask: "secret", groups: [],
     });
@@ -338,11 +340,11 @@ describe("resolveAdmission", () => {
   // sit outside the policy_error path below and could disagree with admission.
   it("returns the policy it loaded, so clearance resolves from the same table", () => {
     const paths = seededPaths();
-    seedPolicy(paths, { default_clearance: "internal", callers: {} });
+    seedPolicy(paths, { default_access: "allowed", callers: {} });
     const result = resolveAdmission({
       paths, from: "shusaku", requestedTask: undefined, groups: [],
     });
-    expect(result.ok && result.policy.default_clearance).toBe("internal");
+    expect(result.ok && result.policy.default_access).toBe("allowed");
   });
 
   it("fails closed with policy_error, not a thrown exception, when the policy file is corrupt", () => {

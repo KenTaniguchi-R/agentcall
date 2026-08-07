@@ -2,7 +2,7 @@ import { existsSync, readFileSync } from "node:fs";
 import { buildCardUpload } from "./card.js";
 import type { LineConfig } from "./config.js";
 import type { LinePaths } from "./paths.js";
-import { clearanceFor } from "./clearance.js";
+import { accessFor } from "./access.js";
 import { loadPolicy, type Policy } from "./policy.js";
 import { ASK_TASK, loadTasks } from "./tasks.js";
 
@@ -39,34 +39,26 @@ export function buildCardReport(cfg: LineConfig, p: LinePaths): CardReport {
   const menu: string[] = [`${cfg.handle} (${cfg.agent_kind})${upload.description ? ` — ${upload.description}` : ""}`];
   menu.push("  Every caller who is not blocked can request:");
   for (const t of upload.tasks) menu.push(`    ${t.id} — ${t.description}`);
-  menu.push(`  Anyone registered can be told: ${policy.default_clearance}`);
+  menu.push(`  Anyone registered by default: ${policy.default_access}`);
   // Resolved, not the raw entry: a block sinks a named clearance, and printing
   // the stored value would tell the owner a grant is live that is not.
   const named = Object.keys(policy.callers).sort((x, y) => x.localeCompare(y));
   for (const caller of named) {
-    menu.push(`    ${caller}: ${clearanceFor(policy, caller)}`);
+    menu.push(`    ${caller}: ${accessFor(policy, caller)}`);
   }
 
-  // codex has no per-tool allowlist (see runner.ts's codex branch): only the
-  // Claude is held to a read-only tool list; codex has no per-tool restriction
-  // at all. `--sandbox read-only` stops it writing, but not reading or running
-  // commands, and the guard runs in observe mode there.
-  //
-  // This comment used to finish "so a codex line's answers are bounded by the
-  // sandbox and the clearance check on the reply". There is no clearance check
-  // on the reply — listener.ts only runs redactOutbound, which replaces
-  // credential-shaped strings and the line's own token. Combined with the guard
-  // observing rather than blocking, a codex line enforces NOTHING from the
-  // sensitivity model; clearance there decides only what gets logged. Say that,
-  // rather than pointing at a control that does not exist.
+  // Codex gets no guard hook at all as of 2026-08-07. It previously ran one in
+  // "observe" mode, which recorded a verdict and then allowed the tool call
+  // unconditionally — including on its own failure paths. Installing a guard
+  // that never denies bought a log line and a second meaning for the word
+  // "guard"; the hook is gone and this notice says the plain thing instead.
   if (cfg.agent_kind === "codex") {
     for (const t of tasks) {
       if (t.id === ASK_TASK.id) continue;
       notices.push(
-        `task "${t.id}": codex has no per-tool restriction, so it can still run shell commands. ` +
-        `--sandbox read-only prevents writes but not reads or execution, and the guard only ` +
-        `observes on codex — a read above the caller's clearance is recorded and then allowed. ` +
-        `Nothing checks the answer either. Clearances on a codex line are intent, not enforcement.`,
+        `task "${t.id}": codex has no per-tool restriction and no read guard, so it can run ` +
+        `shell commands and read anything on this machine. --sandbox read-only prevents writes ` +
+        `but not reads or execution, and nothing checks the answer. Use Claude for a bounded line.`,
       );
     }
   }

@@ -19,12 +19,11 @@ const meet: Task = {
 describe("buildCardUpload", () => {
   const policy: Policy = {
     description: "Ken's agent",
-    default_clearance: "public",
-    callers: {
-      mia: { clearance: "internal", block: false },
-      spammer: { clearance: "internal", block: true },
+    default_access: "allowed", callers: {
+      mia: {},
+      spammer: { access: "blocked" },
     },
-    groups: { eng: { roster_id: "g".repeat(22), clearance: "internal" } },
+    groups: { eng: { roster_id: "g".repeat(22) } },
   };
 
   it("includes card metadata but never SKILL.md content", () => {
@@ -62,7 +61,7 @@ describe("buildCardUpload", () => {
   it("publishes task keywords to the relay", () => {
     const upload = buildCardUpload(
       { org: "acme", handle: "ken", token: "t", agent_kind: "claude", relay: "https://r.test" },
-      { description: "d", default_clearance: "public", callers: {}, groups: {} },
+      { description: "d", default_access: "allowed", callers: {}, groups: {} },
       [{ id: "adr", name: "ADR", description: "Why.", examples: [],
          keywords: ["auth", "migration"], threadable: true, skill: "" }],
     );

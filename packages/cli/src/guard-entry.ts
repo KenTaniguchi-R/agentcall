@@ -42,23 +42,17 @@ import { LINE_NAME_RE } from "./line-name.js";
 import { getLinePaths, getMachinePaths } from "./paths.js";
 // The one import that costs a package (13ms; see the header). It is here
 // because the map is the boundary and a parsed boundary has to be validated.
-import { loadSensitivityMap, withFloor } from "./sensitivity.js";
+import { loadScope } from "./scope.js";
 import { appendPrivateLogLine } from "./audit-log.js";
-import { writeToolHookEvent } from "./tool-telemetry-hook.js";
-
-// Only the exact string opts out of enforcement. Anything else — a typo, a
-// stale value, an empty string — enforces, so a mangled env var cannot
-// silently downgrade the guard to watching.
-const mode = process.env.AGENTCALL_GUARD_MODE === "observe" ? "observe" : "enforce";
 
 const machine = getMachinePaths();
 
 // The guard runs as a subprocess of the answering agent and has no other way
 // to learn which line's call it is policing. Without it, tool events would be
 // audited against the wrong line — so an absent or malformed value fails
-// closed rather than guessing. Unconditional on `mode`: this indicates a
+// closed rather than guessing. This indicates a
 // wiring bug (the runner always sets this env var), not an ordinary decide()
-// failure, so it is not eligible for observe mode's fail-open treatment.
+// wiring bug rather than an ordinary decide() failure.
 // The one event that means "the guard is unwired" must not be the one event
 // that leaves no audit trace. There is no LinePaths to log against — that is
 // exactly the problem — so this goes to the line-independent listenerLog, the
@@ -83,16 +77,13 @@ if (!LINE_NAME_RE.test(lineName)) {
   unwired("guard_unwired");
 }
 
-// Same fail-closed treatment as AGENTCALL_LINE above, for the same reason: the
-// runner always sets this, so an absent or unrecognised value is a wiring bug
-// rather than an ordinary decide() failure. Defaulting it to `public` would be
-// worse than it looks — the guard would keep working, silently answering every
-// caller at the narrowest clearance, and the bug would surface as "the agent
-// can't read anything" long after the deploy that caused it.
-const clearance = process.env.AGENTCALL_CLEARANCE;
-if (clearance !== "public" && clearance !== "internal") {
-  unwired("guard_no_clearance");
-}
+// AGENTCALL_CLEARANCE is gone (2026-08-07). It carried which of `public` /
+// `internal` this caller held, and both the levels and the comparison were
+// deleted with the lattice: a source is `shared` or `secret`, and a caller who
+// is not answered at all never reaches a source, because resolveAdmission
+// refuses a blocked caller before the agent spawns. There is nothing left for
+// this value to select, and a single-valued parameter threaded through a
+// security boundary reads as a check that is not happening.
 
 try {
   let raw = "";
@@ -109,19 +100,13 @@ try {
     // what let a Write through /tmp/link (-> ~/.ssh) land inside ~/.ssh.
     realpath: realpathSync,
     appendLine: appendPrivateLogLine,
-    // Read from disk rather than passed through the environment. The map is
-    // the boundary; ~/.agentcall is itself floored `secret`, so the file is not
-    // writable by the agent this guard is policing, whereas an env var is
-    // inherited state with no such property.
-    map: withFloor(loadSensitivityMap(getLinePaths(machine, lineName)), machine.userHome),
-    clearance,
-  }, mode);
+    // Read from disk rather than passed through the environment. The scope is
+    // the boundary; ~/.agentcall is itself denied, so the file is not writable
+    // by the agent this guard is policing, whereas an env var is inherited
+    // state with no such property.
+    scope: loadScope(getLinePaths(machine, lineName)),
+  });
 
-  // Best-effort and deliberately after the security decision. The spool
-  // writer cannot change the verdict and exports no arguments, paths, or
-  // rule details. A denied attempt has no post event and therefore never
-  // becomes a fabricated execute_tool span.
-  writeToolHookEvent(raw, "pre");
 
   if (out.stdout) process.stdout.write(out.stdout);
   // Codex reads exit 2 as blocking only when stderr carries a reason, and as
@@ -133,6 +118,6 @@ try {
   // Nothing may escape this file. Any exit that is not 0 or 2 is a
   // non-blocking error to Claude, and the tool call proceeds. Even here the
   // reason must be written, for the same reason as above.
-  if (mode !== "observe") process.stderr.write(FAIL_CLOSED_REASON + "\n");
-  process.exit(mode === "observe" ? 0 : 2);
+  process.stderr.write(FAIL_CLOSED_REASON + "\n");
+  process.exit(2);
 }

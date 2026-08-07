@@ -14,7 +14,6 @@ task content.
 | `~/.agentcall/contacts.json` | Local contact book | Mode `0600` |
 | `~/.agentcall/known_peers.json` | Pinned peer identities | Mode `0600` |
 | `~/.agentcall/listener.log` | Native listener output | May contain operational metadata |
-| `~/.agentcall/telemetry-health.json` | Local exporter failure/drop counters | Private operational state |
 
 ## Per-line files
 
@@ -57,7 +56,5 @@ internal test seam `AGENTCALL_HOME`:
 - `AGENTCALL_RELAY` overrides the configured relay URL.
 - `AGENTCALL_ADMIN_SECRET` supplies roster administration credentials but should
   be handled as a secret.
-- `AGENTCALL_OTEL=1` opts into local OpenTelemetry export; standard `OTEL_*`
-  variables configure the exporter.
 
 Source of truth: [path definitions](https://github.com/KenTaniguchi-R/agentcall/blob/main/packages/cli/src/paths.ts) and [line configuration](https://github.com/KenTaniguchi-R/agentcall/blob/main/packages/cli/src/config.ts).

@@ -5,9 +5,8 @@ import { formatAddress, type AgentKind } from "@benree/agentcall-shared";
 import { authOf, publishEncryptionKey, publishIdentityKey, registerHandle } from "../api.js";
 import { publishCard } from "../card.js";
 import { type LineConfig } from "../config.js";
-import { loadSensitivityMap, withFloor, workdirFor } from "../sensitivity.js";
+import { defaultScope, loadScope, workdirFor } from "../scope.js";
 import { assertValidLineName, listLines, readyLines, saveLineConfig } from "../lines.js";
-import { defaultSensitivityMap } from "../sensitivity.js";
 import { listenerPathDirs } from "../listener-path.js";
 import { getLinePaths, type LinePaths, type MachinePaths } from "../paths.js";
 import { generateIdentityKeys, type StoredKeys } from "../keys.js";
@@ -154,7 +153,7 @@ export async function addLine(m: MachinePaths, opts: AddLineOpts): Promise<{ add
   // is what makes a fresh line useful without making it generous: outside a
   // repository this writes an empty map, and doctor reports the line as unable
   // to answer rather than the line silently returning nothing.
-  writeJsonAtomic(paths.sensitivityFile, defaultSensitivityMap(process.cwd(), paths.machine.userHome));
+  writeJsonAtomic(paths.scopeFile, defaultScope(paths.machine.userHome));
 
   const publishKeys = opts.publishKeysFn ?? publishStoredKeys;
   try {
@@ -192,7 +191,7 @@ export async function addLine(m: MachinePaths, opts: AddLineOpts): Promise<{ add
     // owner fixes whatever verifyAgent found.
     if (opts.verify !== false) {
       const log = opts.log ?? console.log;
-      const checks = await verifyAgent(agentKind, workdirFor(withFloor(loadSensitivityMap(paths), paths.machine.userHome), "internal", paths.shareDir), opts.verifyFns);
+      const checks = await verifyAgent(agentKind, workdirFor(loadScope(paths), paths.shareDir, paths.machine.userHome), opts.verifyFns);
       for (const c of checks) log(formatCheck(c));
       const failure = checks.find((c) => !c.ok);
       if (failure) {

@@ -37,7 +37,7 @@ export function tempMachine(prefix = "agentcall-m-"): MachinePaths {
 }
 
 // No policy/task seeded — loadPolicy and loadTasks both fall back to their
-// built-in defaults (default_clearance: "public", the built-in "ask" task),
+// built-in defaults (default_the built-in "ask" task),
 // which is enough for a plain message to resolve. Mirrors `seededPaths` in
 // listener.test.ts.
 export function tempLine(name = "line", prefix = "agentcall-l-"): LinePaths {

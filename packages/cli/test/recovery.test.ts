@@ -10,7 +10,7 @@ const roots: string[] = [];
 function fixture() {
   const root = mkdtempSync(join(tmpdir(), "agentcall-recovery-"));
   roots.push(root);
-  const machine = getMachinePaths(root, root, "linux");
+  const machine = getMachinePaths(root, root);
   const paths = getLinePaths(machine, "main");
   const config = { org: "acme", handle: "alice", token: "old-token", relay: "https://relay.test", agent_kind: "claude" as const };
   saveLineConfig(paths, config);
@@ -23,7 +23,7 @@ function fixture() {
 function fixtureNoConfig() {
   const root = mkdtempSync(join(tmpdir(), "agentcall-recovery-"));
   roots.push(root);
-  const machine = getMachinePaths(root, root, "linux");
+  const machine = getMachinePaths(root, root);
   const paths = getLinePaths(machine, "main");
   return { paths };
 }

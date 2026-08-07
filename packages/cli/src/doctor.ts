@@ -4,7 +4,7 @@ import { execFileSync } from "node:child_process";
 import { encryptionKeyTranscript, importIdentityPublicKey, keyIdFor, verifyTranscript } from "@benree/agentcall-shared";
 import { callAgent } from "./call-client.js";
 import { lineAddress, relayUrl, type LineConfig } from "./config.js";
-import { loadSensitivityMap, withFloor, workdirFor } from "./sensitivity.js";
+import { loadScope, workdirFor } from "./scope.js";
 import {
   inspectListenerService,
   type ListenerServiceStatus,
@@ -15,12 +15,11 @@ import { loadKeys } from "./keys.js";
 import { assertPrivateFile } from "./json-store.js";
 import { checkKnownPeersStore } from "./known-peers.js";
 import {
-  codexToolTelemetryEnabled, type AgentKind,
+  type AgentKind,
 } from "./runner.js";
-import { readTelemetryHealth } from "./telemetry-health.js";
 import {
-  checkCodexGuard, checkGuard, checkRelaySelfCall, formatCheck, short, verifyAgent,
-  type CodexGuardProbeFn, type GuardBinaryProbeFn, type GuardProbeFn,
+  checkGuard, checkRelaySelfCall, formatCheck, short, verifyAgent,
+  type GuardBinaryProbeFn, type GuardProbeFn,
   type VerifyCheck, type VerifyFns,
 } from "./verify.js";
 
@@ -36,9 +35,6 @@ interface DoctorDeps {
   log?: (line: string) => void;
   guardFn?: GuardProbeFn;
   guardBinaryFn?: GuardBinaryProbeFn;
-  codexGuardFn?: CodexGuardProbeFn;
-  codexTelemetryEnabledFn?: () => boolean;
-  telemetryOptInFn?: () => boolean;
   keyHealthFn?: (cfg: LineConfig, paths: LinePaths) => Promise<VerifyCheck[]>;
   pkgFn?: () => CliPackageManifest;
   selfPathFn?: () => string;
@@ -284,21 +280,6 @@ export async function runDoctor(deps: DoctorDeps): Promise<number> {
     }
   }
 
-  const telemetryHealth = readTelemetryHealth(deps.machine.telemetryHealthFile);
-  if (telemetryHealth) {
-    const { trace_export, metric_export, span_queue } = telemetryHealth.failures;
-    report({
-      name: "local telemetry export",
-      ok: true,
-      warn: telemetryHealth.status === "degraded",
-      detail: telemetryHealth.status === "ok"
-        ? "no local export degradation recorded"
-        : `degraded — trace export failures ${trace_export}, metric export failures ${metric_export}, span queue drops ${span_queue}`,
-      hint: telemetryHealth.status === "degraded"
-        ? "check the local OTLP endpoint and ~/.agentcall/listener.log"
-        : undefined,
-    });
-  }
 
   const peerStore = checkKnownPeersStore(deps.machine);
   report({ name: "known-peer trust store", ok: peerStore.ok, detail: peerStore.detail });
@@ -350,7 +331,7 @@ export async function runDoctor(deps: DoctorDeps): Promise<number> {
     }
 
     // #372 deleted `workdir` from config.json; the spawn directory is derived
-    // from the sensitivity map instead. That derivation deliberately SKIPS a
+    // from the scope instead. That derivation deliberately SKIPS a
     // source that no longer exists rather than throwing — one stale entry must
     // not take a line offline — which trades a loud failure for a quiet
     // fallback to an empty share directory. This is where that trade is paid
@@ -358,36 +339,33 @@ export async function runDoctor(deps: DoctorDeps): Promise<number> {
     // discovering it as an agent that suddenly knows nothing.
     let workdirDir: string | undefined;
     try {
-      const map = loadSensitivityMap(line.paths);
-      const missing = map.sources.filter((s) => !existsSync(s.path));
-      // `internal` is the most permissive grantable clearance, so this is the
-      // best case — a public caller may land somewhere narrower.
-      workdirDir = workdirFor(withFloor(map, line.paths.machine.userHome), "internal", line.paths.shareDir);
+      const scope = loadScope(line.paths);
+      const missing = scope.roots.filter((r) => !existsSync(r));
+      workdirDir = workdirFor(scope, line.paths.shareDir, line.paths.machine.userHome);
       if (missing.length > 0) {
         report({
-          name: "sensitivity map", ok: false,
-          detail: `${missing.length} labelled source(s) missing: ${missing.map((s) => s.path).join(", ")}`,
-          hint: "fix or remove those entries in ~/.agentcall/lines/<line>/sensitivity.json",
+          name: "scope", ok: false,
+          detail: `${missing.length} root(s) missing: ${missing.join(", ")}`,
+          hint: "fix or remove those roots in ~/.agentcall/lines/<line>/scope.json",
         });
-      } else if (map.sources.length === 0) {
-        // A warning, not a failure. Everything unlabelled is secret, so this
-        // line answers nothing useful — but it is the fail-CLOSED end of the
-        // model working as designed, not a broken install, and `setup` reaches
-        // it legitimately whenever it runs outside a git repository. Failing
-        // here would make `doctor` exit 1 on a line that is merely empty.
+      } else if (scope.roots.length === 0) {
+        // A warning, not a failure. A caller-only line legitimately has no
+        // scope, and `doctor` exiting 1 on one would report a working install
+        // as broken. It IS worth saying, because on an answering line it means
+        // setup did not write the file and the agent can read nothing.
         report({
-          name: "sensitivity map", ok: true, warn: true,
-          detail: "no source is labelled, so every path is secret and the agent can read nothing",
-          hint: "label at least one directory in ~/.agentcall/lines/<line>/sensitivity.json",
+          name: "scope", ok: true, warn: true,
+          detail: "no root is declared, so the agent can read nothing",
+          hint: "run `agentcall setup` again, or add a root to ~/.agentcall/lines/<line>/scope.json",
         });
       } else {
-        report({ name: "sensitivity map", ok: true, detail: `${map.sources.length} source(s) labelled` });
+        report({ name: "scope", ok: true, detail: `${scope.roots.length} root(s), ${scope.denied.length} extra denial(s)` });
       }
-      report({ name: "workdir", ok: true, detail: `${workdirDir} (derived, at internal clearance)` });
+      report({ name: "workdir", ok: true, detail: `${workdirDir} (derived from the first root)` });
     } catch (e) {
       report({
-        name: "sensitivity map", ok: false, detail: short(e),
-        hint: "fix ~/.agentcall/lines/<line>/sensitivity.json — a listener refuses every call while it is unparseable",
+        name: "scope", ok: false, detail: short(e),
+        hint: "fix ~/.agentcall/lines/<line>/scope.json — a listener refuses every call while it is unparseable",
       });
     }
 
@@ -450,20 +428,6 @@ export async function runDoctor(deps: DoctorDeps): Promise<number> {
         guardCache.set(cfg.agent_kind, guardCheck);
       }
       report(guardCheck);
-    } else if (cfg.agent_kind === "codex" && agentOk) {
-      const telemetryOptIn = (deps.telemetryOptInFn ?? (() => process.env.AGENTCALL_OTEL === "1"))();
-      if (telemetryOptIn && !(deps.codexTelemetryEnabledFn ?? codexToolTelemetryEnabled)()) {
-        report(await checkCodexGuard(agentWorkdir, deps.codexGuardFn, false));
-        report({
-          name: "codex tool telemetry",
-          ok: true,
-          warn: true,
-          detail: "no codex-cli release has passed the default-path lifecycle probe",
-          hint: "Codex call telemetry remains available, but tool spans stay disabled until the default tool path emits paired hooks",
-        });
-      } else {
-        report(await checkCodexGuard(agentWorkdir, deps.codexGuardFn, telemetryOptIn));
-      }
     }
 
     if (agentOk && online) {

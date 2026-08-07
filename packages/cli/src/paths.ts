@@ -21,11 +21,6 @@ export interface MachinePaths {
   linesDir: string;
   removedDir: string;
   listenerLog: string;
-  telemetryHealthFile: string;
-  // Machine-scoped, not line-scoped, on purpose. It is an administrator ceiling:
-  // if it were per-line, adding a line would escape it. It is also deliberately
-  // independent of stateRoot/AGENTCALL_HOME — see managedPolicyPath below.
-  managedPolicyFile: string;
 }
 
 export interface LinePaths {
@@ -45,7 +40,7 @@ export interface LinePaths {
   identityKeyFile: string;
   policyFile: string;
   /** Source sensitivity map (#372). Absent means every source is `secret`. */
-  sensitivityFile: string;
+  scopeFile: string;
   cardSnapshotFile: string;
   callsLog: string;
   toolsLog: string;
@@ -66,16 +61,9 @@ export interface LinePaths {
   recoveryPendingFile: string;
 }
 
-function managedPolicyPath(platform: NodeJS.Platform = process.platform): string {
-  if (platform === "darwin") return "/Library/Application Support/agentcall/policy.json";
-  if (platform === "linux") return "/etc/agentcall/policy.json";
-  throw new Error(`Managed policy is not supported on ${platform}`);
-}
-
 export function getMachinePaths(
   stateRoot: string = process.env.AGENTCALL_HOME ?? os.homedir(),
   userHome: string = os.homedir(),
-  platform: NodeJS.Platform = process.platform,
 ): MachinePaths {
   const dir = join(stateRoot, ".agentcall");
   return {
@@ -90,10 +78,8 @@ export function getMachinePaths(
     removedDir: join(dir, "removed"),
     // One process serves every line, so there is one listener log.
     listenerLog: join(dir, "listener.log"),
-    telemetryHealthFile: join(dir, "telemetry-health.json"),
     // Deliberately independent of stateRoot and AGENTCALL_HOME: an unprivileged
     // user must not be able to relocate the administrator-owned policy.
-    managedPolicyFile: managedPolicyPath(platform),
   };
 }
 
@@ -107,7 +93,7 @@ export function getLinePaths(machine: MachinePaths, name: string): LinePaths {
     configFile: join(dir, "config.json"),
     identityKeyFile: join(dir, "identity.key.json"),
     policyFile: join(dir, "policy.json"),
-    sensitivityFile: join(dir, "sensitivity.json"),
+    scopeFile: join(dir, "scope.json"),
     cardSnapshotFile: join(dir, "card.pushed.json"),
     callsLog: join(dir, "calls.log"),
     toolsLog: join(dir, "tools.log"),
