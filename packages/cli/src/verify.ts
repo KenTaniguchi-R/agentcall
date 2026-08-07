@@ -320,13 +320,11 @@ const defaultGuardBinaryProbe: GuardBinaryProbeFn = async () => {
   const home = mkdtempSync(join(tmpdir(), "agentcall-guardbin-"));
   const stdout = execFileSync(process.execPath, [guardEntryPath()], {
     input: JSON.stringify({ tool_name: "Read", tool_input: { file_path: join(home, ".env") }, cwd: home }),
-    // Forced, not inherited: AGENTCALL_GUARD_MODE=observe in the ambient
-    // environment would make the guard allow, and the probe would then report
-    // a working guard as broken. AGENTCALL_LINE must also be forced — an
-    // absent or malformed value makes guard-entry fail closed before it ever
-    // calls decide(), which happens to also deny, but for the wrong reason:
-    // guardDenied() would then read as "broken guard" on a healthy install.
-      env: { ...process.env, AGENTCALL_HOME: home, AGENTCALL_GUARD_MODE: "enforce", AGENTCALL_LINE: GUARD_PROBE_LINE },
+    // AGENTCALL_LINE is forced, not inherited: an absent or malformed value
+    // makes guard-entry fail closed before it ever calls decide(), which
+    // happens to also deny — but for the wrong reason, so guardDenied() would
+    // read as "broken guard" on a healthy install.
+      env: { ...process.env, AGENTCALL_HOME: home, AGENTCALL_LINE: GUARD_PROBE_LINE },
     encoding: "utf8",
     stdio: ["pipe", "pipe", "pipe"],
   });

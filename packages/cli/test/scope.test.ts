@@ -97,8 +97,8 @@ describe("scope", () => {
     // this, a skill's references/*.md are refused and skills that use them
     // break; the SKILL.md body itself never reaches the guard either way.
     it("allows a skill's own files", () => {
-      expect(isReadable(home(), "/Users/owner/.claude/skills/obsidian/SKILL.md", opts)).toBe(true);
-      expect(isReadable(home(), "/Users/owner/.claude/skills/obsidian/references/x.md", opts)).toBe(true);
+      expect(isReadable(home(), "/Users/owner/.claude/skills/some-skill/SKILL.md", opts)).toBe(true);
+      expect(isReadable(home(), "/Users/owner/.claude/skills/some-skill/references/x.md", opts)).toBe(true);
     });
 
     it("keeps the rest of ~/.claude denied", () => {
@@ -232,7 +232,7 @@ describe("scope", () => {
 
     it("rejects unknown keys rather than ignoring them", () => {
       expect(() => scope({ sources: [{ path: "/x", sensitivity: "shared" }] })).toThrow();
-      expect(() => scope({ skills: { obsidian: "shared" } })).toThrow();
+      expect(() => scope({ skills: { "some-skill": "shared" } })).toThrow();
     });
   });
 });

@@ -229,7 +229,7 @@ export function startListener(deps: ListenerDeps): { stop(): Promise<void> } {
 
       // Clearance, then the directory it implies. Deliberately AFTER
       // resolveAdmission and from the objects it returned: a corrupt
-      // policy.json or sensitivity.json has a failure path there
+      // policy.json or scope.json has a failure path there
       // (policy_error -> call_failed), and loading either earlier would throw
       // first and report corruption as a rejection.
       //

@@ -164,16 +164,6 @@ describe("guard-entry as a real process", () => {
   });
 
 
-  // An unrecognised value must not silently downgrade enforcement.
-  it("enforces when the mode env var is set to anything unrecognised", () => {
-    const home = tempDir("guard-");
-    const r = run(
-      { tool_name: "Read", tool_input: { file_path: join(home, ".ssh/id_rsa") }, cwd: home },
-      home,
-      { AGENTCALL_GUARD_MODE: "off" },
-    );
-    expect(JSON.parse(r.stdout).hookSpecificOutput.permissionDecision).toBe("deny");
-  });
 
   // Guards the fail-open-on-timeout path, and does it under concurrency:
   // Copilot's documented bug is specifically parallel — the timeout expires,

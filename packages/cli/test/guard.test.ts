@@ -11,14 +11,9 @@ const CWD = "/Users/owner/AgentCall/public";
 // Identity realpath: these tests assert path logic, not symlink resolution.
 const id = (p: string) => p;
 
-// The owner has labelled the areas they work in. Everything else — including
-// the rest of $HOME — is `secret` by omission, and withFloor pins the sensitive
-// home paths so they stay secret even though ~/AgentCall's parent is not named.
-//
-// This is what replaced the old allow-everything-except-DENIED_DIRS default.
-// Assertions below that used to read "allows an ordinary project file" now
-// depend on that file sitting under a labelled root, which is the intended
-// inversion: unlabelled is secret.
+// The owner declares the roots they work under. Anything outside every root is
+// refused, and the built-in denylist holds inside them regardless — so these
+// fixtures name roots and let scope.ts supply the denials.
 function scopeFor(_home: string, roots: string[] = []) {
   return ScopeSchema.parse({ roots });
 }
@@ -495,7 +490,7 @@ describe("decide — Skill", () => {
   // (or the ~/.claude/skills exception) and its reads arrive as ordinary tool
   // calls, checked like any other. Withholding one means denying its directory.
   it("allows a skill invocation", () => {
-    expect(decide(call("Skill", { skill: "obsidian" }), ctx()).allow).toBe(true);
+    expect(decide(call("Skill", { skill: "some-skill" }), ctx()).allow).toBe(true);
   });
 
 

@@ -31,13 +31,10 @@ export const DENY_REASON =
 export const FAIL_CLOSED_REASON =
   "The answering agent's policy guard could not evaluate this action.";
 
-// The home-relative paths that used to live here as DENIED_DIRS/DENIED_FILES
-// now live in sensitivity.ts as the non-overridable `secret` floor
-// (builtinSecretSources/withFloor). They are the same paths; expressing them as
-// sensitivity rules rather than a second parallel denylist is what lets
-// longest-prefix-wins protect them even when an owner labels a parent
-// directory. AgentCall/<line>/tasks still has no fixed home-relative form and
-// is passed in per call — see runGuard's extraSecretRoots.
+// The home-relative denied paths live in scope.ts, alongside the roots, so one
+// list answers "may this be read". AgentCall/<line>/tasks has no fixed
+// home-relative form and is passed in per call — see runGuard's
+// extraSecretRoots.
 
 // This module compiles to <package root>/dist/guard.js, one directory below
 // the installed package root — true both for a global npm install and for a
