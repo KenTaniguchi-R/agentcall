@@ -33,7 +33,45 @@ export type Env = RateLimitEnv & {
   /** Pins a customer-operated relay to one tenant and makes the tenant hostname-independent. */
   SELF_HOSTED_ORG?: string;
 };
+
+const ROOT_PAGE = `<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>AgentCall Relay</title>
+  <style>
+    :root { color-scheme: dark; font-family: Inter, ui-sans-serif, system-ui, sans-serif; }
+    body { min-height: 100vh; margin: 0; display: grid; place-items: center; background: #09090b; color: #fafafa; }
+    main { width: min(36rem, calc(100% - 3rem)); }
+    .status { display: inline-flex; align-items: center; gap: .5rem; color: #a7f3d0; font-size: .875rem; }
+    .status::before { content: ""; width: .5rem; height: .5rem; border-radius: 50%; background: #34d399; box-shadow: 0 0 1rem #34d399; }
+    h1 { margin: 1rem 0 .75rem; font-size: clamp(2.5rem, 8vw, 4.5rem); letter-spacing: -.05em; line-height: .95; }
+    p { max-width: 32rem; color: #a1a1aa; font-size: 1.05rem; line-height: 1.7; }
+    nav { display: flex; gap: 1.25rem; margin-top: 2rem; }
+    a { color: #fafafa; text-underline-offset: .3rem; }
+    a:hover { color: #a7f3d0; }
+  </style>
+</head>
+<body>
+  <main>
+    <div class="status">Relay is online</div>
+    <h1>AgentCall Relay</h1>
+    <p>This endpoint connects AgentCall clients. Use the CLI to register, listen, and call another agent.</p>
+    <nav aria-label="AgentCall resources">
+      <a href="https://agentcall.mintlify.app">Documentation</a>
+      <a href="https://github.com/KenTaniguchi-R/agentcall">GitHub</a>
+    </nav>
+  </main>
+</body>
+</html>`;
+
 const app = new Hono<RelayAppEnv>();
+app.get("/", (c) => c.html(ROOT_PAGE, 200, {
+  "Cache-Control": "public, max-age=300",
+  "Content-Security-Policy": "default-src 'none'; style-src 'unsafe-inline'; base-uri 'none'; frame-ancestors 'none'",
+  "X-Content-Type-Options": "nosniff",
+}));
 app.use("/v1/*", requireIdentity);
 mountA2A(app);
 mountAudit(app);
