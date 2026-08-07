@@ -165,18 +165,6 @@ describe("guard-entry as a real process", () => {
     expect(r.stderr.trim()).not.toBe("");
   });
 
-  it("observes without denying when AGENTCALL_GUARD_MODE is observe", () => {
-    const home = tempDir("guard-");
-    const r = run(
-      { tool_name: "Read", tool_input: { file_path: join(home, ".ssh/id_rsa") }, cwd: home },
-      home,
-      { AGENTCALL_GUARD_MODE: "observe" },
-    );
-    expect(r.status).toBe(0);
-    expect(r.stdout).toBe("");
-    const calls = readFileSync(logPath(home, "calls.log"), "utf8").trim();
-    expect(JSON.parse(calls)).toMatchObject({ type: "tool_attempt_flagged" });
-  });
 
   // An unrecognised value must not silently downgrade enforcement.
   it("enforces when the mode env var is set to anything unrecognised", () => {
@@ -304,17 +292,4 @@ describe("guard-entry requires AGENTCALL_LINE", () => {
     expect(JSON.parse(listenerLog)).toMatchObject({ type: "guard_unwired" });
   });
 
-  // Unconditional on mode: a missing AGENTCALL_LINE is a wiring bug, not an
-  // ordinary decide() failure, so it is not eligible for observe mode's
-  // fail-open treatment (which exists so a broken guard doesn't take a
-  // healthy codex spawn down with it).
-  it("fails closed even when AGENTCALL_GUARD_MODE is observe", () => {
-    const home = tempDir("guard-");
-    const r = runWithoutLine(
-      JSON.stringify({ tool_name: "Read", tool_input: { file_path: join(home, "a.ts") }, cwd: home }),
-      home,
-      { AGENTCALL_GUARD_MODE: "observe" },
-    );
-    expect(r.status).toBe(2);
-  });
 });

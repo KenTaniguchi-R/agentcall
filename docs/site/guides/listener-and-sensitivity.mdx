@@ -86,11 +86,10 @@ line's own relay token are redacted from it, and nothing else looks at it. If
 the agent was permitted to read something, it is permitted to repeat it.
 
 <Warning>
-  **On a Codex line, none of this is enforced.** The guard runs in observe mode
-  there, so a `secret` read is recorded and then allowed;
-  `--sandbox read-only` stops writes but not reads; and nothing inspects the
-  answer. Clearances on a Codex line describe intent, not a boundary. Use Claude
-  for anything you need actually bounded.
+  **On a Codex line, none of this is enforced.** There is no read guard there at
+  all; `--sandbox read-only` stops writes but not reads; and nothing inspects
+  the answer. A Codex line can be told to read anything on this machine. Use
+  Claude for anything you need actually bounded.
 </Warning>
 
 ## Success check

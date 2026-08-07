@@ -31,10 +31,6 @@ export const DENY_REASON =
 export const FAIL_CLOSED_REASON =
   "The answering agent's policy guard could not evaluate this action.";
 
-// `enforce` blocks; `observe` records and always allows. Codex uses observe
-// because command-string inspection cannot provide its filesystem read floor.
-type GuardMode = "enforce" | "observe";
-
 // The home-relative paths that used to live here as DENIED_DIRS/DENIED_FILES
 // now live in sensitivity.ts as the non-overridable `secret` floor
 // (builtinSecretSources/withFloor). They are the same paths; expressing them as
@@ -294,10 +290,8 @@ const FAIL_CLOSED: GuardOutput = { exitCode: 2, stdout: "", stderr: FAIL_CLOSED_
 
 // calls.log stays sparse and owner-facing; tools.log carries every call so the
 // audit-trail claim is true. A denial appears in both.
-export function runGuard(raw: string, deps: GuardDeps, mode: GuardMode = "enforce"): GuardOutput {
-  // In observe mode the guard is telemetry, not a boundary, so a failure to
-  // decide must not cost availability — there is nothing to fail closed *to*.
-  const onFailure = mode === "observe" ? ALLOW : FAIL_CLOSED;
+export function runGuard(raw: string, deps: GuardDeps): GuardOutput {
+  const onFailure = FAIL_CLOSED;
 
   let input: GuardInput;
   try {
@@ -354,23 +348,21 @@ export function runGuard(raw: string, deps: GuardDeps, mode: GuardMode = "enforc
     // observe mode it is not: the tool proceeds regardless of the verdict, and
     // may still be stopped downstream by codex's sandbox. Recording `allowed`
     // there would assert an outcome this hook never sees.
-    write(deps.line.toolsLog, mode === "observe"
-      ? { type: "tool_call", call_id: deps.callId, ...correlation, tool: input.tool_name, mode }
-      : { type: "tool_call", call_id: deps.callId, ...correlation, tool: input.tool_name, allowed: verdict.allow });
+    write(deps.line.toolsLog,
+      { type: "tool_call", call_id: deps.callId, ...correlation, tool: input.tool_name, allowed: verdict.allow });
 
     const noteworthy = verdict.allow ? verdict.flag : verdict;
     if (noteworthy) {
       write(deps.line.callsLog, {
         // Three distinct names, because they are three distinct claims:
-        // denied = we stopped it; flagged = we let it through and noticed;
-        // attempt_flagged = we only ever watched.
-        type: mode === "observe" ? "tool_attempt_flagged" : verdict.allow ? "tool_flagged" : "tool_denied",
+        // denied = we stopped it; flagged = we let it through and noticed.
+        type: verdict.allow ? "tool_flagged" : "tool_denied",
         call_id: deps.callId, ...correlation, tool: input.tool_name,
         rule: noteworthy.rule, detail: noteworthy.detail,
       });
     }
 
-    if (mode === "observe" || verdict.allow) return ALLOW;
+    if (verdict.allow) return ALLOW;
     return {
       exitCode: 0,
       stdout: JSON.stringify({

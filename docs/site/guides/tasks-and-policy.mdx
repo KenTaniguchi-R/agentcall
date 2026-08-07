@@ -101,9 +101,9 @@ back to the last-looking configuration.
   Anything absent from `sensitivity.json` is `secret` and never leaves — but the
   reverse is the real risk: labelling a parent directory `shared` labels
   everything beneath it, including anything a subdirectory later acquires.
-  **On a Codex line none of this is enforced.** The guard runs in observe mode,
-  so a `secret` read is recorded and then allowed, and
-  nothing inspects the answer. Clearances there describe intent, not a boundary.
+  **On a Codex line none of this is enforced.** There is no read guard there at
+  all, so nothing stops a `secret` read, and nothing inspects the answer. The
+  labels describe intent on a Codex line, not a boundary.
   Review the [security model](/security/overview) before widening a label.
 </Warning>
 

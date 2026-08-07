@@ -77,14 +77,11 @@ export function renderPolicyReport(
     );
   } else {
     lines.push(
-      "  WARNING: on Codex the sensitivity model is NOT enforced. The guard runs in observe",
-      "  mode, so a read above this caller's clearance is recorded and then allowed.",
-      "  --sandbox read-only stops writes, not reads or execution, and there is no check on the",
-      "  reply. Treat a Codex line's clearances as documentation of intent, not as a boundary.",
+      "  WARNING: on Codex there is NO read guard. Nothing stops the agent reading a secret",
+      "  path, and nothing checks the answer. --sandbox read-only stops writes, not reads or",
+      "  execution. A Codex line can be told to read anything on this machine.",
       "  Bundled authenticated Codex apps, web search, and image generation are disabled on every spawn.",
-      "  On verified codex-cli 0.146.0, shell tool attempts are recorded by an observe-only hook unless managed-only hooks are required.",
-      "  Other Codex releases or allow_managed_hooks_only=true may silently skip that hook; non-hooked read routes remain unrecorded.",
-      "  Run agentcall doctor to verify the exact Codex session hook is active and trusted on this machine.",
+      "  Use Claude for any line where what leaves the machine has to be bounded.",
     );
   }
 

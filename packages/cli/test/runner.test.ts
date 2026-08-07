@@ -5,10 +5,8 @@ import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
 import { buildPrompt } from "../src/prompt.js";
 import {
-  buildSpawnSpec, claudeAllowedTools, codexHookTrustedHash, guardCodexConfigArg,
-  mcpServerNamesFrom,
-  guardCodexTrustArg, guardSettingsJson, GUARD_TIMEOUT_S,
-  toolTelemetryCodexConfigArg,
+  buildSpawnSpec, claudeAllowedTools, mcpServerNamesFrom,
+  guardSettingsJson, GUARD_TIMEOUT_S,
   codexThreadingEnabled, codexToolTelemetryEnabled, CODEX_HOOK_TRUST_VERIFIED_VERSION,
   CODEX_THREADING_VERIFIED_VERSION,
   AgentRunError, isResumeFailure,
@@ -33,9 +31,8 @@ function spawnSpec(
   kind: AgentKind, prompt: string, workdir: string,
   resolveBin: (kind: AgentKind) => string = resolveAgentBin,
   callId: string = "unknown", lineName: string = LINE,
-  toolTelemetryFile?: string,
 ): SpawnSpec {
-  return buildSpawnSpec({ kind, prompt, workdir, resolveBin, callId, lineName, toolTelemetryFile });
+  return buildSpawnSpec({ kind, prompt, workdir, resolveBin, callId, lineName });
 }
 function agentRun(
   kind: AgentKind, prompt: string, workdir: string, timeoutMs: number,
@@ -196,11 +193,11 @@ describe("buildSpawnSpec", () => {
   it("spawns codex directly with a read-only sandbox", () => {
     const s = spawnSpec("codex", "PROMPT", WORKDIR, () => "/abs/path/to/codex");
     expect(s.cmd).toBe("/abs/path/to/codex");
-    // The `-c` payload is asserted in "guard hook wiring" rather than pinned
-    // here, so this stays a test of the spawn shape.
-    expect(s.args.filter((a) => ![guardCodexConfigArg(), guardCodexTrustArg()].includes(a))).toEqual([
+    // No guard hook: Codex gets none as of 2026-08-07, so the whole arg list is
+    // pinned here rather than filtered.
+    expect(s.args).toEqual([
       "exec", "--ignore-user-config", "--sandbox", "read-only", "--cd", WORKDIR,
-      "--skip-git-repo-check", "--json", "-c", "-c", "--disable", "apps",
+      "--skip-git-repo-check", "--json", "--disable", "apps",
       "--disable", "image_generation", "-c", `web_search="disabled"`, "--strict-config", "PROMPT",
     ]);
     expect(s.cwd).toBe(WORKDIR);
@@ -568,38 +565,7 @@ describe("guard hook wiring", () => {
     expect(settings.hooks.PreToolUse[0].hooks).toHaveLength(1);
   });
 
-  it("adds paired post-tool hooks only when a bounded local spool is present", () => {
-    const settings = JSON.parse(guardSettingsJson(true));
-    expect(Object.keys(settings.hooks)).toEqual(["PreToolUse", "PostToolUse", "PostToolUseFailure"]);
-    expect(settings.hooks.PostToolUse[0].hooks[0].command).toContain("tool-telemetry-entry.js");
-    expect(settings.hooks.PostToolUseFailure[0].hooks[0].command).toContain("tool-telemetry-entry.js");
-    expect(settings.hooks.PostToolUse[0].hooks[0].async).toBe(false);
-  });
 
-  it("passes the spool to both runtimes and trusts only Codex's exact post hook", () => {
-    const file = "/private/tmp/agentcall-tool-events-test.jsonl";
-    const claude = spawnSpec(
-      "claude", "hi", WORKDIR, () => "/bin/claude", "call-9", LINE, file,
-    );
-    expect(claude.env?.AGENTCALL_TOOL_TELEMETRY_FILE).toBe(file);
-    const claudeSettings = JSON.parse(claude.args[claude.args.indexOf("--settings") + 1]!);
-    expect(claudeSettings.hooks.PostToolUse).toBeDefined();
-    expect(claudeSettings.hooks.PostToolUseFailure).toBeDefined();
-
-    const codex = spawnSpec(
-      "codex", "hi", WORKDIR, () => "/bin/codex", "call-9", LINE, file,
-    );
-    expect(codex.env?.AGENTCALL_TOOL_TELEMETRY_FILE).toBe(file);
-    const overrides = codex.args.flatMap((arg, i) => arg === "-c" ? [codex.args[i + 1]!] : []);
-    expect(overrides).toContain(toolTelemetryCodexConfigArg());
-    const trust = overrides.find((arg) => arg.startsWith("hooks.state="))!;
-    expect(trust).toContain(":pre_tool_use:0:0");
-    expect(trust).toContain(":post_tool_use:0:0");
-    expect(trust).not.toContain("PostToolUseFailure");
-    const disabled = codex.args.flatMap((arg, index) =>
-      arg === "--disable" ? [codex.args[index + 1]] : []);
-    expect(disabled).not.toContain("code_mode_host");
-  });
 
   it("uses no matcher, so every tool call reaches the guard", () => {
     const entry = JSON.parse(guardSettingsJson()).hooks.PreToolUse[0];
@@ -640,43 +606,9 @@ describe("guard hook wiring", () => {
     expect(spec.args).not.toContain("--settings");
   });
 
-  // Codex takes hooks as config, not as a settings blob, and `-c` is the only
-  // form that stays scoped to this spawn — writing ~/.codex/hooks.json would
-  // edit the owner's real configuration, which claude's inline --settings
-  // deliberately avoids.
-  it("registers the guard on the codex spawn via an inline -c override", () => {
-    const spec = spawnSpec("codex", "hi", WORKDIR, () => "/bin/codex", "call-9");
-    const i = spec.args.indexOf("-c");
-    expect(i).toBeGreaterThan(-1);
-    const override = spec.args[i + 1]!;
-    expect(override).toContain("hooks.PreToolUse");
-    expect(override).toContain("guard-entry.js");
-    expect(override).toContain(`timeout=${GUARD_TIMEOUT_S}`);
-    expect(spec.env?.AGENTCALL_CALL_ID).toBe("call-9");
-  });
 
-  it("matches codex-cli 0.146.0's normalized hook identity hash", () => {
-    expect(codexHookTrustedHash("/usr/bin/touch /private/tmp/agentcall-issue4-own.marker"))
-      .toBe("sha256:d2f79e214fce245f65d8f1aa644e557bd09d402da9653ecab48cc5ce6e3f1f01");
-    expect(codexHookTrustedHash(
-      "/usr/bin/touch /private/tmp/agentcall-tool.marker", "post_tool_use", 5,
-    )).toBe("sha256:0fb54d9822c088e6c659ca3c8205c660e861d4b964d3ccc32bfdbe1a54ffbb62");
-  });
 
-  it("trusts only the exact inline guard hook via a whole state-table override", () => {
-    const trust = guardCodexTrustArg();
-    expect(trust).toMatch(/^hooks\.state=\{"\/<session-flags>\/config\.toml:pre_tool_use:0:0"=\{trusted_hash="sha256:[a-f0-9]{64}"\}\}$/);
 
-    const spec = spawnSpec("codex", "hi", WORKDIR, () => "/bin/codex");
-    const overrides = spec.args.flatMap((arg, i) => arg === "-c" ? [spec.args[i + 1]!] : []);
-    expect(overrides).toEqual([guardCodexConfigArg(), trust, `web_search="disabled"`]);
-    expect(spec.args).not.toContain("--dangerously-bypass-hook-trust");
-  });
-
-  it("runs the codex guard in observe mode", () => {
-    const spec = spawnSpec("codex", "hi", WORKDIR, () => "/bin/codex", "call-9");
-    expect(spec.env?.AGENTCALL_GUARD_MODE).toBe("observe");
-  });
 
   it("disables bundled Codex remote tools with strict recognized configuration", () => {
     const spec = spawnSpec("codex", "hi", WORKDIR, () => "/bin/codex", "call-9");
@@ -763,11 +695,15 @@ describe("buildSpawnSpec resume (codex)", () => {
     expect(spec.args).not.toContain("--cd");
   });
 
-  it("keeps --ignore-user-config and the guard on a resumed spawn", () => {
+  it("keeps --ignore-user-config and the sandbox on a resumed spawn", () => {
+    // The guard hook assertions that used to sit here are gone with the hook.
+    // What still has to survive a resume is the config that bounds the runtime:
+    // the owner's ~/.codex stays out, and the sandbox rides the -c override
+    // because `codex exec resume` accepts no --sandbox.
     const spec = buildSpawnSpec({ kind: "codex", prompt: "hi", workdir: "/w", resolveBin: bin, callId: "c1", lineName: "line", resume: "sess-abc" });
     expect(spec.args).toContain("--ignore-user-config");
-    expect(spec.args.some((a) => a.startsWith("hooks.PreToolUse="))).toBe(true);
-    expect(spec.args.some((a) => a.startsWith("hooks.state="))).toBe(true);
+    expect(spec.args).toContain('sandbox_mode="read-only"');
+    expect(spec.args.some((a) => a.startsWith("hooks."))).toBe(false);
   });
 
   it("puts the prompt last", () => {
@@ -818,10 +754,9 @@ describe("AGENTCALL_LINE propagation", () => {
     expect(spec.env?.AGENTCALL_CALL_ID).toBe("call-1");
   });
 
-  it("injects the line name into a codex spawn alongside observe mode", () => {
+  it("injects the line name into a codex spawn", () => {
     const spec = buildSpawnSpec({ kind: "codex", prompt: "hi", workdir: "/work", resolveBin: () => "/bin/codex", callId: "call-2", lineName: "claude" });
     expect(spec.env?.AGENTCALL_LINE).toBe("claude");
-    expect(spec.env?.AGENTCALL_GUARD_MODE).toBe("observe");
   });
 
   // There used to be a third case here, "defaults to an empty line name when

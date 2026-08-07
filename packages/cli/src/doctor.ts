@@ -18,8 +18,8 @@ import {
   type AgentKind,
 } from "./runner.js";
 import {
-  checkCodexGuard, checkGuard, checkRelaySelfCall, formatCheck, short, verifyAgent,
-  type CodexGuardProbeFn, type GuardBinaryProbeFn, type GuardProbeFn,
+  checkGuard, checkRelaySelfCall, formatCheck, short, verifyAgent,
+  type GuardBinaryProbeFn, type GuardProbeFn,
   type VerifyCheck, type VerifyFns,
 } from "./verify.js";
 
@@ -35,7 +35,6 @@ interface DoctorDeps {
   log?: (line: string) => void;
   guardFn?: GuardProbeFn;
   guardBinaryFn?: GuardBinaryProbeFn;
-  codexGuardFn?: CodexGuardProbeFn;
   keyHealthFn?: (cfg: LineConfig, paths: LinePaths) => Promise<VerifyCheck[]>;
   pkgFn?: () => CliPackageManifest;
   selfPathFn?: () => string;
@@ -432,11 +431,6 @@ export async function runDoctor(deps: DoctorDeps): Promise<number> {
         guardCache.set(cfg.agent_kind, guardCheck);
       }
       report(guardCheck);
-    } else if (cfg.agent_kind === "codex" && agentOk) {
-      // `false`: there is no tool telemetry to require any more, so this asks
-      // only whether the session guard hook is present and trusted — which is
-      // the evidence #391 depends on.
-      report(await checkCodexGuard(agentWorkdir, deps.codexGuardFn, false));
     }
 
     if (agentOk && online) {

@@ -365,28 +365,6 @@ function failingVerifyFor(kind: AgentKind) {
 
 describe("runDoctor", () => {
 
-  it("exits nonzero when Codex managed-only policy suppresses AgentCall's session hook", async () => {
-    const m = freshMachine();
-    const p = getLinePaths(m, LINE);
-    saveLineConfig(p, { org: "acme", handle: "ken", token: "t", agent_kind: "codex", relay: "https://relay.example" });
-    const lines: string[] = [];
-    const code = await runDoctor({
-      ...baseDeps,
-      machine: m,
-      verifyFns: {
-        resolveBin: () => "/fake/bin/codex",
-        execFn: () => {},
-        runFn: async () => ({ text: "OK" }),
-      },
-      codexGuardFn: async () => JSON.stringify({
-        id: 2, result: { data: [{ cwd: p.shareDir, hooks: [] }] },
-      }),
-      log: (line) => lines.push(line),
-    });
-    expect(code).toBe(1);
-    expect(lines.join("\n")).toContain("✗ codex session guard");
-    expect(lines.join("\n")).toContain("allow_managed_hooks_only");
-  });
 
   it("reports a running systemd user listener on Linux", async () => {
     const m = freshMachine();

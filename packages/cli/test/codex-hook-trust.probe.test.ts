@@ -3,9 +3,7 @@ import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
-import {
-  buildSpawnSpec, } from "../src/runner.js";
-import { checkCodexGuard } from "../src/verify.js";
+import { buildSpawnSpec } from "../src/runner.js";
 
 // Env-gated OFF by default. This launches a real authenticated Codex and is
 // deliberately excluded from CI:
@@ -18,11 +16,6 @@ import { checkCodexGuard } from "../src/verify.js";
 const enabled = process.env.AGENTCALL_PROBE_CODEX_HOOKS === "1";
 
 describe.skipIf(!enabled)("codex exact-hook trust", () => {
-  it("doctor discovers the production session hook as enabled and trusted", async () => {
-    expect(await checkCodexGuard(process.cwd())).toMatchObject({
-      name: "codex tool telemetry", ok: true, detail: "trusted session lifecycle hooks",
-    });
-  }, 20_000);
 
 
 

@@ -1,5 +1,4 @@
 import { execFileSync, spawn } from "node:child_process";
-import { createHash } from "node:crypto";
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -13,7 +12,6 @@ export type { AgentKind };
 // the security boundary and must be re-probed before resumed sessions are
 // trusted again.
 export const CODEX_THREADING_VERIFIED_VERSION = "0.146.0";
-export const CODEX_GUARD_TRUST_VERIFIED_VERSION = "0.146.0";
 
 // Kept separate from the threading and guard-trust pins: evidence for either
 // must not silently bless incomplete default-path lifecycle coverage.
@@ -102,7 +100,6 @@ const KILL_GRACE_MS = 10_000;
 // guard-entry's graph), so the bias is roughly 600x, not 900x. Still no reason
 // to touch this number.
 export const GUARD_TIMEOUT_S = 30;
-const TOOL_TELEMETRY_TIMEOUT_S = 5;
 
 // Inline settings, not a plugin and not a file: scoped to this spawn, gone when
 // the process exits, and the owner's own ~/.claude is untouched.
@@ -119,32 +116,20 @@ const shellQuote = (s: string) => `'${s.replaceAll("'", `'\\''`)}'`;
 // Exported so doctor's direct probe invokes the exact file the spawn wires up,
 // rather than a second path expression that could drift from this one.
 export const guardEntryPath = () => fileURLToPath(new URL("./guard-entry.js", import.meta.url));
-const toolTelemetryEntryPath = () => fileURLToPath(new URL("./tool-telemetry-entry.js", import.meta.url));
 
 const guardCommand = () =>
   `${shellQuote(process.execPath)} ${shellQuote(guardEntryPath())}`;
-const toolTelemetryCommand = () =>
-  `${shellQuote(process.execPath)} ${shellQuote(toolTelemetryEntryPath())}`;
 
-export function guardSettingsJson(includeToolTelemetry = false): string {
-  const hooks: Record<string, unknown> = {
-    PreToolUse: [{
-      hooks: [{ type: "command", command: guardCommand(), timeout: GUARD_TIMEOUT_S }],
-    }],
-  };
-  if (includeToolTelemetry) {
-    const post = [{ hooks: [{
-      type: "command", command: toolTelemetryCommand(), timeout: TOOL_TELEMETRY_TIMEOUT_S, async: false,
-    }] }];
-    hooks.PostToolUse = post;
-    hooks.PostToolUseFailure = post;
-  }
-  return JSON.stringify({ hooks });
+export function guardSettingsJson(): string {
+  return JSON.stringify({
+    hooks: {
+      PreToolUse: [{
+        hooks: [{ type: "command", command: guardCommand(), timeout: GUARD_TIMEOUT_S }],
+      }],
+    },
+  });
 }
 
-// TOML basic string. Only `"` and `\` need escaping for a path; the control
-// characters that would also require it cannot appear in one.
-const tomlQuote = (s: string) => `"${s.replaceAll("\\", "\\\\").replaceAll(`"`, `\\"`)}"`;
 
 // Codex takes hooks as configuration rather than as a settings blob, and `-c`
 // is the only form scoped to a single spawn — the alternatives
@@ -153,21 +138,7 @@ const tomlQuote = (s: string) => `"${s.replaceAll("\\", "\\\\").replaceAll(`"`, 
 //
 // This registers the SAME entry point as claude, but Codex runs it in observe
 // mode. Its command-shaped filesystem surface cannot be safely bounded here.
-export function codexHookConfigArg(
-  command: string,
-  event: "PreToolUse" | "PostToolUse" = "PreToolUse",
-  timeout = GUARD_TIMEOUT_S,
-): string {
-  return `hooks.${event}=[{hooks=[{type="command",command=${tomlQuote(command)},timeout=${timeout}}]}]`;
-}
-
-export function guardCodexConfigArg(): string {
-  return codexHookConfigArg(guardCommand());
-}
-
-export function toolTelemetryCodexConfigArg(): string {
-  return codexHookConfigArg(toolTelemetryCommand(), "PostToolUse", TOOL_TELEMETRY_TIMEOUT_S);
-}
+export 
 
 // Codex executes a hook only when its normalized identity matches a trusted
 // hash. Trusting every hook would also execute hooks from the owner's config,
@@ -175,8 +146,6 @@ export function toolTelemetryCodexConfigArg(): string {
 // reproduce codex-cli 0.146.0's canonical identity for this one session hook
 // and supply trust for its exact synthetic key. A CLI-side normalization
 // change makes the hash mismatch and fails closed (the hook is skipped).
-export const CODEX_SESSION_GUARD_KEY = "/<session-flags>/config.toml:pre_tool_use:0:0";
-export const CODEX_SESSION_TOOL_TELEMETRY_KEY = "/<session-flags>/config.toml:post_tool_use:0:0";
 
 function canonicalize(value: unknown): unknown {
   if (Array.isArray(value)) return value.map(canonicalize);
@@ -190,33 +159,8 @@ function canonicalize(value: unknown): unknown {
   return value;
 }
 
-export function codexHookTrustedHash(command: string, eventName = "pre_tool_use", timeout = GUARD_TIMEOUT_S): string {
-  const identity = canonicalize({
-    event_name: eventName,
-    hooks: [{ type: "command", command, timeout, async: false }],
-  });
-  return `sha256:${createHash("sha256").update(JSON.stringify(identity)).digest("hex")}`;
-}
 
-export function codexHookTrustArg(command: string): string {
-  const hash = codexHookTrustedHash(command);
-  // Set the whole map. A dotted `hooks.state.<key>` override is not equivalent:
-  // the CLI path parser splits the literal dot in `config.toml`, leaving this
-  // hook untrusted while appearing superficially correct in argv tests.
-  return `hooks.state={${tomlQuote(CODEX_SESSION_GUARD_KEY)}={trusted_hash=${tomlQuote(hash)}}}`;
-}
 
-export function guardCodexTrustArg(includeToolTelemetry = false): string {
-  if (!includeToolTelemetry) return codexHookTrustArg(guardCommand());
-  const guardHash = codexHookTrustedHash(guardCommand());
-  const toolHash = codexHookTrustedHash(
-    toolTelemetryCommand(), "post_tool_use", TOOL_TELEMETRY_TIMEOUT_S,
-  );
-  return `hooks.state={` +
-    `${tomlQuote(CODEX_SESSION_GUARD_KEY)}={trusted_hash=${tomlQuote(guardHash)}},` +
-    `${tomlQuote(CODEX_SESSION_TOOL_TELEMETRY_KEY)}={trusted_hash=${tomlQuote(toolHash)}}` +
-    `}`;
-}
 
 // Used with --allowedTools + --permission-mode dontAsk: listed tools are
 // pre-approved, everything else is denied instead of prompting (headless -p
@@ -322,7 +266,6 @@ export interface SpawnOptions {
    */
   resume?: string;
   correlationId?: string;
-  toolTelemetryFile?: string;
   /**
    * MCP servers this call may use, enumerated from the owner's own config by
    * the listener (see discoverMcpServers). Empty grants none — `mcp__*` is not
@@ -341,7 +284,7 @@ export interface SpawnOptions {
 export function buildSpawnSpec(options: SpawnOptions): SpawnSpec {
   const {
     kind, prompt, workdir, lineName,
-    resolveBin = resolveAgentBin, callId = "unknown", resume, correlationId, toolTelemetryFile,
+    resolveBin = resolveAgentBin, callId = "unknown", resume, correlationId,
     mcpServers = [],
   } = options;
   const childEnv = process.env;
@@ -353,7 +296,7 @@ export function buildSpawnSpec(options: SpawnOptions): SpawnSpec {
         ...(resume ? ["--resume", resume] : []),
         "-p", prompt, "--output-format", "json",
         "--permission-mode", "dontAsk", "--allowedTools", claudeAllowedTools(mcpServers),
-        "--settings", guardSettingsJson(toolTelemetryFile !== undefined),
+        "--settings", guardSettingsJson(),
       ],
       cwd: workdir,
       env: {
@@ -361,7 +304,6 @@ export function buildSpawnSpec(options: SpawnOptions): SpawnSpec {
         // Replaces AGENTCALL_ALLOWED_ROOT. The guard no longer confines the run
         // to one directory; it asks whether each path's sensitivity is within
         // this clearance, which the sensitivity map on disk answers.
-        ...(toolTelemetryFile ? { AGENTCALL_TOOL_TELEMETRY_FILE: toolTelemetryFile } : {}),
       },
     };
   }
@@ -392,18 +334,14 @@ export function buildSpawnSpec(options: SpawnOptions): SpawnSpec {
     return {
       cmd: resolveBin(kind),
       args: ["exec", "resume", resume, "--ignore-user-config", "--skip-git-repo-check",
-        "--json", ...codexRemoteBoundary, "-c", guardCodexConfigArg(),
-        ...(toolTelemetryFile ? ["-c", toolTelemetryCodexConfigArg()] : []),
-        "-c", guardCodexTrustArg(toolTelemetryFile !== undefined),
+        "--json", ...codexRemoteBoundary,
         "-c", `sandbox_mode="${sandbox}"`, prompt],
       cwd: workdir,
       // AGENTCALL_LINE is as required here as on the non-resume branch: the
       // guard resolves the line's tasksDir from it and fails closed without
       // it, so omitting it would deny every tool call on a resumed session.
       env: {
-        ...childEnv, ...correlationEnv, AGENTCALL_CALL_ID: callId,
-        AGENTCALL_GUARD_MODE: "observe", AGENTCALL_LINE: lineName,
-        ...(toolTelemetryFile ? { AGENTCALL_TOOL_TELEMETRY_FILE: toolTelemetryFile } : {}),
+        ...childEnv, ...correlationEnv, AGENTCALL_CALL_ID: callId, AGENTCALL_LINE: lineName,
       },
     };
   }
@@ -419,14 +357,10 @@ export function buildSpawnSpec(options: SpawnOptions): SpawnSpec {
     // loaded even with this flag, so codexRemoteBoundary removes them explicitly.
     // The prompt stays last: codex takes the final positional as the prompt.
     args: ["exec", "--ignore-user-config", "--sandbox", sandbox, "--cd", workdir,
-      "--skip-git-repo-check", "--json", "-c", guardCodexConfigArg(),
-      ...(toolTelemetryFile ? ["-c", toolTelemetryCodexConfigArg()] : []),
-      "-c", guardCodexTrustArg(toolTelemetryFile !== undefined), ...codexRemoteBoundary, prompt],
+      "--skip-git-repo-check", "--json", ...codexRemoteBoundary, prompt],
     cwd: workdir,
     env: {
-      ...childEnv, ...correlationEnv, AGENTCALL_CALL_ID: callId,
-      AGENTCALL_GUARD_MODE: "observe", AGENTCALL_LINE: lineName,
-      ...(toolTelemetryFile ? { AGENTCALL_TOOL_TELEMETRY_FILE: toolTelemetryFile } : {}),
+      ...childEnv, ...correlationEnv, AGENTCALL_CALL_ID: callId, AGENTCALL_LINE: lineName,
     },
   };
 }

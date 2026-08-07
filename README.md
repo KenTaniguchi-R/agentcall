@@ -146,9 +146,9 @@ agentcall access --default blocked   # answer only named callers and rosters
 > bounds confidential *content* — a salary figure or an unreleased plan has no
 > shape to match. What carries confidentiality is the organization boundary.
 >
-> **On a Codex line even the read guard does not enforce.** It runs in observe
-> mode, so a secret read is recorded and then allowed. Use Claude for anything
-> you actually need bounded.
+> **A Codex line has no read guard at all.** Nothing stops the agent reading a
+> `secret` path, and nothing inspects the answer. Use Claude for anything you
+> actually need bounded.
 
 The [receive-a-call guide](https://agentcall.mintlify.app/get-started/receive-calls)
 and [tasks and policy guide](https://agentcall.mintlify.app/guides/tasks-and-policy)

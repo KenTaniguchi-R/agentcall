@@ -45,19 +45,14 @@ import { getLinePaths, getMachinePaths } from "./paths.js";
 import { loadSensitivityMap, withFloor } from "./sensitivity.js";
 import { appendPrivateLogLine } from "./audit-log.js";
 
-// Only the exact string opts out of enforcement. Anything else — a typo, a
-// stale value, an empty string — enforces, so a mangled env var cannot
-// silently downgrade the guard to watching.
-const mode = process.env.AGENTCALL_GUARD_MODE === "observe" ? "observe" : "enforce";
-
 const machine = getMachinePaths();
 
 // The guard runs as a subprocess of the answering agent and has no other way
 // to learn which line's call it is policing. Without it, tool events would be
 // audited against the wrong line — so an absent or malformed value fails
-// closed rather than guessing. Unconditional on `mode`: this indicates a
+// closed rather than guessing. This indicates a
 // wiring bug (the runner always sets this env var), not an ordinary decide()
-// failure, so it is not eligible for observe mode's fail-open treatment.
+// wiring bug rather than an ordinary decide() failure.
 // The one event that means "the guard is unwired" must not be the one event
 // that leaves no audit trace. There is no LinePaths to log against — that is
 // exactly the problem — so this goes to the line-independent listenerLog, the
@@ -110,7 +105,7 @@ try {
     // writable by the agent this guard is policing, whereas an env var is
     // inherited state with no such property.
     map: withFloor(loadSensitivityMap(getLinePaths(machine, lineName)), machine.userHome),
-  }, mode);
+  });
 
 
   if (out.stdout) process.stdout.write(out.stdout);
@@ -123,6 +118,6 @@ try {
   // Nothing may escape this file. Any exit that is not 0 or 2 is a
   // non-blocking error to Claude, and the tool call proceeds. Even here the
   // reason must be written, for the same reason as above.
-  if (mode !== "observe") process.stderr.write(FAIL_CLOSED_REASON + "\n");
-  process.exit(mode === "observe" ? 0 : 2);
+  process.stderr.write(FAIL_CLOSED_REASON + "\n");
+  process.exit(2);
 }
