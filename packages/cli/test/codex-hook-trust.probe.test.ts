@@ -118,7 +118,6 @@ describe.skipIf(!enabled)("codex exact-hook trust", () => {
         resolveBin: () => "codex",
         callId: "probe-tool-lifecycle",
         lineName: "probe-line",
-        clearance: "internal",
         toolTelemetryFile: spool.file,
       });
       spec.env = { ...spec.env, AGENTCALL_HOME: state };
@@ -168,7 +167,7 @@ describe.skipIf(!enabled)("codex exact-hook trust", () => {
       const specFor = (resume?: string) =>
         buildSpawnSpec({
           kind: "codex", prompt, workdir, resolveBin: () => "codex",
-          callId: "probe-boundary", lineName: "probe-line", clearance: "internal", resume,
+          callId: "probe-boundary", lineName: "probe-line", resume,
         });
       const eventsFrom = (spec: ReturnType<typeof buildSpawnSpec>) => {
         const result = spawnSpec(spec);

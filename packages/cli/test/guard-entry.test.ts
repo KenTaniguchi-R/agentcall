@@ -33,7 +33,7 @@ function seedMap(home: string, roots: string[]): string {
   // fail them for a reason that has nothing to do with the guard.
   mkdirSync(dir, { recursive: true, mode: 0o700 });
   writeFileSync(join(dir, "sensitivity.json"), JSON.stringify({
-    sources: roots.map((path) => ({ path, sensitivity: "internal" })),
+    sources: roots.map((path) => ({ path, sensitivity: "shared" })),
   }));
   return home;
 }
@@ -41,7 +41,7 @@ function seedMap(home: string, roots: string[]): string {
 type Run = { status: number; stdout: string; stderr: string };
 
 function runEntry(input: string, home: string, extraEnv: NodeJS.ProcessEnv = {}): Run {
-  const env = { ...process.env, AGENTCALL_HOME: home, AGENTCALL_CALL_ID: "call-abc", AGENTCALL_LINE: LINE, AGENTCALL_CLEARANCE: "internal", ...extraEnv };
+  const env = { ...process.env, AGENTCALL_HOME: home, AGENTCALL_CALL_ID: "call-abc", AGENTCALL_LINE: LINE, ...extraEnv };
   try {
     // Pipe stderr rather than inheriting it, so the reason text can be
     // asserted — it is what makes exit 2 blocking rather than "hook failed".
@@ -64,7 +64,7 @@ const runRaw = (raw: string, home: string): Run => runEntry(raw, home);
 // value — `run`'s extraEnv spread can only override the key, not delete it,
 // and an absent env var is a materially different case from an empty string.
 function runWithoutLine(input: string, home: string, extraEnv: NodeJS.ProcessEnv = {}): Run {
-  const env: NodeJS.ProcessEnv = { ...process.env, AGENTCALL_HOME: home, AGENTCALL_CALL_ID: "call-abc", AGENTCALL_CLEARANCE: "internal", ...extraEnv };
+  const env: NodeJS.ProcessEnv = { ...process.env, AGENTCALL_HOME: home, AGENTCALL_CALL_ID: "call-abc", ...extraEnv };
   delete env.AGENTCALL_LINE;
   try {
     const stdout = execFileSync(process.execPath, [ENTRY], {

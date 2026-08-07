@@ -430,7 +430,7 @@ describe("runDoctor", () => {
     });
     mkdirSync(paths.dir, { recursive: true });
     writeFileSync(paths.sensitivityFile, JSON.stringify({
-      sources: [{ path: "/no/such/project", sensitivity: "internal" }],
+      sources: [{ path: "/no/such/project", sensitivity: "shared" }],
     }));
     const lines: string[] = [];
     const code = await runDoctor({ ...baseDeps, machine: m, log: (l) => lines.push(l) });
@@ -455,7 +455,7 @@ describe("runDoctor", () => {
     mkdirSync(repo, { recursive: true });
     mkdirSync(paths.dir, { recursive: true });
     writeFileSync(paths.sensitivityFile, JSON.stringify({
-      sources: [{ path: repo, sensitivity: "internal" }],
+      sources: [{ path: repo, sensitivity: "shared" }],
     }));
     const lines: string[] = [];
     await runDoctor({ ...baseDeps, machine: m, log: (l) => lines.push(l) });

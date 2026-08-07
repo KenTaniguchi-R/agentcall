@@ -362,7 +362,7 @@ export async function runDoctor(deps: DoctorDeps): Promise<number> {
       const missing = map.sources.filter((s) => !existsSync(s.path));
       // `internal` is the most permissive grantable clearance, so this is the
       // best case — a public caller may land somewhere narrower.
-      workdirDir = workdirFor(withFloor(map, line.paths.machine.userHome), "internal", line.paths.shareDir);
+      workdirDir = workdirFor(withFloor(map, line.paths.machine.userHome), line.paths.shareDir);
       if (missing.length > 0) {
         report({
           name: "sensitivity map", ok: false,

@@ -6,18 +6,26 @@
 // every source: how sensitive is it. Everything not named is `secret`, so the
 // failure mode of an unconfigured or half-configured line is a refusal to
 // answer rather than a leak — which is what makes a generous default safe.
-import { existsSync, readFileSync, statSync } from "node:fs";
+import { readFileSync, statSync } from "node:fs";
 import { homedir } from "node:os";
-import { dirname, isAbsolute, join, resolve } from "node:path";
+import { isAbsolute, join, resolve } from "node:path";
 import { z } from "zod";
 import { canonical, expandHome, isInside } from "./path-canon.js";
 import type { LinePaths } from "./paths.js";
 
-export const SENSITIVITIES = ["public", "internal", "secret"] as const;
+// Two states, not a lattice. `shared` may reach any caller the line answers at
+// all; `secret` never leaves this machine.
+//
+// This replaced `public < internal < secret` on 2026-08-07. The middle level had
+// no producer — nothing in the CLI ever labelled a source `public` — while the
+// ordering it implied caused a real bug: the seed labelled $HOME `internal`
+// while the default clearance was `public`, so the "open" default opened
+// nothing. A three-level order was also encoding two different questions at once
+// (how sensitive is this, and whose is it), which is the shape
+// docs/superpowers/specs/2026-08-07-open-default-design.md records as
+// known-insufficient. Who may call is now a separate yes/no in clearance.ts.
+export const SENSITIVITIES = ["shared", "secret"] as const;
 export type Sensitivity = (typeof SENSITIVITIES)[number];
-
-// Ordering is the whole lattice: higher is more restrictive.
-const RANK: Record<Sensitivity, number> = { public: 0, internal: 1, secret: 2 };
 
 // Unlabelled means secret. This constant exists so the default is stated once
 // and cannot drift between the classifiers below.
@@ -30,14 +38,13 @@ export const SensitivityMapSchema = z.object({
     path: z.string().min(1),
     sensitivity: SensitivitySchema,
   })).default([]),
-  mcp: z.record(z.string(), SensitivitySchema).default({}),
   skills: z.record(z.string(), SensitivitySchema).default({}),
 }).strict();
 
 export type SensitivityMap = z.infer<typeof SensitivityMapSchema>;
 
 /** A fresh install: no sources named, so everything classifies `secret`. */
-export const DEFAULT_SENSITIVITY_MAP: SensitivityMap = { sources: [], mcp: {}, skills: {} };
+export const DEFAULT_SENSITIVITY_MAP: SensitivityMap = { sources: [], skills: {} };
 
 // Missing file -> safe default (fresh install). Malformed file -> THROW.
 //
@@ -61,20 +68,23 @@ export function loadSensitivityMap(p: LinePaths): SensitivityMap {
   }
 }
 
-/** Most restrictive of the inputs. No inputs is `public` — an untouched run starts clean. */
+/** Most restrictive of the inputs. No inputs is `shared` — an untouched run starts clean. */
 export function combine(...values: Sensitivity[]): Sensitivity {
-  return values.reduce<Sensitivity>(
-    (acc, v) => (RANK[v] > RANK[acc] ? v : acc),
-    "public",
-  );
+  return values.includes("secret") ? "secret" : "shared";
 }
 
-// `secret` is deliberately not grantable. It means "never leaves this machine",
-// so treating it as a holdable clearance would turn the top of the lattice into
-// a bypass that any policy edit could hand out.
-export function permits(clearance: Sensitivity, content: Sensitivity): boolean {
-  if (content === "secret") return false;
-  return RANK[content] <= RANK[clearance];
+/**
+ * May this content leave the machine?
+ *
+ * A function of the CONTENT alone. It used to take the caller's clearance too,
+ * but with one grantable level there is nothing left to compare: a caller who
+ * is not allowed never reaches a source at all, because `resolveAdmission`
+ * refuses a blocked caller before any source is consulted (listener.ts). Passing
+ * a single-valued parameter through a security boundary reads as a check that
+ * is not happening, so it is gone.
+ */
+export function permits(content: Sensitivity): boolean {
+  return content !== "secret";
 }
 
 export interface ClassifyOpts {
@@ -112,18 +122,6 @@ export function classifyPath(
   return best;
 }
 
-// z.record output inherits Object.prototype, so a bare `record[name]` resolves
-// to the Object constructor for any map that does not define that key — which
-// reads as a real declaration. Same trap policy.ts:161-171 documents for
-// `policy.callers`; both lookups go through an own-property check.
-function lookup(record: Record<string, Sensitivity>, name: string): Sensitivity {
-  return Object.hasOwn(record, name) ? record[name]! : DEFAULT_SENSITIVITY;
-}
-
-export function classifyMcp(map: SensitivityMap, server: string): Sensitivity {
-  return lookup(map.mcp, server);
-}
-
 // Home-relative paths that are `secret` no matter what the owner's map says.
 // These are guard.ts's DENIED_DIRS and DENIED_FILES, carried over verbatim.
 //
@@ -148,6 +146,23 @@ const FLOOR_FILES = [
   ".zshrc", ".zprofile", ".bashrc", ".bash_profile", ".profile",
 ];
 
+// Carved back OUT of the floor above, by longest-prefix-wins.
+//
+// ~/.claude is `secret` for an INTEGRITY reason — "executable configuration; cf.
+// CVE-2025-59536" — which is about settings.json and hooks being *written*. A
+// skill's SKILL.md is inert markdown, and reading it is not that threat.
+//
+// The carve-out is safe because of a measured asymmetry: everything a skill
+// *does* passes through this guard as ordinary tool calls — its references/ come
+// in as `Read` with full paths, and its Read/Grep/Glob/LS are checked like any
+// other. Only the SKILL.md body reaches the model with no tool call of its own.
+// So the exposure from enabling skills is bounded to that skill's own prose.
+// An MCP server has no such bound, which is why it gets no carve-out.
+// Measured in docs/research/2026-08-06-skill-and-mcp-guard-reachability.md.
+const FLOOR_CARVEOUTS: readonly { path: string; sensitivity: Sensitivity }[] = [
+  { path: ".claude/skills", sensitivity: "shared" },
+];
+
 export function builtinSecretSources(home: string): SensitivityMap["sources"] {
   return [...FLOOR_DIRS, ...FLOOR_FILES].map((p) => ({
     path: join(home, p),
@@ -163,11 +178,32 @@ export function builtinSecretSources(home: string): SensitivityMap["sources"] {
  * applying it twice cannot change a verdict.
  */
 export function withFloor(map: SensitivityMap, home: string): SensitivityMap {
-  return { ...map, sources: [...map.sources, ...builtinSecretSources(home)] };
+  return {
+    ...map,
+    sources: [
+      ...map.sources,
+      ...builtinSecretSources(home),
+      ...FLOOR_CARVEOUTS.map((c) => ({ path: join(home, c.path), sensitivity: c.sensitivity })),
+    ],
+  };
 }
 
+/**
+ * Skills default OPEN, where every other source defaults `secret`.
+ *
+ * This is the one deliberate exception to "unlabelled is secret", and it rests
+ * on the measurement recorded at FLOOR_CARVEOUTS: a skill cannot reach anything
+ * this guard does not already see, so the exposure is bounded to the skill's own
+ * SKILL.md body. An owner can still mark a skill `secret` to withhold it.
+ *
+ * Do NOT invent the same default for MCP servers. A server's I/O is opaque to
+ * the guard, so there is no equivalent bound — which is why they are granted by
+ * enumeration in the allowlist (runner.ts) rather than labelled here.
+ */
+export const DEFAULT_SKILL_SENSITIVITY: Sensitivity = "shared";
+
 export function classifySkill(map: SensitivityMap, skill: string): Sensitivity {
-  return lookup(map.skills, skill);
+  return Object.hasOwn(map.skills, skill) ? map.skills[skill]! : DEFAULT_SKILL_SENSITIVITY;
 }
 
 /**
@@ -196,9 +232,9 @@ export function classifySkill(map: SensitivityMap, skill: string): Sensitivity {
  * see checkSensitivityWorkdir.
  */
 export function workdirFor(
-  map: SensitivityMap, clearance: Sensitivity, fallbackDir: string, home?: string,
+  map: SensitivityMap, fallbackDir: string, home?: string,
 ): string {
-  return readableSources(map, clearance, home)[0] ?? fallbackDir;
+  return readableSources(map, home)[0] ?? fallbackDir;
 }
 
 /**
@@ -215,11 +251,20 @@ export function workdirFor(
  * path-disclosure channel for `secret` content.
  */
 export function readableSources(
-  map: SensitivityMap, clearance: Sensitivity, home: string = homedir(),
+  map: SensitivityMap, home: string = homedir(),
 ): string[] {
+  const floorRoots = builtinSecretSources(home).map((s) => s.path);
   return map.sources
-    .filter((s) => permits(clearance, s.sensitivity))
+    .filter((s) => permits(s.sensitivity))
     .map((s) => ({ ...s, path: expandHome(s.path, home) }))
+    // Nothing inside the floor is a place to work or a path to advertise, even
+    // where a carve-out makes it readable. FLOOR_CARVEOUTS puts
+    // ~/.claude/skills back in reach of classifyPath, and without this filter
+    // that entry would also become a workdir candidate — `workdirFor` takes the
+    // shortest readable path, so a fresh line would spawn the agent inside the
+    // skills directory instead of the owner's home. A skill is invoked by NAME,
+    // so its directory never needs to be advertised for it to be usable.
+    .filter((s) => !floorRoots.some((root) => isInside(s.path, root)))
     // Absolute only. The schema accepts any string, and `classifyPath`
     // canonicalises a relative one against the CALL's cwd — but there is no
     // call cwd yet when this runs, so a bare `statSync("code/api")` would
@@ -233,35 +278,35 @@ export function readableSources(
     // files under" would mislead the agent about what it can enumerate.
     .filter((s) => { try { return statSync(s.path).isDirectory(); } catch { return false; } })
     .sort((a, b) =>
-      RANK[b.sensitivity] - RANK[a.sensitivity] ||
       a.path.length - b.path.length ||
       a.path.localeCompare(b.path))
     .map((s) => s.path);
 }
 
 /**
- * The map `setup` writes for a new line.
+ * The map `setup` writes for a new line. OPEN by default as of 2026-08-07.
  *
- * Labels the git repository setup ran inside, walking up from cwd so running it
- * deep in a monorepo still names the root. If there is no repository, names
- * NOTHING — an empty map means every source is `secret`, the line answers "I
- * can't share that", and `doctor` tells the owner to label something. A wrong
- * guess here would be a silent leak, which is the one failure this model exists
- * to make impossible.
+ * Labels `$HOME` `internal`. The non-overridable floor above — ~/.ssh, ~/.aws,
+ * ~/.gnupg, keychains, ~/.agentcall, ~/.codex, the shell rc files — is what
+ * makes that safe to say, and it is subtracted by longest-prefix-wins rather
+ * than by a second list that could drift.
  *
- * $HOME is never labelled even when it contains a .git: that is a dotfiles
- * repository, not a project, and labelling it would hand a caller the whole
- * home tree minus the floor.
+ * This replaced a walk-up that labelled only the git repository `setup` ran
+ * inside, and named nothing at all outside one. That default was sound and
+ * unusable: on a fresh install a caller could not reach the owner's skills,
+ * notes, or any directory but that one repo, so the honest answer to most real
+ * questions was "I can't share that". Being useless is a failure mode too.
+ *
+ * `cwd` is now unused and kept only so callers need not change. The seed no
+ * longer depends on where `setup` ran, which also removes the monorepo and
+ * dotfiles-repo traps the walk-up carried.
+ *
+ * **What this gives up is real and is written down**: the seed is
+ * credential-safe, not confidential. See
+ * docs/superpowers/specs/2026-08-07-open-default-design.md before treating it
+ * as a confidentiality boundary.
  */
-export function defaultSensitivityMap(cwd: string, home?: string): SensitivityMap {
-  const stop = home === undefined ? undefined : resolve(home);
-  let dir = resolve(cwd);
-  for (;;) {
-    if (dir !== stop && existsSync(join(dir, ".git"))) {
-      return { ...DEFAULT_SENSITIVITY_MAP, sources: [{ path: dir, sensitivity: "internal" }] };
-    }
-    const parent = dirname(dir);
-    if (parent === dir) return DEFAULT_SENSITIVITY_MAP;
-    dir = parent;
-  }
+export function defaultSensitivityMap(_cwd: string, home?: string): SensitivityMap {
+  if (home === undefined) return DEFAULT_SENSITIVITY_MAP;
+  return { ...DEFAULT_SENSITIVITY_MAP, sources: [{ path: resolve(home), sensitivity: "shared" }] };
 }

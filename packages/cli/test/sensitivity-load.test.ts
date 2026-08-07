@@ -23,12 +23,10 @@ describe("loadSensitivityMap", () => {
 
   it("reads a map the owner wrote", () => {
     const p = seed(tempLine(), {
-      sources: [{ path: "/work/repo", sensitivity: "internal" }],
-      mcp: { jira: "internal" },
+      sources: [{ path: "/work/repo", sensitivity: "shared" }],
     });
     const m = loadSensitivityMap(p);
-    expect(m.sources).toEqual([{ path: "/work/repo", sensitivity: "internal" }]);
-    expect(m.mcp).toEqual({ jira: "internal" });
+    expect(m.sources).toEqual([{ path: "/work/repo", sensitivity: "shared" }]);
   });
 
   it("throws on a malformed map rather than falling back", () => {
@@ -51,30 +49,49 @@ describe("loadSensitivityMap", () => {
   });
 });
 
+// The seed is deliberately OPEN as of 2026-08-07. It used to name only the git
+// repository `setup` ran in, which left skills, MCP servers, notes and every
+// other directory refused on a fresh install — the state that made the product
+// answer "I can't share that" to most real questions.
+//
+// $HOME is now labelled `internal`, and the non-overridable floor
+// (builtinSecretSources) is what keeps ~/.ssh, ~/.aws, ~/.agentcall and the
+// shell rc files out of it. See
+// docs/superpowers/specs/2026-08-07-open-default-design.md for what this gives
+// up: the seed is credential-safe, not confidential.
 describe("defaultSensitivityMap", () => {
-  it("labels a git repository internal when setup runs inside one", () => {
-    const repo = tempDir("repo-");
-    mkdirSync(join(repo, ".git"), { recursive: true });
-    const sub = join(repo, "packages", "cli");
-    mkdirSync(sub, { recursive: true });
-    // Found by walking up from cwd, so running setup deep inside the tree
-    // still labels the repository root rather than the subdirectory.
-    expect(defaultSensitivityMap(sub).sources).toEqual([{ path: repo, sensitivity: "internal" }]);
+  it("labels $HOME internal so a fresh line can answer from the owner's real context", () => {
+    const home = tempDir("home-");
+    expect(defaultSensitivityMap(join(home, "coding", "proj"), home).sources)
+      .toEqual([{ path: home, sensitivity: "shared" }]);
   });
 
-  it("names nothing when setup does not run inside a repository", () => {
-    // Deliberately empty rather than guessing. Everything is secret, the line
-    // answers "I can't share that", and `agentcall doctor` is what tells the
-    // owner to label something — a wrong guess here would be a silent leak.
+  it("labels $HOME regardless of where setup ran, including $HOME itself", () => {
+    // The walk-up to a git repository is gone: the answer no longer depends on
+    // cwd, so running `setup` in a subdirectory, in a repo, or in $HOME all
+    // seed the same map. A stray .git in $HOME is no longer a special case
+    // because $HOME is what gets labelled either way.
+    const home = tempDir("home-");
+    mkdirSync(join(home, ".git"), { recursive: true });
+    expect(defaultSensitivityMap(home, home).sources)
+      .toEqual([{ path: home, sensitivity: "shared" }]);
+  });
+
+  it("names nothing when no home is known", () => {
+    // Fail closed rather than guess a root. Every production caller passes
+    // paths.machine.userHome, so this is the misconfiguration path.
     const plain = tempDir("plain-");
     expect(defaultSensitivityMap(plain).sources).toEqual([]);
   });
 
-  it("never labels $HOME itself, even if a stray .git sits there", () => {
-    // A .git in the home directory is a dotfiles repo, not a project. Labelling
-    // it internal would hand a caller the entire home tree minus the floor.
+  it("does not label a git repository as a separate source", () => {
+    // Previously the repo root was named explicitly. It is now covered by the
+    // $HOME label, and naming it again would be a second rule of equal effect
+    // that could drift from the first.
     const home = tempDir("home-");
-    mkdirSync(join(home, ".git"), { recursive: true });
-    expect(defaultSensitivityMap(home, home).sources).toEqual([]);
+    const repo = join(home, "coding", "proj");
+    mkdirSync(join(repo, ".git"), { recursive: true });
+    expect(defaultSensitivityMap(repo, home).sources)
+      .toEqual([{ path: home, sensitivity: "shared" }]);
   });
 });

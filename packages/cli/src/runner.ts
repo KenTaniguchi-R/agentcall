@@ -1,9 +1,10 @@
 import { execFileSync, spawn } from "node:child_process";
 import { createHash } from "node:crypto";
+import { readFileSync } from "node:fs";
+import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { AGENT_TIMEOUT_MS, MAX_REPLY_BYTES, type AgentKind } from "@benree/agentcall-shared";
 import { resolveAgentBin } from "./bin.js";
-import type { Sensitivity } from "./sensitivity.js";
 import { agentChildEnv } from "./telemetry-env.js";
 
 export type { AgentKind };
@@ -226,10 +227,72 @@ export function guardCodexTrustArg(includeToolTelemetry = false): string {
 // only sink, so there is nothing for Write, Edit or Bash to be granted FOR.
 // WebFetch/WebSearch are out for a different reason: they are a second exit
 // from the machine, and the clearance check only governs the reply.
-export const CLAUDE_READ_ONLY_TOOLS = ["Read", "Grep", "Glob", "LS"] as const;
+export const CLAUDE_READ_ONLY_TOOLS = ["Read", "Grep", "Glob", "LS", "Skill"] as const;
 
-export function claudeAllowedTools(): string {
-  return CLAUDE_READ_ONLY_TOOLS.join(",");
+// A server name is pasted into an allowlist entry, so it has to be a single
+// safe segment. A name carrying a comma would split into a SECOND entry and
+// grant a tool nobody enumerated; one carrying `*` would widen the server
+// segment, which the permission syntax requires to be glob-free. Anything not
+// matching is dropped rather than escaped — a server we cannot name safely is
+// one the caller does without.
+const MCP_SERVER_NAME_RE = /^[A-Za-z0-9_-]+$/;
+
+/**
+ * The tools a call may use.
+ *
+ * Fixed and read-only for the built-ins (#372): a call answers a question and
+ * the reply is the only sink, so there is nothing for Write, Edit or Bash to be
+ * granted FOR. Opening reads on 2026-08-07 deliberately did NOT open those — a
+ * caller's message must not be able to change the owner's machine.
+ * WebFetch/WebSearch stay out for a different reason: they are a second exit
+ * from the machine.
+ *
+ * `mcpServers` is enumerated from the owner's own configuration at spawn time,
+ * not typed by anyone. It has to be enumerated because **`mcp__*` is not
+ * expressible**: allow rules accept a glob only after a literal
+ * `mcp__<server>__` prefix, and the server segment must be glob-free.
+ *
+ * `Skill` is listed for completeness rather than for effect — measured
+ * 2026-08-06, `--allowedTools` does not gate Skill at all. What actually decides
+ * a skill is guard.ts's Skill branch.
+ */
+/**
+ * The MCP servers the owner has already configured, from `~/.claude.json`.
+ *
+ * Split from the file read so the parsing is testable and so a broken or
+ * half-written config cannot take a line offline: every failure returns the
+ * empty list, which grants nothing. A caller-facing spawn must not fail because
+ * the owner has no MCP set up.
+ *
+ * Note the asymmetry with the sensitivity map: servers are granted here, by
+ * enumeration into the allowlist, rather than labelled. A label on an opaque
+ * server would be a promise the guard cannot keep — it never sees that server's
+ * I/O — so there is deliberately no `classifyMcp`.
+ */
+export function mcpServerNamesFrom(raw: string): string[] {
+  try {
+    const parsed = JSON.parse(raw) as { mcpServers?: unknown };
+    const servers = parsed.mcpServers;
+    if (servers === null || typeof servers !== "object" || Array.isArray(servers)) return [];
+    return Object.keys(servers);
+  } catch {
+    return [];
+  }
+}
+
+export function discoverMcpServers(userHome: string, read = readFileSync): string[] {
+  try {
+    return mcpServerNamesFrom(read(join(userHome, ".claude.json"), "utf8") as string);
+  } catch {
+    return [];
+  }
+}
+
+export function claudeAllowedTools(mcpServers: readonly string[] = []): string {
+  const servers = mcpServers
+    .filter((s) => MCP_SERVER_NAME_RE.test(s))
+    .map((s) => `mcp__${s}__*`);
+  return [...CLAUDE_READ_ONLY_TOOLS, ...servers].join(",");
 }
 
 // resolveBin is injectable for tests (the default resolves the real binary
@@ -252,12 +315,6 @@ export interface SpawnOptions {
   workdir: string;
   /** The line this call came in on. The PreToolUse guard fails closed without it. */
   lineName: string;
-  /**
-   * What the caller of this run may receive. Resolved from the relay-verified
-   * identity before the message reaches any prompt (the CaMeL invariant), and
-   * handed to the guard hook, which fails closed without it.
-   */
-  clearance: Sensitivity;
   resolveBin?: (kind: AgentKind) => string;
   callId?: string;
   /**
@@ -267,6 +324,12 @@ export interface SpawnOptions {
   resume?: string;
   correlationId?: string;
   toolTelemetryFile?: string;
+  /**
+   * MCP servers this call may use, enumerated from the owner's own config by
+   * the listener (see discoverMcpServers). Empty grants none — `mcp__*` is not
+   * expressible, so an unlisted server is simply unreachable.
+   */
+  mcpServers?: readonly string[];
 }
 
 // An options object, not positionals. This used to take ten in a fixed order,
@@ -278,8 +341,9 @@ export interface SpawnOptions {
 // compile error instead of a runtime surprise.
 export function buildSpawnSpec(options: SpawnOptions): SpawnSpec {
   const {
-    kind, prompt, workdir, lineName, clearance,
+    kind, prompt, workdir, lineName,
     resolveBin = resolveAgentBin, callId = "unknown", resume, correlationId, toolTelemetryFile,
+    mcpServers = [],
   } = options;
   const childEnv = agentChildEnv(process.env);
   const correlationEnv = correlationId ? { AGENTCALL_CORRELATION_ID: correlationId } : {};
@@ -289,7 +353,7 @@ export function buildSpawnSpec(options: SpawnOptions): SpawnSpec {
       args: [
         ...(resume ? ["--resume", resume] : []),
         "-p", prompt, "--output-format", "json",
-        "--permission-mode", "dontAsk", "--allowedTools", claudeAllowedTools(),
+        "--permission-mode", "dontAsk", "--allowedTools", claudeAllowedTools(mcpServers),
         "--settings", guardSettingsJson(toolTelemetryFile !== undefined),
       ],
       cwd: workdir,
@@ -298,7 +362,6 @@ export function buildSpawnSpec(options: SpawnOptions): SpawnSpec {
         // Replaces AGENTCALL_ALLOWED_ROOT. The guard no longer confines the run
         // to one directory; it asks whether each path's sensitivity is within
         // this clearance, which the sensitivity map on disk answers.
-        AGENTCALL_CLEARANCE: clearance,
         ...(toolTelemetryFile ? { AGENTCALL_TOOL_TELEMETRY_FILE: toolTelemetryFile } : {}),
       },
     };
@@ -341,10 +404,6 @@ export function buildSpawnSpec(options: SpawnOptions): SpawnSpec {
       env: {
         ...childEnv, ...correlationEnv, AGENTCALL_CALL_ID: callId,
         AGENTCALL_GUARD_MODE: "observe", AGENTCALL_LINE: lineName,
-        // Set even though codex runs the guard in observe mode: guard-entry fails
-        // closed on a missing clearance BEFORE mode is consulted, since an
-        // unwired env var is a deploy bug, not a decide() failure.
-        AGENTCALL_CLEARANCE: clearance,
         ...(toolTelemetryFile ? { AGENTCALL_TOOL_TELEMETRY_FILE: toolTelemetryFile } : {}),
       },
     };
@@ -368,10 +427,6 @@ export function buildSpawnSpec(options: SpawnOptions): SpawnSpec {
     env: {
       ...childEnv, ...correlationEnv, AGENTCALL_CALL_ID: callId,
       AGENTCALL_GUARD_MODE: "observe", AGENTCALL_LINE: lineName,
-      // Set even though codex runs the guard in observe mode: guard-entry fails
-      // closed on a missing clearance BEFORE mode is consulted, since an
-      // unwired env var is a deploy bug, not a decide() failure.
-      AGENTCALL_CLEARANCE: clearance,
       ...(toolTelemetryFile ? { AGENTCALL_TOOL_TELEMETRY_FILE: toolTelemetryFile } : {}),
     },
   };

@@ -35,7 +35,7 @@ Commands:
   roster                                 join and manage discovery rosters for `agentcall search`
   search [options] <question...>         find which colleague's agent can answer something
   task                                   manage the tasks your agent offers
-  clearance [options] [handle] [level]   set how much a caller may be told (and republish your card)
+  access [options]                       set whether callers are answered by default (and republish your card)
   block [options] <handle>               refuse all calls from a handle
   unblock [options] <handle>             lift a block
   line                                   manage the addresses (lines) this machine answers on and calls from
@@ -687,24 +687,17 @@ Options:
   -h, --help     display help for command
 ```
 
-## clearance
+## access
 
 ```text
-Usage: agentcall clearance [options] [handle] [level]
+Usage: agentcall access [options]
 
-set how much a caller may be told (and republish your card)
-
-Arguments:
-  handle             caller handle; omit when using --default
-  level              public or internal; omit when using --reset
+set whether callers are answered by default (and republish your card)
 
 Options:
-  --default <level>  set the level anyone registered gets, instead of one
-                     caller
-  --reset            drop a caller's own level, returning them to the line
-                     default
-  --line <name>      line to use (defaults to the primary line)
-  -h, --help         display help for command
+  --default <access>  allowed or blocked
+  --line <name>       line to use (defaults to the primary line)
+  -h, --help          display help for command
 ```
 
 ## block

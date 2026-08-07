@@ -143,7 +143,7 @@ function freshMachine(): MachinePaths {
 }
 
 // No policy/task seeded — loadPolicy and loadTasks both fall back to their
-// built-in defaults (default_clearance: "public", the built-in "ask" task),
+// built-in defaults (default_the built-in "ask" task),
 // which is enough for a plain message to resolve.
 function seededPaths(): LinePaths {
   return tempLine("claude", "agentcall-l-");
@@ -193,7 +193,7 @@ describe("startListener spawn directory", () => {
     const paths = getLinePaths(machine, "claude");
     mkdirSync(paths.dir, { recursive: true });
     writeFileSync(paths.sensitivityFile, JSON.stringify({
-      sources: [{ path: join(machine.stateRoot, "deleted-repo"), sensitivity: "internal" }],
+      sources: [{ path: join(machine.stateRoot, "deleted-repo"), sensitivity: "shared" }],
     }));
     const seen: { workdir?: string; prompt?: string } = {};
     const relayReady = new Promise<WsSocket>((resolveWs) => {
@@ -226,7 +226,7 @@ describe("startListener spawn directory", () => {
     mkdirSync(project, { recursive: true });
     mkdirSync(paths.dir, { recursive: true });
     writeFileSync(paths.sensitivityFile, JSON.stringify({
-      sources: [{ path: project, sensitivity: "public" }],
+      sources: [{ path: project, sensitivity: "shared" }],
     }));
     const seen: { workdir?: string; prompt?: string } = {};
     const relayReady = new Promise<WsSocket>((resolveWs) => {
@@ -252,16 +252,16 @@ describe("startListener spawn directory", () => {
   // The reason cwd is derived from CLEARANCE and not merely from the map: an
   // internal source must not become a public caller's working directory, or
   // every such call fills its context with material it can only be refused on.
-  it("does not spawn a public caller inside an internal source", async () => {
+  it("does not spawn a caller inside a secret source", async () => {
     const machine = freshMachine();
     const paths = getLinePaths(machine, "claude");
     const project = join(machine.stateRoot, "code", "internal-api");
     mkdirSync(project, { recursive: true });
     mkdirSync(paths.dir, { recursive: true });
     writeFileSync(paths.sensitivityFile, JSON.stringify({
-      sources: [{ path: project, sensitivity: "internal" }],
+      sources: [{ path: project, sensitivity: "secret" }],
     }));
-    seedPolicy(paths, { default_clearance: "public", callers: {} });
+    seedPolicy(paths, { default_access: "allowed", callers: {} });
     const seen: { workdir?: string } = {};
     const relayReady = new Promise<WsSocket>((resolveWs) => {
       void fakeRelay((ws) => resolveWs(ws)).then((url) => {
@@ -282,11 +282,11 @@ describe("startListener spawn directory", () => {
 describe("startListener policy assertions", () => {
   it("refuses to start before opening a socket when an assertion is broken", () => {
     const paths = seededPaths();
-    seedPolicy(paths, { default_clearance: "public", tests: [{ caller: "mia", expect_clearance: "internal" }] });
+    seedPolicy(paths, { tests: [{ caller: "mia", expect_access: "blocked" }] });
     expect(() => startListener({
       relay: "http://127.0.0.1:1", paths, loadConfig: () => cfg,
       run: async () => ({ text: "unused" }),
-    })).toThrow(/assertion 1.*expected internal.*got public/i);
+    })).toThrow(/assertion 1.*expected blocked.*got allowed/i);
   });
 });
 
@@ -591,7 +591,7 @@ describe("startListener task resolution", () => {
       void fakeRelay((ws) => resolveWs(ws)).then((url) => {
         const deps = baseDeps(url);
         paths = deps.paths;
-        seedPolicy(paths, { default_clearance: "public", callers: { spammer: { block: true } } });
+        seedPolicy(paths, { default_access: "allowed", callers: { spammer: { access: "blocked" } } });
         stopper = startListener({ ...deps, run: async () => { spawned = true; return { text: "x" }; } });
       });
     });
@@ -613,7 +613,7 @@ describe("startListener task resolution", () => {
     const relayReady = new Promise<WsSocket>((resolveWs) => {
       void fakeRelay((ws) => resolveWs(ws)).then((url) => {
         const deps = baseDeps(url);
-        seedPolicy(deps.paths, { default_clearance: "public", callers: {} });
+        seedPolicy(deps.paths, { default_access: "allowed", callers: {} });
         // The ceiling lives on the MACHINE, not the line — overridden here
         // because its production path is deliberately unredirectable.
         const paths = {
@@ -645,7 +645,7 @@ describe("startListener task resolution", () => {
       void fakeRelay((ws) => resolveWs(ws)).then((url) => {
         const deps = baseDeps(url);
         seedTask(deps.paths, "schedule-meeting", ["description: d"]);
-        seedPolicy(deps.paths, { default_clearance: "public", callers: {} });
+        seedPolicy(deps.paths, { default_access: "allowed", callers: {} });
         stopper = startListener({ ...deps, run: async () => { spawned = true; return { text: "x" }; } });
       });
     });
@@ -657,23 +657,23 @@ describe("startListener task resolution", () => {
     expect(spawned).toBe(true);
   });
 
-  // Was "runs a task granted by a locally recognized relay-attested group".
-  // A group no longer grants a task — it raises clearance — so what an
-  // attestation must still do is reach the spawn with the higher level.
-  it("raises clearance for a locally recognized relay-attested group", async () => {
+  // Was "raises clearance for a relay-attested group". A group no longer raises
+  // an amount — with one grantable level it decides whether the line answers at
+  // all — so what an attestation must still do is open a line the default closes.
+  it("answers an attested group member on a line that is closed by default", async () => {
     const rosterId = "g".repeat(22);
-    const seen: { clearance?: unknown } = {};
+    const seen: { ran?: boolean } = {};
     const relayReady = new Promise<WsSocket>((resolveWs) => {
       void fakeRelay((ws) => resolveWs(ws)).then((url) => {
         const deps = baseDeps(url);
         seedTask(deps.paths, "schedule-meeting", ["description: d"]);
         seedPolicy(deps.paths, {
-          default_clearance: "public", callers: {},
-          groups: { eng: { roster_id: rosterId, clearance: "internal" } },
+          default_access: "blocked", callers: {},
+          groups: { eng: { roster_id: rosterId, access: "allowed" } },
         });
         stopper = startListener({
           ...deps,
-          run: async ({ clearance }) => { seen.clearance = clearance; return { text: "booked" }; },
+          run: async () => { seen.ran = true; return { text: "booked" }; },
         });
       });
     });
@@ -683,41 +683,45 @@ describe("startListener task resolution", () => {
       call_id: "cg1", from: "stranger", groups: [rosterId], message: "book", task: "schedule-meeting",
     });
     const [, , result] = await expectFrames;
-    expect(seen.clearance).toBe("internal");
+    expect(seen.ran).toBe(true);
     expect(result).toMatchObject({ type: "call_result", call_id: "cg1", task: "schedule-meeting" });
   });
 
-  // The mirror of the above: an un-attested claim must not raise anything.
+  // The mirror of the above: an un-attested claim must not open anything.
   // `groups` comes from the relay, but the un-attested path is what a caller
   // could otherwise assert about themselves.
-  it("leaves clearance at the default when the group is not attested", async () => {
+  it("leaves an unattested caller at the default", async () => {
     const rosterId = "g".repeat(22);
-    const seen: { clearance?: unknown } = {};
+    const seen: { ran?: boolean } = {};
     const relayReady = new Promise<WsSocket>((resolveWs) => {
       void fakeRelay((ws) => resolveWs(ws)).then((url) => {
         const deps = baseDeps(url);
         seedTask(deps.paths, "schedule-meeting", ["description: d"]);
         seedPolicy(deps.paths, {
-          default_clearance: "public", callers: {},
-          groups: { eng: { roster_id: rosterId, clearance: "internal" } },
+          default_access: "blocked", callers: {},
+          groups: { eng: { roster_id: rosterId, access: "allowed" } },
         });
         stopper = startListener({
           ...deps,
-          run: async ({ clearance }) => { seen.clearance = clearance; return { text: "booked" }; },
+          run: async () => { seen.ran = true; return { text: "booked" }; },
         });
       });
     });
     const ws = await relayReady;
-    const expectFrames = frames(ws, 3);
+    // One frame, not three: a refused caller never reaches accepted/started.
+    const expectFrames = frames(ws, 1);
     await sendIncoming(ws, {
       call_id: "cg2", from: "stranger", message: "book", task: "schedule-meeting",
     });
-    await expectFrames;
-    expect(seen.clearance).toBe("public");
+    const [failed] = await expectFrames;
+    // The roster would have opened the line, but nothing attested it — so the
+    // caller stays at the closed default and no agent runs at all.
+    expect(failed).toMatchObject({ type: "call_failed", call_id: "cg2", code: "blocked" });
+    expect(seen.ran).toBeUndefined();
   });
 
-  it("runs a task with its timeout, derived workdir, and the caller's clearance, echoing task in call_result", async () => {
-    const seen: { prompt?: string; workdir?: string; timeout?: number; clearance?: unknown } = {};
+  it("runs a task with its timeout and derived workdir, echoing task in call_result", async () => {
+    const seen: { prompt?: string; workdir?: string; timeout?: number } = {};
     let paths!: LinePaths;
     const relayReady = new Promise<WsSocket>((resolveWs) => {
       void fakeRelay((ws) => resolveWs(ws)).then((url) => {
@@ -730,17 +734,17 @@ describe("startListener task resolution", () => {
         mkdirSync(calendar, { recursive: true });
         mkdirSync(deps.paths.dir, { recursive: true });
         writeFileSync(deps.paths.sensitivityFile, JSON.stringify({
-          sources: [{ path: calendar, sensitivity: "internal" }],
+          sources: [{ path: calendar, sensitivity: "shared" }],
         }));
         seedTask(deps.paths, "schedule-meeting", [
           "description: d",
           "timeout_s: 60",
         ], "check the calendar\n");
-        seedPolicy(deps.paths, { default_clearance: "public", callers: { shusaku: { clearance: "internal" } } });
+        seedPolicy(deps.paths, { default_access: "allowed", callers: { shusaku: { access: "allowed" } } });
         stopper = startListener({
           ...deps,
-          run: async ({ prompt, workdir, timeoutMs, clearance }) => {
-            seen.prompt = prompt; seen.workdir = workdir; seen.timeout = timeoutMs; seen.clearance = clearance;
+          run: async ({ prompt, workdir, timeoutMs }) => {
+            seen.prompt = prompt; seen.workdir = workdir; seen.timeout = timeoutMs;
             return { text: "booked" };
           },
         });
@@ -758,18 +762,19 @@ describe("startListener task resolution", () => {
     // The caller's OWN clearance, not the line default: this is the value
     // resolveAdmission's policy object carries through to the spawn, so a
     // per-caller grant that never reached the runner would show up here.
-    expect(seen.clearance).toBe("internal");
+    // clearance is gone from RunOptions (2026-08-07); workdir and timeout above
+    // are what the map and the task still decide.
     const audit = readFileSync(paths.callsLog, "utf8").trim().split("\n").map((l) => JSON.parse(l));
     expect(audit[0]).toMatchObject({ call_id: "c3", task: "schedule-meeting", status: "ok" });
   });
 
   it("falls back to the ask task for a plain message", async () => {
-    const seen: { clearance?: unknown } = {};
+    const seen: { ran?: boolean } = {};
     const relayReady = new Promise<WsSocket>((resolveWs) => {
       void fakeRelay((ws) => resolveWs(ws)).then((url) => {
         stopper = startListener({
           ...baseDeps(url),
-          run: async ({ clearance }) => { seen.clearance = clearance; return { text: "hi" }; },
+          run: async () => { seen.ran = true; return { text: "hi" }; },
         });
       });
     });
@@ -778,7 +783,7 @@ describe("startListener task resolution", () => {
     await sendIncoming(ws, { call_id: "c4", from: "anyone", message: "q?" });
     const [, , result] = await expectFrames;
     expect(result).toMatchObject({ type: "call_result", task: "ask" });
-    expect(seen.clearance).toBe("public");
+    expect(seen.ran).toBe(true);
   });
 
   it("maps a corrupt policy file to call_failed agent_error without spawning, and without leaking the parse error", async () => {
@@ -895,7 +900,7 @@ describe("startListener line name propagation", () => {
     const spec = buildSpawnSpec({
       kind: captured.kind!, prompt: captured.prompt!, workdir: captured.workdir!,
       resolveBin: () => "/fake/claude",
-      callId: captured.callId!, lineName: captured.lineName!, clearance: "internal",
+      callId: captured.callId!, lineName: captured.lineName!,
     });
     expect(spec.env?.AGENTCALL_LINE).toBe(paths.name);
     // Pins the callId position too. buildSpawnSpec's tail has 4 plain-`string`-
@@ -1395,7 +1400,7 @@ describe("listener contexts", () => {
         run: async () => { spawned = true; return { text: "should not happen" }; },
         seed: (p) => {
           seedTask(p, "notes", ["description: d", "threadable: false"]);
-          seedPolicy(p, { default_clearance: "public" });
+          seedPolicy(p, { default_access: "allowed" });
           seedBinding({ task: "notes" })(p);
         },
       },
@@ -1432,7 +1437,7 @@ describe("listener contexts", () => {
     const { frames: f, paths } = await oneCall({ message: "hi", task: "risky" }, {
       seed: (p) => {
         seedTask(p, "risky", ["description: d", "threadable: false"]);
-        seedPolicy(p, { default_clearance: "public" });
+        seedPolicy(p, { default_access: "allowed" });
       },
     });
     expect(f.find((x) => x.type === "call_result").context_id).toBeUndefined();

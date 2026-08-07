@@ -1,7 +1,6 @@
-import { clearanceFor } from "./clearance.js";
+import { accessFor, type Access } from "./access.js";
 import type { CallableLineConfig } from "./config.js";
 import { type Policy } from "./policy.js";
-import type { Sensitivity } from "./sensitivity.js";
 import { type Task } from "./tasks.js";
 
 interface PolicyReportOptions {
@@ -33,15 +32,17 @@ function renderTask(
 // reach them.
 function renderAudience(
   heading: string,
-  clearance: Sensitivity | "blocked",
+  access: Access,
 ): string[] {
   const lines = [heading];
-  if (clearance === "blocked") {
-    lines.push("  BLOCKED — no call is answered at all (a saved clearance stays inactive)");
+  if (access === "blocked") {
+    lines.push("  BLOCKED — no call is answered at all");
     return lines;
   }
-  lines.push(`  May be told: ${clearance} content and below`);
-  lines.push("  Anything more sensitive is refused at the reply, with a fixed reason");
+  // One grantable level, so there is no "and below" to state: everything the
+  // owner has labelled is reachable, and everything else is refused at the read.
+  lines.push("  ANSWERED — may be told anything not marked secret");
+  lines.push("  A secret source is refused when the agent tries to read it, with a fixed reason");
   return lines;
 }
 
@@ -104,33 +105,33 @@ export function renderPolicyReport(
   lines.push(
     "",
     "Rules that compose at call time",
-    "For one caller: start with the base rule, take the highest of their named rule and every roster the relay attests.",
-    "A named caller block overrides every default and roster clearance.",
+    "For one caller: a named rule wins; otherwise a blocked roster wins over an allowed one; otherwise the base rule.",
+    "A named caller block overrides the default and every roster rule.",
     "",
     // Empty is not a valid handle, so the base rule cannot accidentally pick up
     // a named caller's clearance.
-    ...renderAudience("Base rule: Everyone registered", clearanceFor(policy, "")),
+    ...renderAudience("Base rule: Everyone registered", accessFor(policy, "")),
   );
 
   for (const [caller] of Object.entries(policy.callers).sort(([a], [b]) => a.localeCompare(b))) {
-    // clearanceFor applies the same block precedence as listener admission.
+    // accessFor applies the same block precedence as listener admission.
     lines.push(
       "",
       ...renderAudience(
-        `Named caller rule: ${caller} (before roster clearances)`,
-        clearanceFor(policy, caller),
+        `Named caller rule: ${caller} (overrides rosters)`,
+        accessFor(policy, caller),
       ),
     );
   }
 
   for (const [name, group] of Object.entries(policy.groups).sort(([a], [b]) => a.localeCompare(b))) {
-    // Defaults plus exactly this attested roster, matching clearanceFor's
+    // Defaults plus exactly this attested roster, matching accessFor's
     // production union semantics.
     lines.push(
       "",
       ...renderAudience(
         `Roster rule: ${name} (${group.roster_id}) — applies to each attested member`,
-        clearanceFor(policy, "", [group.roster_id]),
+        accessFor(policy, "", [group.roster_id]),
       ),
     );
   }

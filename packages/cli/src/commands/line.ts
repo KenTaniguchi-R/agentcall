@@ -192,7 +192,7 @@ export async function addLine(m: MachinePaths, opts: AddLineOpts): Promise<{ add
     // owner fixes whatever verifyAgent found.
     if (opts.verify !== false) {
       const log = opts.log ?? console.log;
-      const checks = await verifyAgent(agentKind, workdirFor(withFloor(loadSensitivityMap(paths), paths.machine.userHome), "internal", paths.shareDir), opts.verifyFns);
+      const checks = await verifyAgent(agentKind, workdirFor(withFloor(loadSensitivityMap(paths), paths.machine.userHome), paths.shareDir), opts.verifyFns);
       for (const c of checks) log(formatCheck(c));
       const failure = checks.find((c) => !c.ok);
       if (failure) {

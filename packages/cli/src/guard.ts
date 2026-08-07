@@ -3,7 +3,7 @@ import { fileURLToPath } from "node:url";
 import { lineTaskDirs } from "./line-task-dirs.js";
 import { canonical, expandHome, fold, isAncestorOf, isInside } from "./path-canon.js";
 import { getMachinePaths, type LinePaths } from "./paths.js";
-import { classifyPath, permits, type Sensitivity, type SensitivityMap } from "./sensitivity.js";
+import { classifyPath, classifySkill, permits, type SensitivityMap } from "./sensitivity.js";
 
 export type GuardInput = {
   tool_name: string;
@@ -90,12 +90,11 @@ const SELECTOR_KEY: Record<string, string> = { Grep: "glob", Glob: "pattern" };
 // command, while the path branches need the resolved form.
 function unreachableRoots(
   sources: SensitivityMap["sources"],
-  clearance: Sensitivity,
   home: string,
   realpath: (p: string) => string,
 ): string[] {
   const lexical = sources
-    .filter((s) => !permits(clearance, s.sensitivity))
+    .filter((s) => !permits(s.sensitivity))
     .map((s) => resolve(expandHome(s.path, home)));
   return [...new Set([...lexical, ...lexical.map((d) => canonical(d, home, home, realpath))])];
 }
@@ -128,9 +127,6 @@ export interface DecideContext {
   realpath: (p: string) => string;
   /** The owner's map with the secret floor already merged (see withFloor). */
   map: SensitivityMap;
-  /** What this caller may receive. Resolved from identity before the caller's
-   *  message reaches any prompt — the CaMeL invariant. */
-  clearance: Sensitivity;
   guardRoot?: string;
   /** Paths that are `secret` for this run regardless of the map — the guard's
    *  own package root and every line's tasks directory. */
@@ -138,7 +134,7 @@ export interface DecideContext {
 }
 
 export function decide(input: GuardInput, ctx: DecideContext): GuardVerdict {
-  const { userHome, realpath, clearance } = ctx;
+  const { userHome, realpath } = ctx;
   const { tool_name: tool, tool_input: args, cwd } = input;
   if (args === null || typeof args !== "object" || Array.isArray(args)) {
     return { allow: false, rule: "unparseable-input", detail: tool };
@@ -153,17 +149,17 @@ export function decide(input: GuardInput, ctx: DecideContext): GuardVerdict {
     ],
   };
 
-  // A path is reachable when its sensitivity is within the caller's clearance.
-  // Unlabelled classifies `secret`, so this denies by default rather than
-  // allowing by default — the inversion the whole model rests on.
+  // A path is reachable unless it classifies `secret`. Unlabelled classifies
+  // `secret`, so this denies by default rather than allowing by default — the
+  // inversion the whole model rests on.
   const unreachable = (target: string) =>
-    !permits(clearance, classifyPath(map, target, { home: userHome, cwd, realpath }));
+    !permits(classifyPath(map, target, { home: userHome, cwd, realpath }));
 
   // Enumerable because it only has to cover rules NARROWER than the root: a
   // permitted root's subtree inherits its label, so the only way secret content
   // hides under it is an explicit narrower rule. Unlabelled space cannot be
   // "inside" a permitted root without such a rule.
-  const denied = unreachableRoots(map.sources, clearance, userHome, realpath);
+  const denied = unreachableRoots(map.sources, userHome, realpath);
 
   // A scan reads every file beneath its root in ONE tool call, so the hook
   // never sees the individual files. A root that merely contains something
@@ -183,6 +179,28 @@ export function decide(input: GuardInput, ctx: DecideContext): GuardVerdict {
   }
 
   if (NO_PATH_SURFACE.has(tool)) return { allow: true };
+
+  // Skills are dispatched by NAME — tool_input is {"skill": "<name>"} — so this
+  // is a lookup, not a path check.
+  //
+  // It gets its own branch and MUST NOT be moved into NO_PATH_SURFACE. That set
+  // returns allow unconditionally, and the SKILL.md body reaches the model with
+  // no tool call of its own, so this branch is the only check that body ever
+  // passes through. Everything else a skill does — references/, Read, Grep —
+  // arrives here as an ordinary tool call and is checked normally.
+  //
+  // Note that `--allowedTools` does not gate Skill at all (measured 2026-08-06),
+  // so before this branch existed the unclassified-tool deny below was the only
+  // thing holding it closed.
+  if (tool === "Skill") {
+    const name = args.skill;
+    if (typeof name !== "string" || name === "") {
+      return { allow: false, rule: "unparseable-skill", detail: String(name) };
+    }
+    return permits(classifySkill(map, name))
+      ? { allow: true }
+      : { allow: false, rule: "skill-is-secret", detail: name };
+  }
 
   // WebFetch's `url` is safe to allow unread only if Claude Code itself
   // rejects a non-http(s) scheme before this hook fires — an unstated
@@ -208,7 +226,7 @@ export function decide(input: GuardInput, ctx: DecideContext): GuardVerdict {
     // default. Debugging a map is far easier when those two read differently.
     if (hit) return { allow: false, rule: "inside-unreachable-source", detail: target };
     return unreachable(target)
-      ? { allow: false, rule: "above-clearance", detail: target }
+      ? { allow: false, rule: "source-is-secret", detail: target }
       : { allow: true };
   }
 
@@ -224,7 +242,7 @@ export function decide(input: GuardInput, ctx: DecideContext): GuardVerdict {
     const root = canon(rawRoot);
     if (basenameDenied(root)) return { allow: false, rule: "denied-basename", detail: root };
     if (scanReachesSecret(root)) return { allow: false, rule: "root-reaches-denied-path", detail: root };
-    if (unreachable(root)) return { allow: false, rule: "above-clearance", detail: root };
+    if (unreachable(root)) return { allow: false, rule: "source-is-secret", detail: root };
 
     const selectorKey = SELECTOR_KEY[tool];
     const selector = selectorKey === undefined ? undefined : args[selectorKey];
@@ -248,7 +266,7 @@ export function decide(input: GuardInput, ctx: DecideContext): GuardVerdict {
     const hit = scanReachesSecret(selectorRoot);
     if (hit) return { allow: false, rule: "root-reaches-denied-path", detail: selectorRoot };
     return unreachable(selectorRoot)
-      ? { allow: false, rule: "above-clearance", detail: selectorRoot }
+      ? { allow: false, rule: "source-is-secret", detail: selectorRoot }
       : { allow: true };
   }
 
@@ -267,7 +285,6 @@ export interface GuardDeps {
   /** The owner's sensitivity map, floor already merged. */
   map: SensitivityMap;
   /** What the caller of this run may receive. */
-  clearance: Sensitivity;
 }
 
 type GuardOutput = { exitCode: number; stdout: string; stderr: string };
@@ -323,7 +340,6 @@ export function runGuard(raw: string, deps: GuardDeps, mode: GuardMode = "enforc
       userHome,
       realpath: deps.realpath,
       map: deps.map,
-      clearance: deps.clearance,
       extraSecretRoots: taskRoots,
     });
     const ts = deps.now();

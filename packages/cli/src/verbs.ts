@@ -1,13 +1,15 @@
 import { HANDLE_RE } from "@benree/agentcall-shared";
-import { GrantableClearance, clearanceFor, type GrantableClearanceType } from "./clearance.js";
+import { AccessSchema, accessFor, type Access } from "./access.js";
 import { callerEntry, type Policy } from "./policy.js";
 
-// #379 collapsed four verbs into one. `allow`/`revoke`/`offer`/`unoffer` each
-// edited a task menu; a task is no longer individually granted, so the only
-// thing left to set is how much a caller may be told. `block`/`unblock` survive
-// unchanged — an explicit block is the one rule clearance cannot express as a
-// level, since it beats every grant including an attested group's.
-export type Verb = "block" | "unblock" | "clearance" | "clearance-reset" | "clearance-default";
+// #379 collapsed four task-menu verbs (`allow`/`revoke`/`offer`/`unoffer`) into
+// a single clearance setting. 2026-08-07 collapsed that in turn: with one
+// grantable level there is no amount to set, only whether the line answers at
+// all, so `clearance`/`clearance-reset`/`clearance-default` are gone and
+// `block`/`unblock` are the whole per-caller surface. `access-default` remains
+// because closing a line by default — answer only named callers and attested
+// rosters — is a real posture the binary model can still express.
+export type Verb = "block" | "unblock" | "access-default";
 
 // Pure policy mutations behind the flat CLI verbs. Each returns a NEW
 // Policy plus the lines the CLI prints. Validation throws Error with a
@@ -21,89 +23,72 @@ export function execVerb(
     }
     return h;
   };
-  // `secret` is rejected here for the same reason GrantableClearance excludes
-  // it: it means "never leaves this machine", so a grantable secret would be a
-  // bypass any policy edit could hand out.
-  const requireLevel = (value: string | undefined, forVerb: string): GrantableClearanceType => {
-    const parsed = GrantableClearance.safeParse(value);
+  const requireAccess = (value: string | undefined, forVerb: string): Access => {
+    const parsed = AccessSchema.safeParse(value);
     if (!parsed.success) {
-      throw new Error(`${forVerb} needs a clearance level: ${GrantableClearance.options.join(" or ")}.`);
+      throw new Error(`${forVerb} needs one of: ${AccessSchema.options.join(" or ")}.`);
     }
     return parsed.data;
   };
   const clone = (): Policy => ({
     description: policy.description,
-    default_clearance: policy.default_clearance,
+    default_access: policy.default_access,
     callers: Object.fromEntries(
       Object.entries(policy.callers).map(([k, v]) => [
-        k, { ...(v.clearance === undefined ? {} : { clearance: v.clearance }), block: v.block },
+        k, v.access === undefined ? {} : { access: v.access },
       ]),
     ),
     groups: Object.fromEntries(
       Object.entries(policy.groups).map(([k, v]) => [
-        k, { roster_id: v.roster_id, ...(v.clearance === undefined ? {} : { clearance: v.clearance }) },
+        k, { roster_id: v.roster_id, ...(v.access === undefined ? {} : { access: v.access }) },
       ]),
     ),
     ...(policy.tests === undefined ? {} : {
       tests: policy.tests.map((test) => ({
         caller: test.caller,
         groups: [...test.groups],
-        expect_clearance: test.expect_clearance,
+        expect_access: test.expect_access,
       })),
     }),
   });
-  // Report what the caller actually resolves to, not what was just written:
-  // the line default and any attested group can raise it, and a block sinks it
-  // regardless. An owner reading `clearance`'s output otherwise believes an
-  // edit took effect that a block is suppressing.
-  const clearanceLine = (next: Policy, handle: string): string => {
-    const resolved = clearanceFor(next, handle);
-    if (resolved === "blocked") {
-      return `${handle} is blocked; the clearance is kept but inactive until: agentcall unblock ${handle}`;
-    }
-    return `${handle} can be told ${resolved} content (rosters they are attested in may raise this).`;
+
+  // Report what the caller actually RESOLVES to, not what was just written: the
+  // line default and any attested roster take part, and a named block beats
+  // both. An owner reading this otherwise believes an edit took effect that
+  // something else is overriding.
+  const resolvedLine = (next: Policy, handle: string): string => {
+    const resolved = accessFor(next, handle);
+    return resolved === "blocked"
+      ? `${handle} is blocked; no call from them is answered.`
+      : `${handle} is answered, and can be told anything not marked secret.`;
   };
 
   const next = clone();
   switch (verb) {
-    case "clearance": {
-      const handle = requireHandle(a);
-      const level = requireLevel(b, "clearance");
-      // callerEntry, not next.callers[handle]: see policy.ts — a bare lookup
-      // returns Object.prototype's own members for handles like "constructor".
-      next.callers[handle] = { ...(callerEntry(next, handle) ?? { block: false }), clearance: level };
-      return { policy: next, lines: [clearanceLine(next, handle)] };
-    }
-    case "clearance-reset": {
-      const handle = requireHandle(a);
-      const entry = callerEntry(next, handle);
-      if (entry) {
-        delete entry.clearance;
-        // A bare entry that neither blocks nor clears is noise in the file.
-        if (!entry.block) delete next.callers[handle];
-      }
-      return { policy: next, lines: [clearanceLine(next, handle)] };
-    }
-    case "clearance-default": {
-      next.default_clearance = requireLevel(a, "clearance --default");
-      return {
-        policy: next,
-        lines: [`Anyone registered can be told ${next.default_clearance} content.`],
-      };
-    }
     case "block": {
       const handle = requireHandle(a);
-      next.callers[handle] = { ...callerEntry(next, handle), block: true };
+      next.callers[handle] = { access: "blocked" };
       return { policy: next, lines: [`${handle} is blocked.`] };
     }
     case "unblock": {
       const handle = requireHandle(a);
-      const entry = callerEntry(next, handle);
-      if (entry) {
-        entry.block = false;
-        if (entry.clearance === undefined) delete next.callers[handle];
-      }
-      return { policy: next, lines: [clearanceLine(next, handle)] };
+      // Delete rather than write `allowed`: an entry that matches the default
+      // is noise, and leaving one behind would pin this caller against a later
+      // change of `default_access`.
+      if (callerEntry(next, handle)) delete next.callers[handle];
+      return { policy: next, lines: [resolvedLine(next, handle)] };
+    }
+    case "access-default": {
+      next.default_access = requireAccess(a, "access --default");
+      return {
+        policy: next,
+        lines: next.default_access === "blocked"
+          ? ["Only named callers and attested rosters are answered."]
+          : ["Anyone registered is answered."],
+      };
     }
   }
+  // `b` is part of the signature for verbs that take a second argument; none
+  // currently do. Referenced so the parameter is not silently dead.
+  void b;
 }

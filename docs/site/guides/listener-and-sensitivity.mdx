@@ -23,34 +23,36 @@ one file, `~/.agentcall/lines/<line>/sensitivity.json`:
 ```json
 {
   "sources": [
-    { "path": "/Users/ken/code/payments-api", "sensitivity": "internal" },
-    { "path": "/Users/ken/AgentCall/ken/public", "sensitivity": "public" }
+    { "path": "/Users/ken", "sensitivity": "shared" },
+    { "path": "/Users/ken/code/payments-api/vendor-contracts", "sensitivity": "secret" }
   ],
-  "mcp": { "jira": "internal" },
-  "skills": { "obsidian": "internal" }
+  "skills": { "journal": "secret" }
 }
 ```
 
 **Anything not named here is `secret` and never leaves the machine**, for any
-caller. `setup` seeds one entry — the git repository it was run in, labelled
-`internal` — so a new line can answer something without being handed your whole
-home directory.
+caller — except skills, which default to `shared`. `setup` seeds one entry:
+`$HOME`, labelled `shared`, so a new line can answer from your real context on
+day one. The non-overridable floor below is what makes that safe to say.
 
-Three levels, and only the first two can be granted to a caller:
+There is no `mcp` map. An MCP server's I/O is invisible to the read guard, so a
+label on one would be a promise that cannot be kept; the servers you have
+configured are granted to the spawn by enumeration instead.
 
-| Level | Meaning |
+Two states, not a scale:
+
+| Label | Meaning |
 | --- | --- |
-| `public` | Safe for any caller in your organization |
-| `internal` | The normal working level: repositories, engineering notes |
-| `secret` | Never leaves this machine. No clearance grants it |
+| `shared` | Reachable by any caller this line answers |
+| `secret` | Never leaves this machine. Nothing grants it |
 
 Labels nest, and the **most specific one wins** — so a `secret` carve-out inside
-an `internal` repository holds, regardless of the order they appear in the file.
+a `shared` repository holds, regardless of the order they appear in the file.
 
 <Warning>
   The risk runs the other way from what you might expect. Forgetting to label
   something is safe: it stays `secret`. Labelling a *parent* is what leaks —
-  `{"path": "~", "sensitivity": "internal"}` labels everything beneath it,
+  `{"path": "~", "sensitivity": "shared"}` labels everything beneath it,
   including whatever a subdirectory acquires later. Label projects, not homes.
 
   A short list of paths is `secret` no matter what your map says — `~/.ssh`,
@@ -60,24 +62,24 @@ an `internal` repository holds, regardless of the order they appear in the file.
 
 ## Where the agent starts
 
-The spawn directory is derived, not configured: it is the richest labelled
-source **that caller** is cleared for, and `~/AgentCall/<line>/public/` when the
-map names nothing they may see.
+The spawn directory is derived, not configured: it is the shortest `shared`
+source in the map, and `~/AgentCall/<line>/public/` when the map names nothing
+reachable. It is the same for every caller the line answers — there is no
+per-caller level left to vary it by.
 
-So with the map above, a caller cleared for `internal` starts in
-`payments-api`, while a `public` caller starts in the share folder — the same
-line, two directories, decided by clearance. That is deliberate: a public caller
-spawned inside internal content would fill its context with material it can only
-be refused on.
+A `secret` source is never chosen, which is what keeps the built-in floor
+(`~/.ssh`, `~/.aws`, and friends) out of the selection without a second
+exclusion list.
 
-Set a caller's clearance with `agentcall clearance <handle> <level>`; see
+Block a caller with `agentcall block <handle>`, or close the line by default
+with `agentcall access --default blocked`; see
 [tasks and policy](/guides/tasks-and-policy).
 
 ## The read is the boundary
 
 The directory is orientation, not enforcement. **One** thing bounds an answer:
-reading a path above the caller's clearance is **refused at the tool call**,
-before the agent ever sees the content.
+reading a `secret` path is **refused at the tool call**, before the agent ever
+sees the content.
 
 The answer itself is **not** inspected. Credential-shaped strings and this
 line's own relay token are redacted from it, and nothing else looks at it. If
@@ -85,7 +87,7 @@ the agent was permitted to read something, it is permitted to repeat it.
 
 <Warning>
   **On a Codex line, none of this is enforced.** The guard runs in observe mode
-  there, so a read above the caller's clearance is recorded and then allowed;
+  there, so a `secret` read is recorded and then allowed;
   `--sandbox read-only` stops writes but not reads; and nothing inspects the
   answer. Clearances on a Codex line describe intent, not a boundary. Use Claude
   for anything you need actually bounded.

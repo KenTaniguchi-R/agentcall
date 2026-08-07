@@ -614,16 +614,12 @@ exports[`CLI command tree > pins command paths, aliases, descriptions, and optio
     {
       "alias": undefined,
       "commands": [],
-      "description": "set how much a caller may be told (and republish your card)",
-      "name": "clearance",
+      "description": "set whether callers are answered by default (and republish your card)",
+      "name": "access",
       "options": [
         {
-          "description": "set the level anyone registered gets, instead of one caller",
-          "flags": "--default <level>",
-        },
-        {
-          "description": "drop a caller's own level, returning them to the line default",
-          "flags": "--reset",
+          "description": "allowed or blocked",
+          "flags": "--default <access>",
         },
         {
           "description": "line to use (defaults to the primary line)",

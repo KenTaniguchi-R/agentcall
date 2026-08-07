@@ -6,6 +6,7 @@ import { describe, expect, it } from "vitest";
 import { buildPrompt } from "../src/prompt.js";
 import {
   buildSpawnSpec, claudeAllowedTools, codexHookTrustedHash, guardCodexConfigArg,
+  mcpServerNamesFrom,
   guardCodexTrustArg, guardSettingsJson, GUARD_TIMEOUT_S,
   toolTelemetryCodexConfigArg,
   codexThreadingEnabled, codexToolTelemetryEnabled, CODEX_HOOK_TRUST_VERIFIED_VERSION,
@@ -34,17 +35,15 @@ function spawnSpec(
   resolveBin: (kind: AgentKind) => string = resolveAgentBin,
   callId: string = "unknown", lineName: string = LINE,
   toolTelemetryFile?: string,
-  clearance: "public" | "internal" = "internal",
 ): SpawnSpec {
-  return buildSpawnSpec({ kind, prompt, workdir, resolveBin, callId, lineName, clearance, toolTelemetryFile });
+  return buildSpawnSpec({ kind, prompt, workdir, resolveBin, callId, lineName, toolTelemetryFile });
 }
 function agentRun(
   kind: AgentKind, prompt: string, workdir: string, timeoutMs: number,
   specOverride?: SpawnSpec, callId: string = "unknown",
   signal?: AbortSignal, lineName: string = LINE,
-  clearance: "public" | "internal" = "internal",
 ): ReturnType<typeof runAgent> {
-  return runAgent({ kind, prompt, workdir, timeoutMs, specOverride, callId, signal, lineName, clearance });
+  return runAgent({ kind, prompt, workdir, timeoutMs, specOverride, callId, signal, lineName });
 }
 
 describe("codex threading evidence", () => {
@@ -165,7 +164,7 @@ describe("buildSpawnSpec", () => {
     expect(s.args).toEqual([
       "-p", "PROMPT", "--output-format", "json",
       "--permission-mode", "dontAsk",
-      "--allowedTools", "Read,Grep,Glob,LS",
+      "--allowedTools", claudeAllowedTools(),
       "--settings", guardSettingsJson(),
     ]);
     expect(s.cwd).toBe(WORKDIR);
@@ -175,7 +174,6 @@ describe("buildSpawnSpec", () => {
     // asks the sensitivity map what a path is worth, not whether it sits under
     // one directory. The clearance is what the run now carries instead.
     expect(s.env?.AGENTCALL_ALLOWED_ROOT).toBeUndefined();
-    expect(s.env?.AGENTCALL_CLEARANCE).toBe("internal");
   });
 
   // Regression: every spawn used to be wrapped in `npx
@@ -237,7 +235,7 @@ describe("telemetry environment isolation", () => {
       for (const kind of ["claude", "codex"] as const) {
         const spec = buildSpawnSpec({
           kind, prompt: "PROMPT", workdir: WORKDIR, resolveBin: () => `/abs/${kind}`,
-          callId: "call-1", lineName: LINE, clearance: "internal", correlationId: "a".repeat(32),
+          callId: "call-1", lineName: LINE, correlationId: "a".repeat(32),
         });
         expect(spec.env?.OTEL_EXPORTER_OTLP_HEADERS).toBeUndefined();
         expect(spec.env?.AGENTCALL_CALL_ID).toBe("call-1");
@@ -497,7 +495,7 @@ describe("runAgent -> buildSpawnSpec forwarding", () => {
       const out = await runAgent({
         kind: "claude", prompt: "PROMPT", workdir: tmpdir(), timeoutMs: 10_000,
         callId: "call-id-not-a-session", lineName: "line-name-not-a-call-id-or-session",
-        resume: "session-id-not-a-call", clearance: "internal",
+        resume: "session-id-not-a-call",
       });
       expect(out.text).toBe("ok");
 
@@ -515,17 +513,72 @@ describe("runAgent -> buildSpawnSpec forwarding", () => {
 });
 
 describe("read-only spawn spec", () => {
-  it("claudeAllowedTools is a fixed read-only list — there is no cap to widen it", () => {
+  it("claudeAllowedTools stays read-only — Write/Edit/Bash are never grantable", () => {
     // #372: the reply is the only sink, so Write/Edit/Bash have nothing to be
     // granted for, and WebFetch/WebSearch are a second exit the clearance
-    // check on the reply does not govern.
-    expect(claudeAllowedTools()).toBe("Read,Grep,Glob,LS");
+    // check on the reply does not govern. Opening READS (2026-08-07) did not
+    // open writes: a caller's message must not be able to change the machine.
+    const tools = claudeAllowedTools().split(",");
+    for (const forbidden of ["Write", "Edit", "Bash", "WebFetch", "WebSearch", "NotebookEdit", "Task"]) {
+      expect(tools).not.toContain(forbidden);
+    }
+  });
+
+  it("claudeAllowedTools includes Skill", () => {
+    // Not because the allowlist gates it — measured 2026-08-06, it does not —
+    // but so the grant is stated in one place rather than resting on that.
+    expect(claudeAllowedTools().split(",")).toContain("Skill");
+  });
+
+  it("claudeAllowedTools expands each configured MCP server to a glob", () => {
+    // `mcp__*` is not expressible: allow rules take a glob only AFTER a literal
+    // mcp__<server>__ prefix, and the server segment must be glob-free. So the
+    // servers are enumerated from the owner's own config at spawn time — which
+    // is derived from local state, not typed by anyone.
+    const tools = claudeAllowedTools(["jira", "openmemory"]).split(",");
+    expect(tools).toContain("mcp__jira__*");
+    expect(tools).toContain("mcp__openmemory__*");
+  });
+
+  it("claudeAllowedTools drops server names that are not safe allowlist segments", () => {
+    // A name carrying a comma would split into a second entry and grant a tool
+    // nobody enumerated; one carrying a glob would widen the server segment.
+    const tools = claudeAllowedTools(["ok", "bad,Bash", "glob*", "sp ace", ""]).split(",");
+    expect(tools).toContain("mcp__ok__*");
+    expect(tools).not.toContain("Bash");
+    expect(tools.filter((t) => t.startsWith("mcp__"))).toEqual(["mcp__ok__*"]);
+  });
+
+  it("reads the owner's configured MCP servers from ~/.claude.json", () => {
+    // Derived from local state, not typed by anyone: the servers the owner
+    // already installed are the ones a call may use.
+    expect(mcpServerNamesFrom(JSON.stringify({
+      mcpServers: { jira: { command: "npx" }, openmemory: { url: "https://x" } },
+    }))).toEqual(["jira", "openmemory"]);
+  });
+
+  it("returns nothing rather than throwing on a missing or unreadable config", () => {
+    // A caller-facing spawn must not fail because the owner has no MCP set up,
+    // or because their config is mid-edit.
+    expect(mcpServerNamesFrom("")).toEqual([]);
+    expect(mcpServerNamesFrom("{ not json")).toEqual([]);
+    expect(mcpServerNamesFrom(JSON.stringify({}))).toEqual([]);
+    expect(mcpServerNamesFrom(JSON.stringify({ mcpServers: null }))).toEqual([]);
+    expect(mcpServerNamesFrom(JSON.stringify({ mcpServers: ["jira"] }))).toEqual([]);
+  });
+
+  it("carries the enumerated servers into the spawned allowlist", () => {
+    const spec = buildSpawnSpec({
+      kind: "claude", prompt: "hi", workdir: "/w", resolveBin: () => "/abs/claude",
+      callId: "c1", lineName: "line", mcpServers: ["jira"],
+    });
+    expect(spec.args[spec.args.indexOf("--allowedTools") + 1]).toContain("mcp__jira__*");
   });
 
   it("claude's allowedTools is read-only", () => {
     const s = spawnSpec("claude", "PROMPT", WORKDIR, () => "/abs/claude");
     const idx = s.args.indexOf("--allowedTools");
-    expect(s.args[idx + 1]).toBe("Read,Grep,Glob,LS");
+    expect(s.args[idx + 1]).toContain("Read,Grep,Glob,LS");
     expect(s.args).toContain("dontAsk");
   });
 
@@ -612,7 +665,6 @@ describe("guard hook wiring", () => {
     expect(JSON.parse(spec.args[i + 1]!).hooks.PreToolUse).toBeDefined();
     expect(spec.env?.AGENTCALL_CALL_ID).toBe("call-9");
     expect(spec.env?.AGENTCALL_ALLOWED_ROOT).toBeUndefined();
-    expect(spec.env?.AGENTCALL_CLEARANCE).toBe("internal");
   });
 
   it("does not pass claude's --settings to codex, which would not parse it", () => {
@@ -683,30 +735,30 @@ describe("buildSpawnSpec resume (claude)", () => {
   const bin = () => "/usr/bin/claude";
 
   it("adds --resume with the agent session id", () => {
-    const spec = buildSpawnSpec({ kind: "claude", prompt: "hi", workdir: "/w", resolveBin: bin, callId: "c1", lineName: "line", clearance: "internal", resume: "sess-abc" });
+    const spec = buildSpawnSpec({ kind: "claude", prompt: "hi", workdir: "/w", resolveBin: bin, callId: "c1", lineName: "line", resume: "sess-abc" });
     const i = spec.args.indexOf("--resume");
     expect(i).toBeGreaterThan(-1);
     expect(spec.args[i + 1]).toBe("sess-abc");
   });
 
   it("omits --resume when no session is given", () => {
-    const spec = buildSpawnSpec({ kind: "claude", prompt: "hi", workdir: "/w", resolveBin: bin, callId: "c1", lineName: "line", clearance: "internal" });
+    const spec = buildSpawnSpec({ kind: "claude", prompt: "hi", workdir: "/w", resolveBin: bin, callId: "c1", lineName: "line" });
     expect(spec.args).not.toContain("--resume");
   });
 
   // Tool grants and the guard are re-applied per spawn, so a resumed session
   // cannot inherit anything looser from the turn that created it.
   it("still carries the read-only tools and guard on a resumed spawn", () => {
-    const spec = buildSpawnSpec({ kind: "claude", prompt: "hi", workdir: "/w", resolveBin: bin, callId: "c1", lineName: "line", clearance: "internal", resume: "sess-abc" });
+    const spec = buildSpawnSpec({ kind: "claude", prompt: "hi", workdir: "/w", resolveBin: bin, callId: "c1", lineName: "line", resume: "sess-abc" });
     expect(spec.args).toContain("--allowedTools");
     expect(spec.args).toContain("--permission-mode");
     expect(spec.args).toContain("dontAsk");
     expect(spec.args).toContain("--settings");
-    expect(spec.args[spec.args.indexOf("--allowedTools") + 1]).toBe("Read,Grep,Glob,LS");
+    expect(spec.args[spec.args.indexOf("--allowedTools") + 1]).toBe(claudeAllowedTools());
   });
 
   it("keeps the prompt as the -p value", () => {
-    const spec = buildSpawnSpec({ kind: "claude", prompt: "follow up", workdir: "/w", resolveBin: bin, callId: "c1", lineName: "line", clearance: "internal", resume: "sess-abc" });
+    const spec = buildSpawnSpec({ kind: "claude", prompt: "follow up", workdir: "/w", resolveBin: bin, callId: "c1", lineName: "line", resume: "sess-abc" });
     expect(spec.args[spec.args.indexOf("-p") + 1]).toBe("follow up");
   });
 
@@ -715,7 +767,7 @@ describe("buildSpawnSpec resume (claude)", () => {
   // fresh spawn — restated here so a reader of the resume tests doesn't have
   // to trust that the branch wasn't split.
   it("still sets AGENTCALL_LINE on a resumed spawn", () => {
-    const spec = buildSpawnSpec({ kind: "claude", prompt: "hi", workdir: "/w", resolveBin: bin, callId: "c1", lineName: "line", clearance: "internal", resume: "sess-abc" });
+    const spec = buildSpawnSpec({ kind: "claude", prompt: "hi", workdir: "/w", resolveBin: bin, callId: "c1", lineName: "line", resume: "sess-abc" });
     expect(spec.env?.AGENTCALL_LINE).toBe("line");
   });
 });
@@ -724,7 +776,7 @@ describe("buildSpawnSpec resume (codex)", () => {
   const bin = () => "/usr/bin/codex";
 
   it("uses the resume subcommand with the session id", () => {
-    const spec = buildSpawnSpec({ kind: "codex", prompt: "hi", workdir: "/w", resolveBin: bin, callId: "c1", lineName: "line", clearance: "internal", resume: "sess-abc" });
+    const spec = buildSpawnSpec({ kind: "codex", prompt: "hi", workdir: "/w", resolveBin: bin, callId: "c1", lineName: "line", resume: "sess-abc" });
     expect(spec.args.slice(0, 3)).toEqual(["exec", "resume", "sess-abc"]);
   });
 
@@ -733,25 +785,25 @@ describe("buildSpawnSpec resume (codex)", () => {
   it("re-applies the read-only sandbox through -c sandbox_mode on resume", () => {
     // `codex exec resume` accepts neither --sandbox nor --cd, so the level has
     // to be re-applied as config or a resumed session runs unconfined.
-    const spec = buildSpawnSpec({ kind: "codex", prompt: "hi", workdir: "/w", resolveBin: bin, callId: "c1", lineName: "line", clearance: "internal", resume: "sess-abc" });
+    const spec = buildSpawnSpec({ kind: "codex", prompt: "hi", workdir: "/w", resolveBin: bin, callId: "c1", lineName: "line", resume: "sess-abc" });
     expect(spec.args).toContain('sandbox_mode="read-only"');
   });
 
   it("never passes --sandbox or --cd on a resume, which the subcommand rejects", () => {
-    const spec = buildSpawnSpec({ kind: "codex", prompt: "hi", workdir: "/w", resolveBin: bin, callId: "c1", lineName: "line", clearance: "internal", resume: "sess-abc" });
+    const spec = buildSpawnSpec({ kind: "codex", prompt: "hi", workdir: "/w", resolveBin: bin, callId: "c1", lineName: "line", resume: "sess-abc" });
     expect(spec.args).not.toContain("--sandbox");
     expect(spec.args).not.toContain("--cd");
   });
 
   it("keeps --ignore-user-config and the guard on a resumed spawn", () => {
-    const spec = buildSpawnSpec({ kind: "codex", prompt: "hi", workdir: "/w", resolveBin: bin, callId: "c1", lineName: "line", clearance: "internal", resume: "sess-abc" });
+    const spec = buildSpawnSpec({ kind: "codex", prompt: "hi", workdir: "/w", resolveBin: bin, callId: "c1", lineName: "line", resume: "sess-abc" });
     expect(spec.args).toContain("--ignore-user-config");
     expect(spec.args.some((a) => a.startsWith("hooks.PreToolUse="))).toBe(true);
     expect(spec.args.some((a) => a.startsWith("hooks.state="))).toBe(true);
   });
 
   it("puts the prompt last", () => {
-    const spec = buildSpawnSpec({ kind: "codex", prompt: "follow up", workdir: "/w", resolveBin: bin, callId: "c1", lineName: "line", clearance: "internal", resume: "sess-abc" });
+    const spec = buildSpawnSpec({ kind: "codex", prompt: "follow up", workdir: "/w", resolveBin: bin, callId: "c1", lineName: "line", resume: "sess-abc" });
     expect(spec.args.at(-1)).toBe("follow up");
   });
 
@@ -764,12 +816,12 @@ describe("buildSpawnSpec resume (codex)", () => {
   // dedicated resume return statement in buildSpawnSpec, which sets it
   // independently rather than falling through to the fresh branch's code.
   it("sets AGENTCALL_LINE on a resumed spawn, same as the fresh spawn", () => {
-    const spec = buildSpawnSpec({ kind: "codex", prompt: "hi", workdir: "/w", resolveBin: bin, callId: "c1", lineName: "line", clearance: "internal", resume: "sess-abc" });
+    const spec = buildSpawnSpec({ kind: "codex", prompt: "hi", workdir: "/w", resolveBin: bin, callId: "c1", lineName: "line", resume: "sess-abc" });
     expect(spec.env?.AGENTCALL_LINE).toBe("line");
   });
 
   it("keeps bundled remote tools disabled with strict configuration on resume", () => {
-    const spec = buildSpawnSpec({ kind: "codex", prompt: "hi", workdir: "/w", resolveBin: bin, callId: "c1", lineName: "line", clearance: "internal", resume: "sess-abc" });
+    const spec = buildSpawnSpec({ kind: "codex", prompt: "hi", workdir: "/w", resolveBin: bin, callId: "c1", lineName: "line", resume: "sess-abc" });
     const disabled = spec.args.flatMap((arg, index) => arg === "--disable" ? [spec.args[index + 1]] : []);
     expect(disabled).toEqual(["apps", "image_generation"]);
     expect(spec.args).toContain(`web_search="disabled"`);
@@ -793,13 +845,13 @@ describe("codex user-config isolation", () => {
 
 describe("AGENTCALL_LINE propagation", () => {
   it("injects the line name into a claude spawn", () => {
-    const spec = buildSpawnSpec({ kind: "claude", prompt: "hi", workdir: "/work", resolveBin: () => "/bin/claude", callId: "call-1", lineName: "codex", clearance: "internal" });
+    const spec = buildSpawnSpec({ kind: "claude", prompt: "hi", workdir: "/work", resolveBin: () => "/bin/claude", callId: "call-1", lineName: "codex" });
     expect(spec.env?.AGENTCALL_LINE).toBe("codex");
     expect(spec.env?.AGENTCALL_CALL_ID).toBe("call-1");
   });
 
   it("injects the line name into a codex spawn alongside observe mode", () => {
-    const spec = buildSpawnSpec({ kind: "codex", prompt: "hi", workdir: "/work", resolveBin: () => "/bin/codex", callId: "call-2", lineName: "claude", clearance: "internal" });
+    const spec = buildSpawnSpec({ kind: "codex", prompt: "hi", workdir: "/work", resolveBin: () => "/bin/codex", callId: "call-2", lineName: "claude" });
     expect(spec.env?.AGENTCALL_LINE).toBe("claude");
     expect(spec.env?.AGENTCALL_GUARD_MODE).toBe("observe");
   });

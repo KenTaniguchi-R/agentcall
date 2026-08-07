@@ -4,7 +4,6 @@ import {
   requestTranscript, safeParseFrame, transcriptHash,
 } from "@benree/agentcall-shared";
 import { fetchKeys } from "./api.js";
-import { clearanceFor } from "./clearance.js";
 import { readableSources, workdirFor } from "./sensitivity.js";
 import { type CallableLineConfig } from "./config.js";
 import type { LinePaths } from "./paths.js";
@@ -12,7 +11,7 @@ import { buildPrompt } from "./prompt.js";
 import { redactOutbound } from "./redact.js";
 import {
   AgentRunError, codexThreadingEnabled, codexToolTelemetryEnabled,
-  CODEX_THREADING_VERIFIED_VERSION, isResumeFailure, runAgent,
+  CODEX_THREADING_VERIFIED_VERSION, isResumeFailure, discoverMcpServers, runAgent,
 } from "./runner.js";
 import { mintContextId, pruneContexts, saveContexts, upsertContext } from "./contexts.js";
 import { SerialQueue } from "./queue.js";
@@ -263,7 +262,7 @@ export function startListener(deps: ListenerDeps): { stop(): Promise<void> } {
         audit({ call_id, ...correlation, from, message: message.slice(0, 500), task: requestedTask, status: admission.code, duration_ms: 0, outcome_delivery_error: outcomeDeliveryError });
         return;
       }
-      const { task, policy, map } = admission;
+      const { task, map } = admission;
 
       // Clearance, then the directory it implies. Deliberately AFTER
       // resolveAdmission and from the objects it returned: a corrupt
@@ -271,16 +270,15 @@ export function startListener(deps: ListenerDeps): { stop(): Promise<void> } {
       // (policy_error -> call_failed), and loading either earlier would throw
       // first and report corruption as a rejection.
       //
-      // "blocked" is unreachable here — resolveAdmission refuses a blocked
-      // caller before this line — but narrowing it to the least-revealing
-      // clearance is the safe way to say so.
-      const resolved = clearanceFor(policy, from, groups);
-      const clearance = resolved === "blocked" ? "public" : resolved;
+      // Access is resolved by resolveAdmission, which refuses a blocked caller
+      // before this line. Nothing further is derived from it: with one grantable
+      // level there is no per-caller narrowing left to do, so the workdir and
+      // the readable list are the same for every caller the line answers.
       // #372 deleted line and task `workdir`. Where the agent runs is now the
       // richest labelled source THIS caller is cleared for, so a public caller
       // is never spawned inside internal content they could only be refused
       // on. shareDir is the fallback when the map names nothing they may see.
-      const workdirDir = workdirFor(map, clearance, deps.paths.shareDir);
+      const workdirDir = workdirFor(map, deps.paths.shareDir);
 
       // Task resolution above ran on the verified `from` and local files only
       // (see policy.ts's CaMeL invariant). context_id is caller-controlled, so
@@ -354,7 +352,7 @@ export function startListener(deps: ListenerDeps): { stop(): Promise<void> } {
           const out = await run({
             kind: config.agent_kind,
             prompt: buildPrompt(config.handle, from, message, task, {
-              dir: workdirDir, readable: readableSources(map, clearance),
+              dir: workdirDir, readable: readableSources(map),
             }, binding !== undefined),
             workdir: workdirDir,
             timeoutMs,
@@ -367,8 +365,11 @@ export function startListener(deps: ListenerDeps): { stop(): Promise<void> } {
             resume: binding?.agent_session_id,
             correlationId: correlation_id,
             toolTelemetryFile: toolSpool?.file,
+            // Enumerated from the owner's own config, not configured per line:
+            // `mcp__*` is not expressible in an allowlist, so every server the
+            // owner already installed is named explicitly or is unreachable.
+            mcpServers: discoverMcpServers(deps.paths.machine.userHome),
             // Already narrowed above, where the workdir was derived from it.
-            clearance,
           });
 
           // Mint on a fresh threadable call; roll the existing binding forward

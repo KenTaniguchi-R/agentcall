@@ -304,7 +304,7 @@ describe("resolveAdmission", () => {
 
   it("blocks a caller policy has denied, offering nothing", () => {
     const paths = seededPaths();
-    seedPolicy(paths, { default_clearance: "public", callers: { spammer: { block: true } } });
+    seedPolicy(paths, { default_access: "allowed", callers: { spammer: { access: "blocked" } } });
     const result = resolveAdmission({
       paths, from: "spammer", requestedTask: undefined, groups: [],
     });
@@ -326,7 +326,7 @@ describe("resolveAdmission", () => {
   it("admits a task no policy names, since a task is no longer granted", () => {
     const paths = seededPaths();
     seedTask(paths, "secret", ["description: shh"]);
-    seedPolicy(paths, { default_clearance: "public", callers: {} });
+    seedPolicy(paths, { default_access: "allowed", callers: {} });
     const result = resolveAdmission({
       paths, from: "shusaku", requestedTask: "secret", groups: [],
     });
@@ -338,11 +338,11 @@ describe("resolveAdmission", () => {
   // sit outside the policy_error path below and could disagree with admission.
   it("returns the policy it loaded, so clearance resolves from the same table", () => {
     const paths = seededPaths();
-    seedPolicy(paths, { default_clearance: "internal", callers: {} });
+    seedPolicy(paths, { default_access: "allowed", callers: {} });
     const result = resolveAdmission({
       paths, from: "shusaku", requestedTask: undefined, groups: [],
     });
-    expect(result.ok && result.policy.default_clearance).toBe("internal");
+    expect(result.ok && result.policy.default_access).toBe("allowed");
   });
 
   it("fails closed with policy_error, not a thrown exception, when the policy file is corrupt", () => {

@@ -33,39 +33,18 @@ async function runPolicyVerb(verb: Verb, a: string, b: string | undefined, opts:
   }
 }
 
-interface ClearanceOptions { line?: string; default?: string; reset?: boolean }
-
-// One command, three forms, because there is exactly one thing to set and
-// three scopes to set it at. Which form was used is decided here rather than
-// in verbs.ts, so execVerb stays a pure function of an unambiguous verb.
-async function clearanceVerb(
-  handle: string | undefined, level: string | undefined, o: ClearanceOptions,
-): Promise<void> {
-  if (o.default !== undefined) {
-    if (handle !== undefined) {
-      fail(new Error("clearance --default sets the line default and takes no handle."));
-      return;
-    }
-    await runPolicyVerb("clearance-default", o.default, undefined, o);
-    return;
-  }
-  if (handle === undefined) {
-    fail(new Error("clearance needs a handle, or --default <level>."));
-    return;
-  }
-  await runPolicyVerb(o.reset ? "clearance-reset" : "clearance", handle, o.reset ? undefined : level, o);
-}
+interface AccessOptions { line?: string }
 
 export function register(program: Command): void {
-  program.command("clearance")
-    .description("set how much a caller may be told (and republish your card)")
-    .argument("[handle]", "caller handle; omit when using --default")
-    .argument("[level]", "public or internal; omit when using --reset")
-    .option("--default <level>", "set the level anyone registered gets, instead of one caller")
-    .option("--reset", "drop a caller's own level, returning them to the line default")
+  // `clearance` is gone (2026-08-07). With one grantable level there is no
+  // amount to set — only whether the line answers — so block/unblock is the whole
+  // per-caller surface, and `access --default` is the line-wide posture.
+  program.command("access")
+    .description("set whether callers are answered by default (and republish your card)")
+    .requiredOption("--default <access>", "allowed or blocked")
     .option("--line <name>", "line to use (defaults to the primary line)")
-    .action((handle: string | undefined, level: string | undefined, o: ClearanceOptions) =>
-      clearanceVerb(handle, level, o));
+    .action((o: AccessOptions & { default: string }) =>
+      runPolicyVerb("access-default", o.default, undefined, o));
   program.command("block").description("refuse all calls from a handle")
     .argument("<handle>").option("--line <name>", "line to use (defaults to the primary line)")
     .action((handle: string, o: { line?: string }) => runPolicyVerb("block", handle, undefined, o));

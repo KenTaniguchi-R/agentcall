@@ -259,7 +259,7 @@ export async function runSetup(opts: SetupOpts): Promise<{ ready: boolean }> {
   let verifyFailure: VerifyCheck | undefined;
   if (cfg.agent_kind && opts.verify !== false) {
     log(`\nVerifying ${cfg.agent_kind} can answer a test call (takes ~10-30s)...`);
-    const checks = await verifyAgent(cfg.agent_kind, workdirFor(withFloor(loadSensitivityMap(ctx.paths), ctx.paths.machine.userHome), "internal", ctx.paths.shareDir), opts.verifyFns);
+    const checks = await verifyAgent(cfg.agent_kind, workdirFor(withFloor(loadSensitivityMap(ctx.paths), ctx.paths.machine.userHome), ctx.paths.shareDir), opts.verifyFns);
     for (const c of checks) log(formatCheck(c));
     verifyFailure = checks.find((c) => !c.ok);
   }

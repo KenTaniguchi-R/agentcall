@@ -2,7 +2,7 @@ import { existsSync, readFileSync } from "node:fs";
 import { buildCardUpload } from "./card.js";
 import type { LineConfig } from "./config.js";
 import type { LinePaths } from "./paths.js";
-import { clearanceFor } from "./clearance.js";
+import { accessFor } from "./access.js";
 import { loadPolicy, type Policy } from "./policy.js";
 import { ASK_TASK, loadTasks } from "./tasks.js";
 
@@ -39,12 +39,12 @@ export function buildCardReport(cfg: LineConfig, p: LinePaths): CardReport {
   const menu: string[] = [`${cfg.handle} (${cfg.agent_kind})${upload.description ? ` — ${upload.description}` : ""}`];
   menu.push("  Every caller who is not blocked can request:");
   for (const t of upload.tasks) menu.push(`    ${t.id} — ${t.description}`);
-  menu.push(`  Anyone registered can be told: ${policy.default_clearance}`);
+  menu.push(`  Anyone registered by default: ${policy.default_access}`);
   // Resolved, not the raw entry: a block sinks a named clearance, and printing
   // the stored value would tell the owner a grant is live that is not.
   const named = Object.keys(policy.callers).sort((x, y) => x.localeCompare(y));
   for (const caller of named) {
-    menu.push(`    ${caller}: ${clearanceFor(policy, caller)}`);
+    menu.push(`    ${caller}: ${accessFor(policy, caller)}`);
   }
 
   // codex has no per-tool allowlist (see runner.ts's codex branch): only the

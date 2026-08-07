@@ -31,37 +31,37 @@ describe("sensitivity floor", () => {
     // The case that makes this necessary. Without the floor, labelling ~ as
     // internal would classify ~/.ssh/id_rsa as internal and hand it to any
     // internal-cleared caller.
-    const m = floored({ sources: [{ path: "~", sensitivity: "internal" }] });
+    const m = floored({ sources: [{ path: "~", sensitivity: "shared" }] });
     expect(classifyPath(m, join(HOME, ".ssh", "id_rsa"), opts)).toBe("secret");
   });
 
   it("still labels the rest of the parent as the owner asked", () => {
-    const m = floored({ sources: [{ path: "~", sensitivity: "internal" }] });
-    expect(classifyPath(m, join(HOME, "notes", "a.md"), opts)).toBe("internal");
+    const m = floored({ sources: [{ path: "~", sensitivity: "shared" }] });
+    expect(classifyPath(m, join(HOME, "notes", "a.md"), opts)).toBe("shared");
   });
 
   it("wins a tie against an explicit label on the same path", () => {
     // An owner naming ~/.ssh internal outright is either a mistake or an
     // attack on their own config; the floor is not overridable from the map.
-    const m = floored({ sources: [{ path: "~/.ssh", sensitivity: "internal" }] });
+    const m = floored({ sources: [{ path: "~/.ssh", sensitivity: "shared" }] });
     expect(classifyPath(m, join(HOME, ".ssh", "id_rsa"), opts)).toBe("secret");
   });
 
   it("covers floored single files as well as directories", () => {
-    const m = floored({ sources: [{ path: "~", sensitivity: "internal" }] });
+    const m = floored({ sources: [{ path: "~", sensitivity: "shared" }] });
     expect(classifyPath(m, join(HOME, ".netrc"), opts)).toBe("secret");
     expect(classifyPath(m, join(HOME, ".claude.json"), opts)).toBe("secret");
   });
 
   it("leaves an unfloored map's own rules intact", () => {
-    const m = floored({ sources: [{ path: "/work/repo", sensitivity: "internal" }] });
-    expect(classifyPath(m, "/work/repo/src/x.ts", opts)).toBe("internal");
+    const m = floored({ sources: [{ path: "/work/repo", sensitivity: "shared" }] });
+    expect(classifyPath(m, "/work/repo/src/x.ts", opts)).toBe("shared");
   });
 
   it("is idempotent, so applying it twice cannot change a verdict", () => {
-    const once = floored({ sources: [{ path: "~", sensitivity: "internal" }] });
+    const once = floored({ sources: [{ path: "~", sensitivity: "shared" }] });
     const twice = withFloor(once, HOME);
     expect(classifyPath(twice, join(HOME, ".ssh", "id_rsa"), opts)).toBe("secret");
-    expect(classifyPath(twice, join(HOME, "notes"), opts)).toBe("internal");
+    expect(classifyPath(twice, join(HOME, "notes"), opts)).toBe("shared");
   });
 });

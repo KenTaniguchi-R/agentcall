@@ -55,7 +55,7 @@ describe("buildCardReport", () => {
     const h = home();
     const p = linePaths(h);
     writeFileSync(p.policyFile, JSON.stringify({
-      default_offer: ["ask", "gone"], callers: { mia: { offer: ["also-gone"], block: false } },
+      default_offer: ["ask", "gone"], callers: { mia: { offer: ["also-gone"] } },
     }));
     const r = buildCardReport(cfg, p);
     expect(r.problems.join("\n")).toContain("policy.json");
@@ -72,10 +72,10 @@ describe("buildCardReport", () => {
   it("reports a broken policy assertion as a problem", () => {
     const p = linePaths(home());
     writeFileSync(p.policyFile, JSON.stringify({
-      default_clearance: "public", tests: [{ caller: "mia", expect_clearance: "internal" }],
+      tests: [{ caller: "mia", expect_access: "blocked" }],
     }));
     const r = buildCardReport(cfg, p);
-    expect(r.problems.join("\n")).toMatch(/assertion 1.*expected internal.*got public/i);
+    expect(r.problems.join("\n")).toMatch(/assertion 1.*expected blocked.*got allowed/i);
   });
 
   it("is quiet after a push and stale after a change", async () => {
@@ -84,7 +84,7 @@ describe("buildCardReport", () => {
     await publishCard(cfg, p, async () => {});
     expect(buildCardReport(cfg, p).notices).toEqual([]);
     writeSkill(h, "intro", "---\ndescription: d\n---\nbody\n");
-    writeFileSync(p.policyFile, JSON.stringify({ default_clearance: "public", callers: {} }));
+    writeFileSync(p.policyFile, JSON.stringify({ default_access: "allowed", callers: {} }));
     const r = buildCardReport(cfg, p);
     expect(r.notices.join("\n")).toContain("out of date");
   });
@@ -101,7 +101,7 @@ describe("buildCardReport", () => {
     const h = home();
     writeSkill(h, "intro", "---\ndescription: d\n---\n");
     const p = linePaths(h);
-    writeFileSync(p.policyFile, JSON.stringify({ default_clearance: "public", callers: {} }));
+    writeFileSync(p.policyFile, JSON.stringify({ default_access: "allowed", callers: {} }));
     const codexCfg: LineConfig = { ...cfg, agent_kind: "codex" };
     const r = buildCardReport(codexCfg, p);
     expect(r.notices.join("\n")).toMatch(/intro/);
@@ -112,7 +112,7 @@ describe("buildCardReport", () => {
     const h = home();
     writeSkill(h, "intro", "---\ndescription: d\n---\n");
     const p = linePaths(h);
-    writeFileSync(p.policyFile, JSON.stringify({ default_clearance: "public", callers: {} }));
+    writeFileSync(p.policyFile, JSON.stringify({ default_access: "allowed", callers: {} }));
     const r = buildCardReport(cfg, p);
     expect(r.notices.join("\n")).not.toMatch(/codex/i);
   });
@@ -125,7 +125,7 @@ describe("buildCardReport", () => {
     const h = home();
     writeSkill(h, "runner", "---\ndescription: d\n---\n");
     const p = linePaths(h);
-    writeFileSync(p.policyFile, JSON.stringify({ default_clearance: "public", callers: {} }));
+    writeFileSync(p.policyFile, JSON.stringify({ default_access: "allowed", callers: {} }));
     const codexCfg: LineConfig = { ...cfg, agent_kind: "codex" };
     const r = buildCardReport(codexCfg, p);
     const notices = r.notices.join("\n");
@@ -141,14 +141,13 @@ describe("buildCardReport", () => {
     const p = linePaths(h);
     writeSkill(h, "intro", "---\ndescription: d\n---\n");
     writeFileSync(p.policyFile, JSON.stringify({
-      default_clearance: "public",
-      callers: { mia: { clearance: "internal" }, spammer: { clearance: "internal", block: true } },
+      default_access: "allowed", callers: { mia: { access: "allowed" }, spammer: { access: "blocked" } },
     }));
     const text = buildCardReport(cfg, p).menu.join("\n");
     expect(text).toContain("Every caller who is not blocked can request:");
     expect(text).toContain("intro — d");
-    expect(text).toContain("Anyone registered can be told: public");
-    expect(text).toContain("mia: internal");
+    expect(text).toContain("Anyone registered by default: allowed");
+    expect(text).toContain("mia: allowed");
     // Resolved, not stored: spammer's saved `internal` is inert under a block,
     // and printing it would tell the owner a grant is live when it is not.
     expect(text).toContain("spammer: blocked");
@@ -163,13 +162,13 @@ describe("buildCardReport", () => {
     const p = managedLinePaths(h);
     writeSkill(h, "intro", "---\ndescription: d\n---\n");
     writeFileSync(p.policyFile, JSON.stringify({
-      default_clearance: "internal", callers: { mia: { clearance: "internal" } },
+      default_access: "allowed", callers: { mia: { access: "allowed" } },
     }));
-    writeFileSync(p.machine.managedPolicyFile, JSON.stringify({ version: 1, max_clearance: "public" }));
+    writeFileSync(p.machine.managedPolicyFile, JSON.stringify({ version: 1, max_clearance: "allowed" }));
 
     const text = buildCardReport(cfg, p).menu.join("\n");
-    expect(text).toContain("Anyone registered can be told: public");
-    expect(text).toContain("mia: public");
+    expect(text).toContain("Anyone registered by default: allowed");
+    expect(text).toContain("mia: allowed");
     expect(text).not.toContain("internal");
   });
 });

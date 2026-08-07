@@ -34,15 +34,14 @@ const shell: Task = {
 
 const policy: Policy = {
   description: "Production support policy",
-  default_clearance: "public",
-  callers: {
-    alice: { clearance: "internal", block: false },
-    "blocked-bot": { clearance: "internal", block: true },
+  default_access: "allowed", callers: {
+    alice: {},
+    "blocked-bot": { access: "blocked" },
   },
   groups: {
-    engineers: { roster_id: ROSTER_ID, clearance: "internal" },
+    engineers: { roster_id: ROSTER_ID },
   },
-  tests: [{ caller: "alice", expect_clearance: "internal", groups: [] }],
+  tests: [{ caller: "alice", groups: [], expect_access: "allowed" as const }],
 };
 
 describe("renderPolicyReport", () => {
@@ -69,11 +68,11 @@ describe("renderPolicyReport", () => {
     expect(report).toMatch(/browse-docs — Browse documentation[\s\S]*Working directory: \/srv\/agentcall-default/);
     expect(report).toMatch(/shell — Run diagnostics[\s\S]*inspect files — answers are read-only/);
     expect(report).not.toMatch(/exec — run shell commands/);
-    expect(report).toMatch(/Base rule: Everyone registered[\s\S]*May be told: public content and below/);
-    expect(report).toMatch(/Named caller rule: alice \(before roster clearances\)[\s\S]*May be told: internal content and below/);
-    expect(report).toMatch(/Named caller rule: blocked-bot \(before roster clearances\)[\s\S]*BLOCKED — no call is answered at all/);
-    expect(report).toMatch(new RegExp(`Roster rule: engineers \\(${ROSTER_ID}\\) — applies to each attested member[\\s\\S]*May be told: internal content and below`));
-    expect(report).toContain("For one caller: start with the base rule, take the highest of their named rule and every roster the relay attests.");
+    expect(report).toMatch(/Base rule: Everyone registered[\s\S]*ANSWERED — may be told anything not marked secret/);
+    expect(report).toMatch(/Named caller rule: alice \(overrides rosters\)[\s\S]*ANSWERED — may be told anything not marked secret/);
+    expect(report).toMatch(/Named caller rule: blocked-bot \(overrides rosters\)[\s\S]*BLOCKED — no call is answered at all/);
+    expect(report).toMatch(new RegExp(`Roster rule: engineers \\(${ROSTER_ID}\\) — applies to each attested member[\\s\\S]*ANSWERED — may be told anything not marked secret`));
+    expect(report).toContain("For one caller: a named rule wins; otherwise a blocked roster wins over an allowed one; otherwise the base rule.");
     // The enforcement point is the READ, and the report has to say so. It
     // previously claimed the reply was refused unless the context was within
     // clearance; no such check exists (listener.ts only runs redactOutbound).

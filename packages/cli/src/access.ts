@@ -1,58 +1,52 @@
-// The clearance half of #372: who may receive what, independent of what any
-// particular source contains. Sensitivity — how sensitive a source is — lives
-// in sensitivity.ts.
+// Who this line answers at all. What a source is worth — `shared` or `secret` —
+// lives in sensitivity.ts.
 //
-// This module is resolution only — the shape of a clearance table and the rules
-// for reading one. The FILE that happens to hold it (loading, the managed
-// layer, assertions, saving) is policy.ts's job, and policy.ts parses with the
-// schema declared here rather than a second one of its own. That split is what
-// let #379 delete the transitional `loadClearancePolicy` projection that used
-// to sit at the bottom of this file: it existed only because two different
-// schemas described one file.
+// This module is resolution only: the shape of an access table and the rules for
+// reading one. The FILE that holds it (loading, the managed layer, assertions,
+// saving) is policy.ts's job, and policy.ts parses with the schema declared here
+// rather than a second one of its own.
 //
-// This replaced policy.ts's task-menu machinery (`default_offer`, per-caller
-// `offer`, the derived menu). A task is no longer individually granted: it
-// declares which sources it reads, and clearance decides whether the result
-// may reach this caller. One question instead of two lists.
+// **Collapsed from a three-level clearance on 2026-08-07.** `public < internal`
+// promised that one colleague could be told more than another, and nothing ever
+// produced a `public` source label to make the distinction real — while the
+// ordering caused a live bug (see sensitivity.ts). The product rule is simpler
+// than the lattice was: everyone the line answers sees the same thing, and the
+// only per-caller control is whether it answers at all. See
+// docs/superpowers/specs/2026-08-07-open-default-design.md.
 import { z } from "zod";
 import { ROSTER_ID_RE } from "@benree/agentcall-shared";
-import type { Sensitivity } from "./sensitivity.js";
 
 // Exported so policy.ts's assertions constrain group names identically. Two
 // copies of this pattern would drift into a file that parses but whose
 // assertions cannot name half its groups.
 export const GROUP_NAME_RE = /^[a-z0-9][a-z0-9-]{0,63}$/;
 
-// `secret` is deliberately absent. It means "never leaves this machine", so a
-// grantable `secret` would turn the top of the lattice into a bypass any policy
-// edit could hand out. sensitivity.ts's `permits` refuses secret content
-// regardless; excluding it here makes the invariant structural rather than
-// merely enforced downstream.
-export const GrantableClearance = z.enum(["public", "internal"]);
-export type GrantableClearanceType = z.infer<typeof GrantableClearance>;
+/** What the line does with a call. There is no third state. */
+export const ACCESS = ["allowed", "blocked"] as const;
+export type Access = (typeof ACCESS)[number];
 
-export const DEFAULT_CLEARANCE: Sensitivity = "public";
+export const AccessSchema = z.enum(ACCESS);
 
-const CallerClearanceSchema = z.object({
-  clearance: GrantableClearance.optional(),
-  block: z.boolean().default(false),
+/** A fresh line answers anyone the relay lets through — the organization is the boundary. */
+export const DEFAULT_ACCESS: Access = "allowed";
+
+const CallerAccessSchema = z.object({
+  access: AccessSchema.optional(),
 }).strict();
 
-const GroupClearanceSchema = z.object({
+const GroupAccessSchema = z.object({
   roster_id: z.string().regex(ROSTER_ID_RE),
-  clearance: GrantableClearance.optional(),
+  access: AccessSchema.optional(),
 }).strict();
 
-export const ClearancePolicySchema = z.object({
+export const AccessPolicySchema = z.object({
   description: z.string().max(500).default(""),
-  default_clearance: GrantableClearance.default("public"),
-  callers: z.record(z.string(), CallerClearanceSchema).default({}),
-  groups: z.record(z.string().regex(GROUP_NAME_RE), GroupClearanceSchema).default({}),
+  default_access: AccessSchema.default(DEFAULT_ACCESS),
+  callers: z.record(z.string(), CallerAccessSchema).default({}),
+  groups: z.record(z.string().regex(GROUP_NAME_RE), GroupAccessSchema).default({}),
 }).strict();
 
-export type ClearancePolicy = z.infer<typeof ClearancePolicySchema>;
-
-const RANK: Record<Sensitivity, number> = { public: 0, internal: 1, secret: 2 };
+export type AccessPolicy = z.infer<typeof AccessPolicySchema>;
 
 // `policy.callers` comes from JSON.parse + z.record, whose output inherits
 // Object.prototype — and a handle pattern happily accepts "constructor". A bare
@@ -64,50 +58,44 @@ function ownEntry<T>(record: Record<string, T>, key: string): T | undefined {
 }
 
 /**
- * Resolve what this caller may receive.
+ * Resolve whether this caller is answered.
  *
  * Runs on the relay-verified `from` and local files only, BEFORE the caller's
- * message reaches any prompt — the CaMeL invariant `policy.ts:217-219` records.
- * The message cannot influence clearance.
+ * message reaches any prompt — the CaMeL invariant `policy.ts` records. The
+ * message cannot influence access.
  *
- * `attestedGroups` are roster ids the relay vouched for. A caller-supplied
- * claim must never reach this parameter.
+ * `attestedGroups` are roster ids the relay vouched for. A caller-supplied claim
+ * must never reach this parameter.
+ *
+ * **Blocked wins.** An explicit per-caller block is the strongest rule, then a
+ * block on any attested group, then any explicit allow, then the default. Group
+ * membership can open a line the default closes, but can never resurrect a
+ * caller the owner named and blocked — that ordering is what makes "block this
+ * person" mean what it says regardless of what they belong to.
  */
-export function clearanceFor(
-  policy: ClearancePolicy,
+export function accessFor(
+  policy: AccessPolicy,
   from: string,
   attestedGroups: readonly string[] = [],
-): Sensitivity | "blocked" {
+): Access {
   const entry = ownEntry(policy.callers, from);
-  // Individual denial is the strongest rule. Group membership can expand a
-  // clearance, never resurrect a caller the owner explicitly blocked.
-  if (entry?.block) return "blocked";
-
-  const grants: Sensitivity[] = [policy.default_clearance];
-  if (entry?.clearance) grants.push(entry.clearance);
+  if (entry?.access) return entry.access;
 
   const attested = new Set(attestedGroups);
-  for (const group of Object.values(policy.groups)) {
-    if (!attested.has(group.roster_id)) continue;
-    if (group.clearance) grants.push(group.clearance);
-  }
+  const groups = Object.values(policy.groups).filter((g) => attested.has(g.roster_id));
+  if (groups.some((g) => g.access === "blocked")) return "blocked";
+  if (groups.some((g) => g.access === "allowed")) return "allowed";
 
-  // Most permissive applicable grant. Unlike sensitivity, which combines toward
-  // the most restrictive, clearance is a union of what the owner has decided
-  // this caller may see.
-  return grants.reduce((acc, g) => (RANK[g] > RANK[acc] ? g : acc), "public" as Sensitivity);
+  return policy.default_access;
 }
 
 /**
- * Lower a grant to an administrator ceiling.
+ * Apply an administrator ceiling.
  *
- * The managed-policy analogue of `clearanceFor`'s union: where the owner
- * combines grants upward, the administrator clamps the result downward. Used by
- * policy.ts's managed layer, and idempotent — applying a ceiling twice cannot
- * change a verdict, which is what makes the layer safe to compose.
+ * The managed-policy analogue of `accessFor`: an administrator may close a line
+ * the owner opened, never open one the owner closed. Idempotent, which is what
+ * makes the managed layer safe to compose.
  */
-export function capClearance(
-  value: GrantableClearanceType, ceiling: GrantableClearanceType,
-): GrantableClearanceType {
-  return RANK[value] > RANK[ceiling] ? ceiling : value;
+export function capAccess(value: Access, ceiling: Access): Access {
+  return ceiling === "blocked" ? "blocked" : value;
 }

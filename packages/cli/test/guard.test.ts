@@ -21,7 +21,7 @@ const id = (p: string) => p;
 // inversion: unlabelled is secret.
 function mapFor(home: string, roots: string[] = []) {
   return withFloor(SensitivityMapSchema.parse({
-    sources: roots.map((path) => ({ path, sensitivity: "internal" as const })),
+    sources: roots.map((path) => ({ path, sensitivity: "shared" as const })),
   }), home);
 }
 
@@ -37,7 +37,6 @@ function ctx(over: Partial<DecideContext> = {}): DecideContext {
     userHome: HOME,
     realpath: id,
     map: mapFor(HOME, OWNER_ROOTS),
-    clearance: "internal",
     ...over,
   };
 }
@@ -101,15 +100,14 @@ describe("decide — exact-target tools", () => {
 // and therefore secret — no separate allow-list needed to keep it out.
 //
 // The rule name changes with the mechanism: `outside-allowed-root` became
-// `above-clearance`, which is what actually happened.
-describe("decide — clearance bounds what a labelled root can reach", () => {
+// `source-is-secret`, which is what actually happened.
+describe("decide — labelling bounds what a root can reach", () => {
   const ROOT = "/Users/owner/code/payments";
   const bounded = (tool: string, input: Record<string, unknown>, cwd = ROOT) =>
     decide(call(tool, input, cwd), {
       userHome: HOME,
       realpath: id,
       map: mapFor(HOME, [ROOT]),
-      clearance: "internal",
       guardRoot: "/opt/agentcall",
     });
 
@@ -120,29 +118,29 @@ describe("decide — clearance bounds what a labelled root can reach", () => {
 
   it("denies exact file targets in an unlabelled sibling", () => {
     expect(bounded("Read", { file_path: "/Users/owner/code/payroll/secrets.ts" }))
-      .toMatchObject({ allow: false, rule: "above-clearance" });
+      .toMatchObject({ allow: false, rule: "source-is-secret" });
     expect(bounded("Edit", { file_path: "../payroll/secrets.ts" }))
-      .toMatchObject({ allow: false, rule: "above-clearance" });
+      .toMatchObject({ allow: false, rule: "source-is-secret" });
   });
 
   it("denies searches and absolute glob selectors outside the labelled root", () => {
     expect(bounded("Grep", { path: "/Users/owner/code", pattern: "token" }))
-      .toMatchObject({ allow: false, rule: "above-clearance" });
+      .toMatchObject({ allow: false, rule: "source-is-secret" });
     expect(bounded("Glob", { pattern: "/Users/owner/code/payroll/**/*.ts" }))
-      .toMatchObject({ allow: false, rule: "above-clearance" });
+      .toMatchObject({ allow: false, rule: "source-is-secret" });
   });
 
-  it("denies a public-cleared caller what an internal-cleared one may read", () => {
-    // Same map, same path, different caller. This is the axis the old
-    // allow-list could not express at all: containment used to be a property
-    // of the run, not of who was asking.
-    const asPublic = decide(call("Read", { file_path: `${ROOT}/src/index.ts` }, ROOT), {
-      userHome: HOME, realpath: id, map: mapFor(HOME, [ROOT]), clearance: "public",
-    });
-    // `inside-unreachable-source`, not `above-clearance`: the path sits inside a
-    // source the owner labelled `internal`, which this caller cannot reach. The
-    // other rule is for paths that are simply unlabelled.
-    expect(asPublic).toMatchObject({ allow: false, rule: "inside-unreachable-source" });
+  it("denies a path inside a source the owner marked secret", () => {
+    // `inside-unreachable-source`, not `source-is-secret`: the path sits inside a
+    // source that IS labelled, and labelled `secret`. The other rule is for
+    // paths that are simply unlabelled. Distinguishing them is audit-only —
+    // both deny — but conflating them would hide which decision was made.
+    const secretRoot = withFloor(SensitivityMapSchema.parse({
+      sources: [{ path: ROOT, sensitivity: "secret" as const }],
+    }), HOME);
+    expect(decide(call("Read", { file_path: `${ROOT}/src/index.ts` }, ROOT), {
+      userHome: HOME, realpath: id, map: secretRoot,
+    })).toMatchObject({ allow: false, rule: "inside-unreachable-source" });
   });
 
   it("still records but allows Bash because exec is an explicit residual", () => {
@@ -344,7 +342,7 @@ describe("decide — task envelopes and launch config are protected", () => {
   it("denies writing a systemd user unit, which controls how the Linux listener is launched", () => {
     expect(decide(
       call("Write", { file_path: "/home/owner/.config/systemd/user/agentcall-listener.service" }),
-      { userHome: "/home/owner", realpath: id, map: mapFor("/home/owner"), clearance: "internal" },
+      { userHome: "/home/owner", realpath: id, map: mapFor("/home/owner") },
     ).allow).toBe(false);
   });
 
@@ -361,7 +359,7 @@ describe("guard security root", () => {
   it("denies the real home's .ssh, not the state root's", () => {
     const verdict = decide(
       { tool_name: "Read", tool_input: { file_path: "/Users/real/.ssh/id_rsa" }, cwd: "/tmp/work" },
-      { userHome: "/Users/real", realpath: id, map: mapFor("/Users/real", ["/Users/real"]), clearance: "internal" },
+      { userHome: "/Users/real", realpath: id, map: mapFor("/Users/real", ["/Users/real"]) },
     );
     expect(verdict.allow).toBe(false);
   });
@@ -369,7 +367,7 @@ describe("guard security root", () => {
   it("denies one line's config from another line's agent (.agentcall is a denied root)", () => {
     const verdict = decide(
       { tool_name: "Read", tool_input: { file_path: "/Users/real/.agentcall/lines/codex/config.json" }, cwd: "/tmp/work" },
-      { userHome: "/Users/real", realpath: id, map: mapFor("/Users/real", ["/Users/real"]), clearance: "internal" },
+      { userHome: "/Users/real", realpath: id, map: mapFor("/Users/real", ["/Users/real"]) },
     );
     expect(verdict.allow).toBe(false);
   });
@@ -380,7 +378,7 @@ describe("per-line task directories are denied", () => {
     const verdict = decide(
       { tool_name: "Write", tool_input: { file_path: "/Users/real/AgentCall/codex/tasks/x/SKILL.md" }, cwd: "/tmp/work" },
       {
-        userHome: "/Users/real", realpath: id, clearance: "internal", guardRoot: "/pkg",
+        userHome: "/Users/real", realpath: id, guardRoot: "/pkg",
         map: mapFor("/Users/real", ["/Users/real/AgentCall"]),
         extraSecretRoots: [join("/Users/real", "AgentCall", "codex", "tasks")],
       },
@@ -392,7 +390,7 @@ describe("per-line task directories are denied", () => {
     const verdict = decide(
       { tool_name: "Write", tool_input: { file_path: "/Users/real/AgentCall/codex/public/notes.md" }, cwd: "/tmp/work" },
       {
-        userHome: "/Users/real", realpath: id, clearance: "internal", guardRoot: "/pkg",
+        userHome: "/Users/real", realpath: id, guardRoot: "/pkg",
         map: mapFor("/Users/real", ["/Users/real/AgentCall"]),
         extraSecretRoots: [join("/Users/real", "AgentCall", "codex", "tasks")],
       },
@@ -483,8 +481,46 @@ describe("decide — unknown shapes fail closed", () => {
   it("DENIES a tool it has never been taught", () => {
     // The LS failure mode: an unclassified tool has an argument shape this
     // function cannot inspect, so it must not be waved through.
+    //
+    // This fallthrough is load-bearing in a way that is easy to miss: measured
+    // 2026-08-06, `--allowedTools` does NOT gate the `Skill` tool at all, so
+    // before Skill got its own branch below this deny was the only thing
+    // stopping a caller invoking the owner's skills. Do not relax it, and do not
+    // add a new tool to NO_PATH_SURFACE just because it has no path argument.
     const v = decide(call("SomeNewTool", { path: "/Users/owner/.ssh" }), ctx());
     expect(v.allow).toBe(false);
+  });
+});
+
+describe("decide — Skill", () => {
+  // A skill is dispatched by NAME, not by path: tool_input is {"skill": "<name>"}.
+  // It gets its own branch rather than a NO_PATH_SURFACE entry, because
+  // NO_PATH_SURFACE returns allow unconditionally and the SKILL.md body reaches
+  // the model with no tool call of its own — so this branch is the only check
+  // that body ever passes through.
+  const skillMap = (skills: Record<string, "shared" | "secret">) =>
+    withFloor(SensitivityMapSchema.parse({ sources: [], skills }), HOME);
+
+  it("allows a skill the owner shared", () => {
+    const c = ctx({ map: skillMap({ obsidian: "shared" }) });
+    expect(decide(call("Skill", { skill: "obsidian" }), c).allow).toBe(true);
+  });
+
+  it("denies a skill the owner marked secret", () => {
+    const c = ctx({ map: skillMap({ journal: "secret" }) });
+    expect(decide(call("Skill", { skill: "journal" }), c).allow).toBe(false);
+  });
+
+  it("allows an unlabelled skill, because skills default open", () => {
+    const c = ctx({ map: skillMap({}) });
+    expect(decide(call("Skill", { skill: "anything" }), c).allow).toBe(true);
+  });
+
+  it("denies when the skill name is missing or not a string", () => {
+    const c = ctx({ map: skillMap({}) });
+    expect(decide(call("Skill", {}), c).allow).toBe(false);
+    expect(decide(call("Skill", { skill: 42 }), c).allow).toBe(false);
+    expect(decide(call("Skill", { skill: "" }), c).allow).toBe(false);
   });
 
   it("denies a path-shaped tool whose argument is missing", () => {
@@ -518,7 +554,6 @@ function harness() {
     realpath: id,
     appendLine: (file, line) => logLines.push({ file, line }),
     map: mapFor(HOME, OWNER_ROOTS),
-    clearance: "internal",
   };
   return {
     deps, lines: logLines,
@@ -706,7 +741,6 @@ describe("runGuard — enumerates every line's tasksDir from the real home, not 
       // the real userHome. The tasks directories inside them stay secret via
       // extraSecretRoots, which is the distinction these tests exist to pin.
       map: mapFor(userHome, [join(stateRoot, "AgentCall"), join(userHome, "AgentCall")]),
-      clearance: "internal",
     };
   }
 

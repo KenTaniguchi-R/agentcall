@@ -35,7 +35,6 @@ export function register(program: { command(name: string): any }): void {
           // is the point of deriving it per caller rather than configuring it.
           defaultWorkdir: workdirFor(
             withFloor(loadSensitivityMap(ctx.paths), ctx.paths.machine.userHome),
-            "internal",
             ctx.paths.shareDir,
           ),
         });

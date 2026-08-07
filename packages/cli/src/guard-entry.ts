@@ -83,16 +83,13 @@ if (!LINE_NAME_RE.test(lineName)) {
   unwired("guard_unwired");
 }
 
-// Same fail-closed treatment as AGENTCALL_LINE above, for the same reason: the
-// runner always sets this, so an absent or unrecognised value is a wiring bug
-// rather than an ordinary decide() failure. Defaulting it to `public` would be
-// worse than it looks — the guard would keep working, silently answering every
-// caller at the narrowest clearance, and the bug would surface as "the agent
-// can't read anything" long after the deploy that caused it.
-const clearance = process.env.AGENTCALL_CLEARANCE;
-if (clearance !== "public" && clearance !== "internal") {
-  unwired("guard_no_clearance");
-}
+// AGENTCALL_CLEARANCE is gone (2026-08-07). It carried which of `public` /
+// `internal` this caller held, and both the levels and the comparison were
+// deleted with the lattice: a source is `shared` or `secret`, and a caller who
+// is not answered at all never reaches a source, because resolveAdmission
+// refuses a blocked caller before the agent spawns. There is nothing left for
+// this value to select, and a single-valued parameter threaded through a
+// security boundary reads as a check that is not happening.
 
 try {
   let raw = "";
@@ -114,7 +111,6 @@ try {
     // writable by the agent this guard is policing, whereas an env var is
     // inherited state with no such property.
     map: withFloor(loadSensitivityMap(getLinePaths(machine, lineName)), machine.userHome),
-    clearance,
   }, mode);
 
   // Best-effort and deliberately after the security decision. The spool

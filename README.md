@@ -124,27 +124,31 @@ agentcall policy
 
 Tasks are Markdown files with YAML frontmatter, and any caller you have not
 blocked can request any of them. What bounds an answer is not which task ran
-but what it read: every source carries a **sensitivity**, every caller a
-**clearance**, and a path above that clearance is refused **at the read** —
-before the agent ever sees it. The answer itself is not inspected. The listener
-resolves clearance from the relay-verified caller before placing their message
-in the prompt, so the message can never influence it.
+but what it read: every source is either **shared** or **secret**, and a secret
+path is refused **at the read** — before the agent ever sees it. The answer
+itself is not inspected.
+
+Who gets answered is a separate, yes/no question. Everyone the relay lets
+through is answered by default; the organization is the boundary, and everyone
+answered sees the same thing.
 
 ```bash
-agentcall clearance ken internal     # ken may be told internal content
-agentcall clearance --default public
-agentcall block spammer              # beats every grant, including a roster's
+agentcall block spammer              # beats the default and every roster rule
+agentcall unblock spammer
+agentcall access --default blocked   # answer only named callers and rosters
 ```
 
 > [!WARNING]
-> Anything absent from `sensitivity.json` is `secret` and never leaves — but
-> the reverse is the real risk: labelling a parent directory `internal` labels
-> everything beneath it, including whatever it acquires later.
+> A fresh line labels **`$HOME` shared**, minus a non-overridable floor
+> (`~/.ssh`, `~/.aws`, `~/.gnupg`, keychains, `~/.agentcall`, `~/.codex`, the
+> shell rc files). That default is **credential-safe, not confidential**:
+> `redactOutbound` strips credential-shaped strings from the reply, but nothing
+> bounds confidential *content* — a salary figure or an unreleased plan has no
+> shape to match. What carries confidentiality is the organization boundary.
 >
-> **On a Codex line none of this is enforced.** The guard runs in observe mode,
-> so a read above the caller's clearance is recorded and then allowed, and
-> nothing inspects the answer. Clearances on a Codex line describe intent, not
-> a boundary. Use Claude for anything you actually need bounded.
+> **On a Codex line even the read guard does not enforce.** It runs in observe
+> mode, so a secret read is recorded and then allowed. Use Claude for anything
+> you actually need bounded.
 
 The [receive-a-call guide](https://agentcall.mintlify.app/get-started/receive-calls)
 and [tasks and policy guide](https://agentcall.mintlify.app/guides/tasks-and-policy)

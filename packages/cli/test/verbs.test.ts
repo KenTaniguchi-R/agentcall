@@ -2,95 +2,114 @@ import { describe, expect, it } from "vitest";
 import { execVerb } from "../src/verbs.js";
 import { type Policy } from "../src/policy.js";
 
-const base: Policy = { description: "", default_clearance: "public", callers: {}, groups: {} };
+// Rewritten 2026-08-07 with the clearance collapse. The `clearance`,
+// `clearance-reset` and `clearance-default` verbs are gone: with one grantable
+// level there is no amount to set, only whether the line answers. What survives
+// is block/unblock plus the line-wide posture.
+const base: Policy = { description: "", default_access: "allowed", callers: {}, groups: {} };
 const ENG = "e".repeat(22);
 
 describe("execVerb", () => {
-  it("clearance names a caller's level and reports what they resolve to", () => {
-    const { policy, lines } = execVerb(base, "clearance", "ken", "internal");
-    expect(policy.callers.ken).toEqual({ clearance: "internal", block: false });
-    expect(base.callers.ken).toBeUndefined(); // pure: input untouched
-    expect(lines.join("\n")).toContain("ken can be told internal content");
+  describe("block", () => {
+    it("records the block and reports it", () => {
+      const { policy, lines } = execVerb(base, "block", "spammer");
+      expect(policy.callers.spammer).toEqual({ access: "blocked" });
+      expect(base.callers.spammer).toBeUndefined(); // pure: input untouched
+      expect(lines.join("\n")).toContain("spammer is blocked.");
+    });
+
+    it("is idempotent", () => {
+      const once = execVerb(base, "block", "spammer").policy;
+      const twice = execVerb(once, "block", "spammer").policy;
+      expect(twice.callers.spammer).toEqual({ access: "blocked" });
+    });
+
+    it("validates the handle", () => {
+      expect(() => execVerb(base, "block", "Bad Handle")).toThrow(/handle/i);
+      expect(() => execVerb(base, "block", "@acme/ken")).toThrow(/handle/i);
+    });
   });
-  it("clearance is idempotent", () => {
-    const once = execVerb(base, "clearance", "ken", "internal").policy;
-    const twice = execVerb(once, "clearance", "ken", "internal").policy;
-    expect(twice.callers.ken).toEqual({ clearance: "internal", block: false });
+
+  describe("unblock", () => {
+    it("drops the entry entirely rather than writing `allowed`", () => {
+      // An entry matching the default is noise, and leaving one behind would
+      // pin this caller against a later change of default_access.
+      const blocked = execVerb(base, "block", "spammer").policy;
+      const { policy, lines } = execVerb(blocked, "unblock", "spammer");
+      expect(policy.callers.spammer).toBeUndefined();
+      expect(lines.join("\n")).toContain("spammer is answered");
+    });
+
+    it("is a no-op on a caller with no entry, not an error", () => {
+      expect(() => execVerb(base, "unblock", "nobody")).not.toThrow();
+      expect(execVerb(base, "unblock", "nobody").policy.callers.nobody).toBeUndefined();
+    });
+
+    it("reports blocked when the line default still blocks them", () => {
+      // Removing a named allow on a closed line leaves them blocked, and the
+      // report has to say what they RESOLVE to rather than what was written.
+      const closed: Policy = { ...base, default_access: "blocked" };
+      const named = execVerb(closed, "block", "ken").policy;
+      const { lines } = execVerb(named, "unblock", "ken");
+      expect(lines.join("\n")).toContain("ken is blocked");
+    });
+
+    it("reports blocked when an attested roster would still block them", () => {
+      const withGroup: Policy = {
+        ...base, groups: { eng: { roster_id: ENG, access: "blocked" } },
+      };
+      // accessFor is consulted without attestation here, so this resolves to the
+      // default — the point is that the line reports a resolution, not a write.
+      expect(execVerb(withGroup, "unblock", "ken").lines.join("\n")).toContain("ken is answered");
+    });
   });
-  it("clearance overwrites rather than accumulating, so lowering one takes effect", () => {
-    const raised = execVerb(base, "clearance", "ken", "internal").policy;
-    const lowered = execVerb(raised, "clearance", "ken", "public").policy;
-    expect(lowered.callers.ken!.clearance).toBe("public");
+
+  describe("access-default", () => {
+    it("closes the line", () => {
+      const { policy, lines } = execVerb(base, "access-default", "blocked");
+      expect(policy.default_access).toBe("blocked");
+      expect(lines.join("\n")).toContain("Only named callers and attested rosters are answered.");
+    });
+
+    it("opens the line", () => {
+      const closed = execVerb(base, "access-default", "blocked").policy;
+      const { policy, lines } = execVerb(closed, "access-default", "allowed");
+      expect(policy.default_access).toBe("allowed");
+      expect(lines.join("\n")).toContain("Anyone registered is answered.");
+    });
+
+    it("refuses a level from the old lattice, and anything that is not an access at all", () => {
+      for (const bad of ["public", "internal", "secret", "sooper", undefined]) {
+        expect(() => execVerb(base, "access-default", bad as string))
+          .toThrow(/allowed or blocked/);
+      }
+    });
   });
-  // `secret` means "never leaves this machine". Making it grantable from the
-  // CLI would be a bypass any policy edit could hand out — the same structural
-  // exclusion GrantableClearance makes in the schema.
-  it("clearance refuses secret, and anything that is not a level at all", () => {
-    expect(() => execVerb(base, "clearance", "ken", "secret")).toThrow(/public or internal/);
-    expect(() => execVerb(base, "clearance", "ken", "sooper")).toThrow(/public or internal/);
-    expect(() => execVerb(base, "clearance", "ken", undefined)).toThrow(/public or internal/);
-  });
-  it("clearance validates the handle", () => {
-    expect(() => execVerb(base, "clearance", "Bad Handle", "public")).toThrow(/handle/i);
-  });
-  it("clearance --reset drops the level and the now-empty, unblocked entry", () => {
-    const granted = execVerb(base, "clearance", "ken", "internal").policy;
-    const { policy } = execVerb(granted, "clearance-reset", "ken");
-    expect(policy.callers.ken).toBeUndefined();
-  });
-  it("clearance --reset on a caller with no entry is a no-op, not an error", () => {
-    expect(() => execVerb(base, "clearance-reset", "ken")).not.toThrow();
-  });
-  it("clearance --default sets the level everyone registered gets", () => {
-    const { policy, lines } = execVerb(base, "clearance-default", "internal");
-    expect(policy.default_clearance).toBe("internal");
-    expect(lines.join("\n")).toContain("Anyone registered can be told internal content.");
-    expect(() => execVerb(base, "clearance-default", "secret")).toThrow(/public or internal/);
-  });
-  it("block sets the flag and survives a reset-to-empty; unblock clears it", () => {
-    const blocked = execVerb(base, "block", "spammer").policy;
-    expect(blocked.callers.spammer).toEqual({ block: true });
-    const stillBlocked = execVerb(blocked, "clearance-reset", "spammer").policy;
-    expect(stillBlocked.callers.spammer!.block).toBe(true); // blocked entry never dropped
-    const un = execVerb(stillBlocked, "unblock", "spammer").policy;
-    expect(un.callers.spammer).toBeUndefined();
-  });
-  it("block reports; clearance on a blocked caller still records the level but says so", () => {
-    const blocked = execVerb(base, "block", "spammer").policy;
-    const { policy, lines } = execVerb(blocked, "clearance", "spammer", "internal");
-    expect(policy.callers.spammer).toEqual({ clearance: "internal", block: true });
-    expect(lines.join("\n")).toContain("blocked");
-  });
-  // Report what the caller RESOLVES to, not what was just written: the line
-  // default and any attested roster raise it. Printing the stored value would
-  // tell an owner their edit did nothing when the default already covers it.
-  it("reports the resolved level, so a redundant grant is not read as a change", () => {
-    const withDefault: Policy = { ...base, default_clearance: "internal" };
-    const { lines } = execVerb(withDefault, "clearance", "ken", "public");
-    expect(lines.join("\n")).toContain("ken can be told internal content");
-  });
-  it("says rosters can raise a caller's level, since the report cannot show them", () => {
-    const withGroup: Policy = { ...base, groups: { eng: { roster_id: ENG, clearance: "internal" } } };
-    const { lines } = execVerb(withGroup, "clearance", "ken", "public");
-    expect(lines.join("\n")).toContain("rosters they are attested in may raise this");
-  });
+
   // `policy.callers` is a JSON.parse'd / zod z.record object, so it inherits
   // Object.prototype — and HANDLE_RE accepts "constructor". Without an
   // own-property guard, every lookup below resolves to the Object constructor
   // and throws, making a caller with that handle impossible to block.
-  it("handles a caller named after an Object.prototype key", () => {
-    const { policy, lines } = execVerb(base, "block", "constructor");
-    expect(policy.callers.constructor).toEqual({ block: true });
-    expect(lines.join("\n")).toContain("constructor is blocked.");
-  });
-  it("clearance works for a caller named after an Object.prototype key", () => {
-    const { policy } = execVerb(base, "clearance", "constructor", "internal");
-    expect(policy.callers.constructor).toEqual({ clearance: "internal", block: false });
-  });
-  it("reset/unblock stay no-ops for an Object.prototype-named caller with no entry", () => {
-    expect(execVerb(base, "clearance-reset", "constructor").lines.join("\n"))
-      .toContain("constructor can be told public content");
-    expect(execVerb(base, "unblock", "constructor").lines.join("\n"))
-      .toContain("constructor can be told public content");
+  describe("a caller named after an Object.prototype key", () => {
+    it("can be blocked", () => {
+      const { policy, lines } = execVerb(base, "block", "constructor");
+      expect(policy.callers.constructor).toEqual({ access: "blocked" });
+      expect(lines.join("\n")).toContain("constructor is blocked.");
+    });
+
+    it("can be unblocked", () => {
+      // Object.hasOwn, not a bare lookup: `callers.constructor` resolves to the
+      // INHERITED Object constructor once the own property is gone, so
+      // `toBeUndefined()` would fail on a correct removal. That is the same trap
+      // the production lookup guards against, showing up in the assertion.
+      const blocked = execVerb(base, "block", "constructor").policy;
+      const after = execVerb(blocked, "unblock", "constructor").policy;
+      expect(Object.hasOwn(after.callers, "constructor")).toBe(false);
+    });
+
+    it("stays a no-op for unblock with no entry", () => {
+      expect(execVerb(base, "unblock", "constructor").lines.join("\n"))
+        .toContain("constructor is answered");
+    });
   });
 });

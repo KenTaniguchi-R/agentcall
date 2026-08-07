@@ -1,136 +1,138 @@
 import { describe, expect, it } from "vitest";
-import {
-  ClearancePolicySchema,
-  DEFAULT_CLEARANCE,
-  capClearance,
-  clearanceFor,
-} from "../src/clearance.js";
+import { AccessPolicySchema, accessFor, capAccess, DEFAULT_ACCESS } from "../src/access.js";
 
-function policy(input: unknown) {
-  return ClearancePolicySchema.parse(input);
-}
+// Collapsed from a three-level clearance on 2026-08-07. The old tests asserted
+// that a group could RAISE a caller from `public` to `internal`; with one
+// grantable level there is no amount to raise, so the axis a group changes is
+// whether the line answers at all. See
+// docs/superpowers/specs/2026-08-07-open-default-design.md.
+const policy = (input: unknown) => AccessPolicySchema.parse(input);
 
-describe("clearance", () => {
-  it("defaults to public, the level that reveals least", () => {
-    expect(DEFAULT_CLEARANCE).toBe("public");
-    expect(clearanceFor(policy({}), "someone@acme")).toBe("public");
+const ROSTER = "rst_0123456789abcdef";
+const OTHER = "rst_fedcba9876543210";
+
+describe("access", () => {
+  it("answers anyone by default — the organization is the boundary", () => {
+    expect(DEFAULT_ACCESS).toBe("allowed");
+    expect(accessFor(policy({}), "sota")).toBe("allowed");
   });
 
-  it("grants a named caller their clearance", () => {
-    const p = policy({ callers: { "ken@acme": { clearance: "internal" } } });
-    expect(clearanceFor(p, "ken@acme")).toBe("internal");
+  it("honours a line that is closed by default", () => {
+    expect(accessFor(policy({ default_access: "blocked" }), "sota")).toBe("blocked");
   });
 
-  it("leaves an unnamed caller at the default", () => {
-    const p = policy({ callers: { "ken@acme": { clearance: "internal" } } });
-    expect(clearanceFor(p, "someone@acme")).toBe("public");
-  });
+  describe("a named caller", () => {
+    it("is blocked when the owner says so", () => {
+      const p = policy({ callers: { sota: { access: "blocked" } } });
+      expect(accessFor(p, "sota")).toBe("blocked");
+    });
 
-  describe("blocking", () => {
-    it("beats every grant, including a group's", () => {
-      // Individual denial is the strongest rule. Group membership can expand a
-      // clearance, never resurrect a caller the owner explicitly blocked.
-      const p = policy({
-        callers: { "ken@acme": { clearance: "internal", block: true } },
-        groups: { eng: { roster_id: "ros_abcdefghijklmnopqrstuvwx", clearance: "internal" } },
+    it("is answered even on a line that is closed by default", () => {
+      const p = policy({ default_access: "blocked", callers: { sota: { access: "allowed" } } });
+      expect(accessFor(p, "sota")).toBe("allowed");
+      expect(accessFor(p, "someone-else")).toBe("blocked");
+    });
+
+    it("beats every roster rule, in both directions", () => {
+      // The whole point of naming someone: it is the owner's most specific
+      // statement, so no group they belong to can override it either way.
+      const blocked = policy({
+        callers: { sota: { access: "blocked" } },
+        groups: { team: { roster_id: ROSTER, access: "allowed" } },
       });
-      expect(clearanceFor(p, "ken@acme", ["ros_abcdefghijklmnopqrstuvwx"])).toBe("blocked");
-    });
+      expect(accessFor(blocked, "sota", [ROSTER])).toBe("blocked");
 
-    it("blocks even with no clearance named", () => {
-      const p = policy({ callers: { "ken@acme": { block: true } } });
-      expect(clearanceFor(p, "ken@acme")).toBe("blocked");
+      const allowed = policy({
+        default_access: "blocked",
+        callers: { sota: { access: "allowed" } },
+        groups: { team: { roster_id: ROSTER, access: "blocked" } },
+      });
+      expect(accessFor(allowed, "sota", [ROSTER])).toBe("allowed");
     });
   });
 
-  describe("groups", () => {
-    const roster = "ros_abcdefghijklmnopqrstuvwx";
+  describe("rosters", () => {
     const p = policy({
-      groups: { eng: { roster_id: roster, clearance: "internal" } },
+      default_access: "blocked",
+      groups: { team: { roster_id: ROSTER, access: "allowed" } },
     });
 
-    it("raises clearance when the group is attested", () => {
-      expect(clearanceFor(p, "ken@acme", [roster])).toBe("internal");
+    it("opens a line the default closes, for attested members", () => {
+      expect(accessFor(p, "sota", [ROSTER])).toBe("allowed");
     });
 
-    it("does not apply without attestation", () => {
-      // The roster id must be attested by the relay. An un-attested claim is
-      // caller-supplied and must not raise anything.
-      expect(clearanceFor(p, "ken@acme", [])).toBe("public");
-      expect(clearanceFor(p, "ken@acme", ["ros_zzzzzzzzzzzzzzzzzzzzzzzz"])).toBe("public");
+    it("does nothing without attestation", () => {
+      // attestedGroups are roster ids the RELAY vouched for. A caller-supplied
+      // claim never reaches this parameter, so an unattested caller stays at the
+      // default no matter what they assert.
+      expect(accessFor(p, "sota")).toBe("blocked");
+      expect(accessFor(p, "sota", [OTHER])).toBe("blocked");
     });
 
-    it("takes the most permissive applicable grant", () => {
-      const many = policy({
-        default_clearance: "public",
-        callers: { "ken@acme": { clearance: "public" } },
-        groups: { eng: { roster_id: roster, clearance: "internal" } },
+    it("lets a blocked roster win over an allowed one", () => {
+      // Two attested rosters disagreeing resolves to the safe side. Unlike the
+      // old clearance union, which took the most PERMISSIVE grant, access takes
+      // the most restrictive — because the thing being decided is now "answer
+      // at all", where the cautious direction is to refuse.
+      const both = policy({
+        groups: {
+          team: { roster_id: ROSTER, access: "allowed" },
+          contractors: { roster_id: OTHER, access: "blocked" },
+        },
       });
-      expect(clearanceFor(many, "ken@acme", [roster])).toBe("internal");
+      expect(accessFor(both, "sota", [ROSTER, OTHER])).toBe("blocked");
     });
   });
 
   describe("prototype safety", () => {
-    // These pin the OUTCOME for prototype-shaped handles; they do not prove the
-    // `Object.hasOwn` guard is load-bearing today, and mutation testing
-    // confirms it is not: with a bare `record[key]`, "constructor" resolves to
-    // the Object constructor, whose `.block` and `.clearance` are both
-    // undefined, so the result is "public" either way.
-    //
-    // The guard stays because it stops being cosmetic the moment a field is
-    // added whose name exists on Object.prototype, or whose absence is read as
-    // anything other than falsy — which is exactly how policy.ts:161-171
-    // describes the same trap being missed the first time. These assertions are
-    // the regression net for that future change.
-    it("resolves a prototype-shaped handle to the default clearance", () => {
-      const p = policy({ callers: { "ken@acme": { clearance: "internal" } } });
-      expect(clearanceFor(p, "constructor")).toBe("public");
-      expect(clearanceFor(p, "toString")).toBe("public");
-      expect(clearanceFor(p, "hasOwnProperty")).toBe("public");
+    // z.record output inherits Object.prototype, and the handle pattern happily
+    // accepts "constructor" — so a bare `callers[handle]` resolves to the Object
+    // constructor and reads as a caller entry that is not there.
+    const p = policy({ callers: { sota: { access: "blocked" } } });
+
+    it("resolves a prototype-shaped handle to the default", () => {
+      expect(accessFor(p, "constructor")).toBe("allowed");
+      expect(accessFor(p, "toString")).toBe("allowed");
     });
 
-    it("never resolves a prototype-shaped handle to blocked", () => {
-      const p = policy({ callers: { "ken@acme": { block: true } } });
-      expect(clearanceFor(p, "valueOf")).toBe("public");
+    it("never resolves a prototype-shaped handle to a stale block", () => {
+      expect(accessFor(p, "hasOwnProperty")).not.toBe("blocked");
     });
   });
 
-  // The administrator ceiling (policy.ts's managed layer) is expressed as a
-  // clamp rather than a filter, so it lives with the ordering it depends on.
-  describe("capClearance", () => {
-    it("lowers a grant that exceeds the ceiling", () => {
-      expect(capClearance("internal", "public")).toBe("public");
+  describe("capAccess", () => {
+    it("lets an administrator close a line the owner opened", () => {
+      expect(capAccess("allowed", "blocked")).toBe("blocked");
     });
 
-    it("leaves a grant at or below the ceiling alone", () => {
-      expect(capClearance("public", "internal")).toBe("public");
-      expect(capClearance("internal", "internal")).toBe("internal");
+    it("never lets a ceiling open a line the owner closed", () => {
+      expect(capAccess("blocked", "allowed")).toBe("blocked");
     });
 
     it("is idempotent, so applying a ceiling twice cannot change a verdict", () => {
-      expect(capClearance(capClearance("internal", "public"), "public")).toBe("public");
+      expect(capAccess(capAccess("allowed", "blocked"), "blocked")).toBe("blocked");
+      expect(capAccess(capAccess("allowed", "allowed"), "allowed")).toBe("allowed");
     });
   });
 
   describe("schema", () => {
-    it("refuses to grant `secret`, which means never leaves", () => {
-      // Making the top of the lattice grantable would turn it into a bypass
-      // that any policy edit could hand out. It is structurally unavailable.
-      expect(() => policy({ callers: { "ken@acme": { clearance: "secret" } } })).toThrow();
-      expect(() => policy({ default_clearance: "secret" })).toThrow();
-      expect(() => policy({ groups: { eng: { roster_id: "ros_abcdefghijklmnopqrstuvwx", clearance: "secret" } } }))
-        .toThrow();
+    it("rejects a level from the old lattice", () => {
+      // `public`/`internal`/`secret` are not access values. Failing loudly here
+      // is what stops a policy file written against the old model from parsing
+      // into something that looks configured and is not.
+      expect(() => policy({ default_access: "internal" })).toThrow();
+      expect(() => policy({ callers: { sota: { access: "secret" } } })).toThrow();
     });
 
     it("rejects unknown keys rather than ignoring them", () => {
-      expect(() => policy({ default_clearence: "internal" })).toThrow();
+      expect(() => policy({ default_clearance: "public" })).toThrow();
+      expect(() => policy({ callers: { sota: { block: true } } })).toThrow();
     });
 
-    it("accepts an empty document and means public", () => {
+    it("accepts an empty document and means allowed", () => {
       const p = policy({});
-      expect(p.default_clearance).toBe("public");
-      expect(p.callers).toEqual({});
-      expect(p.groups).toEqual({});
+      expect(p.default_access).toBe("allowed");
+      expect(accessFor(p, "anyone")).toBe("allowed");
     });
   });
 });

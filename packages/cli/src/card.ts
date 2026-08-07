@@ -38,7 +38,7 @@ export function buildCardUpload(cfg: LineConfig, policy: Policy, tasks: Task[]):
     agent_kind: cfg.agent_kind,
     tasks: tasks.map(({ id, name, description, examples, keywords }) =>
       ({ id, name, description, examples, keywords })),
-    blocked: Object.entries(policy.callers).filter(([, e]) => e.block).map(([caller]) => caller),
+    blocked: Object.entries(policy.callers).filter(([, e]) => e.access === "blocked").map(([caller]) => caller),
   };
 }
 

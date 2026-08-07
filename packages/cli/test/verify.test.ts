@@ -180,15 +180,15 @@ describe("checkAgentSpawn", () => {
     expect(c).toMatchObject({ name: "agent run", ok: true });
   });
 
-  it("invokes runFn with the verify prompt, timeout, and the narrowest clearance", async () => {
+  it("invokes runFn with the verify prompt and timeout", async () => {
     const seen: unknown[] = [];
-    await checkAgentSpawn("claude", fakeWorkdir, async ({ kind, prompt, timeoutMs, clearance }) => {
-      seen.push(kind, prompt, timeoutMs, clearance);
+    await checkAgentSpawn("claude", fakeWorkdir, async ({ kind, prompt, timeoutMs }) => {
+      seen.push(kind, prompt, timeoutMs);
       return { text: "OK" };
     }, fakeResolveBin);
-    // "public": the doctor probe answers nobody, so it gets the clearance that
-    // reveals least rather than whatever the ask task used to carry.
-    expect(seen).toEqual(["claude", VERIFY_PROMPT, VERIFY_TIMEOUT_MS, "public"]);
+    // No clearance any more (2026-08-07): the probe answers nobody, and with
+    // one grantable level there was nothing for it to carry.
+    expect(seen).toEqual(["claude", VERIFY_PROMPT, VERIFY_TIMEOUT_MS]);
   });
 
   it("classifies an auth failure into a hint", async () => {
@@ -562,7 +562,7 @@ function realDenialStdout(): string {
       // Empty map: every path is secret by omission, so the .env probe below
       // denies on sensitivity as well as on its basename. Either route emits
       // the same stdout shape, which is the only thing this helper cares about.
-      map: withFloor(SensitivityMapSchema.parse({}), home), clearance: "internal",
+      map: withFloor(SensitivityMapSchema.parse({}), home),
     },
   ).stdout;
 }
