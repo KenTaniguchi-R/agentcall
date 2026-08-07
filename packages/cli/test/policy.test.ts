@@ -1,7 +1,6 @@
-import { chmodSync, mkdirSync, writeFileSync } from "node:fs";
-import { dirname, join } from "node:path";
+import { mkdirSync, writeFileSync } from "node:fs";
+import { dirname } from "node:path";
 import { describe, expect, it } from "vitest";
-import { accessFor } from "../src/access.js";
 import { DEFAULT_POLICY, loadPolicy, loadUserPolicy, resolveTask, savePolicy, type Policy } from "../src/policy.js";
 import { ASK_TASK, type Task } from "../src/tasks.js";
 import { getLinePaths, getMachinePaths } from "../src/paths.js";
@@ -11,18 +10,10 @@ function linePaths(home: string) {
   return getLinePaths(getMachinePaths(home, home), "line");
 }
 
-// The managed ceiling is MACHINE-scoped and its real path is deliberately
-// unredirectable (paths.ts), so a test cannot point AGENTCALL_HOME at it —
-// it overrides the field on MachinePaths instead. The line's own policyFile
-// stays per-line.
-function managedLinePaths(home: string) {
-  const m = getMachinePaths(home, home);
-  return getLinePaths({ ...m, managedPolicyFile: join(home, "managed-policy.json") }, "line");
-}
 
 function missingManagedLinePaths(home: string) {
   const m = getMachinePaths(home, home);
-  return getLinePaths({ ...m, managedPolicyFile: join(home, "missing-managed-policy.json") }, "line");
+  return getLinePaths(m, "line");
 }
 
 const intro: Task = {
@@ -87,73 +78,10 @@ describe("loadPolicy", () => {
     }
   });
 
-  it("applies a managed access ceiling to the default, callers, and attested groups", () => {
-    const home = tempDir("agentcall-pol-");
-    const p = managedLinePaths(home);
-    mkdirSync(dirname(p.policyFile), { recursive: true });
-    writeFileSync(p.policyFile, JSON.stringify({
-      ...policy, default_access: "allowed",
-    }));
-    writeFileSync(p.machine.managedPolicyFile, JSON.stringify({
-      version: 1,
-      max_clearance: "blocked",
-    }));
 
-    // An administrator ceiling can only close. It caps the values the owner
-    // actually wrote — the default here — and what matters is the RESOLUTION:
-    // `ken` has no explicit access, so nothing is written into their entry, and
-    // they come back blocked through the capped default rather than through a
-    // rewritten record.
-    const effective = loadPolicy(p);
-    expect(effective.default_access).toBe("blocked");
-    expect(effective.callers.ken!.access).toBeUndefined();
-    expect(accessFor(effective, "ken", [ENG])).toBe("blocked");
-  });
 
-  it("leaves clearances alone when the administrator sets no ceiling", () => {
-    const home = tempDir("agentcall-pol-");
-    const p = managedLinePaths(home);
-    mkdirSync(dirname(p.policyFile), { recursive: true });
-    writeFileSync(p.policyFile, JSON.stringify(policy));
-    writeFileSync(p.machine.managedPolicyFile, JSON.stringify({ version: 1 }));
-    expect(accessFor(loadPolicy(p), "ken")).toBe("allowed");
-  });
 
-  it("makes managed caller blocks unoverridable without rewriting user policy", () => {
-    const home = tempDir("agentcall-pol-");
-    const p = managedLinePaths(home);
-    mkdirSync(dirname(p.policyFile), { recursive: true });
-    writeFileSync(p.policyFile, JSON.stringify(policy));
-    writeFileSync(p.machine.managedPolicyFile, JSON.stringify({
-      version: 1,
-      blocked_callers: ["ken", "constructor"],
-    }));
 
-    const effective = loadPolicy(p);
-    expect(accessFor(effective, "ken")).toBe("blocked");
-    expect(accessFor(effective, "constructor")).toBe("blocked");
-    expect(Object.hasOwn(effective.callers, "constructor")).toBe(true);
-    expect(accessFor(loadUserPolicy(p), "ken")).toBe("allowed");
-  });
-
-  it("fails closed when a managed policy exists but is invalid", () => {
-    const home = tempDir("agentcall-pol-");
-    const p = managedLinePaths(home);
-    writeFileSync(p.machine.managedPolicyFile, JSON.stringify({ version: 1, max_clearance: "secret" }));
-    expect(() => loadPolicy(p)).toThrow(/managed policy/i);
-  });
-
-  it("fails closed when a managed policy exists but cannot be read", () => {
-    const home = tempDir("agentcall-pol-");
-    const p = managedLinePaths(home);
-    writeFileSync(p.machine.managedPolicyFile, JSON.stringify({ version: 1 }));
-    chmodSync(p.machine.managedPolicyFile, 0o000);
-    try {
-      expect(() => loadPolicy(p)).toThrow(/managed policy.*unreadable/i);
-    } finally {
-      chmodSync(p.machine.managedPolicyFile, 0o600);
-    }
-  });
 
   it("treats a missing managed policy as no administrator restriction", () => {
     const home = tempDir("agentcall-pol-");
@@ -163,20 +91,22 @@ describe("loadPolicy", () => {
     expect(loadPolicy(p)).toEqual(policy);
   });
 
-  it("rejects an effective block union too large for the relay card", () => {
+  // The relay card can only carry so many blocked handles, so a policy that
+  // blocks more than the card can publish is refused rather than silently
+  // enforcing less than it says.
+  it("rejects a block list too large for the relay card", () => {
     const home = tempDir("agentcall-pol-");
-    const p = managedLinePaths(home);
+    const p = linePaths(home);
     mkdirSync(dirname(p.policyFile), { recursive: true });
-    const callers = Object.fromEntries(Array.from({ length: 200 }, (_, i) => [
-      `user-${i}`,
-      { access: "blocked" },
+    const atCap = Object.fromEntries(Array.from({ length: 200 }, (_, i) => [
+      `user-${i}`, { access: "blocked" },
     ]));
-    writeFileSync(p.policyFile, JSON.stringify({ callers }));
-
-    writeFileSync(p.machine.managedPolicyFile, JSON.stringify({ version: 1, blocked_callers: ["user-0"] }));
+    writeFileSync(p.policyFile, JSON.stringify({ callers: atCap }));
     expect(() => loadPolicy(p)).not.toThrow();
 
-    writeFileSync(p.machine.managedPolicyFile, JSON.stringify({ version: 1, blocked_callers: ["extra-user"] }));
+    writeFileSync(p.policyFile, JSON.stringify({
+      callers: { ...atCap, "one-too-many": { access: "blocked" } },
+    }));
     expect(() => loadPolicy(p)).toThrow(/at most 200.*enforced and published/i);
   });
 
@@ -224,34 +154,7 @@ describe("loadPolicy", () => {
     expect(loadUserPolicy(p).tests).toHaveLength(1);
   });
 
-  it("evaluates user assertions after the managed clearance ceiling", () => {
-    const home = tempDir("agentcall-pol-");
-    const p = managedLinePaths(home);
-    mkdirSync(dirname(p.policyFile), { recursive: true });
-    writeFileSync(p.policyFile, JSON.stringify({
-      tests: [{ caller: "ken", expect_access: "blocked" }],
-    }));
-    writeFileSync(p.machine.managedPolicyFile, JSON.stringify({ version: 1, max_clearance: "allowed" }));
-    expect(() => loadPolicy(p)).toThrow(/user policy assertion 1.*expected blocked.*got allowed/i);
-  });
 
-  it("lets managed assertions prove an administrator block survived user policy", () => {
-    const home = tempDir("agentcall-pol-");
-    const p = managedLinePaths(home);
-    mkdirSync(dirname(p.policyFile), { recursive: true });
-    writeFileSync(p.policyFile, JSON.stringify({
-      default_access: "allowed", callers: { ken: { access: "allowed" } },
-    }));
-    writeFileSync(p.machine.managedPolicyFile, JSON.stringify({
-      version: 1, blocked_callers: ["ken"], tests: [{ caller: "ken", expect_access: "blocked" }],
-    }));
-    expect(() => loadPolicy(p)).not.toThrow();
-
-    writeFileSync(p.machine.managedPolicyFile, JSON.stringify({
-      version: 1, tests: [{ caller: "ken", expect_access: "blocked" }],
-    }));
-    expect(() => loadPolicy(p)).toThrow(/managed policy assertion 1/i);
-  });
 });
 
 // resolveTask no longer consults a menu: a task is not individually granted,

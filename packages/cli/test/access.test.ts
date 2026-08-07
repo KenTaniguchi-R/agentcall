@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { AccessPolicySchema, accessFor, capAccess, DEFAULT_ACCESS } from "../src/access.js";
+import { AccessPolicySchema, accessFor, DEFAULT_ACCESS } from "../src/access.js";
 
 // Collapsed from a three-level clearance on 2026-08-07. The old tests asserted
 // that a group could RAISE a caller from `public` to `internal`; with one
@@ -97,21 +97,6 @@ describe("access", () => {
 
     it("never resolves a prototype-shaped handle to a stale block", () => {
       expect(accessFor(p, "hasOwnProperty")).not.toBe("blocked");
-    });
-  });
-
-  describe("capAccess", () => {
-    it("lets an administrator close a line the owner opened", () => {
-      expect(capAccess("allowed", "blocked")).toBe("blocked");
-    });
-
-    it("never lets a ceiling open a line the owner closed", () => {
-      expect(capAccess("blocked", "allowed")).toBe("blocked");
-    });
-
-    it("is idempotent, so applying a ceiling twice cannot change a verdict", () => {
-      expect(capAccess(capAccess("allowed", "blocked"), "blocked")).toBe("blocked");
-      expect(capAccess(capAccess("allowed", "allowed"), "allowed")).toBe("allowed");
     });
   });
 

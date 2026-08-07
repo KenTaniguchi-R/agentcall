@@ -5,7 +5,6 @@ import { type Task } from "./tasks.js";
 
 interface PolicyReportOptions {
   agentKind: CallableLineConfig["agent_kind"];
-  managed: boolean;
   defaultWorkdir: string;
 }
 
@@ -52,11 +51,8 @@ export function renderPolicyReport(
   options: PolicyReportOptions,
 ): string {
   const lines = [
-    "Effective clearance policy",
+    "Effective access policy",
     `Agent runtime: ${options.agentKind === "claude" ? "Claude" : "Codex"}`,
-    options.managed
-      ? "Administrator policy: active — combined result shown below"
-      : "Administrator policy: not installed",
     policy.tests?.length
       ? `Policy checks: ${policy.tests.length} passed while loading this policy`
       : "Policy checks: none configured",

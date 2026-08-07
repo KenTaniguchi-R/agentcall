@@ -608,32 +608,6 @@ describe("startListener task resolution", () => {
     });
   });
 
-  it("enforces an administrator block even when user policy allows the caller", async () => {
-    let spawned = false;
-    const relayReady = new Promise<WsSocket>((resolveWs) => {
-      void fakeRelay((ws) => resolveWs(ws)).then((url) => {
-        const deps = baseDeps(url);
-        seedPolicy(deps.paths, { default_access: "allowed", callers: {} });
-        // The ceiling lives on the MACHINE, not the line — overridden here
-        // because its production path is deliberately unredirectable.
-        const paths = {
-          ...deps.paths,
-          machine: { ...deps.paths.machine, managedPolicyFile: join(deps.paths.dir, "managed-policy.json") },
-        };
-        writeFileSync(paths.machine.managedPolicyFile, JSON.stringify({
-          version: 1,
-          blocked_callers: ["spammer"],
-        }));
-        stopper = startListener({ ...deps, paths, run: async () => { spawned = true; return { text: "x" }; } });
-      });
-    });
-    const ws = await relayReady;
-    const expectFrames = frames(ws, 1);
-    await sendIncoming(ws, { call_id: "managed-block", from: "spammer", message: "hi" });
-    const [failed] = await expectFrames;
-    expect(failed).toMatchObject({ type: "call_failed", call_id: "managed-block", code: "blocked" });
-    expect(spawned).toBe(false);
-  });
 
   // Was "refuses an ungranted task with the caller's offered menu, without
   // spawning". #379 deleted the menu, so a task no policy names now runs for

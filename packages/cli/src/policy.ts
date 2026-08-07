@@ -10,8 +10,7 @@ import { readFileSync } from "node:fs";
 import { z } from "zod";
 import { HANDLE_RE, MAX_CARD_BLOCKED_CALLERS } from "@benree/agentcall-shared";
 import {
-  AccessPolicySchema, GROUP_NAME_RE, AccessSchema, capAccess, accessFor,
-  type Access,
+  AccessPolicySchema, GROUP_NAME_RE, AccessSchema, accessFor,
 } from "./access.js";
 import { writeJsonAtomic } from "./json-store.js";
 import type { LinePaths } from "./paths.js";
@@ -41,19 +40,6 @@ const PolicySchema = AccessPolicySchema.extend({
 });
 export type Policy = z.infer<typeof PolicySchema>;
 
-const ManagedPolicySchema = z.object({
-  version: z.literal(1),
-  // Omitted means the administrator does not cap clearance. This is the
-  // successor to the task-menu era's `allowed_tasks`: that bounded which tasks
-  // the owner could grant, this bounds how much any grant can reveal. There is
-  // no deny-all value because `blocked_callers` is the deny-all lever, and
-  // because `secret` is not grantable in the first place.
-  max_clearance: AccessSchema.optional(),
-  blocked_callers: z.array(z.string().regex(HANDLE_RE)).default([]),
-  tests: z.array(PolicyAssertionSchema).max(MAX_POLICY_ASSERTIONS).optional(),
-}).strict();
-type ManagedPolicy = z.infer<typeof ManagedPolicySchema>;
-
 export const DEFAULT_POLICY: Policy = {
   description: "", default_access: "allowed", callers: {}, groups: {},
 };
@@ -81,34 +67,6 @@ export function loadUserPolicy(p: LinePaths): Policy {
   return readOptionalJson(p.policyFile, "user policy", PolicySchema) ?? DEFAULT_POLICY;
 }
 
-function applyManagedPolicy(user: Policy, managed: ManagedPolicy): Policy {
-  const ceiling = managed.max_clearance;
-  const cap = (value: Access | undefined) =>
-    value === undefined || ceiling === undefined ? value : capAccess(value, ceiling);
-
-  const callerEntries = new Map(Object.entries(user.callers).map(([handle, entry]) => {
-    const access = cap(entry.access);
-    return [handle, access === undefined ? {} : { access }] as const;
-  }));
-  // An administrator may close a line the owner opened, never the reverse —
-  // which is why this overwrites rather than merges with the owner's value.
-  for (const handle of managed.blocked_callers) {
-    callerEntries.set(handle, { access: "blocked" });
-  }
-
-  const assertions = [...(user.tests ?? []), ...(managed.tests ?? [])];
-  return {
-    description: user.description,
-    default_access: cap(user.default_access) ?? user.default_access,
-    callers: Object.fromEntries(callerEntries),
-    groups: Object.fromEntries(Object.entries(user.groups).map(([name, group]) => {
-      const access = cap(group.access);
-      return [name, { roster_id: group.roster_id, ...(access === undefined ? {} : { access }) }];
-    })),
-    ...(assertions.length > 0 ? { tests: assertions } : {}),
-  };
-}
-
 function validateEffectivePolicy(policy: Policy): Policy {
   const blocked = Object.values(policy.callers).filter((entry) => entry.access === "blocked").length;
   if (blocked > MAX_CARD_BLOCKED_CALLERS) {
@@ -126,19 +84,20 @@ export function loadPolicy(p: LinePaths): Policy {
   return validatePolicy(p, loadUserPolicy(p));
 }
 
-// Validate a proposed user policy against the installed managed layer before
-// writing it. CLI mutations use this to reject a change that would break an
-// assertion, preserving the last known-good file and listener availability.
+// Validate a proposed user policy before writing it. CLI mutations use this to
+// reject a change that would break an assertion, preserving the last known-good
+// file and listener availability.
 //
-// The user half is per-LINE (p.policyFile); the managed half is per-MACHINE
-// (p.machine.managedPolicyFile). An administrator ceiling that lived on the
-// line would be escaped by `agentcall line add`, and its path is deliberately
-// independent of AGENTCALL_HOME — see paths.ts.
+// There was a machine-scoped administrator ceiling here until 2026-08-07
+// (max_clearance + blocked_callers + its own assertions, merged by
+// applyManagedPolicy). It was READ but never WRITTEN: no command produced the
+// file, so an administrator had to hand-author JSON into a platform-specific
+// path they could only find by reading this source. An enterprise control with
+// no tooling is one nobody can use. Restore it from git history alongside a
+// command that writes it, not on its own.
 export function validatePolicy(p: LinePaths, user: Policy): Policy {
-  const managed = readOptionalJson(p.machine.managedPolicyFile, "managed policy", ManagedPolicySchema);
-  const effective = validateEffectivePolicy(managed === undefined ? user : applyManagedPolicy(user, managed));
+  const effective = validateEffectivePolicy(user);
   validatePolicyAssertions(effective, user.tests ?? [], "user policy");
-  if (managed !== undefined) validatePolicyAssertions(effective, managed.tests ?? [], "managed policy");
   return effective;
 }
 
@@ -162,7 +121,7 @@ export function callerEntry(policy: Policy, handle: string): CallerEntry | undef
 }
 
 function validatePolicyAssertions(
-  effective: Policy, assertions: readonly PolicyAssertion[], source: "user policy" | "managed policy",
+  effective: Policy, assertions: readonly PolicyAssertion[], source: "user policy",
 ): void {
   for (const [index, assertion] of assertions.entries()) {
     const unknownGroups = assertion.groups.filter((name) => !Object.hasOwn(effective.groups, name));

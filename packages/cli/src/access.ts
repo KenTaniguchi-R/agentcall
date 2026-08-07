@@ -89,13 +89,3 @@ export function accessFor(
   return policy.default_access;
 }
 
-/**
- * Apply an administrator ceiling.
- *
- * The managed-policy analogue of `accessFor`: an administrator may close a line
- * the owner opened, never open one the owner closed. Idempotent, which is what
- * makes the managed layer safe to compose.
- */
-export function capAccess(value: Access, ceiling: Access): Access {
-  return ceiling === "blocked" ? "blocked" : value;
-}

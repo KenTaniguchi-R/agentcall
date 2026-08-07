@@ -1,4 +1,3 @@
-import { existsSync } from "node:fs";
 import { loadPolicy } from "../policy.js";
 import { loadTasks } from "../tasks.js";
 import { renderPolicyReport } from "../policy-report.js";
@@ -26,9 +25,6 @@ export function register(program: { command(name: string): any }): void {
       try {
         const report = renderPolicyReport(loadPolicy(ctx.paths), loadTasks(ctx.paths), {
           agentKind: cfg.agent_kind,
-          // Machine-scoped, not line-scoped: the administrator ceiling applies
-          // to every line on this machine (see paths.ts).
-          managed: existsSync(ctx.paths.machine.managedPolicyFile),
           // Derived from the sensitivity map since #372, at `internal` — the
           // most permissive grantable clearance, so this is the best case. A
           // caller cleared only for `public` may land somewhere narrower, which

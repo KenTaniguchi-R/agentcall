@@ -12,12 +12,6 @@ const cfg: LineConfig = { org: "acme", handle: "ken", token: "t", agent_kind: "c
 function linePaths(h: string) {
   return getLinePaths(getMachinePaths(h, h), "line");
 }
-// The managed ceiling is machine-scoped and unredirectable in production, so
-// tests override it on MachinePaths rather than through AGENTCALL_HOME.
-function managedLinePaths(h: string) {
-  const m = getMachinePaths(h, h);
-  return getLinePaths({ ...m, managedPolicyFile: join(h, "managed-policy.json") }, "line");
-}
 function home() {
   const h = tempDir("agentcall-lint-");
   mkdirSync(linePaths(h).dir, { recursive: true });
@@ -153,22 +147,4 @@ describe("buildCardReport", () => {
     expect(text).toContain("spammer: blocked");
   });
 
-  // Was "renders the administrator-filtered menu rather than raw user grants".
-  // `allowed_tasks` became `max_clearance` in #379 — same administrator
-  // ceiling, applied to how much a caller may be told rather than to which
-  // tasks they may run — so this pins the same property on the new lever.
-  it("renders the administrator-capped clearance rather than the raw user grant", () => {
-    const h = home();
-    const p = managedLinePaths(h);
-    writeSkill(h, "intro", "---\ndescription: d\n---\n");
-    writeFileSync(p.policyFile, JSON.stringify({
-      default_access: "allowed", callers: { mia: { access: "allowed" } },
-    }));
-    writeFileSync(p.machine.managedPolicyFile, JSON.stringify({ version: 1, max_clearance: "allowed" }));
-
-    const text = buildCardReport(cfg, p).menu.join("\n");
-    expect(text).toContain("Anyone registered by default: allowed");
-    expect(text).toContain("mia: allowed");
-    expect(text).not.toContain("internal");
-  });
 });

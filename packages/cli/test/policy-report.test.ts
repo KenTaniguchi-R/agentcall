@@ -48,13 +48,11 @@ describe("renderPolicyReport", () => {
   it("renders effective default, caller, group, block, task, and assertion policy in plain language", () => {
     const report = renderPolicyReport(policy, [ASK_TASK, deploy, browse, shell], {
       agentKind: "claude",
-      managed: true,
       defaultWorkdir: "/srv/agentcall-default",
     });
 
-    expect(report).toContain("Effective clearance policy");
+    expect(report).toContain("Effective access policy");
     expect(report).toContain("Agent runtime: Claude");
-    expect(report).toContain("Administrator policy: active — combined result shown below");
     expect(report).toContain("Policy checks: 1 passed while loading this policy");
     // Capabilities are gone (#372): every task reads and only reads, so the
     // report states that once per task instead of enumerating a per-task list.
@@ -87,7 +85,6 @@ describe("renderPolicyReport", () => {
   it("states the weaker Codex enforcement semantics instead of implying per-tool controls", () => {
     const report = renderPolicyReport(policy, [ASK_TASK, deploy, browse, shell], {
       agentKind: "codex",
-      managed: false,
       defaultWorkdir: "/srv/agentcall-default",
     });
 

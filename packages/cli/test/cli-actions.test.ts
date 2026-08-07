@@ -871,7 +871,7 @@ describe.sequential("CLI command actions", () => {
 
     expect(out.code).toBe(0);
     expect(out.stderr).toBe("");
-    expect(out.stdout).toContain("Effective clearance policy");
+    expect(out.stdout).toContain("Effective access policy");
     expect(out.stdout).toMatch(new RegExp(`Tasks — every caller who is not blocked[\\s\\S]*ask — Ask a question[\\s\\S]*Working directory: ${paths.shareDir}`));
     expect(out.stdout).toMatch(/deploy — Deploy production[\s\S]*inspect files — answers are read-only/);
     // The exec warning is gone with the capability that caused it (#372).

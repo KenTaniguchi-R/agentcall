@@ -22,10 +22,6 @@ export interface MachinePaths {
   removedDir: string;
   listenerLog: string;
   telemetryHealthFile: string;
-  // Machine-scoped, not line-scoped, on purpose. It is an administrator ceiling:
-  // if it were per-line, adding a line would escape it. It is also deliberately
-  // independent of stateRoot/AGENTCALL_HOME — see managedPolicyPath below.
-  managedPolicyFile: string;
 }
 
 export interface LinePaths {
@@ -66,16 +62,9 @@ export interface LinePaths {
   recoveryPendingFile: string;
 }
 
-function managedPolicyPath(platform: NodeJS.Platform = process.platform): string {
-  if (platform === "darwin") return "/Library/Application Support/agentcall/policy.json";
-  if (platform === "linux") return "/etc/agentcall/policy.json";
-  throw new Error(`Managed policy is not supported on ${platform}`);
-}
-
 export function getMachinePaths(
   stateRoot: string = process.env.AGENTCALL_HOME ?? os.homedir(),
   userHome: string = os.homedir(),
-  platform: NodeJS.Platform = process.platform,
 ): MachinePaths {
   const dir = join(stateRoot, ".agentcall");
   return {
@@ -93,7 +82,6 @@ export function getMachinePaths(
     telemetryHealthFile: join(dir, "telemetry-health.json"),
     // Deliberately independent of stateRoot and AGENTCALL_HOME: an unprivileged
     // user must not be able to relocate the administrator-owned policy.
-    managedPolicyFile: managedPolicyPath(platform),
   };
 }
 
