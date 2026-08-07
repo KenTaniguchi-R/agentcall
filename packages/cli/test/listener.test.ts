@@ -9,7 +9,7 @@ import {
   keyIdFor, requestTranscript, transcriptHash, type E2EERequestPayloadType,
   type EncryptionKeyRecordType,
 } from "@benree/agentcall-shared";
-import { runtimeToolTelemetryEnabled, startListener } from "../src/listener.js";
+import { startListener } from "../src/listener.js";
 import { getLinePaths, getMachinePaths, type LinePaths, type MachinePaths } from "../src/paths.js";
 import { AgentRunError, buildSpawnSpec } from "../src/runner.js";
 import { loadContexts, mintContextId, saveContexts, type ContextBinding } from "../src/contexts.js";
@@ -25,13 +25,6 @@ let callerKeys: StoredKeys;
 let listenerKeys: StoredKeys;
 const requestByCall = new Map<string, E2EERequestPayloadType>();
 
-describe("runtime tool telemetry gate", () => {
-  it("follows a hot-edited runtime instead of the startup runtime", () => {
-    expect(runtimeToolTelemetryEnabled("codex", false)).toBe(false);
-    expect(runtimeToolTelemetryEnabled("codex", true)).toBe(true);
-    expect(runtimeToolTelemetryEnabled("claude", false)).toBe(true);
-  });
-});
 
 beforeAll(async () => {
   cryptoRoot = mkdtempSync(join(tmpdir(), "agentcall-listener-crypto-"));
@@ -157,7 +150,6 @@ function baseDeps(relay: string) {
   const paths = seededPaths();
   return {
     paths, relay, loadConfig: () => ({ ...cfg, relay }), codexThreadingEnabled: () => true,
-    codexToolTelemetryEnabled: () => true,
     fetchKeys: async (_relay: string, _auth: unknown, handle: string) => {
       const record: EncryptionKeyRecordType = {
         v: 1, relay_origin: `${handle}@127.0.0.1`.slice(`${handle}@127.0.0.1`.indexOf("@") + 1), address: `${handle}@127.0.0.1`, key_id: await keyIdFor(callerKeys.encryption_pub),
@@ -787,55 +779,21 @@ describe("startListener task resolution", () => {
 });
 
 describe("startListener line name propagation", () => {
-  // Task 7 made the PreToolUse guard fail closed without AGENTCALL_LINE: no
-  // env var, no tool call succeeds, for every task on that call. If
-  // listener.ts:139's `deps.paths.name` ever regresses back to the old
-  // hardcoded `""` — or `run`'s nine positional arguments get reordered,
-  // which is a live risk given how many there are — every answered call on
-  // every line dies at its first tool use, silently, with the generic
-  // DENY_REASON that deliberately gives no path and no rule name. That
-  // failure mode is too silent to trust to "the two halves of this chain are
-  // each covered by their own unit test" (runner.test.ts's "AGENTCALL_LINE
-  // propagation" proves buildSpawnSpec maps a given lineName into
-  // env.AGENTCALL_LINE; this only needs to prove the listener still passes
-  // it) — a refactor can keep both halves individually green while the
-  // wiring between them silently rots. This goes through startListener end
-  // to end and lands the assertion on the actual env var a spawned process
-  // would see, not on an intermediate string.
   it("regressing this breaks the PreToolUse guard fail-closed on every answered call: line name must reach AGENTCALL_LINE", async () => {
     const paths = getLinePaths(freshMachine(), "sales");
     const captured: {
       kind?: "claude" | "codex"; prompt?: string; workdir?: string;
       envelope?: unknown; callId?: string; lineName?: string; correlationId?: string;
-      toolTelemetryFile?: string;
     } = {};
-    const recordTool = vi.fn();
-    const endInvocation = vi.fn();
     const relayReady = new Promise<WsSocket>((resolveWs) => {
       void fakeRelay((ws) => resolveWs(ws)).then((url) => {
         stopper = startListener({
           ...baseDeps(url), paths,
           loadConfig: () => ({ ...cfg, relay: url }),
-          telemetry: {
-            startInbound: () => ({
-              context: {} as never,
-              endAdmission: () => {},
-              startInvocation: () => ({ recordTool, end: endInvocation }),
-            }),
-          } as never,
-          createToolEventSpool: () => ({
-            file: "/private/tmp/agentcall-tool-events-test.jsonl",
-            dispose: () => {},
-            collect: () => [{
-              callId: "c1", toolCallId: "tool-1", toolName: "Read", outcome: "success" as const,
-              startedAtMs: 1_000, endedAtMs: 1_010, durationMs: 10,
-            }],
-          }),
-          run: async ({ kind, prompt, workdir, callId, lineName, correlationId, toolTelemetryFile }) => {
+          run: async ({ kind, prompt, workdir, callId, lineName, correlationId }) => {
             captured.kind = kind; captured.prompt = prompt; captured.workdir = workdir;
             captured.callId = callId; captured.lineName = lineName;
             captured.correlationId = correlationId;
-            captured.toolTelemetryFile = toolTelemetryFile;
             return { text: "ok" };
           },
         });
@@ -885,50 +843,9 @@ describe("startListener line name propagation", () => {
     // runtime assertion here the way callId/workdir/lineName do.
     expect(spec.env?.AGENTCALL_CALL_ID).toBe("c1");
     expect(captured.correlationId).toBe("a".repeat(32));
-    expect(captured.toolTelemetryFile).toBe("/private/tmp/agentcall-tool-events-test.jsonl");
-    expect(recordTool).toHaveBeenCalledWith(expect.objectContaining({
-      callId: "c1", toolCallId: "tool-1", toolName: "Read",
-    }));
-    expect(endInvocation).toHaveBeenCalledWith("success", undefined);
   });
 
-  it("disposes an active tool spool and aborts the answering run before graceful stop returns", async () => {
-    const paths = getLinePaths(freshMachine(), "shutdown");
-    const dispose = vi.fn();
-    let runAborted = false;
-    const relayReady = new Promise<WsSocket>((resolveWs) => {
-      void fakeRelay((ws) => resolveWs(ws)).then((url) => {
-        stopper = startListener({
-          ...baseDeps(url), paths,
-          loadConfig: () => ({ ...cfg, relay: url }),
-          telemetry: {
-            startInbound: () => ({
-              context: {} as never,
-              endAdmission: () => {},
-              startInvocation: () => ({ recordTool: () => {}, end: () => {} }),
-            }),
-          } as never,
-          createToolEventSpool: () => ({
-            file: "/private/state/active-tool-events.jsonl", dispose, collect: () => [],
-          }),
-          run: async ({ signal }) =>
-            new Promise((resolve) => signal?.addEventListener("abort", () => {
-              runAborted = true;
-              resolve({ text: "canceled" });
-            }, { once: true })),
-        });
-      });
-    });
-    const ws = await relayReady;
-    const started = frames(ws, 2);
-    await sendIncoming(ws, { call_id: "stop-call", from: "shusaku", message: "hi" });
-    await started;
 
-    await stopper!.stop();
-    stopper = undefined;
-    expect(dispose).toHaveBeenCalledOnce();
-    expect(runAborted).toBe(true);
-  });
 });
 
 // Minimal fake WebSocket for tests that need to assert on what each

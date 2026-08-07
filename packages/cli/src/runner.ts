@@ -5,7 +5,6 @@ import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { AGENT_TIMEOUT_MS, MAX_REPLY_BYTES, type AgentKind } from "@benree/agentcall-shared";
 import { resolveAgentBin } from "./bin.js";
-import { agentChildEnv } from "./telemetry-env.js";
 
 export type { AgentKind };
 
@@ -345,7 +344,7 @@ export function buildSpawnSpec(options: SpawnOptions): SpawnSpec {
     resolveBin = resolveAgentBin, callId = "unknown", resume, correlationId, toolTelemetryFile,
     mcpServers = [],
   } = options;
-  const childEnv = agentChildEnv(process.env);
+  const childEnv = process.env;
   const correlationEnv = correlationId ? { AGENTCALL_CORRELATION_ID: correlationId } : {};
   if (kind === "claude") {
     return {

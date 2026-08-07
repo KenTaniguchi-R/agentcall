@@ -26,7 +26,7 @@ Commands:
   verify [options] <address>             fetch and verify a peer's pinned identity fingerprint
   trust [options]                        manage explicitly pinned peer identities
   keys                                   manage this line's end-to-end encryption keys
-  doctor                                 verify this install can answer calls: binary, auth, agent spawn, tool telemetry, listener, relay self-call
+  doctor                                 verify this install can answer calls: binary, auth, agent spawn, listener, relay self-call
   history [options]                      show call activity stored locally on this machine
   lint [options]                         validate tasks, effective policy assertions, and the published card
   policy [options]                       show the effective per-caller clearance policy and the tasks it covers
@@ -299,8 +299,8 @@ Options:
 ```text
 Usage: agentcall doctor [options]
 
-verify this install can answer calls: binary, auth, agent spawn, tool
-telemetry, listener, relay self-call
+verify this install can answer calls: binary, auth, agent spawn, listener,
+relay self-call
 
 Options:
   -h, --help  display help for command

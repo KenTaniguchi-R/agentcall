@@ -17,7 +17,6 @@ import {
 import { resolveAgentBin } from "../src/bin.js";
 import { getLinePaths, getMachinePaths } from "../src/paths.js";
 import { ASK_TASK, type Task } from "../src/tasks.js";
-import { agentChildEnv } from "../src/telemetry-env.js";
 
 // runAgent/buildSpawnSpec take the resolved working directory, not a paths object.
 const WORKDIR = getLinePaths(getMachinePaths("/tmp/fakehome"), "line").shareDir;
@@ -216,37 +215,6 @@ describe("buildSpawnSpec", () => {
   });
 });
 
-describe("telemetry environment isolation", () => {
-  it("removes collector routing and credentials but keeps unrelated environment", () => {
-    expect(agentChildEnv({
-      PATH: "/bin", OTEL_EXPORTER_OTLP_HEADERS: "authorization=secret",
-      OTEL_EXPORTER_OTLP_ENDPOINT: "https://collector.example",
-      AGENTCALL_OTEL: "1", AGENTCALL_OTEL_MAX_ROOT_SPANS_PER_MINUTE: "10",
-      AGENTCALL_TOOL_TELEMETRY_FILE: "/stale-or-attacker-controlled",
-      otel_exporter_otlp_headers: "authorization=lowercase-secret",
-      AgentCall_Otel_Exporter_Headers: "authorization=mixed-secret",
-    })).toEqual({ PATH: "/bin" });
-  });
-
-  it("passes only bounded local correlation into every answering runtime", () => {
-    const previousHeader = process.env.OTEL_EXPORTER_OTLP_HEADERS;
-    process.env.OTEL_EXPORTER_OTLP_HEADERS = "authorization=secret";
-    try {
-      for (const kind of ["claude", "codex"] as const) {
-        const spec = buildSpawnSpec({
-          kind, prompt: "PROMPT", workdir: WORKDIR, resolveBin: () => `/abs/${kind}`,
-          callId: "call-1", lineName: LINE, correlationId: "a".repeat(32),
-        });
-        expect(spec.env?.OTEL_EXPORTER_OTLP_HEADERS).toBeUndefined();
-        expect(spec.env?.AGENTCALL_CALL_ID).toBe("call-1");
-        expect(spec.env?.AGENTCALL_CORRELATION_ID).toBe("a".repeat(32));
-      }
-    } finally {
-      if (previousHeader === undefined) delete process.env.OTEL_EXPORTER_OTLP_HEADERS;
-      else process.env.OTEL_EXPORTER_OTLP_HEADERS = previousHeader;
-    }
-  });
-});
 
 describe("output parsing", () => {
   it("parses claude json output", () => {

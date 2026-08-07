@@ -15,9 +15,8 @@ import { loadKeys } from "./keys.js";
 import { assertPrivateFile } from "./json-store.js";
 import { checkKnownPeersStore } from "./known-peers.js";
 import {
-  codexToolTelemetryEnabled, type AgentKind,
+  type AgentKind,
 } from "./runner.js";
-import { readTelemetryHealth } from "./telemetry-health.js";
 import {
   checkCodexGuard, checkGuard, checkRelaySelfCall, formatCheck, short, verifyAgent,
   type CodexGuardProbeFn, type GuardBinaryProbeFn, type GuardProbeFn,
@@ -37,8 +36,6 @@ interface DoctorDeps {
   guardFn?: GuardProbeFn;
   guardBinaryFn?: GuardBinaryProbeFn;
   codexGuardFn?: CodexGuardProbeFn;
-  codexTelemetryEnabledFn?: () => boolean;
-  telemetryOptInFn?: () => boolean;
   keyHealthFn?: (cfg: LineConfig, paths: LinePaths) => Promise<VerifyCheck[]>;
   pkgFn?: () => CliPackageManifest;
   selfPathFn?: () => string;
@@ -284,21 +281,6 @@ export async function runDoctor(deps: DoctorDeps): Promise<number> {
     }
   }
 
-  const telemetryHealth = readTelemetryHealth(deps.machine.telemetryHealthFile);
-  if (telemetryHealth) {
-    const { trace_export, metric_export, span_queue } = telemetryHealth.failures;
-    report({
-      name: "local telemetry export",
-      ok: true,
-      warn: telemetryHealth.status === "degraded",
-      detail: telemetryHealth.status === "ok"
-        ? "no local export degradation recorded"
-        : `degraded — trace export failures ${trace_export}, metric export failures ${metric_export}, span queue drops ${span_queue}`,
-      hint: telemetryHealth.status === "degraded"
-        ? "check the local OTLP endpoint and ~/.agentcall/listener.log"
-        : undefined,
-    });
-  }
 
   const peerStore = checkKnownPeersStore(deps.machine);
   report({ name: "known-peer trust store", ok: peerStore.ok, detail: peerStore.detail });
@@ -451,19 +433,10 @@ export async function runDoctor(deps: DoctorDeps): Promise<number> {
       }
       report(guardCheck);
     } else if (cfg.agent_kind === "codex" && agentOk) {
-      const telemetryOptIn = (deps.telemetryOptInFn ?? (() => process.env.AGENTCALL_OTEL === "1"))();
-      if (telemetryOptIn && !(deps.codexTelemetryEnabledFn ?? codexToolTelemetryEnabled)()) {
-        report(await checkCodexGuard(agentWorkdir, deps.codexGuardFn, false));
-        report({
-          name: "codex tool telemetry",
-          ok: true,
-          warn: true,
-          detail: "no codex-cli release has passed the default-path lifecycle probe",
-          hint: "Codex call telemetry remains available, but tool spans stay disabled until the default tool path emits paired hooks",
-        });
-      } else {
-        report(await checkCodexGuard(agentWorkdir, deps.codexGuardFn, telemetryOptIn));
-      }
+      // `false`: there is no tool telemetry to require any more, so this asks
+      // only whether the session guard hook is present and trusted — which is
+      // the evidence #391 depends on.
+      report(await checkCodexGuard(agentWorkdir, deps.codexGuardFn, false));
     }
 
     if (agentOk && online) {

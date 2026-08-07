@@ -268,7 +268,7 @@ exports[`CLI command tree > pins command paths, aliases, descriptions, and optio
     {
       "alias": undefined,
       "commands": [],
-      "description": "verify this install can answer calls: binary, auth, agent spawn, tool telemetry, listener, relay self-call",
+      "description": "verify this install can answer calls: binary, auth, agent spawn, listener, relay self-call",
       "name": "doctor",
       "options": [],
     },

@@ -21,7 +21,6 @@ export interface MachinePaths {
   linesDir: string;
   removedDir: string;
   listenerLog: string;
-  telemetryHealthFile: string;
 }
 
 export interface LinePaths {
@@ -79,7 +78,6 @@ export function getMachinePaths(
     removedDir: join(dir, "removed"),
     // One process serves every line, so there is one listener log.
     listenerLog: join(dir, "listener.log"),
-    telemetryHealthFile: join(dir, "telemetry-health.json"),
     // Deliberately independent of stateRoot and AGENTCALL_HOME: an unprivileged
     // user must not be able to relocate the administrator-owned policy.
   };

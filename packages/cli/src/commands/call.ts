@@ -6,7 +6,6 @@ import { relayUrl } from "../config.js";
 import { resolveAddress } from "../contacts.js";
 import { pickOutboundLine } from "../outbound.js";
 import { forgetOutbound, matchOutbound, loadOutbound, rememberOutbound } from "../contexts-out.js";
-import { getTelemetry, shutdownTelemetry, telemetrySafely } from "../telemetry.js";
 import type { LineContext } from "../line-context.js";
 import { fail } from "../errors.js";
 
@@ -79,26 +78,20 @@ export function register(program: Command): void {
         contextId = prev.context_id;
         task = prev.task;
       }
-      const telemetry = getTelemetry();
-      const callerSpan = telemetrySafely(() => telemetry?.startCaller({ task, relay: relayUrl(cfg) }));
       try {
         const reply = await callAgent({
           relay: relayUrl(cfg), org: cfg.org, from: cfg.handle, token: cfg.token,
           to: parsed.handle, message, paths: ctx.paths, task, contextId,
-          correlationId: callerSpan?.correlationId, traceparent: callerSpan?.traceparent,
-          onStatus: (s, frame) => {
-            telemetrySafely(() => callerSpan?.setCallId(frame.call_id));
+          onStatus: (s) => {
             console.error(callStatusMessage(s));
           },
         });
-        telemetrySafely(() => callerSpan?.endSuccess(reply.call_id));
         if (reply.context_id && reply.task) {
           rememberOutbound(ctx.paths, { relay: relayUrl(cfg), from: cfg.handle, to: parsed.handle, task: reply.task, context_id: reply.context_id, at: Date.now() });
           console.error("conversation open — add --continue to follow up");
         }
         console.log(o.json ? stringifyTerminalSafeJson(reply) : sanitizeTerminalOutput(reply.text));
       } catch (e) {
-        telemetrySafely(() => callerSpan?.endError(e instanceof CallError ? e.code : "agent_error", e instanceof CallError ? e.callId : undefined));
         // `context_unknown` is the callee's ONLY word for a conversation that
         // is no longer resumable — expired, past its turn cap, threading
         // withdrawn, or a session its agent CLI has dropped. It is deliberately
@@ -114,7 +107,6 @@ export function register(program: Command): void {
         }
         fail(e instanceof CallError ? `Call failed (${e.code}): ${e.message}` : String(e));
       } finally {
-        await shutdownTelemetry();
       }
     });
 }

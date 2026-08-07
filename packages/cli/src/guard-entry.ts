@@ -44,7 +44,6 @@ import { getLinePaths, getMachinePaths } from "./paths.js";
 // because the map is the boundary and a parsed boundary has to be validated.
 import { loadSensitivityMap, withFloor } from "./sensitivity.js";
 import { appendPrivateLogLine } from "./audit-log.js";
-import { writeToolHookEvent } from "./tool-telemetry-hook.js";
 
 // Only the exact string opts out of enforcement. Anything else — a typo, a
 // stale value, an empty string — enforces, so a mangled env var cannot
@@ -113,11 +112,6 @@ try {
     map: withFloor(loadSensitivityMap(getLinePaths(machine, lineName)), machine.userHome),
   }, mode);
 
-  // Best-effort and deliberately after the security decision. The spool
-  // writer cannot change the verdict and exports no arguments, paths, or
-  // rule details. A denied attempt has no post event and therefore never
-  // becomes a fabricated execute_tool span.
-  writeToolHookEvent(raw, "pre");
 
   if (out.stdout) process.stdout.write(out.stdout);
   // Codex reads exit 2 as blocking only when stderr carries a reason, and as

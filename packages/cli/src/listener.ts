@@ -10,22 +10,18 @@ import type { LinePaths } from "./paths.js";
 import { buildPrompt } from "./prompt.js";
 import { redactOutbound } from "./redact.js";
 import {
-  AgentRunError, codexThreadingEnabled, codexToolTelemetryEnabled,
+  AgentRunError, codexThreadingEnabled,
   CODEX_THREADING_VERIFIED_VERSION, isResumeFailure, discoverMcpServers, runAgent,
 } from "./runner.js";
 import { mintContextId, pruneContexts, saveContexts, upsertContext } from "./contexts.js";
 import { SerialQueue } from "./queue.js";
 import { loadPolicy } from "./policy.js";
 import { appendPrivateLogLine } from "./audit-log.js";
-import {
-  getTelemetry, shutdownTelemetry, telemetrySafely, type AgentCallTelemetry,
-} from "./telemetry.js";
 import { sealE2EEResponse } from "./e2ee.js";
 import { loadKeys } from "./keys.js";
 import { verifyAndPinPeer } from "./known-peers.js";
 import { reserveReplay } from "./replay-store.js";
 import { signalForInboundStatus } from "./abuse-signals.js";
-import { createToolEventSpool, type ToolEventSpool } from "./tool-telemetry-spool.js";
 import {
   admitBinding, handleCancel, makeOutcomeSender, openInboundEnvelope, resolveAdmission,
 } from "./listener-stages.js";
@@ -48,20 +44,11 @@ export interface ListenerDeps {
     opts: { headers: Record<string, string>; perMessageDeflate: false; maxPayload: number },
   ) => WebSocket;
   codexThreadingEnabled?: () => boolean;
-  codexToolTelemetryEnabled?: () => boolean;
-  telemetry?: AgentCallTelemetry;
-  createToolEventSpool?: (
-    callId: string, privateStateDir?: string, now?: () => number,
-  ) => ToolEventSpool | undefined;
   fetchKeys?: typeof fetchKeys;
   verifyAndPinPeer?: typeof verifyAndPinPeer;
   loadKeys?: typeof loadKeys;
   reserveReplay?: typeof reserveReplay;
   sealE2EEResponse?: typeof sealE2EEResponse;
-}
-
-export function runtimeToolTelemetryEnabled(runtime: "claude" | "codex", codexVerified: boolean): boolean {
-  return runtime !== "codex" || codexVerified;
 }
 
 function rawWireBytes(raw: RawData): number {
@@ -77,9 +64,6 @@ export function startListener(deps: ListenerDeps): { stop(): Promise<void> } {
     opts: { headers: Record<string, string>; perMessageDeflate: false; maxPayload: number },
   ) => new WebSocket(url, opts));
   const persistContexts = deps.saveContexts ?? saveContexts;
-  const telemetry = deps.telemetry ?? getTelemetry(process.env, {
-    healthFile: deps.paths.machine.telemetryHealthFile,
-  });
   const fetchPeerKeys = deps.fetchKeys ?? fetchKeys;
   const verifyPeer = deps.verifyAndPinPeer ?? verifyAndPinPeer;
   const loadLocalKeys = deps.loadKeys ?? loadKeys;
@@ -105,26 +89,16 @@ export function startListener(deps: ListenerDeps): { stop(): Promise<void> } {
   const codexCanThread = startupKind === "codex"
     ? (deps.codexThreadingEnabled ?? codexThreadingEnabled)()
     : false;
-  const startupCodexCanReportTools = startupKind === "codex"
-    ? (deps.codexToolTelemetryEnabled ?? codexToolTelemetryEnabled)()
-    : false;
   if (startupKind === "codex" && !codexCanThread) {
     console.error(
       `Warning: Codex conversation threading is disabled because this codex-cli release has not passed ` +
         `the resume sandbox probe (last verified: ${CODEX_THREADING_VERIFIED_VERSION}).`,
     );
   }
-  if (startupKind === "codex" && telemetry && !startupCodexCanReportTools) {
-    console.error(
-      `Warning: Codex tool telemetry is disabled because no codex-cli release has passed ` +
-        `the default-path lifecycle probe.`,
-    );
-  }
   let stopped = false;
   let attempt = 0;
   let ws: WebSocket | undefined;
   let pingTimer: ReturnType<typeof setInterval> | undefined;
-  const activeToolSpools = new Set<ToolEventSpool>();
 
   const audit = (entry: Record<string, unknown>) => {
     try {
@@ -160,12 +134,6 @@ export function startListener(deps: ListenerDeps): { stop(): Promise<void> } {
   const connect = () => {
     if (stopped) return;
     const config = deps.loadConfig();
-    const runtimeCanReportTools = runtimeToolTelemetryEnabled(
-      config.agent_kind,
-      startupKind === "codex"
-        ? startupCodexCanReportTools
-        : (deps.codexToolTelemetryEnabled ?? codexToolTelemetryEnabled)(),
-    );
     // `deps.relay`, not `config.relay`: the relay host is fixed at
     // `startListener()` entry (set by `startAllListeners` from the config it
     // read at process startup), so unlike the token/handle above,
@@ -206,8 +174,6 @@ export function startListener(deps: ListenerDeps): { stop(): Promise<void> } {
         return;
       }
 
-      const inboundSpan = telemetrySafely(() => telemetry?.startInbound(frame));
-      let admissionOutcome = "agent_error";
       try {
       const {
         call_id, correlation_id, from, groups,
@@ -226,7 +192,6 @@ export function startListener(deps: ListenerDeps): { stop(): Promise<void> } {
         },
       );
       if (!opened.ok) {
-        admissionOutcome = "protocol_error";
         send({ type: "call_rejected", call_id, code: "protocol_error" });
         audit({
           call_id, ...correlation, from, status: "protocol_error", duration_ms: Date.now() - started,
@@ -252,12 +217,10 @@ export function startListener(deps: ListenerDeps): { stop(): Promise<void> } {
       const admission = resolveAdmission({ paths: deps.paths, from, requestedTask, groups });
       if (!admission.ok) {
         if (admission.code === "policy_error") {
-          admissionOutcome = "policy_error";
           const outcomeDeliveryError = await trySendOutcome({ kind: "failure", code: "agent_error", detail: "A local policy error prevented this call from completing." });
           audit({ call_id, ...correlation, from, message: message.slice(0, 500), status: "policy_error", duration_ms: 0, error: String(admission.error).slice(0, 2000), outcome_delivery_error: outcomeDeliveryError });
           return;
         }
-        admissionOutcome = admission.code;
         const outcomeDeliveryError = await trySendOutcome({ kind: "failure", code: admission.code, offered: admission.offered });
         audit({ call_id, ...correlation, from, message: message.slice(0, 500), task: requestedTask, status: admission.code, duration_ms: 0, outcome_delivery_error: outcomeDeliveryError });
         return;
@@ -296,7 +259,6 @@ export function startListener(deps: ListenerDeps): { stop(): Promise<void> } {
         workdirDir,
       });
       if (!admitted.ok) {
-        admissionOutcome = "context_unknown";
         const outcomeDeliveryError = await trySendOutcome({ kind: "failure", code: "context_unknown" });
         audit({ call_id, ...correlation, from, message: message.slice(0, 500), task: task.id,
                 status: "context_unknown", duration_ms: 0, outcome_delivery_error: outcomeDeliveryError });
@@ -320,34 +282,6 @@ export function startListener(deps: ListenerDeps): { stop(): Promise<void> } {
         // raising maxPending.
         send({ type: "call_accepted", call_id });
         send({ type: "call_started", call_id });
-        const invocationSpan = telemetrySafely(() => inboundSpan?.startInvocation({
-          task: task.id,
-          runtime: config.agent_kind,
-          callId: call_id,
-          correlationId: correlation_id,
-          contextId: binding?.context_id,
-        }));
-        const toolSpool = telemetrySafely(() => invocationSpan && runtimeCanReportTools
-          ? (deps.createToolEventSpool ?? createToolEventSpool)(call_id, deps.paths.dir)
-          : undefined);
-        if (toolSpool) activeToolSpools.add(toolSpool);
-        let invocationFinished = false;
-        const finishInvocation = (
-          outcome: "success" | "timeout" | "canceled" | "agent_error",
-          contextId?: string,
-        ) => {
-          if (invocationFinished) return;
-          invocationFinished = true;
-          const resolvedContextId = contextId ?? binding?.context_id;
-          if (toolSpool) activeToolSpools.delete(toolSpool);
-          for (const lifecycle of toolSpool?.collect() ?? []) {
-            telemetrySafely(() => invocationSpan?.recordTool({
-              ...lifecycle,
-              ...(resolvedContextId ? { contextId: resolvedContextId } : {}),
-            }));
-          }
-          telemetrySafely(() => invocationSpan?.end(outcome, contextId));
-        };
         try {
           const out = await run({
             kind: config.agent_kind,
@@ -364,7 +298,6 @@ export function startListener(deps: ListenerDeps): { stop(): Promise<void> } {
             lineName: deps.paths.name,
             resume: binding?.agent_session_id,
             correlationId: correlation_id,
-            toolTelemetryFile: toolSpool?.file,
             // Enumerated from the owner's own config, not configured per line:
             // `mcp__*` is not expressible in an allowlist, so every server the
             // owner already installed is named explicitly or is unreachable.
@@ -426,7 +359,6 @@ export function startListener(deps: ListenerDeps): { stop(): Promise<void> } {
             kind: "reply", text: reply, context_id: contextId, task: task.id,
           });
           if (outcomeDeliveryError) {
-            finishInvocation("agent_error", contextId);
             audit({
               call_id, ...correlation, from, message: message.slice(0, 500), task: task.id,
               status: "outcome_delivery_error", duration_ms: Date.now() - started,
@@ -436,7 +368,6 @@ export function startListener(deps: ListenerDeps): { stop(): Promise<void> } {
             });
             return;
           }
-          finishInvocation("success", contextId);
           audit({
             call_id, ...correlation, from, message: message.slice(0, 500), reply: reply.slice(0, 500),
             task: task.id, status: "ok",
@@ -446,7 +377,6 @@ export function startListener(deps: ListenerDeps): { stop(): Promise<void> } {
           });
         } catch (e) {
           const code = e instanceof AgentRunError ? e.code : "agent_error";
-          finishInvocation(code);
           // runAgent settles from the child's exit handler, so reaching here
           // with "canceled" means the process group is actually gone.
           if (code === "canceled") {
@@ -499,7 +429,6 @@ export function startListener(deps: ListenerDeps): { stop(): Promise<void> } {
           });
         }
       });
-      admissionOutcome = accepted ? "accepted" : "busy";
       if (!accepted) {
         const outcomeDeliveryError = await trySendOutcome({ kind: "failure", code: "busy" });
         audit({ call_id, ...correlation, from, message: message.slice(0, 500), task: task.id, status: "busy", duration_ms: 0, outcome_delivery_error: outcomeDeliveryError });
@@ -508,14 +437,12 @@ export function startListener(deps: ListenerDeps): { stop(): Promise<void> } {
         // EventEmitter does not observe a rejected async message callback.
         // Contain unexpected key-store/sealing failures here so one malformed
         // or expired call cannot become an unhandled process rejection.
-        admissionOutcome = "protocol_error";
         send({ type: "call_rejected", call_id: frame.call_id, code: "protocol_error" });
         console.error(
           `Listener could not finish encrypted call ${frame.call_id}: ` +
           `${error instanceof Error ? error.message : String(error)}`,
         );
       } finally {
-        telemetrySafely(() => inboundSpan?.endAdmission(admissionOutcome));
       }
     });
     const scheduleReconnect = () => {
@@ -556,10 +483,7 @@ export function startListener(deps: ListenerDeps): { stop(): Promise<void> } {
       stopped = true;
       if (pingTimer) clearInterval(pingTimer);
       try { ws?.close(); } catch { /* fine */ }
-      for (const spool of activeToolSpools) spool.dispose();
-      activeToolSpools.clear();
       await queue.stop();
-      await shutdownTelemetry();
     },
   };
 }

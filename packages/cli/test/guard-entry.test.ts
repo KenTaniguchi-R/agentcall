@@ -108,25 +108,6 @@ describe("guard-entry as a real process", () => {
     expect(statSync(logPath(home, "tools.log")).mode & 0o777).toBe(0o600);
   });
 
-  it("spools a stable pre-tool id without arguments and without changing the verdict", () => {
-    const home = tempDir("guard-");
-    seedMap(home, [home]);
-    const spool = join(home, "tool-events.jsonl");
-    writeFileSync(spool, "", { mode: 0o600 });
-    const r = run({
-      hook_event_name: "PreToolUse",
-      tool_name: "Read",
-      tool_use_id: "toolu_123",
-      tool_input: { file_path: join(home, "private-name.ts") },
-      cwd: home,
-    }, home, { AGENTCALL_TOOL_TELEMETRY_FILE: spool });
-    expect(r).toMatchObject({ status: 0, stdout: "", stderr: "" });
-    const event = JSON.parse(readFileSync(spool, "utf8").trim());
-    expect(event).toMatchObject({
-      phase: "pre", call_id: "call-abc", tool_use_id: "toolu_123", tool_name: "Read",
-    });
-    expect(JSON.stringify(event)).not.toContain("private-name.ts");
-  });
 
   it("denies a credential read and emits the structured decision", () => {
     const home = tempDir("guard-");
