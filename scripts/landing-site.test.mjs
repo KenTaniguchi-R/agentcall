@@ -22,6 +22,18 @@ test("the landing page publishes favicon metadata and assets", () => {
   assert.equal(existsSync(join(root, "apps/landing/assets/favicon.svg")), true);
 });
 
+test("every same-page fragment link has a landing target", () => {
+  const targets = new Set(
+    [...html.matchAll(/href="#([^"]+)"/g)].map(([, target]) => target),
+  );
+  const ids = new Set(
+    [...html.matchAll(/\sid="([^"]+)"/g)].map(([, id]) => id),
+  );
+  const unresolved = [...targets].filter((target) => !ids.has(target));
+
+  assert.deepEqual(unresolved, []);
+});
+
 // The landing page is the only AgentCall surface a stranger sees before
 // installing, and it spent a release teaching `ken@acme.example.com` after the
 // CLI, README, and docs site had all moved to `@acme/ken`. Nothing caught it:
