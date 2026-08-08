@@ -129,6 +129,19 @@ but what it read, and that is two facts: a **root** the agent may read under
 path outside every root, or on the denylist, is refused **at the read** —
 before the agent ever sees it. The answer itself is not inspected.
 
+> [!CAUTION]
+> **`Bash` is not bounded by any of this.** It is not restricted to the roots and
+> the denylist does not apply to it, so a caller can reach any file on the
+> machine through an ordinary shell command — `~/.ssh`, `~/.aws`, anything. The
+> guard records such a command and allows it, because inspecting a command
+> string cannot tell you what it will read.
+>
+> So the denylist bounds `Read`, `Grep`, `Glob` and `LS`, and not the one tool
+> that can do everything those four can. Treat the roots and the denylist as
+> shaping what an agent reaches *by default*, not as a boundary against a
+> caller who asks for something else. Tracked in
+> [#419](https://github.com/KenTaniguchi-R/agentcall/issues/419).
+
 Who gets answered is a separate, yes/no question. Everyone the relay lets
 through is answered by default; the organization is the boundary, and everyone
 answered sees the same thing.

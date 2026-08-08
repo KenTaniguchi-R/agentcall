@@ -129,8 +129,19 @@ export function decide(input: GuardInput, ctx: DecideContext): GuardVerdict {
     const hit = denied.find((d) =>
       fold(command).includes(fold(d)) || fold(command).includes(fold(d.replace(userHome, "~"))));
     // Record and allow: string matching is too weak to be a boundary and too
-    // eager to be harmless. See the spec's Bash section — and note this means
-    // an `exec`-granted task has NO read floor.
+    // eager to be harmless. That reasoning still holds — a command string
+    // cannot be inspected for what it will read.
+    //
+    // What did NOT hold is the assumption this comment used to carry: that the
+    // consequence was limited to an `exec`-granted task. It is not. `Bash` is
+    // NOT gated by `--allowedTools` (measured 2026-08-07, with and without a
+    // PreToolUse hook), so it is reachable on every call, and every denied path
+    // is readable through it. Demonstrated: `~/.zshrc` classifies DENIED and a
+    // caller got its exact line count.
+    //
+    // So the denylist bounds Read/Grep/Glob/LS and not the one tool that can do
+    // everything those four can. Tracked in #419; the README and both guides
+    // now say so rather than claiming a boundary that is not here.
     return hit ? { allow: true, flag: { rule: "bash-references-denied-path", detail: hit } } : { allow: true };
   }
 

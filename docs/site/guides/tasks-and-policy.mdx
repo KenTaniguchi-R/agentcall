@@ -44,9 +44,18 @@ visible for human review.
 ## 3. Decide who is answered
 
 Any caller you have not blocked can request any task. What bounds the answer is
-what the task read, not which task ran: every source is either **shared** or
-**secret**, and a secret path is refused **at the read** — before the agent sees
-it. The answer itself is not inspected.
+what the task read, not which task ran: a path outside every root, or on the
+denylist, is refused **at the read** — before the agent sees it. The answer
+itself is not inspected.
+
+<Warning>
+  **This does not bound `Bash`.** A caller can reach any file on the machine
+  through a shell command; the guard records it and allows it, because a command
+  string cannot be inspected for what it will read. The roots and the denylist
+  shape what the agent reaches by default — they are not a boundary against a
+  caller who asks for something else. See
+  [#419](https://github.com/KenTaniguchi-R/agentcall/issues/419).
+</Warning>
 
 Who gets answered is a separate, yes/no question. **Everyone answered sees the
 same thing** — the organization is the boundary, not a per-caller level.
