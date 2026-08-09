@@ -19,7 +19,7 @@ export interface PromptWorkdir {
 //
 // The fence is only as good as the caller's inability to write it, so the
 // message is defanged here rather than at the call site: this function owns the
-// reserved syntax, and a second caller of it (a Room path, a replay tool) would
+// reserved syntax, and a second caller of it (for example, a replay tool) would
 // otherwise have to remember to defang separately. See defang.ts.
 //
 // The directory sentence is behavior-shaping too, and #372 changed what it can

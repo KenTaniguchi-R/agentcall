@@ -6,6 +6,15 @@ which are released together.
 
 ## Unreleased
 
+### Accountless Room removal (#371)
+
+- Remove the experimental accountless Room command and protocol so AgentCall has
+  one authenticated Team call model instead of two parallel identity systems.
+- Remove Room HTTP and WebSocket routes, schemas, Durable Object bindings,
+  client runtimes, safety adapters, tests, and current documentation.
+- Remove the Room-only terminal helpers and simplify the shared call lifecycle
+  to its remaining authenticated Team principal.
+
 ### The Room membership code is reported, not asked (#369)
 
 - Joining a Room no longer stops on `Does everyone see the same code? [y/N]`.
