@@ -14,7 +14,7 @@ import {
 } from "./call-rate-limit.js";
 import {
   advanceAuthorizedCall, beginAuthorizedCall, expireAuthorizedCall, terminateAuthorizedCall,
-  type AuthorizedCallLifecycle, type LiveCallPhase, type TeamCallPrincipal,
+  type CallLifecycle, type LiveCallPhase, type TeamCallPrincipal,
 } from "./call-lifecycle.js";
 
 export function recordCallPresenceRead(statusReads: AnalyticsEngineDataset): void {
@@ -70,7 +70,7 @@ const DURABLE_PHASE: Record<CallStatusType["state"], LiveCallPhase> = {
   working: "working",
 };
 
-function teamCallLifecycle(task: PersistedTask): AuthorizedCallLifecycle {
+function teamCallLifecycle(task: PersistedTask): CallLifecycle {
   return {
     principal: task.principal ?? {
       kind: "team",
@@ -517,7 +517,7 @@ export class HandleDO extends DurableObject {
       const task = {
         call_id, correlation_id, from: att.from, org: att.org, to: att.to, deadline, state: "ringing",
         task_state: "TASK_STATE_SUBMITTED", created_at: now, updated_at: now,
-        principal: beginAuthorizedCall(att.principal, deadline).principal as TeamCallPrincipal,
+        principal: beginAuthorizedCall(att.principal, deadline).principal,
       } satisfies PersistedTask;
       await this.persistTaskWithAudit(
         task,
@@ -556,7 +556,7 @@ export class HandleDO extends DurableObject {
       // cancellation. The task record remains until its original deadline.
       const cancellation = terminateAuthorizedCall(teamCallLifecycle(record), "canceled");
       const canceled = updateTask(record, { task_state: "TASK_STATE_CANCELED" });
-      canceled.principal = cancellation.principal as TeamCallPrincipal;
+      canceled.principal = cancellation.principal;
       // Persist terminal truth before fan-out. Once a caller observes a
       // terminal response, a concurrent GetTask must never move backward.
       await this.persistTaskWithAudit(

@@ -15,19 +15,16 @@ import { sharedRosterIds } from "./groups.js";
 import { checkLimit, NATIVE_CARD, NATIVE_READ, REGISTER, type RateLimitEnv } from "./ratelimit/index.js";
 import { parseStoredCard } from "./stored-card.js";
 import { drainRecoveryEvictions, mountRecovery } from "./recovery.js";
-import { mountRooms } from "./room/routes.js";
 import { jsonBody, rateLimit, requireIdentity, type RelayAppEnv } from "./middleware.js";
 
 export { HandleDO } from "./do.js";
 export { RateLimiterDO } from "./ratelimit/do.js";
-export { RoomDO } from "./room/do.js";
 
 export type Env = RateLimitEnv & {
   /** Hosted-only product-site assets; customer-owned relays intentionally omit them. */
   ASSETS?: Fetcher;
   DB: D1Database;
   HANDLE_DO: DurableObjectNamespace;
-  ROOM_DO: DurableObjectNamespace;
   STATUS_READS: AnalyticsEngineDataset;
   BOOTSTRAP_TOKEN?: string;
   /** Required: missing or unknown deployment mode fails every tenant boundary closed. */
@@ -47,7 +44,6 @@ mountKeys(app);
 mountPresence(app);
 mountRoster(app);
 mountRecovery(app);
-mountRooms(app);
 
 async function handleExists(db: D1Database, org: string, handle: string): Promise<boolean> {
   return !!(await db.prepare("SELECT 1 FROM handles WHERE org = ? AND handle = ?").bind(org, handle).first());

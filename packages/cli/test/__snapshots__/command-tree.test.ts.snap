@@ -50,35 +50,6 @@ exports[`CLI command tree > pins command paths, aliases, descriptions, and optio
         {
           "alias": undefined,
           "commands": [],
-          "description": "join a Room using an invitation from its host",
-          "name": "join",
-          "options": [
-            {
-              "description": "relay URL",
-              "flags": "--relay <url>",
-            },
-          ],
-        },
-      ],
-      "description": "host a temporary, accountless group Room — no account, handle, or listener required",
-      "name": "room",
-      "options": [
-        {
-          "description": "relay URL",
-          "flags": "--relay <url>",
-        },
-        {
-          "description": "your display name in this Room",
-          "flags": "--name <name>",
-        },
-      ],
-    },
-    {
-      "alias": undefined,
-      "commands": [
-        {
-          "alias": undefined,
-          "commands": [],
           "description": "create a one-time invite",
           "name": "create",
           "options": [

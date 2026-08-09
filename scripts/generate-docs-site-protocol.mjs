@@ -4,7 +4,6 @@ import { dirname, join, resolve } from "node:path";
 import { toJSONSchema } from "../packages/shared/node_modules/zod/index.js";
 import * as protocol from "../packages/shared/dist/protocol.js";
 import * as e2ee from "../packages/shared/dist/e2ee.js";
-import * as room from "../packages/shared/dist/room.js";
 
 const root = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const output = join(root, "docs/site/reference/protocol.mdx");
@@ -45,7 +44,7 @@ const lines = [
   "description: Generated WebSocket frame shapes exchanged by callers, the relay, and listeners.",
   "---",
   "",
-  "This page is generated from the built Zod schemas in `packages/shared/src/protocol.ts`, `packages/shared/src/e2ee.ts`, and `packages/shared/src/room.ts`. The [repository README](https://github.com/KenTaniguchi-R/agentcall#how-a-call-works) remains the authority on current runtime behavior.",
+  "This page is generated from the built Zod schemas in `packages/shared/src/protocol.ts` and `packages/shared/src/e2ee.ts`. The [repository README](https://github.com/KenTaniguchi-R/agentcall#how-a-call-works) remains the authority on current runtime behavior.",
 ];
 
 for (const [heading, schemas] of groups) {
@@ -54,52 +53,6 @@ for (const [heading, schemas] of groups) {
     // Protocol documentation describes accepted wire input. This matters for
     // fields such as IncomingCall.groups: Zod defaults it to [] after parsing,
     // so it is required in output but optional on the wire.
-    const schema = toJSONSchema(wireSchema, { io: "input" });
-    const frame = schema.properties.type.const;
-    const required = new Set(schema.required ?? []);
-    lines.push("", `### \`${frame}\``, "", purpose, "", "| Field | Type | Required |", "| --- | --- | --- |");
-    for (const [field, fieldSchema] of Object.entries(schema.properties)) {
-      lines.push(`| \`${field}\` | ${renderType(fieldSchema)} | ${required.has(field) ? "yes" : "no"} |`);
-    }
-  }
-}
-
-lines.push("", "## Accountless Room HTTP protocol");
-for (const [heading, wireSchema, purpose] of [
-  ["Create request", room.RoomCreateRequest, "Create a bounded 2–6-person accountless Room."],
-  ["Create response", room.RoomCreateResponse, "Return the host capability and independent single-use invitations exactly once."],
-  ["Join request", room.RoomJoinRequest, "Redeem one invitation with a participant secret and signing-key possession proof."],
-  ["Join response", room.RoomJoinResponse, "Return session-local membership; the capability appears only on first issuance."],
-  ["Room action request", room.RoomMutationRequest, "Perform a capability-authenticated lifecycle action; only moderation actions use the optional target."],
-  ["Room action response", room.RoomMutationResponse, "Return the current bounded Room membership view without credential hashes."],
-]) {
-  const schema = toJSONSchema(wireSchema, { io: "input" });
-  const required = new Set(schema.required ?? []);
-  lines.push("", `### ${heading}`, "", purpose, "", "| Field | Type | Required |", "| --- | --- | --- |");
-  for (const [field, fieldSchema] of Object.entries(schema.properties)) {
-    lines.push(`| \`${field}\` | ${renderType(fieldSchema)} | ${required.has(field) ? "yes" : "no"} |`);
-  }
-}
-
-for (const [heading, schemas] of [
-  ["Room participant to relay WebSocket", [
-    [room.RoomCallSubmit, "Submit one opaque call to an exact Room participant."],
-    [room.RoomCallAccepted, "Confirm ownership of delivered Room work."],
-    [room.RoomCallStarted, "Confirm the Room answering process started."],
-    [room.RoomCallOutcome, "Return an opaque terminal Room outcome."],
-    [room.RoomCallCancel, "Cancel a previously submitted Room call."],
-    [room.RoomCallCanceled, "Confirm local cancellation completed."],
-  ]],
-  ["Relay to Room participant WebSocket", [
-    [room.RoomIncomingCall, "Deliver an opaque call with relay-attested Room membership metadata."],
-    [room.RoomRelayCallStatus, "Report Room call progress to its caller."],
-    [room.RoomRelayCallResult, "Report a terminal Room result; duplicate submissions may omit erased outcome bytes."],
-    [room.RoomRelayCallError, "Return a bounded Room routing or lifecycle error."],
-    [room.RoomRelayCancelCall, "Request cancellation of exact inbound Room work."],
-  ]],
-]) {
-  lines.push("", `## ${heading}`);
-  for (const [wireSchema, purpose] of schemas) {
     const schema = toJSONSchema(wireSchema, { io: "input" });
     const frame = schema.properties.type.const;
     const required = new Set(schema.required ?? []);

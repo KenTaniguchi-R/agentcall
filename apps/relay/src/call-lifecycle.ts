@@ -1,4 +1,3 @@
-import type { RoomIdType, RoomParticipantIdType } from "@benree/agentcall-shared";
 import type { Identity } from "./tenant.js";
 
 export type TeamCallPrincipal = {
@@ -8,18 +7,10 @@ export type TeamCallPrincipal = {
   credential_generation: number;
 };
 
-export type RoomCallPrincipal = {
-  kind: "room";
-  room_id: RoomIdType;
-  participant_id: RoomParticipantIdType;
-  membership_epoch: number;
-};
-
-type AuthorizedCallPrincipal = TeamCallPrincipal | RoomCallPrincipal;
 export type LiveCallPhase = "submitted" | "accepted" | "working";
 type CallTerminalReason = "completed" | "failed" | "canceled" | "expired";
-export type AuthorizedCallLifecycle = {
-  principal: AuthorizedCallPrincipal;
+export type CallLifecycle = {
+  principal: TeamCallPrincipal;
   phase: LiveCallPhase;
   deadline: number;
   terminal?: CallTerminalReason;
@@ -41,55 +32,35 @@ export function teamCallPrincipal(identity: Identity): TeamCallPrincipal {
   };
 }
 
-/** Build lifecycle input only after a Room capability is verified by RoomDO. */
-export function roomCallPrincipal(input: {
-  roomId: RoomIdType;
-  participantId: RoomParticipantIdType;
-  membershipEpoch: number;
-}): RoomCallPrincipal {
-  return {
-    kind: "room",
-    room_id: input.roomId,
-    participant_id: input.participantId,
-    membership_epoch: input.membershipEpoch,
-  };
-}
-
-export function authorizedPrincipalKey(principal: AuthorizedCallPrincipal): string {
-  return principal.kind === "team"
-    ? `team:${principal.organization}:${principal.participant}:${principal.credential_generation}`
-    : `room:${principal.room_id}:${principal.membership_epoch}:${principal.participant_id}`;
-}
-
 /** Begin lifecycle handling only after a route has authenticated this principal. */
 export function beginAuthorizedCall(
-  principal: AuthorizedCallPrincipal,
+  principal: TeamCallPrincipal,
   deadline: number,
-): AuthorizedCallLifecycle {
+): CallLifecycle {
   return { principal, phase: "submitted", deadline };
 }
 
 /** Ignore duplicate or backward peer frames; neither routing path may regress. */
 export function advanceAuthorizedCall(
-  lifecycle: AuthorizedCallLifecycle,
+  lifecycle: CallLifecycle,
   requested: LiveCallPhase,
-): AuthorizedCallLifecycle {
+): CallLifecycle {
   if (lifecycle.terminal || PHASE_RANK[requested] <= PHASE_RANK[lifecycle.phase]) return lifecycle;
   return { ...lifecycle, phase: requested };
 }
 
 /** Make cancellation terminal without discarding the already-authorized identity boundary. */
 export function terminateAuthorizedCall(
-  lifecycle: AuthorizedCallLifecycle,
+  lifecycle: CallLifecycle,
   terminal: CallTerminalReason,
-): AuthorizedCallLifecycle {
+): CallLifecycle {
   return lifecycle.terminal ? lifecycle : { ...lifecycle, terminal };
 }
 
 /** Return an expired terminal lifecycle only once its bounded deadline is reached. */
 export function expireAuthorizedCall(
-  lifecycle: AuthorizedCallLifecycle,
+  lifecycle: CallLifecycle,
   now: number,
-): AuthorizedCallLifecycle | undefined {
+): CallLifecycle | undefined {
   return now >= lifecycle.deadline ? terminateAuthorizedCall(lifecycle, "expired") : undefined;
 }

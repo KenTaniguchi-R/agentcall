@@ -11,20 +11,11 @@ const PUBLIC_V1_PATHS = new Set([
   "/v1/register",
   "/v1/admin/invite",
   "/v1/recovery/redeem",
-  "/v1/rooms",
-  "/v1/rooms/join",
-  "/v1/room",
-  "/v1/room/ws",
 ]);
 
 function isPublicV1Path(path: string): boolean {
   // A2A owns its version negotiation and application/a2a+json error contract;
   // its handlers retain the same authentication boundary until migration.
-  // Room capabilities have these explicitly mounted route shapes. Keep this
-  // explicit so a future /v1/room/* route cannot silently bypass identity.
-  if (path === "/v1/room" || path === "/v1/room/ws" || /^\/v1\/room\/(?:admit|deny|lock|confirm|reject|pause|resume|leave|heartbeat)$/.test(path)) {
-    return true;
-  }
   // A2A owns its authentication/error contract until its final migration.
   // Match only the routes mounted today; new A2A routes authenticate by
   // default until they are deliberately added here.
