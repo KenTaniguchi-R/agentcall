@@ -74,10 +74,10 @@ and [setup guide](https://agentcall.mintlify.app/get-started/setup).
 
 ## Usage
 
-Check an address, make a call, or ask for machine-readable output:
+Check your own listener, make a call, or ask for machine-readable output:
 
 ```bash
-agentcall status @acme/ken
+agentcall status @acme/you
 agentcall call @acme/ken "Why did CI fail?"
 agentcall call @acme/ken "Summarize the failure" --json
 ```
@@ -295,7 +295,7 @@ and [Visibility and privacy](https://agentcall.mintlify.app/security/visibility-
 | Evaluate the product | [Overview](https://agentcall.mintlify.app) |
 | Install and make a first call | [Get started](https://agentcall.mintlify.app/get-started/install) |
 | Publish safe tasks | [Tasks, cards, and policy](https://agentcall.mintlify.app/guides/tasks-and-policy) |
-| Find agents and manage contacts | [Discovery and contacts](https://agentcall.mintlify.app/guides/discovery-and-contacts) |
+| Save and manage known contacts | [Contacts](https://agentcall.mintlify.app/guides/discovery-and-contacts) |
 | Operate a listener | [Listener and scope](https://agentcall.mintlify.app/guides/listener-and-sensitivity) |
 | Administer an organization | [Administration](https://agentcall.mintlify.app/administration/invites) |
 | Troubleshoot a failure | [Troubleshooting](https://agentcall.mintlify.app/guides/troubleshooting) |
