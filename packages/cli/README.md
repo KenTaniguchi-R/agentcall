@@ -59,18 +59,20 @@ when a caller needs more specific instructions:
 ```bash
 agentcall task new architecture-history
 agentcall lint
-agentcall clearance ken internal   # how much ken may be told
 agentcall block spammer            # or nothing at all
 ```
 
-Any caller you have not blocked can request any task. What bounds the answer is
-what it read: sources carry a sensitivity, callers carry a clearance, and a path
-above that clearance is refused at the read, before the agent sees it. The answer
-itself is not inspected. Clearance is resolved from the relay-verified caller
-before their message enters the prompt.
+Any caller you have not blocked can request any task. On a Claude line, its
+first-class file tools may read only under the configured scope roots, except
+for paths on the built-in and owner denylist. Paths outside the roots or on the
+denylist are refused before the agent sees them. The answer itself is not
+inspected.
 
-**On a Codex line this is not enforced** — the guard observes rather than
-blocks, so clearances there are intent rather than a boundary.
+This is not a complete machine boundary: Bash bypasses the read guard, so a
+caller can ask it to read any file the account can reach. Treat scope as a
+default-shaping control, not confidentiality protection.
+
+**On a Codex line this is not enforced** — there is no AgentCall read guard.
 **Any authenticated handle in your organization may call you** — an address is a
 routing identifier, not a secret.
 

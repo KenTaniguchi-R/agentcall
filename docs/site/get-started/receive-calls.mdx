@@ -18,14 +18,14 @@ check before sharing your address.
 
 ## 2. Keep the default task
 
-Plain calls use the built-in `ask` task. It grants `read` and points at
-`~/AgentCall/<line>/public/` by default. Put only intentionally shareable files
-there.
+Plain calls use the built-in `ask` task. On a Claude line, first-class file
+tools start with `$HOME` as their read root, subject to a built-in
+credential-focused denylist and any paths you add to `scope.json`.
 
 <Warning>
-  Read-only is not an OS sandbox. Claude file tools are guarded to the task
-  directory and protected credential paths, but shell execution bypasses that
-  boundary. Codex has no enforced read floor.
+  Read-only is not an OS sandbox. Claude file tools are guarded to configured
+  roots and protected credential paths, but shell execution bypasses that
+  guard. Codex has no enforced read floor.
 </Warning>
 
 ## 3. Review what callers can invoke

@@ -22,7 +22,7 @@ Setup:
 
 1. Derives the organization from the invite and registers the handle.
 2. Writes the line configuration and generates endpoint identity/encryption keys.
-3. Creates `~/AgentCall/<line>/public/` as the default answering directory.
+3. Creates the task directory and configures `$HOME` as the initial Claude read root, with a built-in credential-focused denylist.
 4. Installs one launchd or systemd user listener for all callable lines.
 5. Publishes the line's card and keys.
 6. Runs a verification call unless `--no-verify` is set.

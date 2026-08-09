@@ -876,7 +876,7 @@ describe.sequential("CLI command actions", () => {
     expect(out.stdout).toMatch(/deploy — Deploy production[\s\S]*inspect files — answers are read-only/);
     // The exec warning is gone with the capability that caused it (#372).
     expect(out.stdout).not.toContain("WARNING: exec");
-    expect(out.stdout).toMatch(/Named caller rule: alice \(overrides rosters\)[\s\S]*ANSWERED — may be told anything not marked secret/);
+    expect(out.stdout).toMatch(/Named caller rule: alice \(overrides rosters\)[\s\S]*ANSWERED — calls from this audience are admitted/);
     expect(out.stdout).toMatch(/Named caller rule: blocked-bot \(overrides rosters\)[\s\S]*BLOCKED — no call is answered at all/);
   });
 

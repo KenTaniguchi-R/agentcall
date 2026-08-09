@@ -54,8 +54,9 @@ An administrator creates an invite with:
 agentcall invite create
 ```
 
-Setup registers your identity, creates a private line configuration, prepares
-`~/AgentCall/<line>/public/`, and installs a background listener on macOS or
+Setup registers your identity, creates a private line configuration and its
+task directory, configures `$HOME` as the initial Claude read root with a
+credential-focused denylist, and installs a background listener on macOS or
 Linux. It then makes a test call to verify that your agent can answer.
 
 ```bash

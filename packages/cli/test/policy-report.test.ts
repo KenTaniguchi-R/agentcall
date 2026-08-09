@@ -49,6 +49,7 @@ describe("renderPolicyReport", () => {
     const report = renderPolicyReport(policy, [ASK_TASK, deploy, browse, shell], {
       agentKind: "claude",
       defaultWorkdir: "/srv/agentcall-default",
+      readableRoots: ["/srv/agentcall-default", "/srv/shared"],
     });
 
     expect(report).toContain("Effective access policy");
@@ -58,26 +59,21 @@ describe("renderPolicyReport", () => {
     // report states that once per task instead of enumerating a per-task list.
     // The per-audience task menus are gone too (#379): the task list is the
     // same for everyone, so it is printed once and each audience shows only
-    // the clearance it resolves to.
+    // whether calls are admitted.
     expect(report).toMatch(/Tasks — every caller who is not blocked can request any of these[\s\S]*ask — Ask a question[\s\S]*inspect files — answers are read-only[\s\S]*Working directory: \/srv\/agentcall-default/);
-    // Every task reports the SAME directory now: #372 deleted task `workdir`,
-    // so the spawn directory is derived per CALLER from the sensitivity map
-    // rather than per task.
+    // Every task reports the same derived directory: scope is line-wide, not
+    // per task or per caller.
     expect(report).toMatch(/browse-docs — Browse documentation[\s\S]*Working directory: \/srv\/agentcall-default/);
     expect(report).toMatch(/shell — Run diagnostics[\s\S]*inspect files — answers are read-only/);
     expect(report).not.toMatch(/exec — run shell commands/);
-    expect(report).toMatch(/Base rule: Everyone registered[\s\S]*ANSWERED — may be told anything not marked secret/);
-    expect(report).toMatch(/Named caller rule: alice \(overrides rosters\)[\s\S]*ANSWERED — may be told anything not marked secret/);
+    expect(report).toMatch(/Base rule: Everyone registered[\s\S]*ANSWERED — calls from this audience are admitted/);
+    expect(report).toMatch(/Named caller rule: alice \(overrides rosters\)[\s\S]*ANSWERED — calls from this audience are admitted/);
     expect(report).toMatch(/Named caller rule: blocked-bot \(overrides rosters\)[\s\S]*BLOCKED — no call is answered at all/);
-    expect(report).toMatch(new RegExp(`Roster rule: engineers \\(${ROSTER_ID}\\) — applies to each attested member[\\s\\S]*ANSWERED — may be told anything not marked secret`));
+    expect(report).toMatch(new RegExp(`Roster rule: engineers \\(${ROSTER_ID}\\) — applies to each attested member[\\s\\S]*ANSWERED — calls from this audience are admitted`));
     expect(report).toContain("For one caller: a named rule wins; otherwise a blocked roster wins over an allowed one; otherwise the base rule.");
-    // The enforcement point is the READ, and the report has to say so. It
-    // previously claimed the reply was refused unless the context was within
-    // clearance; no such check exists (listener.ts only runs redactOutbound).
-    // Pinned as an absence too, because naming a control that does not exist
-    // tells an owner they are covered when they are not.
-    expect(report).toContain("anything unlabelled is secret and never leaves");
-    expect(report).toContain("refused AT THE READ, before the agent sees it");
+    expect(report).toContain("Claude may read under: /srv/agentcall-default, /srv/shared.");
+    expect(report).toContain("Paths outside those roots, and paths on the built-in or owner denylist, are refused at the read.");
+    expect(report).toContain("Bash is recorded, not blocked, and bypasses this read guard.");
     expect(report).toContain("The answer itself is not inspected");
     expect(report).not.toMatch(/reply is refused/i);
   });
@@ -86,6 +82,7 @@ describe("renderPolicyReport", () => {
     const report = renderPolicyReport(policy, [ASK_TASK, deploy, browse, shell], {
       agentKind: "codex",
       defaultWorkdir: "/srv/agentcall-default",
+      readableRoots: ["/srv/agentcall-default"],
     });
 
     expect(report).toContain("Agent runtime: Codex");
@@ -107,5 +104,16 @@ describe("renderPolicyReport", () => {
     // #372 deleted fetch and exec as separate grants, so the report must stop
     // describing them as Codex controls that merely happen to be unenforced.
     expect(report).not.toContain("fetch and exec are not separate Codex controls");
+  });
+
+  it("does not invent a read root when none is usable", () => {
+    const report = renderPolicyReport(policy, [ASK_TASK], {
+      agentKind: "claude",
+      defaultWorkdir: "/srv/agentcall-default",
+      readableRoots: [],
+    });
+
+    expect(report).toContain("Claude has no usable configured read root.");
+    expect(report).not.toContain("Claude may read under:");
   });
 });

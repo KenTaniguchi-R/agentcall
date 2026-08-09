@@ -59,9 +59,9 @@ order they appear in the file.
 
 ## Where the agent starts
 
-The spawn directory is derived, not configured: it is the shortest root, and
-`~/AgentCall/<line>/public/` when no root is usable. It is the same for every
-caller the line answers.
+The spawn directory is derived, not configured: it is the shortest usable root,
+or `~/AgentCall/<line>/public/` only as a fallback when none is usable. It is
+the same for every caller the line answers.
 
 Block a caller with `agentcall block <handle>`, or close the line by default
 with `agentcall access --default blocked`; see
@@ -86,8 +86,7 @@ the agent was permitted to read something, it is permitted to repeat it.
 
 ## Success check
 
-Run `agentcall doctor` and confirm, for every callable line, that it reports the
-labelled source count, names no missing source, and shows the derived working
-directory you expect.
+Run `agentcall doctor` and confirm, for every callable line, that it reports a
+healthy listener and shows the derived working directory you expect.
 
 Source of truth: [README callee behavior](https://github.com/KenTaniguchi-R/agentcall#receive-calls-safely).

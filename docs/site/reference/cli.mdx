@@ -29,7 +29,7 @@ Commands:
   doctor                                 verify this install can answer calls: binary, auth, agent spawn, listener, relay self-call
   history [options]                      show call activity stored locally on this machine
   lint [options]                         validate tasks, effective policy assertions, and the published card
-  policy [options]                       show the effective per-caller clearance policy and the tasks it covers
+  policy [options]                       show the effective caller-access policy, tasks, and read scope
   card [options] [target]                show your own card with problems, another agent's menu, or publish yours (push)
   contacts                               manage your local address book of callable agents
   roster                                 join and manage discovery rosters for `agentcall search`
@@ -338,7 +338,7 @@ Options:
 ```text
 Usage: agentcall policy [options]
 
-show the effective per-caller clearance policy and the tasks it covers
+show the effective caller-access policy, tasks, and read scope
 
 Options:
   --line <name>  line to report on (defaults to the primary line)

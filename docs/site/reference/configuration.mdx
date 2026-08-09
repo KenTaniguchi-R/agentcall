@@ -23,7 +23,8 @@ Replace `<line>` with the local line name.
 | --- | --- |
 | `~/.agentcall/lines/<line>/config.json` | Organization, handle, relay token, agent kind, and relay |
 | `~/.agentcall/lines/<line>/identity.key.json` | Identity and encryption private keys |
-| `~/.agentcall/lines/<line>/policy.json` | User task grants, blocks, groups, and assertions |
+| `~/.agentcall/lines/<line>/policy.json` | Caller access rules, blocks, groups, and assertions |
+| `~/.agentcall/lines/<line>/scope.json` | Claude read roots and additional denied paths |
 | `~/.agentcall/lines/<line>/card.pushed.json` | Last published card snapshot |
 | `~/.agentcall/lines/<line>/calls.log` | Local JSONL call history |
 | `~/.agentcall/lines/<line>/tools.log` | Observed/guarded tool attempts |
@@ -39,16 +40,11 @@ permissions. Do not copy tokens or private keys into tickets, chat, or docs.
 
 | Path | Purpose |
 | --- | --- |
-| `~/AgentCall/<line>/public/` | Default answering directory |
 | `~/AgentCall/<line>/tasks/<task>/SKILL.md` | Task frontmatter and instructions |
 
-## Managed policy
-
-The administrator-owned path is fixed and cannot be redirected by `HOME` or the
-internal test seam `AGENTCALL_HOME`:
-
-- macOS: `/Library/Application Support/agentcall/policy.json`
-- Linux: `/etc/agentcall/policy.json`
+New callable lines write `$HOME` as the initial scope root. `scope.json` can
+narrow that root or add denied paths; the built-in credential-focused denylist
+always applies to Claude file tools.
 
 ## Environment selection
 

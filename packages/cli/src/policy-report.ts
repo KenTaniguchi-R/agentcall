@@ -6,6 +6,7 @@ import { type Task } from "./tasks.js";
 interface PolicyReportOptions {
   agentKind: CallableLineConfig["agent_kind"];
   defaultWorkdir: string;
+  readableRoots: readonly string[];
 }
 
 function renderTask(
@@ -25,10 +26,9 @@ function renderTask(
   return lines;
 }
 
-// One audience, one clearance. Before #379 this printed a per-audience task
-// menu; a task is no longer individually granted, so the task list is the same
-// for everyone and what changes per audience is only how much of an answer may
-// reach them.
+// One audience, one access decision. Before #379 this printed a per-audience
+// task menu; a task is no longer individually granted, so the task list is the
+// same for everyone and policy only decides whether a call is admitted.
 function renderAudience(
   heading: string,
   access: Access,
@@ -38,10 +38,8 @@ function renderAudience(
     lines.push("  BLOCKED — no call is answered at all");
     return lines;
   }
-  // One grantable level, so there is no "and below" to state: everything the
-  // owner has labelled is reachable, and everything else is refused at the read.
-  lines.push("  ANSWERED — may be told anything not marked secret");
-  lines.push("  A secret source is refused when the agent tries to read it, with a fixed reason");
+  lines.push("  ANSWERED — calls from this audience are admitted");
+  lines.push("  Every admitted caller has the same task and read scope");
   return lines;
 }
 
@@ -60,20 +58,21 @@ export function renderPolicyReport(
   if (policy.description) lines.push(`Purpose: ${policy.description}`);
 
   lines.push("", "Runtime enforcement");
-  // Enforcement is on the READ, not on the reply. An earlier revision of this
-  // block said the reply was refused unless the context was within clearance —
-  // there is no such check anywhere. listener.ts runs redactOutbound over the
-  // answer, which replaces credential-shaped strings and this line's own relay
-  // token, and nothing else looks at it. Naming a control that does not exist
-  // is worse than naming none: it tells an owner they are covered.
+  // Enforcement is on Claude's first-class file tools, not on the reply.
+  // listener.ts runs redactOutbound over the answer, which replaces
+  // credential-shaped strings and this line's own relay token, and nothing else
+  // looks at it. Naming a control that does not exist tells an owner they are
+  // covered when they are not.
   lines.push(
-    "  Sources are labelled by sensitivity; anything unlabelled is secret and never leaves.",
-    "  A path above this caller's clearance is refused AT THE READ, before the agent sees it.",
+    options.readableRoots.length > 0
+      ? `  Claude may read under: ${options.readableRoots.join(", ")}.`
+      : "  Claude has no usable configured read root.",
+    "  Paths outside those roots, and paths on the built-in or owner denylist, are refused at the read.",
     "  The answer itself is not inspected — only credential-shaped strings are redacted from it.",
   );
   if (options.agentKind === "claude") {
     lines.push(
-      "  Claude denies first-class tools not named by the task, and Bash is recorded, not blocked.",
+      "  Claude permits read-only first-class tools; Bash is recorded, not blocked, and bypasses this read guard.",
     );
   } else {
     lines.push(

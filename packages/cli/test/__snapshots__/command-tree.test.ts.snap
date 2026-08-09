@@ -311,7 +311,7 @@ exports[`CLI command tree > pins command paths, aliases, descriptions, and optio
     {
       "alias": undefined,
       "commands": [],
-      "description": "show the effective per-caller clearance policy and the tasks it covers",
+      "description": "show the effective caller-access policy, tasks, and read scope",
       "name": "policy",
       "options": [
         {
