@@ -29,7 +29,6 @@ type CallerAttachment = {
   to: string;
   actorIp?: string;
   actorCountry?: string;
-  groups: string[];
   relayOrigin: string;
   call_id?: string;
   correlation_id?: string;
@@ -224,11 +223,6 @@ export class HandleDO extends DurableObject {
       if (credentialGeneration < credentialGenerationFloor) {
         return new Response("stale credentials", { status: 401 });
       }
-      let groups: string[] = [];
-      try {
-        const parsed = JSON.parse(req.headers.get("X-Verified-Groups") ?? "[]");
-        if (Array.isArray(parsed) && parsed.every((value) => typeof value === "string")) groups = parsed;
-      } catch { /* malformed internal attestation fails closed to no groups */ }
       const testTimeout = Number(url.searchParams.get("test_timeout_ms") || "") || undefined;
       const pair = new WebSocketPair();
       const client = pair[0];
@@ -247,7 +241,7 @@ export class HandleDO extends DurableObject {
         this.ctx.acceptWebSocket(server, ["caller"]);
         server.serializeAttachment({
           kind: "caller", principal: principal!, from, org, to: target, actorIp, actorCountry,
-          groups, timeoutMs: testTimeout, relayOrigin,
+          timeoutMs: testTimeout, relayOrigin,
           credentialGeneration,
         } satisfies CallerAttachment);
       }
@@ -527,7 +521,7 @@ export class HandleDO extends DurableObject {
       this.send(ws, { type: "call_status", state: "ringing", call_id, correlation_id });
       this.send(listener, {
         type: "incoming_call", call_id, correlation_id, traceparent: frame.traceparent,
-        from: att.from, groups: att.groups,
+        from: att.from,
         envelope: frame.envelope,
       });
       return;

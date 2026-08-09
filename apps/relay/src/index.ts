@@ -6,12 +6,10 @@ import { orgAuditStatement, orgAuditTrimStatement } from "./events.js";
 import { expiredInviteCleanupStatement, mountInvites } from "./invites.js";
 import { mountKeys } from "./keys.js";
 import { mountPresence } from "./presence.js";
-import { mountRoster } from "./roster.js";
 import { generateToken, sha256Hex } from "./auth.js";
 import { generateAgentId, resolveAgentId } from "./identity.js";
 import { deploymentOrgAllows, identityObjectName,
   type DeploymentMode } from "./tenant.js";
-import { sharedRosterIds } from "./groups.js";
 import { checkLimit, NATIVE_CARD, NATIVE_READ, REGISTER, type RateLimitEnv } from "./ratelimit/index.js";
 import { parseStoredCard } from "./stored-card.js";
 import { drainRecoveryEvictions, mountRecovery } from "./recovery.js";
@@ -42,7 +40,6 @@ mountAudit(app);
 mountInvites(app);
 mountKeys(app);
 mountPresence(app);
-mountRoster(app);
 mountRecovery(app);
 
 async function handleExists(db: D1Database, org: string, handle: string): Promise<boolean> {
@@ -192,9 +189,6 @@ app.get("/v1/card/:handle", rateLimit(NATIVE_READ, "ip"), async (c) => {
     handle,
     description: upload.description,
     agent_kind: upload.agent_kind,
-    // No roster lookup here any more: since #379 a card carries no per-group
-    // task grants, so the viewer's shared rosters cannot change what they see.
-    // sharedRosterIds is still what attests groups for a CALL (below).
     tasks: visibleTasks(upload, viewer),
     updated_at: row.updated_at,
   });
@@ -211,7 +205,6 @@ app.get("/v1/ws", async (c) => {
   // here down so neither is used for the other's job.
   let target: string;
   let targetAgentId: string;
-  let groups: string[] = [];
   if (role === "listen") {
     target = handle;
     targetAgentId = identity.agentId;
@@ -230,10 +223,6 @@ app.get("/v1/ws", async (c) => {
     if (!resolved) return c.json({ error: "unknown handle" }, 404);
     target = to;
     targetAgentId = resolved;
-    // The caller cannot supply a policy selector. Group attestation is the
-    // relay's observation that both identities are currently live members of
-    // the same roster, taken before the DO accepts the caller socket.
-    groups = await sharedRosterIds(c.env.DB, org, identity.agentId, targetAgentId);
   } else {
     return c.json({ error: "bad role" }, 400);
   }
@@ -251,7 +240,6 @@ app.get("/v1/ws", async (c) => {
   fwd.headers.set("X-Verified-Target", target);
   fwd.headers.set("X-Verified-Credential-Generation", String(identity.recoveryGeneration));
   fwd.headers.set("X-Verified-Relay-Origin", new URL(c.req.url).hostname);
-  fwd.headers.set("X-Verified-Groups", JSON.stringify(groups));
   fwd.headers.set("X-Verified-Actor-IP", c.req.header("cf-connecting-ip") ?? "");
   const country = c.req.raw.cf?.country;
   fwd.headers.set("X-Verified-Actor-Country", typeof country === "string" ? country : "");

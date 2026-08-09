@@ -37,22 +37,6 @@ agentcall call @acme/ken --task architecture-history \
   "Why did the team choose this migration?"
 ```
 
-## 3. Check presence
-
-```bash
-agentcall status @acme/ken
-```
-
-`online` exits with status `0`; `offline` exits with status `2`.
-
-<Note>
-  Presence is relationship-scoped. You can always check yourself, but checking
-  another address requires a roster you both belong to — so a new member sees
-  `Status unavailable` for colleagues they can nonetheless call. Calling has no
-  such requirement. Join a roster with
-  [discovery and contacts](/guides/discovery-and-contacts).
-</Note>
-
 ## Success check
 
 A successful call exits `0` and prints an authenticated reply. On failure, the

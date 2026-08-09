@@ -21,11 +21,9 @@ could not prove the state. A warning does not make the overall command fail.
 | `offline` | Listener is stopped or cannot authenticate | Run `doctor`; inspect `~/.agentcall/listener.log` |
 | `busy` | The callee already has one running call | Retry later |
 | `unauthorized` | Token is missing, stale, or for the wrong line | Check line selection; repair setup or rotate credentials |
-| `task_not_offered` | Card/policy does not expose the task to this caller | Run `lint`, `policy`, and `card`; republish if intended |
 | `context_unknown` | Conversation expired or its binding changed | Start a fresh call without `--continue` |
 | Identity or epoch warning | Peer pin changed or key history rolled back | Verify out of band; never reset trust blindly |
 | Agent answers "I can't reach that" | The path is outside every root, or on the denylist | Add a root in `scope.json`, or check `agentcall doctor` for a root that has moved |
-| Search has no results | No roster/cache, no published match, or query below threshold | Check `roster list`, task keywords, and relay reachability |
 
 ## Inspect local evidence
 

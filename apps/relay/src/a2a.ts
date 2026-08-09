@@ -160,7 +160,7 @@ export function mountA2A(app: Hono<RelayAppEnv>): void {
     const card = toAgentCard({
       handle,
       description: upload.description,
-      // No roster lookup: a card carries no per-group task grants since #379.
+      // A card carries no per-group task grants since #379.
       tasks: visibleTasks(upload, viewer),
       baseUrl: `${origin}/v1/a2a/${handle}`,
     });

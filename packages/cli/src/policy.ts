@@ -9,9 +9,7 @@
 import { readFileSync } from "node:fs";
 import { z } from "zod";
 import { HANDLE_RE, MAX_CARD_BLOCKED_CALLERS } from "@benree/agentcall-shared";
-import {
-  AccessPolicySchema, GROUP_NAME_RE, AccessSchema, accessFor,
-} from "./access.js";
+import { AccessPolicySchema, AccessSchema, accessFor } from "./access.js";
 import { writeJsonAtomic } from "./json-store.js";
 import type { LinePaths } from "./paths.js";
 import type { Task } from "./tasks.js";
@@ -27,7 +25,6 @@ const MAX_POLICY_ASSERTIONS = 100;
 // AccessSchema: no clearance grants it, so no assertion can expect it.
 const PolicyAssertionSchema = z.object({
   caller: z.string().regex(HANDLE_RE),
-  groups: z.array(z.string().regex(GROUP_NAME_RE)).max(20).default([]),
   expect_access: AccessSchema,
 }).strict();
 type PolicyAssertion = z.infer<typeof PolicyAssertionSchema>;
@@ -41,7 +38,7 @@ const PolicySchema = AccessPolicySchema.extend({
 export type Policy = z.infer<typeof PolicySchema>;
 
 export const DEFAULT_POLICY: Policy = {
-  description: "", default_access: "allowed", callers: {}, groups: {},
+  description: "", default_access: "allowed", callers: {},
 };
 
 // Missing file -> safe default (fresh install). Malformed file -> THROW:
@@ -124,14 +121,7 @@ function validatePolicyAssertions(
   effective: Policy, assertions: readonly PolicyAssertion[], source: "user policy",
 ): void {
   for (const [index, assertion] of assertions.entries()) {
-    const unknownGroups = assertion.groups.filter((name) => !Object.hasOwn(effective.groups, name));
-    if (unknownGroups.length > 0) {
-      throw new Error(
-        `${source} assertion ${index + 1} for "${assertion.caller}" references unknown groups: ${unknownGroups.join(", ")}`,
-      );
-    }
-    const attestedGroups = assertion.groups.map((name) => effective.groups[name]!.roster_id);
-    const actual = accessFor(effective, assertion.caller, attestedGroups);
+    const actual = accessFor(effective, assertion.caller);
     if (actual === assertion.expect_access) continue;
     throw new Error(
       `${source} assertion ${index + 1} for "${assertion.caller}" failed: ` +
@@ -154,12 +144,12 @@ export type TaskResolution =
 // CONTAIN is decided afterwards, by accessFor against the sensitivity of
 // whatever the task actually read — one question where there used to be two.
 export function resolveTask(
-  policy: Policy, tasks: Task[], from: string, requested?: string, attestedGroups: readonly string[] = [],
+  policy: Policy, tasks: Task[], from: string, requested?: string,
 ): TaskResolution {
   // Blocked is the one rule clearance cannot express as a level: it beats every
-  // grant, including an attested group's, and it refuses before any task is
+  // task grant and refuses before any task is
   // named so a blocked caller learns nothing about what exists.
-  if (accessFor(policy, from, attestedGroups) === "blocked") {
+  if (accessFor(policy, from) === "blocked") {
     return { ok: false, code: "blocked", offered: [] };
   }
   if (requested !== undefined) {

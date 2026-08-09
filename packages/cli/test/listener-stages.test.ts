@@ -264,7 +264,7 @@ describe("makeOutcomeSender", () => {
 describe("resolveAdmission", () => {
   it("admits the default ask task for a caller with no policy configured", () => {
     const result = resolveAdmission({
-      paths: seededPaths(), from: "shusaku", requestedTask: undefined, groups: [],
+      paths: seededPaths(), from: "shusaku", requestedTask: undefined,
     });
     expect(result.ok).toBe(true);
     if (!result.ok) throw new Error("expected ok");
@@ -279,7 +279,7 @@ describe("resolveAdmission", () => {
   it("returns the scope, which is what the workdir is derived from", () => {
     const paths = seededPaths();
     const result = resolveAdmission({
-      paths, from: "shusaku", requestedTask: undefined, groups: [],
+      paths, from: "shusaku", requestedTask: undefined,
     });
     expect(result.ok).toBe(true);
     if (!result.ok) throw new Error("expected ok");
@@ -299,7 +299,7 @@ describe("resolveAdmission", () => {
     mkdirSync(paths.dir, { recursive: true });
     writeFileSync(paths.scopeFile, "{not valid json");
     const result = resolveAdmission({
-      paths, from: "shusaku", requestedTask: undefined, groups: [],
+      paths, from: "shusaku", requestedTask: undefined,
     });
     expect(result).toMatchObject({ ok: false, code: "policy_error" });
   });
@@ -308,14 +308,14 @@ describe("resolveAdmission", () => {
     const paths = seededPaths();
     seedPolicy(paths, { default_access: "allowed", callers: { spammer: { access: "blocked" } } });
     const result = resolveAdmission({
-      paths, from: "spammer", requestedTask: undefined, groups: [],
+      paths, from: "spammer", requestedTask: undefined,
     });
     expect(result).toEqual({ ok: false, code: "blocked", offered: [] });
   });
 
   it("rejects a requested task that does not exist on disk", () => {
     const result = resolveAdmission({
-      paths: seededPaths(), from: "shusaku", requestedTask: "no-such-task", groups: [],
+      paths: seededPaths(), from: "shusaku", requestedTask: "no-such-task",
     });
     expect(result).toMatchObject({ ok: false, code: "task_unknown" });
   });
@@ -330,7 +330,7 @@ describe("resolveAdmission", () => {
     seedTask(paths, "secret", ["description: shh"]);
     seedPolicy(paths, { default_access: "allowed", callers: {} });
     const result = resolveAdmission({
-      paths, from: "shusaku", requestedTask: "secret", groups: [],
+      paths, from: "shusaku", requestedTask: "secret",
     });
     expect(result).toMatchObject({ ok: true, task: { id: "secret" } });
   });
@@ -342,7 +342,7 @@ describe("resolveAdmission", () => {
     const paths = seededPaths();
     seedPolicy(paths, { default_access: "allowed", callers: {} });
     const result = resolveAdmission({
-      paths, from: "shusaku", requestedTask: undefined, groups: [],
+      paths, from: "shusaku", requestedTask: undefined,
     });
     expect(result.ok && result.policy.default_access).toBe("allowed");
   });
@@ -352,7 +352,7 @@ describe("resolveAdmission", () => {
     mkdirSync(paths.dir, { recursive: true });
     writeFileSync(paths.policyFile, "{not valid json");
     const result = resolveAdmission({
-      paths, from: "shusaku", requestedTask: undefined, groups: [],
+      paths, from: "shusaku", requestedTask: undefined,
     });
     expect(result.ok).toBe(false);
     if (result.ok || result.code !== "policy_error") throw new Error("expected a policy_error failure");

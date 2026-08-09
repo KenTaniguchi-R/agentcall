@@ -68,7 +68,6 @@ Deliver an encrypted call with relay-attested routing metadata.
 | `envelope` | object | yes |
 | `correlation_id` | string | yes |
 | `traceparent` | string | no |
-| `groups` | string[] | no |
 
 ### `cancel_call`
 
@@ -145,7 +144,6 @@ Explain why cancellation did not complete.
 - Messages are limited to 64,000 bytes; replies to 256,000 bytes.
 - Conversation contexts expire after 30 minutes and allow at most 10 turns.
 - Each caller has a 30-call hourly budget.
-- A listener accepts at most 50 relay-attested shared roster IDs per call.
 - An encrypted WebSocket frame is limited to 2,063,019 bytes.
 - Optional W3C trace context is normalized and must match the correlation ID.
 

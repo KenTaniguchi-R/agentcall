@@ -1,17 +1,15 @@
 import {
   DEFAULT_ORG_INVITE_EXPIRY_DAYS,
-  HANDLE_RE, AgentCard, AuditExportPage, CreateOrgInviteResponse, CreateRosterResponse, IssueRosterJoinKeyResponse,
-  ListOrgInvitesResponse, ListRosterJoinKeysResponse, RegisterResponse, RevokeOrgInviteResponse,
+  HANDLE_RE, AgentCard, AuditExportPage, CreateOrgInviteResponse,
+  ListOrgInvitesResponse, RegisterResponse, RevokeOrgInviteResponse,
   RecoveryIssueResponse, RecoveryReceipt, RecoveryStatusResponse,
-  RevokeRosterJoinKeyResponse, RosterBundle,
   EncryptionKeyRecord, formatAddress, IdentityRecord, HPKE_SUITE, MAX_ENCRYPTION_KEY_VALIDITY_MS, parseAddress,
   encryptionKeyTranscript, encryptionKeyTranscriptHash, fromBase64Url, identityTranscript, keyIdFor, signTranscript,
   // AgentKind is ours: registerHandle takes it, and it is the shared type that
   // replaced the inline "claude" | "codex" unions.
   type AgentCardType, type AgentKind, type AuditExportPageType, type CardUploadType,
-  type OrgInviteMetadataType, type RosterBundleType,
+  type OrgInviteMetadataType,
   type OrgRoleType,
-  type RosterJoinKeyMetadataType,
   type EncryptionKeyRecordType, type IdentityRecordType,
   type RecoveryIssueRequestType, type RecoveryIssueResponseType,
   type RecoveryStatusResponseType,
@@ -236,8 +234,8 @@ export async function fetchAuditExportPage(
   return AuditExportPage.parse(await res.json());
 }
 
-// Presence is self-or-shared-roster on the relay, so this always authenticates.
-// `auth` is required rather than optional to make that a compile-time fact.
+// Presence is self-only on the relay, so this always authenticates. `auth` is
+// required rather than optional to make that a compile-time fact.
 export async function getStatus(
   relay: string, handle: string, auth: Auth, opts: { timeoutMs?: number } = {},
 ): Promise<{ online: boolean }> {
@@ -245,7 +243,7 @@ export async function getStatus(
     schema: { parse: (value) => value as { online: boolean } },
     errors: {
       429: relayError("Too many status checks — try again in a minute."),
-      404: relayError(`Status unavailable for "${handle}": the target does not exist or does not share a roster with you.`, "status_unavailable"),
+      404: relayError(`Status unavailable for "${handle}": only the current line may inspect its listener status.`, "status_unavailable"),
     }, failed: "Status check" });
 }
 
@@ -292,98 +290,6 @@ export async function pushCard(
 ): Promise<void> {
   await relayCall({ relay, path: "/v1/card", method: "PUT", auth, body: upload,
     timeoutMs: opts.timeoutMs, failed: "Card push" });
-}
-
-export async function createRoster(
-  relay: string, auth: Auth, opts: { timeoutMs?: number } = {},
-): Promise<{ roster_id: string; join_key: string; admin_secret: string }> {
-  return relayCall({ relay, path: "/v1/roster", method: "POST", auth, timeoutMs: opts.timeoutMs,
-    schema: CreateRosterResponse, errors: { 429: relayError("Too many rosters created — try again in a minute.") }, failed: "Roster creation" });
-}
-
-export async function joinRoster(
-  relay: string, auth: Auth, rosterId: string, joinKey: string,
-  opts: { timeoutMs?: number } = {},
-): Promise<void> {
-  // The relay deliberately cannot tell these apart, and neither can this
-  // message: distinguishing them would make roster ids enumerable.
-  await relayCall({ relay, path: `/v1/roster/${rosterId}/join`, method: "POST", auth,
-    body: { join_key: joinKey }, timeoutMs: opts.timeoutMs,
-    errors: { 429: relayError("Too many join attempts — try again in a minute."), 404: relayError("No such roster, or the join key is invalid, expired, used, or revoked.", "unknown_handle"), 409: relayError("That roster is full.", "invalid") },
-    failed: "Joining the roster" });
-}
-
-async function rosterMutation(
-  relay: string, auth: Auth, rosterId: string, operation: string, body: unknown,
-  opts: { timeoutMs?: number } = {},
-): Promise<Response> {
-  return relayCall({ relay, path: `/v1/roster/${rosterId}/${operation}`, method: "POST", auth,
-    body, timeoutMs: opts.timeoutMs, response: true,
-    errors: { 429: relayError(`Too many roster ${operation} attempts — try again in a minute.`), 404: relayError("That roster, member, or administrative secret was not found.", "unknown_handle") },
-    failed: `Roster ${operation}` });
-}
-
-export async function leaveRoster(relay: string, auth: Auth, rosterId: string): Promise<void> {
-  await rosterMutation(relay, auth, rosterId, "leave", {});
-}
-
-export async function expelRosterMember(
-  relay: string, auth: Auth, rosterId: string, handle: string, adminSecret: string,
-): Promise<void> {
-  await rosterMutation(relay, auth, rosterId, "expel", { handle, admin_secret: adminSecret });
-}
-
-export async function issueRosterJoinKey(
-  relay: string, auth: Auth, rosterId: string, adminSecret: string,
-  options: { description?: string; expiresInDays?: number; reusable?: boolean } = {},
-): Promise<{ join_key: string; key: RosterJoinKeyMetadataType }> {
-  const res = await rosterMutation(relay, auth, rosterId, "keys", {
-    admin_secret: adminSecret,
-    description: options.description,
-    expires_in_days: options.expiresInDays,
-    reusable: options.reusable,
-  });
-  return IssueRosterJoinKeyResponse.parse(await res.json());
-}
-
-export async function listRosterJoinKeys(
-  relay: string, auth: Auth, rosterId: string, adminSecret: string,
-): Promise<RosterJoinKeyMetadataType[]> {
-  const res = await rosterMutation(relay, auth, rosterId, "keys/list", { admin_secret: adminSecret });
-  return ListRosterJoinKeysResponse.parse(await res.json()).keys;
-}
-
-export async function revokeRosterJoinKey(
-  relay: string, auth: Auth, rosterId: string, prefix: string, adminSecret: string, evict = false,
-): Promise<{ prefix: string; revoked_at: number; evicted: number }> {
-  const res = await rosterMutation(relay, auth, rosterId, `keys/${prefix}/revoke`, {
-    admin_secret: adminSecret, evict,
-  });
-  return RevokeRosterJoinKeyResponse.parse(await res.json());
-}
-
-export async function deleteRoster(
-  relay: string, auth: Auth, rosterId: string, adminSecret: string,
-): Promise<void> {
-  await rosterMutation(relay, auth, rosterId, "delete", { admin_secret: adminSecret });
-}
-
-// Returns "not-modified" rather than a bundle when the relay 304s, so the
-// caller keeps its cached entries instead of parsing an empty body.
-export async function fetchRosterBundle(
-  relay: string, auth: Auth, rosterId: string, etag?: string,
-  opts: { timeoutMs?: number } = {},
-): Promise<{ bundle: RosterBundleType; etag?: string } | "not-modified"> {
-  const headers: Record<string, string> = authHeaders(auth);
-  if (etag) headers["If-None-Match"] = etag;
-  const res = await relayCall({ relay, path: `/v1/roster/${rosterId}/bundle`, headers,
-    timeoutMs: opts.timeoutMs, raw: true, failed: "Roster refresh" });
-  if (res.status === 304) return "not-modified";
-  if (res.status === 401) throw new ApiError(CREDENTIALS_REJECTED, "invalid");
-  if (res.status === 429) throw new ApiError("Too many roster refreshes — try again in a minute.", "network");
-  if (res.status === 404) throw new ApiError("That roster is gone, or you are no longer a member.", "unknown_handle");
-  if (!res.ok) throw new ApiError(`Roster refresh failed (${res.status}).`, "network");
-  return { bundle: RosterBundle.parse(await res.json()), etag: res.headers.get("ETag") ?? undefined };
 }
 
 export async function fetchCard(

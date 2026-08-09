@@ -51,7 +51,7 @@ describe("E2EE envelope schemas and transcripts", () => {
     };
     expect(E2EECallerFrame.safeParse({ type: "call_request", envelope: requestEnvelope }).success).toBe(false);
     expect(E2EERelayToListenerFrame.safeParse({
-      type: "incoming_call", call_id: "c1", from: "alice", envelope: requestEnvelope, groups: [],
+      type: "incoming_call", call_id: "c1", from: "alice", envelope: requestEnvelope,
     }).success).toBe(false);
   });
 

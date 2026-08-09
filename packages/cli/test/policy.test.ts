@@ -25,15 +25,12 @@ const meet: Task = {
   examples: [], keywords: [], threadable: true, skill: "",
 };
 const TASKS = [ASK_TASK, intro, meet];
-const ENG = "e".repeat(22);
-
 const policy: Policy = {
   description: "",
   default_access: "allowed", callers: {
     ken: {},
     spammer: { access: "blocked" },
   },
-  groups: { eng: { roster_id: ENG } },
 };
 
 describe("loadPolicy", () => {
@@ -54,7 +51,7 @@ describe("loadPolicy", () => {
     const cases = [
       { default_tests: [{ caller: "mia", expect_access: "allowed" }] },
       { default_access: "allowed", callers: { mia: { blok: true } } },
-      { groups: { eng: { roster_id: ENG, acccess: "allowed" } } },
+      { groups: {} },
     ];
     for (const value of cases) {
       const p = linePaths(tempDir("agentcall-pol-"));
@@ -69,7 +66,6 @@ describe("loadPolicy", () => {
     for (const value of [
       { default_offer: ["ask"] },
       { callers: { ken: { offer: ["schedule-meeting"] } } },
-      { groups: { eng: { roster_id: ENG, offer: ["schedule-meeting"] } } },
     ]) {
       const p = linePaths(tempDir("agentcall-pol-"));
       mkdirSync(dirname(p.policyFile), { recursive: true });
@@ -110,7 +106,7 @@ describe("loadPolicy", () => {
     expect(() => loadPolicy(p)).toThrow(/at most 200.*enforced and published/i);
   });
 
-  it("accepts assertions over default, named, blocked, and relay-attested clearances", () => {
+  it("accepts assertions over default, named, and blocked access", () => {
     const p = linePaths(tempDir("agentcall-pol-"));
     mkdirSync(dirname(p.policyFile), { recursive: true });
     writeFileSync(p.policyFile, JSON.stringify({
@@ -119,13 +115,12 @@ describe("loadPolicy", () => {
         { caller: "ken", expect_access: "allowed" },
         { caller: "spammer", expect_access: "blocked" },
         { caller: "stranger", expect_access: "allowed" },
-        { caller: "stranger", groups: ["eng"], expect_access: "allowed" },
       ],
     }));
     expect(() => loadPolicy(p)).not.toThrow();
   });
 
-  it("rejects assertions with no expectation, an ungrantable one, or an unknown group", () => {
+  it("rejects assertions with no expectation, an ungrantable one, or retired group input", () => {
     const p = linePaths(tempDir("agentcall-pol-"));
     mkdirSync(dirname(p.policyFile), { recursive: true });
     writeFileSync(p.policyFile, JSON.stringify({ tests: [{ caller: "ken" }] }));
@@ -136,10 +131,10 @@ describe("loadPolicy", () => {
       tests: [{ caller: "ken", expect_access: "internal" }],
     }));
     expect(() => loadPolicy(p)).toThrow(/user policy is invalid/);
-    writeFileSync(p.policyFile, JSON.stringify({
-      tests: [{ caller: "ken", groups: ["missing"], expect_access: "allowed" }],
-    }));
-    expect(() => loadPolicy(p)).toThrow(/unknown groups.*missing/i);
+    writeFileSync(p.policyFile, JSON.stringify({ tests: [
+      { caller: "ken", groups: ["missing"], expect_access: "allowed" },
+    ] }));
+    expect(() => loadPolicy(p)).toThrow(/user policy is invalid/i);
   });
 
   it("fails closed when a user assertion does not match the effective clearance", () => {
@@ -165,21 +160,11 @@ describe("resolveTask", () => {
   it("blocked caller -> blocked, offered stays empty (no task-list leak to blocked callers)", () => {
     expect(resolveTask(policy, TASKS, "spammer", "ask")).toEqual({ ok: false, code: "blocked", offered: [] });
   });
-  it("lets an individual block outrank an attested group clearance", () => {
-    expect(resolveTask(policy, TASKS, "spammer", "ask", [ENG]))
-      .toEqual({ ok: false, code: "blocked", offered: [] });
-  });
   it("resolves any task on disk for any caller who is not blocked", () => {
     expect(resolveTask(policy, TASKS, "stranger", "schedule-meeting"))
       .toMatchObject({ ok: true, task: { id: "schedule-meeting" } });
     expect(resolveTask(policy, TASKS, "ken", "owner-introduction"))
       .toMatchObject({ ok: true, task: { id: "owner-introduction" } });
-  });
-  it("needs no relay attestation to reach a task, only to raise clearance", () => {
-    // The group grant used to expand a menu. It now only expands what the
-    // reply may contain, so attestation is not a gate on task resolution.
-    expect(resolveTask(policy, TASKS, "stranger", "schedule-meeting", [ENG]))
-      .toMatchObject({ ok: true, task: { id: "schedule-meeting" } });
   });
   it("nonexistent task -> task_unknown with the tasks that do exist", () => {
     expect(resolveTask(policy, TASKS, "ken", "no-such-task")).toEqual({
@@ -212,7 +197,6 @@ describe("savePolicy", () => {
     mkdirSync(dirname(p.policyFile), { recursive: true });
     const pol: Policy = {
       description: "x", default_access: "allowed", callers: { ken: {} },
-      groups: { eng: { roster_id: ENG } },
     };
     savePolicy(p, pol);
     expect(loadPolicy(p)).toEqual(pol);

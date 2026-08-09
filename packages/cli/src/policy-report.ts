@@ -97,8 +97,7 @@ export function renderPolicyReport(
   lines.push(
     "",
     "Rules that compose at call time",
-    "For one caller: a named rule wins; otherwise a blocked roster wins over an allowed one; otherwise the base rule.",
-    "A named caller block overrides the default and every roster rule.",
+    "For one caller: a named rule wins; otherwise the base rule applies.",
     "",
     // Empty is not a valid handle, so the base rule cannot accidentally pick up
     // a named caller's clearance.
@@ -106,24 +105,12 @@ export function renderPolicyReport(
   );
 
   for (const [caller] of Object.entries(policy.callers).sort(([a], [b]) => a.localeCompare(b))) {
-    // accessFor applies the same block precedence as listener admission.
+    // accessFor applies the same named-rule precedence as listener admission.
     lines.push(
       "",
       ...renderAudience(
-        `Named caller rule: ${caller} (overrides rosters)`,
+        `Named caller rule: ${caller} (overrides the base rule)`,
         accessFor(policy, caller),
-      ),
-    );
-  }
-
-  for (const [name, group] of Object.entries(policy.groups).sort(([a], [b]) => a.localeCompare(b))) {
-    // Defaults plus exactly this attested roster, matching accessFor's
-    // production union semantics.
-    lines.push(
-      "",
-      ...renderAudience(
-        `Roster rule: ${name} (${group.roster_id}) — applies to each attested member`,
-        accessFor(policy, "", [group.roster_id]),
       ),
     );
   }

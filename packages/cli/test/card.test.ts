@@ -23,7 +23,6 @@ describe("buildCardUpload", () => {
       mia: {},
       spammer: { access: "blocked" },
     },
-    groups: { eng: { roster_id: "g".repeat(22) } },
   };
 
   it("includes card metadata but never SKILL.md content", () => {
@@ -61,7 +60,7 @@ describe("buildCardUpload", () => {
   it("publishes task keywords to the relay", () => {
     const upload = buildCardUpload(
       { org: "acme", handle: "ken", token: "t", agent_kind: "claude", relay: "https://r.test" },
-      { description: "d", default_access: "allowed", callers: {}, groups: {} },
+      { description: "d", default_access: "allowed", callers: {} },
       [{ id: "adr", name: "ADR", description: "Why.", examples: [],
          keywords: ["auth", "migration"], threadable: true, skill: "" }],
     );

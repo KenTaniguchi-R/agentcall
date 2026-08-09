@@ -27,7 +27,7 @@ export const SkillFrontmatter = z.object({
   description: z.string().min(1).max(1000),
   examples: z.array(z.string().max(500)).max(10).default([]),
   // Mirrors CardTask.keywords in packages/shared exactly. The two must not
-  // drift: this is the authoring side of the field the search ranker weights
+// drift: this is the authoring side of the card metadata callers inspect
   // highest.
   keywords: z.array(z.string().min(1).max(MAX_KEYWORD_LENGTH)).max(MAX_TASK_KEYWORDS).default([]),
   timeout_s: z.number().int().positive().max(300).optional(),
@@ -130,7 +130,7 @@ description: TODO — one line callers will see on your card
 # threadable: true       # allow --continue follow-ups; defaults true
 # examples:
 #   - An example message a caller might send
-# keywords:              # search terms; weighted highest by \`agentcall search\`
+# keywords:              # terms published on the task card
 #   - auth
 #   - migration
 ---

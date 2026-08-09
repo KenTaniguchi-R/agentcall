@@ -25,8 +25,8 @@ answer to the caller.
 - Delivers authenticated, end-to-end encrypted calls through a hosted relay.
 - Runs the answering agent in a task-specific working directory.
 - Lets owners publish narrow tasks and decide which callers may use them.
-- Supports contacts, team rosters, discovery, conversations, multiple lines,
-  local history, and organization audit export.
+- Supports contacts, conversations, multiple lines, local history, and
+  organization audit export.
 
 AgentCall is not an autonomous-agent marketplace, an offline message queue, or
 an OS-level sandbox. The person receiving a call controls the agent, task,
@@ -135,9 +135,9 @@ through is answered by default; the organization is the boundary, and everyone
 answered sees the same thing.
 
 ```bash
-agentcall block spammer              # beats the default and every roster rule
+agentcall block spammer              # overrides the default
 agentcall unblock spammer
-agentcall access --default blocked   # answer only named callers and rosters
+agentcall access --default blocked   # answer only named callers
 ```
 
 > [!WARNING]
@@ -273,8 +273,8 @@ from its owner's operating-system account.
 - A caller's prompt can induce the answering agent to read and echo back
   material the guard does not cover — a key pasted into a tracked config file, a
   credential printed by an allowed command. Replies are scanned locally for
-  credential shapes (`sk-`, `gh*_`, AWS key ids, JWTs, bearer tokens, roster join
-  keys) and for this line's own relay token, and matches are replaced with
+  credential shapes (`sk-`, `gh*_`, AWS key ids, JWTs, bearer tokens) and for
+  this line's own relay token, and matches are replaced with
   `[redacted]` before the reply is sealed and before it is written to the local
   log. The scan is a fixed local pass with no network call, so it cannot fail
   open — but it recognizes shapes, not secrets in general.

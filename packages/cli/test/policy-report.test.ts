@@ -3,7 +3,6 @@ import { renderPolicyReport } from "../src/policy-report.js";
 import type { Policy } from "../src/policy.js";
 import { ASK_TASK, type Task } from "../src/tasks.js";
 
-const ROSTER_ID = "r".repeat(22);
 const deploy: Task = {
   id: "deploy",
   name: "Deploy production",
@@ -38,14 +37,11 @@ const policy: Policy = {
     alice: {},
     "blocked-bot": { access: "blocked" },
   },
-  groups: {
-    engineers: { roster_id: ROSTER_ID },
-  },
-  tests: [{ caller: "alice", groups: [], expect_access: "allowed" as const }],
+  tests: [{ caller: "alice", expect_access: "allowed" as const }],
 };
 
 describe("renderPolicyReport", () => {
-  it("renders effective default, caller, group, block, task, and assertion policy in plain language", () => {
+  it("renders effective default, caller, block, task, and assertion policy in plain language", () => {
     const report = renderPolicyReport(policy, [ASK_TASK, deploy, browse, shell], {
       agentKind: "claude",
       defaultWorkdir: "/srv/agentcall-default",
@@ -67,10 +63,9 @@ describe("renderPolicyReport", () => {
     expect(report).toMatch(/shell — Run diagnostics[\s\S]*inspect files — answers are read-only/);
     expect(report).not.toMatch(/exec — run shell commands/);
     expect(report).toMatch(/Base rule: Everyone registered[\s\S]*ANSWERED — calls from this audience are admitted/);
-    expect(report).toMatch(/Named caller rule: alice \(overrides rosters\)[\s\S]*ANSWERED — calls from this audience are admitted/);
-    expect(report).toMatch(/Named caller rule: blocked-bot \(overrides rosters\)[\s\S]*BLOCKED — no call is answered at all/);
-    expect(report).toMatch(new RegExp(`Roster rule: engineers \\(${ROSTER_ID}\\) — applies to each attested member[\\s\\S]*ANSWERED — calls from this audience are admitted`));
-    expect(report).toContain("For one caller: a named rule wins; otherwise a blocked roster wins over an allowed one; otherwise the base rule.");
+    expect(report).toMatch(/Named caller rule: alice \(overrides the base rule\)[\s\S]*ANSWERED — calls from this audience are admitted/);
+    expect(report).toMatch(/Named caller rule: blocked-bot \(overrides the base rule\)[\s\S]*BLOCKED — no call is answered at all/);
+    expect(report).toContain("For one caller: a named rule wins; otherwise the base rule applies.");
     expect(report).toContain("Claude may read under: /srv/agentcall-default, /srv/shared.");
     expect(report).toContain("Paths outside those roots, and paths on the built-in or owner denylist, are refused at the read.");
     expect(report).toContain("Bash is recorded, not blocked, and bypasses this read guard.");

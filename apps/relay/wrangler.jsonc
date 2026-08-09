@@ -51,9 +51,6 @@
     // source IP. 60/min is far above any human or agent's real read rate
     // while still putting a ceiling on namespace scraping and on the
     // Durable Object wakeups a status probe causes.
-    { "name": "READ_RL", "namespace_id": "1003", "simple": { "limit": 60, "period": 60 } },
-    // Roster bundle reads remain native. Credential-checked roster writes use
-    // RATE_LIMITER_DO so their window is exact and shared across source IPs.
-    { "name": "ROSTER_READ_RL", "namespace_id": "1004", "simple": { "limit": 10, "period": 60 } }
+    { "name": "READ_RL", "namespace_id": "1003", "simple": { "limit": 60, "period": 60 } }
   ]
 }

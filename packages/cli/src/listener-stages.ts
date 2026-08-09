@@ -192,7 +192,7 @@ type AdmissionDecision =
   | { ok: false; code: "blocked" | "task_unknown"; offered: string[] };
 
 export function resolveAdmission(
-  input: { paths: LinePaths; from: string; requestedTask?: string; groups: readonly string[] },
+  input: { paths: LinePaths; from: string; requestedTask?: string },
 ): AdmissionDecision {
   let policy: Policy;
   let scope: Scope;
@@ -208,7 +208,7 @@ export function resolveAdmission(
     // into one clean call_failed carrying the parse error, which is the same
     // treatment a corrupt policy.json already gets.
     scope = loadScope(input.paths);
-    resolution = resolveTask(policy, loadTasks(input.paths), input.from, input.requestedTask, input.groups);
+    resolution = resolveTask(policy, loadTasks(input.paths), input.from, input.requestedTask);
   } catch (error) {
     return { ok: false, code: "policy_error", error };
   }

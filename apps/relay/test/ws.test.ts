@@ -138,59 +138,6 @@ describe("listener attach + status", () => {
     expect(frame.from).toBe("solo2");
   });
 
-  it("attests only rosters shared by caller and callee", async () => {
-    const targetToken = await registerHandle("group-target");
-    const callerToken = await registerHandle("group-caller");
-    const listener = await openWs("/v1/ws?role=listen", wsAuth("group-target", targetToken));
-    const shared = "s".repeat(22);
-    const callerOnly = "c".repeat(22);
-    const roster = env.DB.prepare(
-      "INSERT INTO rosters (id, org, admin_secret_hash, created_at) VALUES (?, 'acme', 'a', 1)",
-    );
-    const member = env.DB.prepare(
-      "INSERT INTO roster_members (roster_id, org, agent_id, joined_at) VALUES (?, 'acme', ?, 1)",
-    );
-    await env.DB.batch([
-      roster.bind(shared), roster.bind(callerOnly),
-      member.bind(shared, await agentIdFor("group-target")), member.bind(shared, await agentIdFor("group-caller")),
-      member.bind(callerOnly, await agentIdFor("group-caller")),
-    ]);
-
-    const incoming = nextFrame(listener);
-    const caller = await openWs("/v1/ws?role=call&to=group-target", wsAuth("group-caller", callerToken));
-    caller.send(JSON.stringify(encryptedCallRequest("group-caller", "group-target")));
-
-    expect(await incoming).toMatchObject({
-      type: "incoming_call", from: "group-caller", groups: [shared],
-    });
-  });
-
-  it("keeps same-organization calls reachable when caller and callee share no roster", async () => {
-    const targetToken = await registerHandle("open-target");
-    const callerToken = await registerHandle("open-caller");
-    const listener = await openWs("/v1/ws?role=listen", wsAuth("open-target", targetToken));
-    const callerRoster = "q".repeat(22);
-    const targetRoster = "u".repeat(22);
-    const roster = env.DB.prepare(
-      "INSERT INTO rosters (id, org, admin_secret_hash, created_at) VALUES (?, 'acme', 'a', 1)",
-    );
-    const member = env.DB.prepare(
-      "INSERT INTO roster_members (roster_id, org, agent_id, joined_at) VALUES (?, 'acme', ?, 1)",
-    );
-    await env.DB.batch([
-      roster.bind(callerRoster), roster.bind(targetRoster),
-      member.bind(callerRoster, await agentIdFor("open-caller")), member.bind(targetRoster, await agentIdFor("open-target")),
-    ]);
-
-    const incoming = nextFrame(listener);
-    const caller = await openWs("/v1/ws?role=call&to=open-target", wsAuth("open-caller", callerToken));
-    caller.send(JSON.stringify(encryptedCallRequest("open-caller", "open-target")));
-
-    expect(await incoming).toMatchObject({
-      type: "incoming_call", from: "open-caller", groups: [],
-    });
-  });
-
   it("does not route a caller to the same handle in another tenant", async () => {
     const betaToken = await registerHandle("tenant-target", "claude", "beta");
     await openWs("/v1/ws?role=listen", wsAuth("tenant-target", betaToken, "beta"));
@@ -245,7 +192,7 @@ describe("listener attach + status", () => {
     expect(await known.text()).toBe(await unknown.text());
   });
 
-  it("serves a peer that shares a roster with the target", async () => {
+  it("does not let legacy roster membership grant peer presence access", async () => {
     await registerHandle("s-target4");
     const viewer = await registerHandle("s-viewer4");
     const roster = "p".repeat(22);
@@ -263,8 +210,7 @@ describe("listener attach + status", () => {
     const res = await SELF.fetch("https://relay.test/v1/status/s-target4", {
       headers: wsAuth("s-viewer4", viewer),
     });
-    expect(res.status).toBe(200);
-    expect((await res.json<{ online: boolean }>()).online).toBe(false);
+    expect(res.status).toBe(404);
   });
 
   it("records only identity-unlinked allowed and denied status-read points", async () => {

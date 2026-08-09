@@ -51,9 +51,7 @@ export const requireAdmin = createMiddleware<RelayAppEnv>(async (c, next) => {
 // from surfacing as a 500 instead of the route's own 400/404. Seventeen
 // handlers wrote that chain out by hand, which is seventeen chances to drop
 // the catch. Returning undefined rather than a Response leaves each route
-// owning its own rejection status and body — roster answers 404 to keep
-// roster ids unenumerable, audit answers 400 — which is a real difference
-// this helper must not flatten.
+// owning its own rejection status and body, which this helper must not flatten.
 // `overrides` is for routes that take a field from the URL path rather than
 // the body — the override wins, so a body that also carries the field cannot
 // contradict the path. Passing none leaves the parsed value untouched, so a

@@ -175,9 +175,7 @@ export function startListener(deps: ListenerDeps): { stop(): Promise<void> } {
       }
 
       try {
-      const {
-        call_id, correlation_id, from, groups,
-      } = frame;
+      const { call_id, correlation_id, from } = frame;
       const correlation = { correlation_id };
       const started = Date.now();
 
@@ -214,7 +212,7 @@ export function startListener(deps: ListenerDeps): { stop(): Promise<void> } {
       // policy.ts). Refusals never enqueue and never spawn: no tokens are
       // burned by blocked callers or task probing.
 
-      const admission = resolveAdmission({ paths: deps.paths, from, requestedTask, groups });
+      const admission = resolveAdmission({ paths: deps.paths, from, requestedTask });
       if (!admission.ok) {
         if (admission.code === "policy_error") {
           const outcomeDeliveryError = await trySendOutcome({ kind: "failure", code: "agent_error", detail: "A local policy error prevented this call from completing." });

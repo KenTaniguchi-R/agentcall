@@ -8,7 +8,6 @@ import { WebSocketServer } from "ws";
 import { createProgram, runCli } from "../src/index.js";
 import { getLinePaths, getMachinePaths, type LinePaths } from "../src/paths.js";
 import { saveLineConfig } from "../src/lines.js";
-import { loadMemberships, readCached, saveMembership, writeCached } from "../src/rosters.js";
 import { loadOutbound, rememberOutbound } from "../src/contexts-out.js";
 import { loadKnownPeers } from "../src/known-peers.js";
 import { writeJsonAtomic } from "../src/json-store.js";
@@ -329,21 +328,6 @@ function seedConfig(testHome: string, relay: string): LinePaths {
   return paths;
 }
 
-const A = "a".repeat(22);
-const B = "b".repeat(22);
-const KEY_PREFIX = "c".repeat(12);
-const JOIN_KEY = `agjk_${KEY_PREFIX}_${"s".repeat(32)}`;
-const bundle = (rosterId: string, handle = "sota") => ({
-  roster_id: rosterId,
-  entries: [{
-    handle,
-    agent_kind: "claude" as const,
-    updated_at: 1,
-    truncated: false,
-    tasks: [{ id: "ask", name: "Ask", description: "TypeScript architecture", keywords: ["typescript"] }],
-  }],
-  skipped: 0,
-});
 
 describe.sequential("CLI command actions", () => {
   it("renders the employee's local call and tool history", async () => {
@@ -471,12 +455,6 @@ describe.sequential("CLI command actions", () => {
     expect(out.code).toBe(0);
     expect(out.stderr).toMatch(/scan.*limited.*calls\.log/i);
     expect(JSON.parse(out.stdout)).toMatchObject([{ call_id: "new" }]);
-  });
-
-  it("preserves the top-level no-config failure path", async () => {
-    const out = await runCommand(home(), ["search", "typescript"]);
-    expect(out.code).toBe(1);
-    expect(out.stderr).toMatch(/agentcall setup/);
   });
 
   it("requires setup before fetching another agent's card", async () => {
@@ -825,12 +803,6 @@ describe.sequential("CLI command actions", () => {
     expect(out.stderr).not.toContain("Checkpoint org=");
   });
 
-  it("captures Commander validation failures without exiting the process", async () => {
-    const out = await runCommand(home(), ["roster", "join", A]);
-    expect(out.code).toBe(1);
-    expect(out.stderr).toMatch(/required option.*--key/i);
-  });
-
   it("exposes policy assertion failures through agentcall lint", async () => {
     const testHome = home();
     const paths = getLinePaths(getMachinePaths(testHome), "claude");
@@ -876,8 +848,8 @@ describe.sequential("CLI command actions", () => {
     expect(out.stdout).toMatch(/deploy — Deploy production[\s\S]*inspect files — answers are read-only/);
     // The exec warning is gone with the capability that caused it (#372).
     expect(out.stdout).not.toContain("WARNING: exec");
-    expect(out.stdout).toMatch(/Named caller rule: alice \(overrides rosters\)[\s\S]*ANSWERED — calls from this audience are admitted/);
-    expect(out.stdout).toMatch(/Named caller rule: blocked-bot \(overrides rosters\)[\s\S]*BLOCKED — no call is answered at all/);
+    expect(out.stdout).toMatch(/Named caller rule: alice \(overrides the base rule\)[\s\S]*ANSWERED — calls from this audience are admitted/);
+    expect(out.stdout).toMatch(/Named caller rule: blocked-bot \(overrides the base rule\)[\s\S]*BLOCKED — no call is answered at all/);
   });
 
   it("rejects a CLI policy edit that would break an assertion and preserves the file", async () => {
@@ -898,220 +870,6 @@ describe.sequential("CLI command actions", () => {
     expect(out.code).toBe(1);
     expect(out.stderr).toMatch(/assertion 1.*expected allowed.*got blocked/i);
     expect(JSON.parse(readFileSync(paths.policyFile, "utf8"))).toEqual(original);
-  });
-
-  it("prints one-time roster credentials before a colliding local save can fail", async () => {
-    let creates = 0;
-    const relay = await startRelay(() => {
-      creates += 1;
-      return {
-        status: 200,
-        body: { roster_id: B, join_key: JOIN_KEY, admin_secret: "admin-once" },
-      };
-    });
-    const testHome = home();
-    seedConfig(testHome, relay);
-    saveMembership(getLinePaths(getMachinePaths(testHome), "claude"), { name: "roster", relay, roster_id: A });
-
-    const out = await runCommand(testHome, ["roster", "create"]);
-
-    expect(creates).toBe(1);
-    expect(out.code).toBe(1);
-    expect(out.stdout).toContain(B);
-    expect(out.stdout).toContain(JOIN_KEY);
-    expect(out.stdout).toContain("admin-once");
-    expect(out.stderr).toMatch(/roster was created.*not saved locally/is);
-    expect(out.stderr).toContain(`agentcall roster join ${B}`);
-    expect(loadMemberships(getLinePaths(getMachinePaths(testHome), "claude"))).toEqual([{ name: "roster", relay, roster_id: A }]);
-  });
-
-  it("persists a roster only after the relay accepts the join", async () => {
-    let seen: { url?: string; method?: string; body?: string } = {};
-    const relay = await startRelay((url, method, body) => {
-      seen = { url, method, body };
-      return { status: 200 };
-    });
-    const testHome = home();
-    const paths = seedConfig(testHome, relay);
-
-    const out = await runCommand(testHome, ["roster", "join", A, "--key", JOIN_KEY, "--as", "acme"]);
-
-    expect(out.code).toBe(0);
-    expect(seen).toEqual({ url: `/v1/roster/${A}/join`, method: "POST", body: JSON.stringify({ join_key: JOIN_KEY }) });
-    expect(loadMemberships(paths)).toEqual([{ name: "acme", relay, roster_id: A }]);
-  });
-
-  it("preserves an existing local membership when a successful relay join collides", async () => {
-    let joins = 0;
-    const relay = await startRelay(() => {
-      joins += 1;
-      return { status: 200 };
-    });
-    const testHome = home();
-    const paths = seedConfig(testHome, relay);
-    saveMembership(paths, { name: "acme", relay, roster_id: A });
-
-    const out = await runCommand(testHome, ["roster", "join", B, "--key", JOIN_KEY, "--as", "acme"]);
-
-    expect(joins).toBe(1); // Relay membership happened; there is no rollback operation.
-    expect(out.code).toBe(1);
-    expect(out.stderr).toMatch(/joined.*not saved locally/is);
-    expect(out.stderr).toContain(`agentcall roster join ${B}`);
-    expect(loadMemberships(paths)).toEqual([{ name: "acme", relay, roster_id: A }]);
-  });
-
-  it("removes local membership only after the relay accepts leave", async () => {
-    let seen = "";
-    const relay = await startRelay((url) => {
-      seen = url;
-      return { status: 200 };
-    });
-    const testHome = home();
-    const paths = seedConfig(testHome, relay);
-    saveMembership(paths, { name: "acme", relay, roster_id: A });
-
-    const out = await runCommand(testHome, ["roster", "leave", "acme"]);
-
-    expect(out.code).toBe(0);
-    expect(seen).toBe(`/v1/roster/${A}/leave`);
-    expect(loadMemberships(paths)).toEqual([]);
-  });
-
-  it("passes explicit confirmation for join-key-scoped eviction", async () => {
-    let seen: { url?: string; body?: string } = {};
-    const relay = await startRelay((url, _method, body) => {
-      seen = { url, body };
-      return { status: 200, body: { prefix: KEY_PREFIX, revoked_at: 3, evicted: 2 } };
-    });
-    const testHome = home();
-    const paths = seedConfig(testHome, relay);
-    saveMembership(paths, { name: "acme", relay, roster_id: A });
-
-    const out = await runCommand(testHome, [
-      "roster", "key", "revoke", "acme", KEY_PREFIX, "--evict", "--yes", "--admin-secret", "admin-secret",
-    ]);
-
-    expect(out.code).toBe(0);
-    expect(seen).toEqual({
-      url: `/v1/roster/${A}/keys/${KEY_PREFIX}/revoke`,
-      body: JSON.stringify({ admin_secret: "admin-secret", evict: true }),
-    });
-    expect(out.stdout).toContain("Evicted 2 member(s)");
-  });
-
-  // Same defect class as the invite listing: a join-key description is
-  // caller-supplied free text (MAX_ROSTER_JOIN_KEY_DESCRIPTION bounds length,
-  // not character set) rendered into a row. This row is tab-delimited, so a
-  // tab shifts every following column as well.
-  it("neutralizes terminal escapes and tabs in a join-key description", async () => {
-    const metadata = {
-      prefix: KEY_PREFIX, description: "safe\u001b[2K\r\tspoofed", created_by: "ken",
-      created_at: 1, expires_at: 2_000_000_000_000, reusable: true, used: false, revoked_at: null,
-    };
-    const relay = await startRelay(() => ({ status: 200, body: { keys: [metadata] } }));
-    const testHome = home();
-    seedConfig(testHome, relay);
-    saveMembership(getLinePaths(getMachinePaths(testHome), "claude"), { name: "acme", relay, roster_id: A });
-
-    const out = await runCommand(testHome, [
-      "roster", "key", "list", "acme", "--admin-secret", "admin-secret",
-    ]);
-
-    expect(out.code).toBe(0);
-    expect(out.stdout).not.toContain("\u001b");
-    expect(out.stdout).not.toContain("\r");
-    // The column separators this row legitimately uses are the ones the
-    // renderer writes, not any the description smuggled in.
-    expect(out.stdout.split("\t")).toHaveLength(6);
-    expect(out.stdout).toContain("spoofed");
-  });
-
-  it("issues a key once and lists metadata without a secret", async () => {
-    const metadata = {
-      prefix: KEY_PREFIX, description: "contractor", created_by: "ken", created_at: 1, expires_at: 2_000_000_000_000,
-      reusable: true, used: false, revoked_at: null,
-    };
-    const requests: { url: string; body?: string }[] = [];
-    const relay = await startRelay((url, _method, body) => {
-      requests.push({ url, body });
-      return url.endsWith("/keys/list")
-        ? { status: 200, body: { keys: [metadata] } }
-        : { status: 200, body: { join_key: JOIN_KEY, key: metadata } };
-    });
-    const testHome = home();
-    seedConfig(testHome, relay);
-    saveMembership(getLinePaths(getMachinePaths(testHome), "claude"), { name: "acme", relay, roster_id: A });
-
-    const issued = await runCommand(testHome, [
-      "roster", "key", "issue", "acme", "--description", "contractor", "--expires-in", "14",
-      "--reusable", "--admin-secret", "admin-secret",
-    ]);
-    const listed = await runCommand(testHome, [
-      "roster", "key", "list", "acme", "--admin-secret", "admin-secret",
-    ]);
-
-    expect(issued.code).toBe(0);
-    expect(issued.stdout).toContain(JOIN_KEY);
-    expect(listed.code).toBe(0);
-    expect(listed.stdout).toContain(`${KEY_PREFIX}\tactive\treusable`);
-    expect(listed.stdout).not.toContain(JOIN_KEY);
-    expect(requests).toEqual([
-      {
-        url: `/v1/roster/${A}/keys`,
-        body: JSON.stringify({
-          admin_secret: "admin-secret", description: "contractor", expires_in_days: 14, reusable: true,
-        }),
-      },
-      { url: `/v1/roster/${A}/keys/list`, body: JSON.stringify({ admin_secret: "admin-secret" }) },
-    ]);
-  });
-
-  it("keeps JSON stdout parseable when one roster refresh fails", async () => {
-    const relay = await startRelay((url) =>
-      url.includes(A) ? { status: 200, body: bundle(A), headers: { ETag: '"a1"' } } : { status: 500, body: { error: "down" } });
-    const testHome = home();
-    const paths = seedConfig(testHome, relay);
-    saveMembership(paths, { name: "working", relay, roster_id: A });
-    saveMembership(paths, { name: "broken", relay, roster_id: B });
-
-    const out = await runCommand(testHome, ["search", "typescript", "--json"]);
-
-    expect(out.code).toBe(0);
-    expect(out.stderr).toMatch(/broken:/);
-    const json = JSON.parse(out.stdout);
-    expect(json.results).toMatchObject([{ roster: "working", handle: "sota", task: "ask" }]);
-  });
-
-  it("returns failure when every roster refresh fails", async () => {
-    const relay = await startRelay(() => ({ status: 500, body: { error: "down" } }));
-    const testHome = home();
-    const paths = seedConfig(testHome, relay);
-    saveMembership(paths, { name: "one", relay, roster_id: A });
-    saveMembership(paths, { name: "two", relay, roster_id: B });
-
-    const out = await runCommand(testHome, ["search", "typescript", "--json"]);
-
-    expect(out.code).toBe(1);
-    expect(JSON.parse(out.stdout).results).toEqual([]);
-  });
-
-  it("does not resurrect a revoked roster in a later offline invocation", async () => {
-    const relay = await startRelay(() => ({ status: 404, body: { error: "gone" } }));
-    const testHome = home();
-    const paths = seedConfig(testHome, relay);
-    saveMembership(paths, { name: "acme", relay, roster_id: A });
-    writeCached(paths, "acme", {
-      relay, caller: "ken", roster_id: A, fetched_at: 0,
-      entries: bundle(A).entries, skipped: 0,
-    });
-
-    const online = await runCommand(testHome, ["search", "typescript"]);
-    expect(online.code).toBe(1);
-    expect(readCached(paths, "acme", { relay, caller: "ken", roster_id: A })).toBeNull();
-
-    const offline = await runCommand(testHome, ["search", "typescript", "--offline"]);
-    expect(offline.code).toBe(1);
-    expect(offline.stderr).toMatch(/never been fetched/);
   });
 
   it("rejects --continue with no stored conversation before opening a WebSocket", async () => {

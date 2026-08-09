@@ -46,15 +46,9 @@ export interface LinePaths {
   toolsLog: string;
   tasksDir: string;
   shareDir: string;
-  // Line-scoped, not machine-scoped, because every one of these is keyed to an
-  // audience. Rosters and the bundle cache are membership held by a handle on
-  // a relay, and a line is exactly "a handle on a relay" — a second line on a
-  // different relay must not read the first's memberships. contexts.json binds
-  // an agent session to (caller, task, agent_kind, workdir), all of which are
-  // per-line, and contexts-out.json is keyed by the `from` handle placing the
-  // call. Machine-scoping any of them would leak one audience into another.
-  rostersFile: string;
-  rosterCacheFile: string;
+  // Line-scoped because contexts.json binds an agent session to (caller, task,
+  // agent_kind, workdir), and contexts-out.json is keyed by the `from` handle
+  // placing the call. Machine-scoping either would leak one audience into another.
   contextsFile: string;
   contextsOutFile: string;
   /** Crash-safe online credential candidate; never contains a recovery proof. */
@@ -99,8 +93,6 @@ export function getLinePaths(machine: MachinePaths, name: string): LinePaths {
     toolsLog: join(dir, "tools.log"),
     tasksDir: join(authored, "tasks"),
     shareDir: join(authored, "public"),
-    rostersFile: join(dir, "rosters.json"),
-    rosterCacheFile: join(dir, "roster-cache.json"),
     contextsFile: join(dir, "contexts.json"),
     contextsOutFile: join(dir, "contexts-out.json"),
     recoveryPendingFile: join(dir, "recovery-pending.json"),

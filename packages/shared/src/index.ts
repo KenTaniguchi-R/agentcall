@@ -1,6 +1,5 @@
 export * from "./protocol.js";
 export * from "./card.js";
-export * from "./roster.js";
 export * from "./invite.js";
 export * from "./audit.js";
 export * from "./audit-catalog.js";

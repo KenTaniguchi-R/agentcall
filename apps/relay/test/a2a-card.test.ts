@@ -104,20 +104,8 @@ describe("GET /v1/a2a/:handle/agent-card.json", () => {
     expect(body).not.toContain("agent_kind");
   });
 
-  // Replaces "projects skills granted by relay-attested shared roster
-  // membership". #379 removed per-group grants from the card, so roster
-  // membership no longer changes an A2A projection at all — which is the
-  // property now worth pinning, since a reintroduced group filter here would
-  // silently narrow a caller's view.
-  it("projects the same skills whether or not a viewer shares a roster", async () => {
-    const targetToken = await registerHandle("a2a-group");
-    const created = await (await SELF.fetch("https://relay.test/v1/roster", {
-      method: "POST", headers: wsAuth("a2a-group", targetToken),
-    })).json<{ roster_id: string; join_key: string }>();
-    await SELF.fetch(`https://relay.test/v1/roster/${created.roster_id}/join`, {
-      method: "POST", headers: { "content-type": "application/json", ...viewerHeaders() },
-      body: JSON.stringify({ join_key: created.join_key }),
-    });
+  it("projects the same skills to every authenticated organization member", async () => {
+    await registerHandle("a2a-group");
     await env.DB.prepare("INSERT OR REPLACE INTO cards (org, agent_id, card_json, updated_at) VALUES (?, ?, ?, ?)")
       .bind("acme", await agentIdFor("a2a-group"), JSON.stringify({
         description: "grouped", agent_kind: "claude",
