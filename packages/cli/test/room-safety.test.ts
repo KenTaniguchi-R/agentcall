@@ -36,25 +36,34 @@ async function waitUntil(predicate: () => boolean, timeoutMs = 5_000): Promise<b
 }
 
 describe("Room safety adapter support", () => {
-  it("fails closed when the exact agent, version, OS, and architecture have no probe evidence", () => {
+  it("uses matching agent, OS, and architecture evidence across Claude Code versions", () => {
     expect(roomSafetySupport({
       agent: "claude",
       cliVersion: "99.0.0",
       platform: "darwin",
       arch: "arm64",
-    })).toEqual({
-      supported: false,
-      reason: "no Room safety evidence for claude 99.0.0 on darwin/arm64",
-    });
+    }, [passingEvidence])).toEqual({ supported: true, evidence: passingEvidence });
   });
 
-  it("supports only an exact tuple backed by complete passing evidence", () => {
+  it("fails closed when the agent, OS, or architecture has no probe evidence", () => {
     expect(roomSafetySupport({
       agent: "claude",
       cliVersion: "2.1.220",
       platform: "darwin",
       arch: "arm64",
     }, [passingEvidence])).toEqual({ supported: true, evidence: passingEvidence });
+    expect(roomSafetySupport({
+      agent: "claude",
+      cliVersion: "2.1.226",
+      platform: "linux",
+      arch: "arm64",
+    }, [passingEvidence]).supported).toBe(false);
+    expect(roomSafetySupport({
+      agent: "claude",
+      cliVersion: "2.1.226",
+      platform: "darwin",
+      arch: "x64",
+    }, [passingEvidence]).supported).toBe(false);
   });
 
   it("ships the exact live-probed Claude tuple and leaves Codex unsupported", () => {
@@ -300,13 +309,13 @@ describe("checkRoomSafetyEligibility / resolveRoomSafetyTuple (#347)", () => {
     expect(tuple).toEqual({ agent: "claude", cliVersion: "9.9.9", platform: "linux", arch: "x64" });
   });
 
-  it("fails closed for a version with no probe evidence", () => {
+  it("uses matching adapter evidence for an unprobed Claude Code version", () => {
     const result = checkRoomSafetyEligibility({
       agent: "claude", platform: "darwin", arch: "arm64",
       resolveBin: () => "/usr/bin/claude", readVersion: () => "0.0.1",
       evidenceCatalog,
     });
-    expect(result.supported).toBe(false);
+    expect(result).toEqual({ supported: true, evidence: evidenceCatalog[0] });
   });
 
   it("does not change buildRoomSafeSpawnContract's behavior (regression)", () => {

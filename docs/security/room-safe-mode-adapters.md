@@ -1,18 +1,20 @@
 # Room safe-mode adapter evidence
 
 Room execution fails closed. A client may become callable in a Room only when its
-exact agent, CLI version, operating system, and architecture appear in the passing
-catalog in `packages/cli/src/room-safety.ts`. Upgrades and unprobed platforms are
-unsupported until the probe is rerun and reviewed. Passing evidence also expires
-after 90 days; malformed, future-dated, or commandless evidence is rejected.
+agent, operating system, and architecture appear in the passing catalog in
+`packages/cli/src/room-safety.ts`. Claude Code versions are not pinned; the catalog's
+recorded version identifies the probe that established support for its adapter,
+platform, and architecture. Unprobed agents and platforms are unsupported. Passing
+evidence also expires after 90 days; malformed, future-dated, or commandless evidence
+is rejected.
 
 ## Support matrix
 
 | Agent | CLI | Platform | Decision | Reason |
 |---|---|---|---|---|
-| Claude Code | 2.1.220 | macOS arm64 | Supported | The opt-in live canary passed every Room safety surface on 2026-08-03 PDT. |
+| Claude Code | Any version | macOS arm64 | Supported | The adapter's safety contract passed the opt-in live canary on 2.1.220 on 2026-08-03 PDT. |
 | Codex CLI | 0.146.0 | macOS arm64 | Unsupported | `read-only` controls writes but still exposes reads outside the workdir, and this CLI has no switch that removes its shell/file tools. |
-| Any other tuple | any | any | Unsupported | No exact passing evidence. |
+| Any other agent/platform | any | any | Unsupported | No passing adapter evidence. |
 
 The Claude adapter runs in an empty, non-symlink workdir with no built-in tools,
 safe mode, no persisted or resumed session, no setting sources, an explicitly empty

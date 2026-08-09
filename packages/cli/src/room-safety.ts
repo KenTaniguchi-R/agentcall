@@ -174,7 +174,6 @@ export function roomSafetySupport(
 ): RoomSafetySupport {
   const evidence = evidenceCatalog.find((candidate) =>
     candidate.agent === tuple.agent &&
-    candidate.cliVersion === tuple.cliVersion &&
     candidate.platform === tuple.platform &&
     candidate.arch === tuple.arch
   );
