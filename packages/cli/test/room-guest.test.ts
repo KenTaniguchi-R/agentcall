@@ -25,7 +25,7 @@ function joinedResponse(overrides: Partial<{ participant: unknown; credential: s
 }
 
 function baseEligibility() {
-  return vi.fn().mockReturnValue({ supported: true, evidence: { cliVersion: "9.9.9" } });
+  return vi.fn().mockReturnValue({ supported: true, evidence: {} });
 }
 
 describe("runRoomGuest", () => {

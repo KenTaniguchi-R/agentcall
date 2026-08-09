@@ -72,7 +72,7 @@ const participant = {
   credential_hash: HASH,
   signing_public_key: ZERO_KEY,
   encryption_public_key: ONE_KEY,
-  agent_adapter: "claude@2.1.220:darwin/arm64",
+  agent_adapter: "claude:darwin/arm64",
   joined_at: NOW,
   admitted_at: NOW + 1,
   verified_epoch: 1,
@@ -175,9 +175,9 @@ describe("Room primitive schemas", () => {
   });
 
   it.each([
-    "claude@2.1.220:darwin/arm64",
-    "codex@0.146.0:linux/x64",
-    "claude@3.0.0:win32/x64",
+    "claude:darwin/arm64",
+    "codex:linux/x64",
+    "claude:win32/x64",
   ])("accepts supported adapter tuple syntax %s", (value) => {
     expect(RoomAgentAdapter.parse(value)).toBe(value);
   });

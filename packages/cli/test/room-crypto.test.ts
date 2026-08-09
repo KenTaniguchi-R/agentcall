@@ -10,7 +10,7 @@ function unsignedProof(keys: Pick<RoomJoinProofInput, "signing_public_key" | "en
     invite: `acri.room_${randomBase64Url(16)}.ri_${randomBase64Url(16)}.${secret}`,
     participant_secret: secret,
     display_name: "sota",
-    agent_adapter: "claude@2.1.220:darwin/arm64",
+    agent_adapter: "claude:darwin/arm64",
     ...keys,
   };
 }

@@ -28,7 +28,7 @@ describe("createRoom", () => {
     const request = {
       expected_participants: 2 as const, display_name: "ken",
       signing_public_key: "a".repeat(43), encryption_public_key: "b".repeat(43),
-      agent_adapter: "claude@2.1.220:darwin/arm64",
+      agent_adapter: "claude:darwin/arm64",
     };
     await createRoom("https://relay.test", request);
     const [url, init] = fetchMock.mock.calls[0]!;

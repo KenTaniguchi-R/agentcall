@@ -7,11 +7,11 @@ import { formatInviteLines, resolveHostDisplayName } from "./room-render.js";
 import { runRoomVerification, type RoomVerificationResult } from "./room-verification.js";
 import { createLineListener } from "./tty.js";
 
-const AGENT_ADAPTER_RE = /^(?:claude|codex)@(\d+\.\d+\.\d+):(\w+)\/(\w+)$/;
+const AGENT_ADAPTER_RE = /^(?:claude|codex):(\w+)\/(\w+)$/;
 const ROOM_SEATS = 6 as const;
 
-function agentAdapterString(agent: "claude" | "codex", version: string): string {
-  const adapter = `${agent}@${version}:${process.platform}/${process.arch}`;
+function agentAdapterString(agent: "claude" | "codex"): string {
+  const adapter = `${agent}:${process.platform}/${process.arch}`;
   if (!AGENT_ADAPTER_RE.test(adapter)) throw new Error(`could not build a valid Room agent_adapter string from ${adapter}`);
   return adapter;
 }
@@ -51,7 +51,7 @@ export async function runRoomHost(options: RoomHostOptions): Promise<RoomVerific
     display_name: name,
     signing_public_key: keys.signingPublicKey,
     encryption_public_key: keys.encryptionPublicKey,
-    agent_adapter: agentAdapterString(agent, eligibility.evidence.cliVersion),
+    agent_adapter: agentAdapterString(agent),
   });
   const own = parseRoomCapability(created.credential);
   if (!own) throw new Error("The relay returned a Room credential this CLI could not parse.");

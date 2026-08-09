@@ -7,11 +7,11 @@ import { suggestAlternateDisplayName } from "./room-render.js";
 import { runRoomVerification, type RoomVerificationResult } from "./room-verification.js";
 import { ask, hiddenAsk } from "./tty.js";
 
-const AGENT_ADAPTER_RE = /^(?:claude|codex)@(\d+\.\d+\.\d+):(\w+)\/(\w+)$/;
+const AGENT_ADAPTER_RE = /^(?:claude|codex):(\w+)\/(\w+)$/;
 const MAX_NAME_RETRIES = 4;
 
-function agentAdapterString(agent: "claude" | "codex", version: string): string {
-  const adapter = `${agent}@${version}:${process.platform}/${process.arch}`;
+function agentAdapterString(agent: "claude" | "codex"): string {
+  const adapter = `${agent}:${process.platform}/${process.arch}`;
   if (!AGENT_ADAPTER_RE.test(adapter)) throw new Error(`could not build a valid Room agent_adapter string from ${adapter}`);
   return adapter;
 }
@@ -49,7 +49,7 @@ export async function runRoomGuest(options: RoomGuestOptions): Promise<RoomVerif
   }
 
   const keys = await generateKeys();
-  const adapter = agentAdapterString(agent, eligibility.evidence.cliVersion);
+  const adapter = agentAdapterString(agent);
   const secret = randomBase64Url(32);
 
   let displayName = (await askName("Name in this Room [Guest]: ")).trim() || "Guest";

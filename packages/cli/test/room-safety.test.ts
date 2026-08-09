@@ -19,7 +19,6 @@ import { tempDir } from "./helpers.js";
 const passingEvidence: RoomSafetyEvidence = {
   contractVersion: ROOM_SAFETY_CONTRACT_VERSION,
   agent: "claude",
-  cliVersion: "2.1.220",
   platform: "darwin",
   arch: "arm64",
   probedAt: "2026-08-03T00:00:00.000Z",
@@ -36,10 +35,9 @@ async function waitUntil(predicate: () => boolean, timeoutMs = 5_000): Promise<b
 }
 
 describe("Room safety adapter support", () => {
-  it("uses matching agent, OS, and architecture evidence across Claude Code versions", () => {
+  it("uses matching agent, OS, and architecture evidence", () => {
     expect(roomSafetySupport({
       agent: "claude",
-      cliVersion: "99.0.0",
       platform: "darwin",
       arch: "arm64",
     }, [passingEvidence])).toEqual({ supported: true, evidence: passingEvidence });
@@ -48,46 +46,40 @@ describe("Room safety adapter support", () => {
   it("fails closed when the agent, OS, or architecture has no probe evidence", () => {
     expect(roomSafetySupport({
       agent: "claude",
-      cliVersion: "2.1.220",
       platform: "darwin",
       arch: "arm64",
     }, [passingEvidence])).toEqual({ supported: true, evidence: passingEvidence });
     expect(roomSafetySupport({
       agent: "claude",
-      cliVersion: "2.1.226",
       platform: "linux",
       arch: "arm64",
     }, [passingEvidence]).supported).toBe(false);
     expect(roomSafetySupport({
       agent: "claude",
-      cliVersion: "2.1.226",
       platform: "darwin",
       arch: "x64",
     }, [passingEvidence]).supported).toBe(false);
   });
 
-  it("ships the exact live-probed Claude tuple and leaves Codex unsupported", () => {
+  it("ships the live-probed Claude adapter and leaves Codex unsupported", () => {
     expect(roomSafetySupport({
       agent: "claude",
-      cliVersion: "2.1.220",
       platform: "darwin",
       arch: "arm64",
     }, undefined, new Date("2026-08-04T03:40:00.000Z")).supported).toBe(true);
     expect(roomSafetySupport({
       agent: "codex",
-      cliVersion: "0.146.0",
       platform: "darwin",
       arch: "arm64",
     })).toEqual({
       supported: false,
-      reason: "no Room safety evidence for codex 0.146.0 on darwin/arm64",
+      reason: "no Room safety evidence for codex on darwin/arm64",
     });
   });
 
   it("rejects malformed evidence that has no reproducible probe command", () => {
     expect(roomSafetySupport({
       agent: "claude",
-      cliVersion: "2.1.220",
       platform: "darwin",
       arch: "arm64",
     }, [{ ...passingEvidence, command: [] }], new Date("2026-08-04T03:00:00.000Z"))).toEqual({
@@ -99,7 +91,6 @@ describe("Room safety adapter support", () => {
   it("rejects future-dated or older-than-90-day evidence", () => {
     const tuple = {
       agent: "claude" as const,
-      cliVersion: "2.1.220",
       platform: "darwin" as const,
       arch: "arm64",
     };
@@ -120,7 +111,6 @@ describe("Room safety adapter support", () => {
     };
     expect(roomSafetySupport({
       agent: "claude",
-      cliVersion: "2.1.220",
       platform: "darwin",
       arch: "arm64",
     }, [failed])).toEqual({
@@ -136,7 +126,6 @@ describe("Room safety adapter support", () => {
     } as unknown as RoomSafetyEvidence;
     expect(roomSafetySupport({
       agent: "claude",
-      cliVersion: "2.1.220",
       platform: "darwin",
       arch: "arm64",
     }, [malformed])).toEqual({
@@ -287,32 +276,45 @@ describe("Room safety adapter support", () => {
 
 describe("checkRoomSafetyEligibility / resolveRoomSafetyTuple (#347)", () => {
   const evidenceCatalog: RoomSafetyEvidence[] = [{
-    ...passingEvidence, cliVersion: "9.9.9",
+    ...passingEvidence,
   }];
 
   it("checkRoomSafetyEligibility matches roomSafetySupport(resolveRoomSafetyTuple(...))", () => {
     const options = {
       agent: "claude" as const, platform: "darwin" as const, arch: "arm64",
-      resolveBin: () => "/usr/bin/claude", readVersion: () => "9.9.9",
+      resolveBin: () => "/usr/bin/claude",
     };
     const tuple = resolveRoomSafetyTuple(options);
-    expect(tuple).toEqual({ agent: "claude", cliVersion: "9.9.9", platform: "darwin", arch: "arm64" });
+    expect(tuple).toEqual({ agent: "claude", platform: "darwin", arch: "arm64" });
     expect(checkRoomSafetyEligibility({ ...options, evidenceCatalog }))
       .toEqual(roomSafetySupport(tuple, evidenceCatalog));
   });
 
-  it("resolveRoomSafetyTuple extracts the version from readVersion's raw output", () => {
+  it("resolveRoomSafetyTuple returns the adapter platform tuple", () => {
     const tuple = resolveRoomSafetyTuple({
       agent: "claude", platform: "linux", arch: "x64",
-      resolveBin: () => "/usr/bin/claude", readVersion: () => "claude-code 9.9.9 (build 42)\n",
+      resolveBin: () => "/usr/bin/claude",
     });
-    expect(tuple).toEqual({ agent: "claude", cliVersion: "9.9.9", platform: "linux", arch: "x64" });
+    expect(tuple).toEqual({ agent: "claude", platform: "linux", arch: "x64" });
   });
 
-  it("uses matching adapter evidence for an unprobed Claude Code version", () => {
+  it("does not inspect the installed CLI version during eligibility", () => {
+    let resolved = false;
+    const tuple = resolveRoomSafetyTuple({
+      agent: "claude", platform: "darwin", arch: "arm64",
+      resolveBin: () => {
+        resolved = true;
+        throw new Error("the Room safety tuple must not resolve a CLI binary");
+      },
+    });
+    expect(resolved).toBe(false);
+    expect(tuple).toEqual({ agent: "claude", platform: "darwin", arch: "arm64" });
+  });
+
+  it("uses matching adapter evidence", () => {
     const result = checkRoomSafetyEligibility({
       agent: "claude", platform: "darwin", arch: "arm64",
-      resolveBin: () => "/usr/bin/claude", readVersion: () => "0.0.1",
+      resolveBin: () => "/usr/bin/claude",
       evidenceCatalog,
     });
     expect(result).toEqual({ supported: true, evidence: evidenceCatalog[0] });
@@ -323,10 +325,10 @@ describe("checkRoomSafetyEligibility / resolveRoomSafetyTuple (#347)", () => {
     try {
       const contract = buildRoomSafeSpawnContract({
         agent: "claude", prompt: "hello", workdir,
-        resolveBin: () => "/usr/bin/claude", readVersion: () => "9.9.9",
+        resolveBin: () => "/usr/bin/claude",
         evidenceCatalog, env: {},
       });
-      expect(contract.evidence.cliVersion).toBe("9.9.9");
+      expect(contract.evidence.agent).toBe("claude");
       expect(contract.spawn.cmd).toBe("/usr/bin/claude");
     } finally {
       rmSync(workdir, { recursive: true, force: true });

@@ -75,7 +75,7 @@ export const RoomDisplayName = z.string().transform((value) => value.normalize("
 );
 
 export const RoomAgentAdapter = z.string().max(80).regex(
-  /^(?:claude|codex)@[0-9]+\.[0-9]+\.[0-9]+:(?:darwin|linux|win32)\/(?:arm64|x64)$/,
+  /^(?:claude|codex):(?:darwin|linux|win32)\/(?:arm64|x64)$/,
 );
 
 export const RoomInviteCapability = z.string().regex(

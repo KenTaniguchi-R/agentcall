@@ -1,4 +1,3 @@
-import { execFileSync } from "node:child_process";
 import { lstatSync, readdirSync } from "node:fs";
 import type { AgentKind } from "@benree/agentcall-shared";
 import { resolveAgentBin } from "./bin.js";
@@ -6,7 +5,6 @@ import { runAgent, type AgentOutput } from "./runner.js";
 
 export interface RoomSafetyTuple {
   agent: AgentKind;
-  cliVersion: string;
   platform: NodeJS.Platform;
   arch: string;
 }
@@ -67,7 +65,6 @@ export type RoomSafetySupport =
 const ROOM_SAFETY_EVIDENCE: readonly RoomSafetyEvidence[] = [{
   contractVersion: ROOM_SAFETY_CONTRACT_VERSION,
   agent: "claude",
-  cliVersion: "2.1.220",
   platform: "darwin",
   arch: "arm64",
   probedAt: "2026-08-04T03:38:30.000Z",
@@ -210,7 +207,7 @@ export function roomSafetySupport(
   }
   return {
     supported: false,
-    reason: `no Room safety evidence for ${tuple.agent} ${tuple.cliVersion} on ${tuple.platform}/${tuple.arch}`,
+    reason: `no Room safety evidence for ${tuple.agent} on ${tuple.platform}/${tuple.arch}`,
   };
 }
 
@@ -219,20 +216,12 @@ interface ResolveRoomSafetyTupleOptions {
   platform?: NodeJS.Platform;
   arch?: string;
   resolveBin?: (agent: AgentKind) => string;
-  readVersion?: (bin: string) => string;
 }
 
-/** Resolves which (agent, version, platform, arch) tuple is actually installed here. */
+/** Resolves which agent/platform/architecture tuple is installed here. */
 export function resolveRoomSafetyTuple(options: ResolveRoomSafetyTupleOptions): RoomSafetyTuple {
-  const resolveBin = options.resolveBin ?? resolveAgentBin;
-  const bin = resolveBin(options.agent);
-  const readVersion = options.readVersion ?? ((path: string) =>
-    execFileSync(path, ["--version"], { encoding: "utf8", stdio: ["ignore", "pipe", "ignore"] }));
-  const cliVersion = readVersion(bin).match(/\b(\d+\.\d+\.\d+)\b/)?.[1];
-  if (!cliVersion) throw new Error(`could not determine Room safety version for ${options.agent}`);
   return {
     agent: options.agent,
-    cliVersion,
     platform: options.platform ?? process.platform,
     arch: options.arch ?? process.arch,
   };

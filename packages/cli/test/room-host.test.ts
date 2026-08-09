@@ -74,7 +74,7 @@ describe("runRoomHost", () => {
 
   it("auto-admits a pending joiner and hands off to verification once locked", async () => {
     const deps = baseDeps();
-    const checkEligibility = vi.fn().mockReturnValue({ supported: true, evidence: { cliVersion: "9.9.9" } });
+    const checkEligibility = vi.fn().mockReturnValue({ supported: true, evidence: {} });
     const resultPromise = runRoomHost({
       relay: "https://relay.test", checkEligibility,
       createRoomFn: deps.createRoomFn, poll: deps.poll, mutate: deps.mutate,
@@ -101,7 +101,7 @@ describe("runRoomHost", () => {
     const deps = baseDeps();
     const resultPromise = runRoomHost({
       relay: "https://relay.test",
-      checkEligibility: () => ({ supported: true, evidence: { cliVersion: "9.9.9" } } as never),
+      checkEligibility: () => ({ supported: true, evidence: {} } as never),
       createRoomFn: deps.createRoomFn, poll: deps.poll, mutate: deps.mutate,
       createListener: deps.listener.factory, runVerification: deps.runVerification,
     });
@@ -114,7 +114,7 @@ describe("runRoomHost", () => {
     const deps = baseDeps();
     const resultPromise = runRoomHost({
       relay: "https://relay.test",
-      checkEligibility: () => ({ supported: true, evidence: { cliVersion: "9.9.9" } } as never),
+      checkEligibility: () => ({ supported: true, evidence: {} } as never),
       createRoomFn: deps.createRoomFn, poll: deps.poll, mutate: deps.mutate,
       createListener: deps.listener.factory, runVerification: deps.runVerification,
     });
@@ -134,7 +134,7 @@ describe("runRoomHost", () => {
     const deps = baseDeps();
     const resultPromise = runRoomHost({
       relay: "https://relay.test",
-      checkEligibility: () => ({ supported: true, evidence: { cliVersion: "9.9.9" } } as never),
+      checkEligibility: () => ({ supported: true, evidence: {} } as never),
       createRoomFn: deps.createRoomFn, poll: deps.poll, mutate: deps.mutate,
       createListener: deps.listener.factory, runVerification: deps.runVerification,
     });

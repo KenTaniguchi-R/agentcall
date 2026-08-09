@@ -17,7 +17,7 @@ describe("Room HTTP protocol schemas", () => {
       display_name: "Host",
       signing_public_key: key,
       encryption_public_key: key.replace(/A$/, "Q"),
-      agent_adapter: "claude@2.1.220:darwin/arm64",
+      agent_adapter: "claude:darwin/arm64",
     };
     expect(RoomCreateRequest.safeParse(input).success).toBe(true);
     expect(RoomCreateRequest.safeParse({ ...input, room_id: room }).success).toBe(false);
@@ -31,7 +31,7 @@ describe("Room HTTP protocol schemas", () => {
       display_name: "Guest",
       signing_public_key: key,
       encryption_public_key: key.replace(/A$/, "Q"),
-      agent_adapter: "claude@2.1.220:darwin/arm64",
+      agent_adapter: "claude:darwin/arm64",
       signing_proof: "A".repeat(86),
     };
     expect(RoomJoinRequest.safeParse(input).success).toBe(true);
@@ -59,7 +59,7 @@ describe("Room HTTP protocol schemas", () => {
       display_name: "Host",
       signing_public_key: key,
       encryption_public_key: key.replace(/A$/, "Q"),
-      agent_adapter: "claude@2.1.220:darwin/arm64",
+      agent_adapter: "claude:darwin/arm64",
       joined_at: 1,
       admitted_at: 1,
       last_seen_at: 1,

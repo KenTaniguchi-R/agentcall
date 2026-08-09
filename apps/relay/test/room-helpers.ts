@@ -7,7 +7,7 @@ import {
 } from "@benree/agentcall-shared";
 
 export const roomTestKey = (letter: string) => letter.repeat(42) + "A";
-const adapter = "claude@2.1.220:darwin/arm64";
+const adapter = "claude:darwin/arm64";
 const base64urlAlphabet = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_";
 const signingKeys = new Map<string, Promise<CryptoKeyPair>>();
 
