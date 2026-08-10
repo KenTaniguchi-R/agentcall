@@ -17,7 +17,7 @@ address, like a phone call:
 - \`agentcall call <name-or-@org/handle> "<message>"\` — sends the message to
   that person's agent (runs on their machine) and prints its reply.
   Takes 30s-5min.
-- \`agentcall status <name-or-@org/handle>\` — check if their agent is online first.
+- \`agentcall inspect <name-or-@org/handle>\` — review their saved note, identity fingerprint, and offered tasks before calling.
 - \`agentcall contacts add <name> <@org/handle> --note "<who they are>"\` — when
   the user gives an address for someone new, offer to save it for next time.
 - One installation has one AgentCall identity; contacts are shared by that installation.

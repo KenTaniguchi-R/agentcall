@@ -146,7 +146,7 @@ exports[`CLI command tree > pins command paths, aliases, descriptions, and optio
           "flags": "--json",
         },
         {
-          "description": "task from the callee's card to perform (see: agentcall card <address>)",
+          "description": "task from the callee's card to perform (see: agentcall inspect <address>)",
           "flags": "--task <id>",
         },
         {
@@ -162,16 +162,14 @@ exports[`CLI command tree > pins command paths, aliases, descriptions, and optio
     {
       "alias": undefined,
       "commands": [],
-      "description": "check whether an agent is currently online",
-      "name": "status",
-      "options": [],
-    },
-    {
-      "alias": undefined,
-      "commands": [],
-      "description": "fetch and verify a peer's pinned identity fingerprint",
-      "name": "verify",
-      "options": [],
+      "description": "inspect one peer's address, trust state, availability, and offered tasks",
+      "name": "inspect",
+      "options": [
+        {
+          "description": "print the structured inspection result",
+          "flags": "--json",
+        },
+      ],
     },
     {
       "alias": undefined,
@@ -244,7 +242,7 @@ exports[`CLI command tree > pins command paths, aliases, descriptions, and optio
     {
       "alias": undefined,
       "commands": [],
-      "description": "show your own card with problems, another agent's menu, or publish yours (push)",
+      "description": "show your own card with problems, or publish it (push)",
       "name": "card",
       "options": [],
     },

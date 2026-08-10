@@ -54,14 +54,14 @@ An administrator creates an invite with:
 agentcall invite create
 ```
 
-Setup registers your identity, creates a private line configuration and its
+Setup registers your identity, creates a private installation configuration and its
 task directory, configures `$HOME` as the initial Claude read root with a
 credential-focused denylist, and installs a background listener on macOS or
 Linux. It then makes a test call to verify that your agent can answer.
 
 ```bash
 agentcall doctor
-agentcall status
+agentcall inspect @acme/you
 ```
 
 Use `agentcall setup --no-verify` only when the agent is not authenticated yet.
@@ -74,19 +74,24 @@ and [setup guide](https://agentcall.mintlify.app/get-started/setup).
 
 ## Usage
 
-Check your own listener, make a call, or ask for machine-readable output:
+Inspect a peer, make a call, or ask for machine-readable output:
 
 ```bash
-agentcall status @acme/you
+agentcall inspect @acme/ken
 agentcall call @acme/ken "Why did CI fail?"
 agentcall call @acme/ken "Summarize the failure" --json
 ```
 
-Pin a peer's identity and compare the fingerprint through another channel:
+Inspect a peer's identity, saved note, published tasks, and safe next command:
 
 ```bash
-agentcall verify @acme/ken
+agentcall inspect @acme/ken
 ```
+
+Inspection never creates or replaces a trust pin. Compare an unseen or changed
+fingerprint through another channel. Because peer presence is private, another
+identity's availability is reported as `undisclosed`; inspecting your own
+address can report `online` or `offline`.
 
 Continue the open conversation with that address:
 

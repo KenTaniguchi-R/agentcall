@@ -21,15 +21,14 @@ Commands:
   invite                                 manage one-time organization invites
   audit                                  export organization audit evidence
   call [options] <address> <message...>  call another handle's agent with a message and print its reply
-  status <address>                       check whether an agent is currently online
-  verify <address>                       fetch and verify a peer's pinned identity fingerprint
+  inspect [options] <address>            inspect one peer's address, trust state, availability, and offered tasks
   trust [options]                        manage explicitly pinned peer identities
   keys                                   manage this installation's end-to-end encryption keys
   doctor                                 verify this install can answer calls: binary, auth, agent spawn, listener, relay self-call
   history [options]                      show call activity stored locally on this machine
   lint                                   validate tasks, effective policy assertions, and the published card
   policy                                 show the effective caller-access policy, tasks, and read scope
-  card [target]                          show your own card with problems, another agent's menu, or publish yours (push)
+  card [action]                          show your own card with problems, or publish it (push)
   contacts                               manage your local address book of callable agents
   task                                   manage the tasks your agent offers
   access [options]                       set whether callers are answered by default (and republish your card)
@@ -173,39 +172,26 @@ Arguments:
 
 Options:
   --json          print the full reply envelope instead of just the text
-  --task <id>     task from the callee's card to perform (see: agentcall card
-                  <address>)
+  --task <id>     task from the callee's card to perform (see: agentcall
+                  inspect <address>)
   --continue      continue the open conversation with this address (add --task
                   when several are open)
   --context <id>  continue a specific conversation by id
   -h, --help      display help for command
 ```
 
-## status
+## inspect
 
 ```text
-Usage: agentcall status [options] <address>
+Usage: agentcall inspect [options] <address>
 
-check whether an agent is currently online
-
-Arguments:
-  address     contact name or @org/handle to check
-
-Options:
-  -h, --help  display help for command
-```
-
-## verify
-
-```text
-Usage: agentcall verify [options] <address>
-
-fetch and verify a peer's pinned identity fingerprint
+inspect one peer's address, trust state, availability, and offered tasks
 
 Arguments:
-  address     contact name or @org/handle to verify
+  address     contact name or @org/handle
 
 Options:
+  --json      print the structured inspection result
   -h, --help  display help for command
 ```
 
@@ -299,13 +285,12 @@ Options:
 ## card
 
 ```text
-Usage: agentcall card [options] [target]
+Usage: agentcall card [options] [action]
 
-show your own card with problems, another agent's menu, or publish yours (push)
+show your own card with problems, or publish it (push)
 
 Arguments:
-  target      contact name or @org/handle to fetch, 'push' to publish, or omit
-              to review your own card
+  action      'push' to publish, or omit to review your own card
 
 Options:
   -h, --help  display help for command

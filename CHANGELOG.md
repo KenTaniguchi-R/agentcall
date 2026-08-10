@@ -6,6 +6,17 @@ which are released together.
 
 ## Unreleased
 
+### Unified peer inspection (#428)
+
+- Add `agentcall inspect <contact-or-address>` as the single read-only view of
+  resolved address, saved contact note, availability disclosure, identity pin
+  comparison, offered tasks, examples, and a safe next command.
+- Remove top-level `status` and `verify`, and remove peer-target `card`; retain
+  self `card`, `card push`, contacts CRUD, and explicit `trust --reset`.
+- Never create or replace a trust pin during inspection. Peer availability is
+  `undisclosed` after the self-only presence change in #424; only self
+  inspection reports `online` or `offline`.
+
 ### One installation identity (#427)
 
 - Replace local multi-line selection with one identity per installation. Remove

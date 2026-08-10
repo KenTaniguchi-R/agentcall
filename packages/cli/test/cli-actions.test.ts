@@ -9,7 +9,7 @@ import { createProgram, runCli } from "../src/index.js";
 import { getPaths, type Paths } from "../src/paths.js";
 import { saveConfig } from "../src/config.js";
 import { loadOutbound, rememberOutbound } from "../src/contexts-out.js";
-import { loadKnownPeers } from "../src/known-peers.js";
+import { loadKnownPeers, verifyAndPinPeer } from "../src/known-peers.js";
 import { writeJsonAtomic } from "../src/json-store.js";
 import {
   encryptionKeyTranscript, exportPublicKey, fingerprint, generateEncryptionKeyPair, identityTranscript,
@@ -144,24 +144,36 @@ describe("trust CLI", () => {
     let response: unknown;
     const relay = "https://local.test";
     routing.host = "local.test";
-    vi.stubGlobal("fetch", vi.fn(async () => new Response(JSON.stringify(response), { status: 200 })));
+    vi.stubGlobal("fetch", vi.fn(async (input: string | URL | Request) => {
+      const body = String(input).includes("/v1/card/")
+        ? { handle: "sota", description: "", agent_kind: "claude", tasks: [], updated_at: 1 }
+        : response;
+      return new Response(JSON.stringify(body), { status: 200 });
+    }));
     const address = "@acme/sota";
     const firstIdentity = await identityBundle(address);
     response = firstIdentity.response;
     const testHome = home();
     seedConfig(testHome, relay);
 
-    const first = await runCommand(testHome, ["verify", "local-sota"]);
+    const first = await runCommand(testHome, ["inspect", "local-sota", "--json"]);
     expect(first.code, first.stderr).toBe(0);
-    expect(first.stdout).toContain(`Pinned fingerprint: ${firstIdentity.expected}`);
-    expect(first.stdout).toContain(`Served fingerprint: ${firstIdentity.expected}`);
+    expect(JSON.parse(first.stdout)).toMatchObject({
+      address,
+      availability: { state: "undisclosed" },
+      identity: { state: "unseen", served_fingerprint: firstIdentity.expected },
+      card: { state: "available", value: { handle: "sota" } },
+    });
+    expect(loadKnownPeers(getPaths(testHome))).toEqual([]);
+
+    await verifyAndPinPeer(getPaths(testHome), address, firstIdentity.response);
 
     const replacement = await identityBundle(address);
     response = replacement.response;
-    const changed = await runCommand(testHome, ["verify", "local-sota"]);
+    const changed = await runCommand(testHome, ["inspect", "local-sota"]);
     expect(changed.code).toBe(1);
-    expect(changed.stderr).toContain(firstIdentity.expected);
-    expect(changed.stderr).toContain(replacement.expected);
+    expect(changed.stdout).toContain(firstIdentity.expected);
+    expect(changed.stdout).toContain(replacement.expected);
     expect(loadKnownPeers(getPaths(testHome))[0]?.fingerprint).toBe(firstIdentity.expected);
   });
 });
@@ -450,8 +462,8 @@ describe.sequential("CLI command actions", () => {
     expect(JSON.parse(out.stdout)).toMatchObject([{ call_id: "new" }]);
   });
 
-  it("requires setup before fetching another agent's card", async () => {
-    const out = await runCommand(home(), ["card", "@acme/ken"]);
+  it("requires setup before inspecting another agent", async () => {
+    const out = await runCommand(home(), ["inspect", "@acme/ken"]);
     expect(out.code).toBe(1);
     expect(out.stderr).toMatch(/agentcall setup/);
   });
@@ -1103,9 +1115,9 @@ describe.sequential("CLI command actions", () => {
     const testHome = home();
     seedConfig(testHome, relay);
 
-    const out = await runCommand(testHome, ["card", "local-sota"]);
+    const out = await runCommand(testHome, ["inspect", "local-sota"]);
 
-    expect(out.code).toBe(0);
+    expect(out.code).toBe(1); // card is available, but the fixture intentionally has no identity keys
     expect(out.stdout).toContain("spoof");
     expect(out.stdout).toContain("FAKE");
     expect(out.stdout).toContain("example");

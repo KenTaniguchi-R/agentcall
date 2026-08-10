@@ -7,7 +7,7 @@ import {
   encryptionKeyTranscript, exportPublicKey, generateEncryptionKeyPair, generateIdentityKeyPair,
   HPKE_SUITE, keyIdFor, signTranscript, type EncryptionKeyRecordType,
 } from "@benree/agentcall-shared";
-import { loadKnownPeers, MAX_KNOWN_PEERS, resetPeerTrust, verifyAndPinPeer } from "../src/known-peers.js";
+import { inspectPeerIdentity, loadKnownPeers, MAX_KNOWN_PEERS, resetPeerTrust, verifyAndPinPeer } from "../src/known-peers.js";
 import { writeJsonAtomic } from "../src/json-store.js";
 import { getPaths, type Paths } from "../src/paths.js";
 
@@ -47,6 +47,28 @@ async function bundle(identity?: CryptoKeyPair, epoch = 1, address = PEER) {
 }
 
 describe("known-peer identity pins", () => {
+  it("inspects an unseen valid identity without creating a pin", async () => {
+    const first = await bundle();
+    await expect(inspectPeerIdentity(machine, PEER, first.value, NOW)).resolves.toMatchObject({ state: "unseen" });
+    expect(loadKnownPeers(machine)).toEqual([]);
+  });
+
+  it("reports a changed identity with both fingerprints without replacing the pin", async () => {
+    const first = await bundle();
+    const pinned = await verifyAndPinPeer(machine, PEER, first.value, NOW);
+    const before = readFileSync(machine.knownPeersFile, "utf8");
+    const result = await inspectPeerIdentity(machine, PEER, (await bundle()).value, NOW);
+    expect(result).toMatchObject({ state: "changed", pinned_fingerprint: pinned.fingerprint });
+    expect(readFileSync(machine.knownPeersFile, "utf8")).toBe(before);
+  });
+
+  it("reports an invalid served signature without mutating trust", async () => {
+    const first = await bundle();
+    first.value.encryption.signature = (await bundle()).value.encryption.signature;
+    await expect(inspectPeerIdentity(machine, PEER, first.value, NOW)).resolves.toMatchObject({ state: "invalid" });
+    expect(loadKnownPeers(machine)).toEqual([]);
+  });
+
   it("pins a first contact only after verifying its encryption signature", async () => {
     const first = await bundle();
     const peer = await verifyAndPinPeer(machine, PEER, first.value, NOW);

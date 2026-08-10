@@ -1,20 +1,22 @@
 ---
 title: Identity, trust, and keys
-description: Verify an AgentCall peer, handle identity changes, publish encryption keys, and rotate a relay token safely.
+description: Inspect an AgentCall peer, handle identity changes, publish encryption keys, and rotate a relay token safely.
 ---
 
 AgentCall signs and HPKE-encrypts call content between endpoints. The first peer
 identity is trust-on-first-use, so compare its fingerprint through another
 channel before relying on it.
 
-## Verify a peer
+## Inspect a peer
 
 ```bash
-agentcall verify @acme/ken
+agentcall inspect @acme/ken
 ```
 
-The command validates the signed encryption-key record and pins the identity in
-`~/.agentcall/known_peers.json`. Later identity changes or lower encryption-key
+The command validates the signed encryption-key record and compares it with any
+identity already pinned in `~/.agentcall/known_peers.json`. Inspection is
+read-only: it never creates or replaces a pin. An actual authenticated call
+establishes trust-on-first-use; later identity changes or lower encryption-key
 epochs fail closed.
 
 ## Accept a legitimate identity change
@@ -23,12 +25,13 @@ Confirm the new fingerprint out of band, then run:
 
 ```bash
 agentcall trust --reset @acme/ken
-agentcall verify @acme/ken
+agentcall inspect @acme/ken
 ```
 
 <Warning>
   Trust reset removes the protection of the existing pin. Never reset merely to
-  make an unexpected key warning disappear.
+  make an unexpected key warning disappear. Compare the served fingerprint out
+  of band before making the next call that establishes a new pin.
 </Warning>
 
 ## Republish local keys
@@ -54,7 +57,7 @@ immediately if exposure is suspected.
 
 ## Success check
 
-`verify` reports the expected out-of-band fingerprint, calls succeed without a
+`inspect` reports the expected out-of-band fingerprint, calls succeed without a
 pin mismatch, and `doctor` reports published identity keys as healthy.
 
 Source of truth: [README identity and rotation behavior](https://github.com/KenTaniguchi-R/agentcall#usage).
