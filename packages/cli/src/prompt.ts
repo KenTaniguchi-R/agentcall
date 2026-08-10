@@ -36,7 +36,7 @@ export interface PromptWorkdir {
 //
 // It deliberately does NOT claim the reply is checked, because it is not. The
 // only thing that happens to an answer is redactOutbound (listener.ts), which
-// replaces credential-SHAPED strings and this line's own relay token. Nothing
+// replaces credential-SHAPED strings and this installation's relay token. Nothing
 // compares the answer against the caller's clearance. An earlier revision of
 // this sentence said otherwise, which repeated the exact mistake it had just
 // fixed: the confinement claim it replaced was also false.

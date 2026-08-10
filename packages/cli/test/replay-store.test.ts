@@ -4,7 +4,7 @@ import { join } from "node:path";
 import { spawn } from "node:child_process";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { writeJsonAtomic } from "../src/json-store.js";
-import { getMachinePaths, type MachinePaths } from "../src/paths.js";
+import { getPaths, type Paths } from "../src/paths.js";
 import {
   MAX_REPLAY_RESERVATIONS, REPLAY_RETENTION_SKEW_MS, ReplayDetectedError,
   loadReplayReservations, reserveReplay,
@@ -14,11 +14,11 @@ const NOW = 1_800_000_000_000;
 const FINGERPRINT = `SHA256:${"a".repeat(32)}`;
 const REQUEST_ID = "1".repeat(32);
 let root: string;
-let machine: MachinePaths;
+let machine: Paths;
 
 beforeEach(() => {
   root = mkdtempSync(join(tmpdir(), "agentcall-replay-"));
-  machine = getMachinePaths(root, root);
+  machine = getPaths(root, root);
 });
 afterEach(() => {
   vi.useRealTimers();
@@ -36,7 +36,7 @@ describe("persistent E2EE replay reservations", () => {
   it("survives restart and rejects a duplicate without mutating the store", async () => {
     await reserveReplay(machine, input(), NOW);
     const before = readFileSync(machine.replayReservationsFile, "utf8");
-    const restarted = getMachinePaths(root, root);
+    const restarted = getPaths(root, root);
     await expect(reserveReplay(restarted, input(), NOW)).rejects.toBeInstanceOf(ReplayDetectedError);
     expect(readFileSync(machine.replayReservationsFile, "utf8")).toBe(before);
     expect(statSync(machine.dir).mode & 0o777).toBe(0o700);
@@ -47,11 +47,11 @@ describe("persistent E2EE replay reservations", () => {
     const replayModule = new URL("../dist/replay-store.js", import.meta.url).href;
     const pathsModule = new URL("../dist/paths.js", import.meta.url).href;
     const script = `
-      const [{ reserveReplay }, { getMachinePaths }] = await Promise.all([
+      const [{ reserveReplay }, { getPaths }] = await Promise.all([
         import(process.argv[1]), import(process.argv[2]),
       ]);
       try {
-        await reserveReplay(getMachinePaths(process.argv[3], process.argv[3]), {
+        await reserveReplay(getPaths(process.argv[3], process.argv[3]), {
           sender_fingerprint: process.argv[4], request_id: process.argv[5], expires_at: Number(process.argv[6]),
         }, Number(process.argv[7]));
         process.exit(0);

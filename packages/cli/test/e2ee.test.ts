@@ -8,7 +8,7 @@ import {
   type E2EEResponsePayloadType,
 } from "@benree/agentcall-shared";
 import { generateIdentityKeys, type StoredKeys } from "../src/keys.js";
-import { getLinePaths, getMachinePaths } from "../src/paths.js";
+import { getPaths } from "../src/paths.js";
 import { openE2EERequest, openE2EEResponse, sealE2EERequest, sealE2EEResponse } from "../src/e2ee.js";
 
 const roots: string[] = [];
@@ -17,7 +17,7 @@ afterEach(() => { for (const root of roots.splice(0)) rmSync(root, { recursive: 
 async function keys(name: string): Promise<StoredKeys> {
   const root = mkdtempSync(join(tmpdir(), `agentcall-e2ee-${name}-`));
   roots.push(root);
-  return generateIdentityKeys(getLinePaths(getMachinePaths(root, root), name));
+  return generateIdentityKeys(getPaths(root, root));
 }
 
 const NOW = 1_000_000;

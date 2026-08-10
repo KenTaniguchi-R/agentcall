@@ -2,7 +2,7 @@ import { execFileSync } from "node:child_process";
 import { existsSync, mkdirSync, rmSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
-import type { MachinePaths } from "./paths.js";
+import type { Paths } from "./paths.js";
 
 export const LAUNCH_LABEL = "tech.benree.agentcall.listener";
 type ExecCmd = (cmd: string[]) => void;
@@ -11,13 +11,13 @@ type ExecCmd = (cmd: string[]) => void;
 // macOS LaunchAgent. Everything outside it asks "is the listener installed?"
 // rather than reaching for a plist path, so adding a systemd (or other)
 // supervisor later is a sibling module rather than surgery across the CLI.
-export function launchAgentFile(m: MachinePaths): string {
+export function launchAgentFile(m: Paths): string {
   // userHome, not stateRoot: launchd only loads plists from the real account's
   // LaunchAgents directory, and a redirected state root must not move it.
   return join(m.userHome, "Library", "LaunchAgents", `${LAUNCH_LABEL}.plist`);
 }
 
-export function isLaunchAgentInstalled(m: MachinePaths): boolean {
+export function isLaunchAgentInstalled(m: Paths): boolean {
   return existsSync(launchAgentFile(m));
 }
 
@@ -58,7 +58,7 @@ function xmlEscape(value: string): string {
 }
 
 export function plistContent(
-  nodeBin: string, cliScript: string, m: MachinePaths, extraPathDirs: string[] = [],
+  nodeBin: string, cliScript: string, m: Paths, extraPathDirs: string[] = [],
 ): string {
   const pathDirs = [...new Set([...extraPathDirs, dirname(nodeBin), ...BASE_PATH_DIRS])];
   return `<?xml version="1.0" encoding="UTF-8"?>
@@ -92,7 +92,7 @@ const defaultSleep: SleepFn = () => {
 };
 
 export function installLaunchAgent(
-  m: MachinePaths, execCmd: ExecCmd = defaultExec, extraPathDirs: string[] = [], sleep: SleepFn = defaultSleep,
+  m: Paths, execCmd: ExecCmd = defaultExec, extraPathDirs: string[] = [], sleep: SleepFn = defaultSleep,
 ): void {
   const cliScript = fileURLToPath(new URL("../dist/index.js", import.meta.url));
   const plistFile = launchAgentFile(m);
@@ -118,7 +118,7 @@ export function installLaunchAgent(
   }
 }
 
-export function uninstallLaunchAgent(m: MachinePaths, execCmd: ExecCmd = defaultExec): void {
+export function uninstallLaunchAgent(m: Paths, execCmd: ExecCmd = defaultExec): void {
   try {
     execCmd(["launchctl", "bootout", `gui/${uid()}/${LAUNCH_LABEL}`]);
   } catch {

@@ -6,8 +6,8 @@ import { join } from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { WebSocketServer } from "ws";
 import { createProgram, runCli } from "../src/index.js";
-import { getLinePaths, getMachinePaths, type LinePaths } from "../src/paths.js";
-import { saveLineConfig } from "../src/lines.js";
+import { getPaths, type Paths } from "../src/paths.js";
+import { saveConfig } from "../src/config.js";
 import { loadOutbound, rememberOutbound } from "../src/contexts-out.js";
 import { loadKnownPeers } from "../src/known-peers.js";
 import { writeJsonAtomic } from "../src/json-store.js";
@@ -62,8 +62,10 @@ afterEach(() => {
 
 async function runCommand(home: string, argv: string[]): Promise<Run> {
   const previousHome = process.env.AGENTCALL_HOME;
+  const previousUserHome = process.env.HOME;
   const previousRelay = process.env.AGENTCALL_RELAY;
   process.env.AGENTCALL_HOME = home;
+  process.env.HOME = home;
   delete process.env.AGENTCALL_RELAY;
   const stdout: string[] = [];
   const stderr: string[] = [];
@@ -78,6 +80,8 @@ async function runCommand(home: string, argv: string[]): Promise<Run> {
   } finally {
     if (previousHome === undefined) delete process.env.AGENTCALL_HOME;
     else process.env.AGENTCALL_HOME = previousHome;
+    if (previousUserHome === undefined) delete process.env.HOME;
+    else process.env.HOME = previousUserHome;
     if (previousRelay === undefined) delete process.env.AGENTCALL_RELAY;
     else process.env.AGENTCALL_RELAY = previousRelay;
   }
@@ -96,20 +100,12 @@ describe("cross-platform listener CLI", () => {
     expect(options).not.toContain("--skip-launchd");
   });
 
-  it("uses the same service opt-out when adding another line", () => {
-    const line = createProgram().commands.find((command) => command.name() === "line");
-    const add = line?.commands.find((command) => command.name() === "add");
-    const options = add?.options.map((option) => option.long);
-
-    expect(options).toContain("--skip-service");
-    expect(options).not.toContain("--skip-launchd");
-  });
 });
 
 describe("trust CLI", () => {
   it("removes exactly one full-address pin only through --reset", async () => {
     const testHome = home();
-    const machine = getMachinePaths(testHome, testHome);
+    const machine = getPaths(testHome, testHome);
     writeJsonAtomic(machine.knownPeersFile, { peers: [{
       relay_origin: "relay.example",
       address: "@acme/peer", identity_pub: "abc",
@@ -166,7 +162,7 @@ describe("trust CLI", () => {
     expect(changed.code).toBe(1);
     expect(changed.stderr).toContain(firstIdentity.expected);
     expect(changed.stderr).toContain(replacement.expected);
-    expect(loadKnownPeers(getMachinePaths(testHome))[0]?.fingerprint).toBe(firstIdentity.expected);
+    expect(loadKnownPeers(getPaths(testHome))[0]?.fingerprint).toBe(firstIdentity.expected);
   });
 });
 
@@ -300,12 +296,9 @@ async function startCallRelay(
   });
 }
 
-// Every cli-actions test runs a single line named "claude". With only one
-// line on the machine, resolveLine/resolvePrimary (person.ts) picks it
-// automatically, so no separate savePerson call is needed here.
-function seedConfig(testHome: string, relay: string): LinePaths {
-  const paths = getLinePaths(getMachinePaths(testHome), "claude");
-  saveLineConfig(paths, { org: "acme", handle: "ken", token: "tok", relay });
+function seedConfig(testHome: string, relay: string): Paths {
+  const paths = getPaths(testHome, testHome);
+  saveConfig(paths, { org: "acme", handle: "ken", token: "tok", relay });
   const pair = () => generateKeyPairSync("ec", { namedCurve: "prime256v1" });
   const rawPublic = (key: ReturnType<typeof pair>["publicKey"]) => {
     const jwk = key.export({ format: "jwk" });
@@ -805,8 +798,8 @@ describe.sequential("CLI command actions", () => {
 
   it("exposes policy assertion failures through agentcall lint", async () => {
     const testHome = home();
-    const paths = getLinePaths(getMachinePaths(testHome), "claude");
-    saveLineConfig(paths, { org: "acme", handle: "ken", token: "tok", relay: "https://relay.test", agent_kind: "claude" });
+    const paths = getPaths(testHome, testHome);
+    saveConfig(paths, { org: "acme", handle: "ken", token: "tok", relay: "https://relay.test", agent_kind: "claude" });
     mkdirSync(join(testHome, ".agentcall"), { recursive: true });
     writeFileSync(paths.policyFile, JSON.stringify({
       tests: [{ caller: "mia", expect_access: "blocked" }],
@@ -820,8 +813,8 @@ describe.sequential("CLI command actions", () => {
 
   it("renders the effective policy as a per-caller access report", async () => {
     const testHome = home();
-    const paths = getLinePaths(getMachinePaths(testHome), "claude");
-    saveLineConfig(paths, {
+    const paths = getPaths(testHome, testHome);
+    saveConfig(paths, {
       org: "acme", handle: "ken", token: "tok", relay: "https://relay.test", agent_kind: "claude",
     });
     mkdirSync(join(paths.tasksDir, "deploy"), { recursive: true });
@@ -854,8 +847,8 @@ describe.sequential("CLI command actions", () => {
 
   it("rejects a CLI policy edit that would break an assertion and preserves the file", async () => {
     const testHome = home();
-    const paths = getLinePaths(getMachinePaths(testHome), "claude");
-    saveLineConfig(paths, { org: "acme", handle: "ken", token: "tok", relay: "https://relay.test", agent_kind: "claude" });
+    const paths = getPaths(testHome, testHome);
+    saveConfig(paths, { org: "acme", handle: "ken", token: "tok", relay: "https://relay.test", agent_kind: "claude" });
     mkdirSync(join(testHome, ".agentcall"), { recursive: true });
     const original = {
       tests: [{ caller: "mia", expect_access: "allowed" }],

@@ -14,7 +14,7 @@ import {
 } from "@benree/agentcall-shared";
 import { generateIdentityKeys, type StoredKeys } from "../src/keys.js";
 import { sealE2EERequest } from "../src/e2ee.js";
-import { getLinePaths, getMachinePaths, type LinePaths, type MachinePaths } from "../src/paths.js";
+import { getPaths, type Paths } from "../src/paths.js";
 import { saveContexts, type ContextBinding } from "../src/contexts.js";
 import { ReplayDetectedError } from "../src/replay-store.js";
 import {
@@ -28,9 +28,8 @@ let listenerKeys: StoredKeys;
 
 beforeAll(async () => {
   cryptoRoot = mkdtempSync(join(tmpdir(), "agentcall-listener-stages-crypto-"));
-  const machine = getMachinePaths(cryptoRoot, cryptoRoot);
-  callerKeys = await generateIdentityKeys(getLinePaths(machine, "caller"));
-  listenerKeys = await generateIdentityKeys(getLinePaths(machine, "listener"));
+  callerKeys = await generateIdentityKeys(getPaths(join(cryptoRoot, "caller"), join(cryptoRoot, "caller")));
+  listenerKeys = await generateIdentityKeys(getPaths(join(cryptoRoot, "listener"), join(cryptoRoot, "listener")));
 });
 afterAll(() => rmSync(cryptoRoot, { recursive: true, force: true }));
 
@@ -38,17 +37,17 @@ afterAll(() => rmSync(cryptoRoot, { recursive: true, force: true }));
 // and listener.test.ts's own freshMachine/seededPaths; using them directly
 // here (rather than keeping a local copy) is what gives every temp dir this
 // file creates its auto-teardown.
-function freshMachine(): MachinePaths {
+function freshMachine(): Paths {
   return tempMachine("agentcall-stages-");
 }
-function seededPaths(): LinePaths {
+function seededPaths(): Paths {
   return tempLine("claude", "agentcall-stages-");
 }
-function seedPolicy(paths: LinePaths, policy: object) {
+function seedPolicy(paths: Paths, policy: object) {
   mkdirSync(paths.dir, { recursive: true });
   writeFileSync(paths.policyFile, JSON.stringify(policy));
 }
-function seedTask(paths: LinePaths, id: string, frontmatter: string[], body = "do it\n") {
+function seedTask(paths: Paths, id: string, frontmatter: string[], body = "do it\n") {
   const dir = join(paths.tasksDir, id);
   mkdirSync(dir, { recursive: true });
   writeFileSync(join(dir, "SKILL.md"), ["---", ...frontmatter, "---", body].join("\n"));
@@ -119,10 +118,10 @@ describe("openInboundEnvelope", () => {
     const { envelope } = await buildEnvelope({ from: "shusaku", to: "ken", message: "hi" });
     const bundle = await callerBundleFor("shusaku");
     const machine = freshMachine();
-    const paths = getLinePaths(machine, "claude");
+    const paths = machine;
     let reserved: unknown;
     const result = await openInboundEnvelope(
-      { relay: "http://127.0.0.1:9", org: "acme", handle: "ken", token: "tok", machine, paths, from: "shusaku", envelope },
+      { relay: "http://127.0.0.1:9", org: "acme", handle: "ken", token: "tok", paths, from: "shusaku", envelope },
       {
         fetchKeys: async () => bundle,
         verifyAndPinPeer: async (_m, address) => fakePeer(address),
@@ -142,9 +141,9 @@ describe("openInboundEnvelope", () => {
   it("fails closed when fetching the caller's keys throws, without pinning or reserving anything", async () => {
     const { envelope } = await buildEnvelope({ from: "shusaku", to: "ken", message: "hi" });
     const machine = freshMachine();
-    const paths = getLinePaths(machine, "claude");
+    const paths = machine;
     const result = await openInboundEnvelope(
-      { relay: "http://127.0.0.1:9", org: "acme", handle: "ken", token: "tok", machine, paths, from: "shusaku", envelope },
+      { relay: "http://127.0.0.1:9", org: "acme", handle: "ken", token: "tok", paths, from: "shusaku", envelope },
       {
         fetchKeys: async () => { throw new Error("relay unreachable"); },
         verifyAndPinPeer: async () => { throw new Error("must not be called"); },
@@ -161,9 +160,9 @@ describe("openInboundEnvelope", () => {
     const { envelope } = await buildEnvelope({ from: "shusaku", to: "ken", message: "hi" });
     const bundle = await callerBundleFor("shusaku");
     const machine = freshMachine();
-    const paths = getLinePaths(machine, "claude");
+    const paths = machine;
     const result = await openInboundEnvelope(
-      { relay: "http://127.0.0.1:9", org: "acme", handle: "ken", token: "tok", machine, paths, from: "shusaku", envelope },
+      { relay: "http://127.0.0.1:9", org: "acme", handle: "ken", token: "tok", paths, from: "shusaku", envelope },
       {
         fetchKeys: async () => bundle,
         verifyAndPinPeer: async (_m, address) => fakePeer(address),
@@ -180,12 +179,12 @@ describe("openInboundEnvelope", () => {
     const { envelope } = await buildEnvelope({ from: "shusaku", to: "ken", message: "hi" });
     const bundle = await callerBundleFor("shusaku");
     const machine = freshMachine();
-    const paths = getLinePaths(machine, "claude");
+    const paths = machine;
     // Sealed for listenerKeys but opened with a different line's keys: the
     // envelope's key_id will not match the expected route.
-    const wrongKeys = await generateIdentityKeys(getLinePaths(machine, "wrong"));
+    const wrongKeys = await generateIdentityKeys(machine);
     const result = await openInboundEnvelope(
-      { relay: "http://127.0.0.1:9", org: "acme", handle: "ken", token: "tok", machine, paths, from: "shusaku", envelope },
+      { relay: "http://127.0.0.1:9", org: "acme", handle: "ken", token: "tok", paths, from: "shusaku", envelope },
       {
         fetchKeys: async () => bundle,
         verifyAndPinPeer: async (_m, address) => fakePeer(address),
@@ -365,7 +364,7 @@ describe("admitBinding", () => {
   // loadContexts' schema parse.
   const SEEDED_CTX = "ctx_AAAAAAAAAAAAAAAAAAAAAA";
 
-  function seedBinding(paths: LinePaths, over: Partial<ContextBinding> = {}) {
+  function seedBinding(paths: Paths, over: Partial<ContextBinding> = {}) {
     const binding: ContextBinding = {
       context_id: SEEDED_CTX, agent_session_id: "real-agent-session", caller: "shusaku", task: "ask",
       agent_kind: "claude", workdir: paths.shareDir, turns: 1, created_at: Date.now(), last_used_at: Date.now(),

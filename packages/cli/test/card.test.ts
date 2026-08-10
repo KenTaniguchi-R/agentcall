@@ -3,10 +3,10 @@ import { describe, expect, it } from "vitest";
 import { buildCardUpload, publishCard } from "../src/card.js";
 import { ASK_TASK, type Task } from "../src/tasks.js";
 import type { Policy } from "../src/policy.js";
-import type { LineConfig } from "../src/config.js";
+import type { Config } from "../src/config.js";
 import { tempLine } from "./helpers.js";
 
-const cfg: LineConfig = { org: "acme", handle: "ken", token: "t", agent_kind: "claude", relay: "https://r" };
+const cfg: Config = { org: "acme", handle: "ken", token: "t", agent_kind: "claude", relay: "https://r" };
 const intro: Task = {
   id: "owner-introduction", name: "Intro", description: "Introduce the owner.",
   examples: ["who is ken?"], keywords: [], threadable: true, skill: "secret steps",

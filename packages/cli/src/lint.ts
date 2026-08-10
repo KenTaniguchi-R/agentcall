@@ -1,7 +1,7 @@
 import { existsSync, readFileSync } from "node:fs";
 import { buildCardUpload } from "./card.js";
-import type { LineConfig } from "./config.js";
-import type { LinePaths } from "./paths.js";
+import type { Config } from "./config.js";
+import type { Paths } from "./paths.js";
 import { accessFor } from "./access.js";
 import { loadPolicy, type Policy } from "./policy.js";
 import { ASK_TASK, loadTasks } from "./tasks.js";
@@ -16,7 +16,7 @@ interface CardReport {
 // menu from the same loadPolicy/loadTasks/buildCardUpload path the push
 // uses, but route every warning to the terminal instead of the listener
 // log (spec: error-visibility principle).
-export function buildCardReport(cfg: LineConfig, p: LinePaths): CardReport {
+export function buildCardReport(cfg: Config, p: Paths): CardReport {
   const problems: string[] = [];
   const notices: string[] = [];
 

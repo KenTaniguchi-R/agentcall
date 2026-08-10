@@ -21,23 +21,22 @@ Commands:
   invite                                 manage one-time organization invites
   audit                                  export organization audit evidence
   call [options] <address> <message...>  call another handle's agent with a message and print its reply
-  status [options] <address>             check whether this line's agent is currently online
-  verify [options] <address>             fetch and verify a peer's pinned identity fingerprint
+  status <address>                       check whether an agent is currently online
+  verify <address>                       fetch and verify a peer's pinned identity fingerprint
   trust [options]                        manage explicitly pinned peer identities
-  keys                                   manage this line's end-to-end encryption keys
+  keys                                   manage this installation's end-to-end encryption keys
   doctor                                 verify this install can answer calls: binary, auth, agent spawn, listener, relay self-call
   history [options]                      show call activity stored locally on this machine
-  lint [options]                         validate tasks, effective policy assertions, and the published card
-  policy [options]                       show the effective caller-access policy, tasks, and read scope
-  card [options] [target]                show your own card with problems, another agent's menu, or publish yours (push)
+  lint                                   validate tasks, effective policy assertions, and the published card
+  policy                                 show the effective caller-access policy, tasks, and read scope
+  card [target]                          show your own card with problems, another agent's menu, or publish yours (push)
   contacts                               manage your local address book of callable agents
   task                                   manage the tasks your agent offers
   access [options]                       set whether callers are answered by default (and republish your card)
-  block [options] <handle>               refuse all calls from a handle
-  unblock [options] <handle>             lift a block
-  line                                   manage the addresses (lines) this machine answers on and calls from
-  listen [options]                       run the foreground listener (the platform service runs this after setup)
-  rotate [options]                       replace a line's relay token (use if it may have leaked)
+  block <handle>                         refuse all calls from a handle
+  unblock <handle>                       lift a block
+  listen                                 run the foreground listener (the platform service runs this after setup)
+  rotate                                 replace this installation's relay token (use if it may have leaked)
   recovery                               manage the out-of-band identity recovery proof
   uninstall [options]                    remove the background listener
   help [command]                         display help for command
@@ -74,14 +73,14 @@ Usage: agentcall invite [options] [command]
 manage one-time organization invites
 
 Options:
-  -h, --help             display help for command
+  -h, --help        display help for command
 
 Commands:
-  create [options]       create a one-time invite
-  list [options]         list organization invites: state, role, expiry, and
-                         the ID to revoke
-  revoke [options] <id>  revoke an unused organization invite
-  help [command]         display help for command
+  create [options]  create a one-time invite
+  list [options]    list organization invites: state, role, expiry, and the ID
+                    to revoke
+  revoke <id>       revoke an unused organization invite
+  help [command]    display help for command
 ```
 
 ## invite create
@@ -96,8 +95,6 @@ Options:
                             (default: "")
   --expires-in-days <days>  expiry from 1 to 90 days (default: "7")
   --role <role>             enrolled organization role: member or admin
-  --line <name>             line whose organization to invite into (defaults to
-                            the primary line)
   -h, --help                display help for command
 ```
 
@@ -109,9 +106,8 @@ Usage: agentcall invite list [options]
 list organization invites: state, role, expiry, and the ID to revoke
 
 Options:
-  --json         print the raw invite array
-  --line <name>  line whose organization to list (defaults to the primary line)
-  -h, --help     display help for command
+  --json      print the raw invite array
+  -h, --help  display help for command
 ```
 
 ## invite revoke
@@ -122,12 +118,10 @@ Usage: agentcall invite revoke [options] <id>
 revoke an unused organization invite
 
 Arguments:
-  id             64-character invite ID from `agentcall invite list`
+  id          64-character invite ID from `agentcall invite list`
 
 Options:
-  --line <name>  line whose organization the invite belongs to (defaults to the
-                 primary line)
-  -h, --help     display help for command
+  -h, --help  display help for command
 ```
 
 ## audit
@@ -163,8 +157,6 @@ Options:
   --format <format>    output format: ndjson or csv (default: "ndjson")
   --page-size <count>  events fetched per relay page, from 1 to 500 (default:
                        "100")
-  --line <name>        line whose organization to export (defaults to the
-                       primary line)
   -h, --help           display help for command
 ```
 
@@ -183,8 +175,6 @@ Options:
   --json          print the full reply envelope instead of just the text
   --task <id>     task from the callee's card to perform (see: agentcall card
                   <address>)
-  --as <line>     line to call from (defaults to the primary line on the
-                  destination's relay)
   --continue      continue the open conversation with this address (add --task
                   when several are open)
   --context <id>  continue a specific conversation by id
@@ -196,15 +186,13 @@ Options:
 ```text
 Usage: agentcall status [options] <address>
 
-check whether this line's agent is currently online
+check whether an agent is currently online
 
 Arguments:
-  address      contact name or @org/handle to check
+  address     contact name or @org/handle to check
 
 Options:
-  --as <line>  line to check from (defaults to the primary line on the
-               destination's relay)
-  -h, --help   display help for command
+  -h, --help  display help for command
 ```
 
 ## verify
@@ -215,11 +203,10 @@ Usage: agentcall verify [options] <address>
 fetch and verify a peer's pinned identity fingerprint
 
 Arguments:
-  address      contact name or @org/handle to verify
+  address     contact name or @org/handle to verify
 
 Options:
-  --as <line>  line whose relay credentials to use
-  -h, --help   display help for command
+  -h, --help  display help for command
 ```
 
 ## trust
@@ -239,15 +226,15 @@ Options:
 ```text
 Usage: agentcall keys [options] [command]
 
-manage this line's end-to-end encryption keys
+manage this installation's end-to-end encryption keys
 
 Options:
-  -h, --help         display help for command
+  -h, --help      display help for command
 
 Commands:
-  publish [options]  publish the identity and current encryption key already
-                     stored on disk
-  help [command]     display help for command
+  publish         publish the identity and current encryption key already
+                  stored on disk
+  help [command]  display help for command
 ```
 
 ## keys publish
@@ -258,8 +245,7 @@ Usage: agentcall keys publish [options]
 publish the identity and current encryption key already stored on disk
 
 Options:
-  --line <name>  line whose persisted keys to publish
-  -h, --help     display help for command
+  -h, --help  display help for command
 ```
 
 ## doctor
@@ -285,7 +271,6 @@ Options:
   --limit <count>  maximum newest calls to show (1-100) (default: "20")
   --flagged        show only calls with objective local abuse signals
   --json           print machine-readable local history
-  --line <name>    line whose history to show (defaults to the primary line)
   -h, --help       display help for command
 ```
 
@@ -297,8 +282,7 @@ Usage: agentcall lint [options]
 validate tasks, effective policy assertions, and the published card
 
 Options:
-  --line <name>  line to lint (defaults to the primary line)
-  -h, --help     display help for command
+  -h, --help  display help for command
 ```
 
 ## policy
@@ -309,8 +293,7 @@ Usage: agentcall policy [options]
 show the effective caller-access policy, tasks, and read scope
 
 Options:
-  --line <name>  line to report on (defaults to the primary line)
-  -h, --help     display help for command
+  -h, --help  display help for command
 ```
 
 ## card
@@ -321,12 +304,11 @@ Usage: agentcall card [options] [target]
 show your own card with problems, another agent's menu, or publish yours (push)
 
 Arguments:
-  target         contact name or @org/handle to fetch, 'push' to publish, or
-                 omit to review your own card
+  target      contact name or @org/handle to fetch, 'push' to publish, or omit
+              to review your own card
 
 Options:
-  --line <name>  line to use (defaults to the primary line)
-  -h, --help     display help for command
+  -h, --help  display help for command
 ```
 
 ## contacts
@@ -398,11 +380,11 @@ Usage: agentcall task [options] [command]
 manage the tasks your agent offers
 
 Options:
-  -h, --help          display help for command
+  -h, --help      display help for command
 
 Commands:
-  new [options] <id>  scaffold a new task (does not publish it)
-  help [command]      display help for command
+  new <id>        scaffold a new task (does not publish it)
+  help [command]  display help for command
 ```
 
 ## task new
@@ -413,11 +395,10 @@ Usage: agentcall task new [options] <id>
 scaffold a new task (does not publish it)
 
 Arguments:
-  id             task id: lowercase kebab-case, becomes the directory name
+  id          task id: lowercase kebab-case, becomes the directory name
 
 Options:
-  --line <name>  line to use (defaults to the primary line)
-  -h, --help     display help for command
+  -h, --help  display help for command
 ```
 
 ## access
@@ -429,7 +410,6 @@ set whether callers are answered by default (and republish your card)
 
 Options:
   --default <access>  allowed or blocked
-  --line <name>       line to use (defaults to the primary line)
   -h, --help          display help for command
 ```
 
@@ -441,8 +421,7 @@ Usage: agentcall block [options] <handle>
 refuse all calls from a handle
 
 Options:
-  --line <name>  line to use (defaults to the primary line)
-  -h, --help     display help for command
+  -h, --help  display help for command
 ```
 
 ## unblock
@@ -451,97 +430,6 @@ Options:
 Usage: agentcall unblock [options] <handle>
 
 lift a block
-
-Options:
-  --line <name>  line to use (defaults to the primary line)
-  -h, --help     display help for command
-```
-
-## line
-
-```text
-Usage: agentcall line [options] [command]
-
-manage the addresses (lines) this machine answers on and calls from
-
-Options:
-  -h, --help               display help for command
-
-Commands:
-  add [options] <name>     register another address on this machine
-  list [options]           list the addresses this machine holds, which is
-                           primary, and whether each is online
-  remove [options] <name>  remove a line (archives calls.log; the handle can
-                           never be reused, see README)
-  primary <name>           set which line places an outbound call when several
-                           could answer it
-  help [command]           display help for command
-```
-
-## line add
-
-```text
-Usage: agentcall line add [options] <name>
-
-register another address on this machine
-
-Arguments:
-  name               local name for this line, e.g. codex (never shared — the
-                     handle is)
-
-Options:
-  --handle <handle>  handle to register (prompted if omitted)
-  --invite <token>   one-time organization invite (required — each line enrolls
-                     in its own tenant)
-  --agent <agent>    agent kind: claude or codex (omit with --caller-only)
-  --relay <url>      relay URL to register against
-  --caller-only      register a handle to call others without making this
-                     line's agent callable
-  --skip-service     skip reinstalling the background listener service
-  --no-verify        skip verifying the agent can answer a test call
-  -h, --help         display help for command
-```
-
-## line list
-
-```text
-Usage: agentcall line list [options]
-
-list the addresses this machine holds, which is primary, and whether each is
-online
-
-Options:
-  --json      print the full row data (name, address, relay, state, primary) as
-              JSON
-  -h, --help  display help for command
-```
-
-## line remove
-
-```text
-Usage: agentcall line remove [options] <name>
-
-remove a line (archives calls.log; the handle can never be reused, see README)
-
-Arguments:
-  name        line to remove
-
-Options:
-  --yes       confirm removal — required, since the handle can never be
-              reclaimed
-  --purge     delete outright instead of archiving calls.log
-  -h, --help  display help for command
-```
-
-## line primary
-
-```text
-Usage: agentcall line primary [options] <name>
-
-set which line places an outbound call when several could answer it
-
-Arguments:
-  name        line to make primary
 
 Options:
   -h, --help  display help for command
@@ -555,8 +443,7 @@ Usage: agentcall listen [options]
 run the foreground listener (the platform service runs this after setup)
 
 Options:
-  --line <name>  run only this line instead of every callable line
-  -h, --help     display help for command
+  -h, --help  display help for command
 ```
 
 ## rotate
@@ -564,11 +451,10 @@ Options:
 ```text
 Usage: agentcall rotate [options]
 
-replace a line's relay token (use if it may have leaked)
+replace this installation's relay token (use if it may have leaked)
 
 Options:
-  --line <name>  line to rotate (defaults to the primary line)
-  -h, --help     display help for command
+  -h, --help  display help for command
 ```
 
 ## recovery
@@ -582,9 +468,9 @@ Options:
   -h, --help        display help for command
 
 Commands:
-  issue [options]   issue or replace a recovery proof while the line token
-                    still works
-  redeem [options]  recover one line using an out-of-band proof
+  issue             issue or replace a recovery proof while the token still
+                    works
+  redeem [options]  recover this installation using an out-of-band proof
   help [command]    display help for command
 ```
 
@@ -593,11 +479,10 @@ Commands:
 ```text
 Usage: agentcall recovery issue [options]
 
-issue or replace a recovery proof while the line token still works
+issue or replace a recovery proof while the token still works
 
 Options:
-  --line <name>  line to protect (defaults to the primary line)
-  -h, --help     display help for command
+  -h, --help  display help for command
 ```
 
 ## recovery redeem
@@ -605,10 +490,9 @@ Options:
 ```text
 Usage: agentcall recovery redeem [options]
 
-recover one line using an out-of-band proof
+recover this installation using an out-of-band proof
 
 Options:
-  --line <name>          local line name to recover
   --org <org>            organization (required when local config is missing)
   --handle <handle>      handle (required when local config is missing)
   --relay <url>          relay URL (required when local config is missing)

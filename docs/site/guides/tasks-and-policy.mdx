@@ -12,7 +12,7 @@ what it finds may reach each caller.
 agentcall task new architecture-history
 ```
 
-Edit `~/AgentCall/<line>/tasks/architecture-history/SKILL.md`:
+Edit `~/AgentCall/tasks/architecture-history/SKILL.md`:
 
 ```yaml
 ---
@@ -86,7 +86,7 @@ leaves:
 }
 ```
 
-A named caller rule overrides the line default.
+A named caller rule overrides the installation default.
 
 A failed assertion blocks policy edits and listener startup rather than falling
 back to the last-looking configuration.
@@ -95,7 +95,7 @@ back to the last-looking configuration.
   `scope.json` names a root the agent may read under, and a denylist that holds
   regardless. **A path you never thought about is readable** — the default root
   is `$HOME`, so anything a subdirectory later acquires is in scope too.
-  **On a Codex line none of this is enforced.** There is no read guard there at
+  **With Codex none of this is enforced.** There is no read guard there at
   all, so nothing stops a denied read, and nothing inspects the answer.
   Review the [security model](/security/overview) before widening a root.
 </Warning>

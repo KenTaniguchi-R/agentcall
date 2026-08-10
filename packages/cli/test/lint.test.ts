@@ -3,14 +3,14 @@ import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 import { buildCardReport } from "../src/lint.js";
 import { publishCard } from "../src/card.js";
-import { getLinePaths, getMachinePaths } from "../src/paths.js";
-import type { LineConfig } from "../src/config.js";
+import { getPaths } from "../src/paths.js";
+import type { Config } from "../src/config.js";
 import { tempDir } from "./helpers.js";
 
-const cfg: LineConfig = { org: "acme", handle: "ken", token: "t", agent_kind: "claude", relay: "https://r" };
+const cfg: Config = { org: "acme", handle: "ken", token: "t", agent_kind: "claude", relay: "https://r" };
 
 function linePaths(h: string) {
-  return getLinePaths(getMachinePaths(h, h), "line");
+  return getPaths(h, h);
 }
 function home() {
   const h = tempDir("agentcall-lint-");
@@ -18,7 +18,7 @@ function home() {
   return h;
 }
 function writeSkill(h: string, id: string, skillMd: string) {
-  const dir = join(h, "AgentCall", "line", "tasks", id);
+  const dir = join(h, "AgentCall", "tasks", id);
   mkdirSync(dir, { recursive: true });
   writeFileSync(join(dir, "SKILL.md"), skillMd);
 }
@@ -96,7 +96,7 @@ describe("buildCardReport", () => {
     writeSkill(h, "intro", "---\ndescription: d\n---\n");
     const p = linePaths(h);
     writeFileSync(p.policyFile, JSON.stringify({ default_access: "allowed", callers: {} }));
-    const codexCfg: LineConfig = { ...cfg, agent_kind: "codex" };
+    const codexCfg: Config = { ...cfg, agent_kind: "codex" };
     const r = buildCardReport(codexCfg, p);
     expect(r.notices.join("\n")).toMatch(/intro/);
     expect(r.notices.join("\n")).toMatch(/codex/i);
@@ -120,7 +120,7 @@ describe("buildCardReport", () => {
     writeSkill(h, "runner", "---\ndescription: d\n---\n");
     const p = linePaths(h);
     writeFileSync(p.policyFile, JSON.stringify({ default_access: "allowed", callers: {} }));
-    const codexCfg: LineConfig = { ...cfg, agent_kind: "codex" };
+    const codexCfg: Config = { ...cfg, agent_kind: "codex" };
     const r = buildCardReport(codexCfg, p);
     const notices = r.notices.join("\n");
     expect(notices).toMatch(/task "runner": codex has no per-tool restriction/);

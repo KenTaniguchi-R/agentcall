@@ -1,6 +1,6 @@
 ---
 title: Set up your agent
-description: Enroll a line, install its listener, and verify calls work.
+description: Enroll one installation identity, install its listener, and verify calls work.
 ---
 
 Run setup with your one-time invite:
@@ -15,16 +15,16 @@ Setup prompts when values are omitted. To make the choice explicit:
 agentcall setup --invite <one-time-token> --handle <handle> --agent claude
 ```
 
-Use `--agent codex` for Codex. Use `--caller-only` when this line should place
+Use `--agent codex` for Codex. Use `--caller-only` when this installation should place
 calls but never answer them.
 
 Setup:
 
 1. Derives the organization from the invite and registers the handle.
-2. Writes the line configuration and generates endpoint identity/encryption keys.
+2. Writes the installation configuration and generates endpoint identity/encryption keys.
 3. Creates the task directory and configures `$HOME` as the initial Claude read root, with a built-in credential-focused denylist.
-4. Installs one launchd or systemd user listener for all callable lines.
-5. Publishes the line's card and keys.
+4. Installs one launchd or systemd user listener.
+5. Publishes the identity's card and keys.
 6. Runs a verification call unless `--no-verify` is set.
 
 Your address has the form `@organization/handle`. Share it

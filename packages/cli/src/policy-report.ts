@@ -1,10 +1,10 @@
 import { accessFor, type Access } from "./access.js";
-import type { CallableLineConfig } from "./config.js";
+import type { CallableConfig } from "./config.js";
 import { type Policy } from "./policy.js";
 import { type Task } from "./tasks.js";
 
 interface PolicyReportOptions {
-  agentKind: CallableLineConfig["agent_kind"];
+  agentKind: CallableConfig["agent_kind"];
   defaultWorkdir: string;
   readableRoots: readonly string[];
 }
@@ -60,7 +60,7 @@ export function renderPolicyReport(
   lines.push("", "Runtime enforcement");
   // Enforcement is on Claude's first-class file tools, not on the reply.
   // listener.ts runs redactOutbound over the answer, which replaces
-  // credential-shaped strings and this line's own relay token, and nothing else
+// credential-shaped strings and this installation's relay token, and nothing else
   // looks at it. Naming a control that does not exist tells an owner they are
   // covered when they are not.
   lines.push(

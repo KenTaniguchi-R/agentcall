@@ -65,10 +65,6 @@ exports[`CLI command tree > pins command paths, aliases, descriptions, and optio
               "description": "enrolled organization role: member or admin",
               "flags": "--role <role>",
             },
-            {
-              "description": "line whose organization to invite into (defaults to the primary line)",
-              "flags": "--line <name>",
-            },
           ],
         },
         {
@@ -81,10 +77,6 @@ exports[`CLI command tree > pins command paths, aliases, descriptions, and optio
               "description": "print the raw invite array",
               "flags": "--json",
             },
-            {
-              "description": "line whose organization to list (defaults to the primary line)",
-              "flags": "--line <name>",
-            },
           ],
         },
         {
@@ -92,12 +84,7 @@ exports[`CLI command tree > pins command paths, aliases, descriptions, and optio
           "commands": [],
           "description": "revoke an unused organization invite",
           "name": "revoke",
-          "options": [
-            {
-              "description": "line whose organization the invite belongs to (defaults to the primary line)",
-              "flags": "--line <name>",
-            },
-          ],
+          "options": [],
         },
       ],
       "description": "manage one-time organization invites",
@@ -141,10 +128,6 @@ exports[`CLI command tree > pins command paths, aliases, descriptions, and optio
               "description": "events fetched per relay page, from 1 to 500",
               "flags": "--page-size <count>",
             },
-            {
-              "description": "line whose organization to export (defaults to the primary line)",
-              "flags": "--line <name>",
-            },
           ],
         },
       ],
@@ -167,10 +150,6 @@ exports[`CLI command tree > pins command paths, aliases, descriptions, and optio
           "flags": "--task <id>",
         },
         {
-          "description": "line to call from (defaults to the primary line on the destination's relay)",
-          "flags": "--as <line>",
-        },
-        {
           "description": "continue the open conversation with this address (add --task when several are open)",
           "flags": "--continue",
         },
@@ -183,26 +162,16 @@ exports[`CLI command tree > pins command paths, aliases, descriptions, and optio
     {
       "alias": undefined,
       "commands": [],
-      "description": "check whether this line's agent is currently online",
+      "description": "check whether an agent is currently online",
       "name": "status",
-      "options": [
-        {
-          "description": "line to check from (defaults to the primary line on the destination's relay)",
-          "flags": "--as <line>",
-        },
-      ],
+      "options": [],
     },
     {
       "alias": undefined,
       "commands": [],
       "description": "fetch and verify a peer's pinned identity fingerprint",
       "name": "verify",
-      "options": [
-        {
-          "description": "line whose relay credentials to use",
-          "flags": "--as <line>",
-        },
-      ],
+      "options": [],
     },
     {
       "alias": undefined,
@@ -224,15 +193,10 @@ exports[`CLI command tree > pins command paths, aliases, descriptions, and optio
           "commands": [],
           "description": "publish the identity and current encryption key already stored on disk",
           "name": "publish",
-          "options": [
-            {
-              "description": "line whose persisted keys to publish",
-              "flags": "--line <name>",
-            },
-          ],
+          "options": [],
         },
       ],
-      "description": "manage this line's end-to-end encryption keys",
+      "description": "manage this installation's end-to-end encryption keys",
       "name": "keys",
       "options": [],
     },
@@ -261,10 +225,6 @@ exports[`CLI command tree > pins command paths, aliases, descriptions, and optio
           "description": "print machine-readable local history",
           "flags": "--json",
         },
-        {
-          "description": "line whose history to show (defaults to the primary line)",
-          "flags": "--line <name>",
-        },
       ],
     },
     {
@@ -272,36 +232,21 @@ exports[`CLI command tree > pins command paths, aliases, descriptions, and optio
       "commands": [],
       "description": "validate tasks, effective policy assertions, and the published card",
       "name": "lint",
-      "options": [
-        {
-          "description": "line to lint (defaults to the primary line)",
-          "flags": "--line <name>",
-        },
-      ],
+      "options": [],
     },
     {
       "alias": undefined,
       "commands": [],
       "description": "show the effective caller-access policy, tasks, and read scope",
       "name": "policy",
-      "options": [
-        {
-          "description": "line to report on (defaults to the primary line)",
-          "flags": "--line <name>",
-        },
-      ],
+      "options": [],
     },
     {
       "alias": undefined,
       "commands": [],
       "description": "show your own card with problems, another agent's menu, or publish yours (push)",
       "name": "card",
-      "options": [
-        {
-          "description": "line to use (defaults to the primary line)",
-          "flags": "--line <name>",
-        },
-      ],
+      "options": [],
     },
     {
       "alias": undefined,
@@ -350,12 +295,7 @@ exports[`CLI command tree > pins command paths, aliases, descriptions, and optio
           "commands": [],
           "description": "scaffold a new task (does not publish it)",
           "name": "new",
-          "options": [
-            {
-              "description": "line to use (defaults to the primary line)",
-              "flags": "--line <name>",
-            },
-          ],
+          "options": [],
         },
       ],
       "description": "manage the tasks your agent offers",
@@ -372,10 +312,6 @@ exports[`CLI command tree > pins command paths, aliases, descriptions, and optio
           "description": "allowed or blocked",
           "flags": "--default <access>",
         },
-        {
-          "description": "line to use (defaults to the primary line)",
-          "flags": "--line <name>",
-        },
       ],
     },
     {
@@ -383,102 +319,13 @@ exports[`CLI command tree > pins command paths, aliases, descriptions, and optio
       "commands": [],
       "description": "refuse all calls from a handle",
       "name": "block",
-      "options": [
-        {
-          "description": "line to use (defaults to the primary line)",
-          "flags": "--line <name>",
-        },
-      ],
+      "options": [],
     },
     {
       "alias": undefined,
       "commands": [],
       "description": "lift a block",
       "name": "unblock",
-      "options": [
-        {
-          "description": "line to use (defaults to the primary line)",
-          "flags": "--line <name>",
-        },
-      ],
-    },
-    {
-      "alias": undefined,
-      "commands": [
-        {
-          "alias": undefined,
-          "commands": [],
-          "description": "register another address on this machine",
-          "name": "add",
-          "options": [
-            {
-              "description": "handle to register (prompted if omitted)",
-              "flags": "--handle <handle>",
-            },
-            {
-              "description": "one-time organization invite (required — each line enrolls in its own tenant)",
-              "flags": "--invite <token>",
-            },
-            {
-              "description": "agent kind: claude or codex (omit with --caller-only)",
-              "flags": "--agent <agent>",
-            },
-            {
-              "description": "relay URL to register against",
-              "flags": "--relay <url>",
-            },
-            {
-              "description": "register a handle to call others without making this line's agent callable",
-              "flags": "--caller-only",
-            },
-            {
-              "description": "skip reinstalling the background listener service",
-              "flags": "--skip-service",
-            },
-            {
-              "description": "skip verifying the agent can answer a test call",
-              "flags": "--no-verify",
-            },
-          ],
-        },
-        {
-          "alias": undefined,
-          "commands": [],
-          "description": "list the addresses this machine holds, which is primary, and whether each is online",
-          "name": "list",
-          "options": [
-            {
-              "description": "print the full row data (name, address, relay, state, primary) as JSON",
-              "flags": "--json",
-            },
-          ],
-        },
-        {
-          "alias": undefined,
-          "commands": [],
-          "description": "remove a line (archives calls.log; the handle can never be reused, see README)",
-          "name": "remove",
-          "options": [
-            {
-              "description": "confirm removal — required, since the handle can never be reclaimed",
-              "flags": "--yes",
-            },
-            {
-              "description": "delete outright instead of archiving calls.log",
-              "flags": "--purge",
-            },
-          ],
-        },
-        {
-          "alias": undefined,
-          "commands": [],
-          "description": "set which line places an outbound call when several could answer it",
-          "name": "primary",
-          "options": [],
-        },
-      ],
-      "description": "manage the addresses (lines) this machine answers on and calls from",
-      "name": "line",
       "options": [],
     },
     {
@@ -486,24 +333,14 @@ exports[`CLI command tree > pins command paths, aliases, descriptions, and optio
       "commands": [],
       "description": "run the foreground listener (the platform service runs this after setup)",
       "name": "listen",
-      "options": [
-        {
-          "description": "run only this line instead of every callable line",
-          "flags": "--line <name>",
-        },
-      ],
+      "options": [],
     },
     {
       "alias": undefined,
       "commands": [],
-      "description": "replace a line's relay token (use if it may have leaked)",
+      "description": "replace this installation's relay token (use if it may have leaked)",
       "name": "rotate",
-      "options": [
-        {
-          "description": "line to rotate (defaults to the primary line)",
-          "flags": "--line <name>",
-        },
-      ],
+      "options": [],
     },
     {
       "alias": undefined,
@@ -511,25 +348,16 @@ exports[`CLI command tree > pins command paths, aliases, descriptions, and optio
         {
           "alias": undefined,
           "commands": [],
-          "description": "issue or replace a recovery proof while the line token still works",
+          "description": "issue or replace a recovery proof while the token still works",
           "name": "issue",
-          "options": [
-            {
-              "description": "line to protect (defaults to the primary line)",
-              "flags": "--line <name>",
-            },
-          ],
+          "options": [],
         },
         {
           "alias": undefined,
           "commands": [],
-          "description": "recover one line using an out-of-band proof",
+          "description": "recover this installation using an out-of-band proof",
           "name": "redeem",
           "options": [
-            {
-              "description": "local line name to recover",
-              "flags": "--line <name>",
-            },
             {
               "description": "organization (required when local config is missing)",
               "flags": "--org <org>",

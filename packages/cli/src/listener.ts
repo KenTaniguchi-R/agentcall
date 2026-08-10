@@ -5,8 +5,8 @@ import {
 } from "@benree/agentcall-shared";
 import { fetchKeys } from "./api.js";
 import { readableRoots, workdirFor } from "./scope.js";
-import { type CallableLineConfig } from "./config.js";
-import type { LinePaths } from "./paths.js";
+import { type CallableConfig } from "./config.js";
+import type { Paths } from "./paths.js";
 import { buildPrompt } from "./prompt.js";
 import { redactOutbound } from "./redact.js";
 import {
@@ -28,9 +28,9 @@ import {
 
 export interface ListenerDeps {
   relay: string;
-  paths: LinePaths;
+  paths: Paths;
   /** Called on every (re)connect — a rotated token takes effect without a restart. */
-  loadConfig: () => CallableLineConfig;
+  loadConfig: () => CallableConfig;
   run?: typeof runAgent;
   saveContexts?: typeof saveContexts;
   maxPending?: number;
@@ -72,9 +72,7 @@ export function startListener(deps: ListenerDeps): { stop(): Promise<void> } {
   // Validate before opening the socket. Hot edits are still loaded per call
   // below, but a listener must never advertise availability when its initial
   // effective policy (user layer + the machine's managed ceiling) is malformed
-  // or contradicts an assertion. Throwing here is contained to this one line:
-  // startAllListeners catches per-line startup failures so the other lines'
-  // sockets survive (listenAll.ts).
+  // or contradicts an assertion. Fail before advertising availability.
   loadPolicy(deps.paths);
 
   const queue = new SerialQueue(deps.maxPending ?? 0);
@@ -121,16 +119,14 @@ export function startListener(deps: ListenerDeps): { stop(): Promise<void> } {
 
   // Config is re-read on every (re)connect, not just once at startup: a
   // rotated token (`agentcall rotate`) then takes effect on the next reconnect
-  // instead of needing the whole multi-line process restarted. A bad config
+  // instead of needing the listener restarted. A bad config
   // still stops the
   // FIRST connect() (called synchronously below, not through
   // scheduleReconnect) with a thrown error — same "fail loudly at start"
-  // contract `agentcall listen` had before lines existed. A config that goes
+  // contract `agentcall listen` provides. A config that goes
   // bad LATER, discovered on a scheduled reconnect, must NOT throw all the
-  // way out: this one process holds every line's socket, and an uncaught
-  // throw from inside a bare `setTimeout` callback would crash all of them,
-  // not just the line whose config broke — see scheduleReconnect below,
-  // which is what catches that case.
+  // way out: an uncaught throw from inside a bare `setTimeout` callback would
+  // terminate the listener process, so scheduleReconnect catches it below.
   const connect = () => {
     if (stopped) return;
     const config = deps.loadConfig();
@@ -182,7 +178,7 @@ export function startListener(deps: ListenerDeps): { stop(): Promise<void> } {
       const opened = await openInboundEnvelope(
         {
           relay: deps.relay, org: config.org, handle: config.handle, token: config.token,
-          machine: deps.paths.machine, paths: deps.paths, from, envelope: frame.envelope,
+          paths: deps.paths, from, envelope: frame.envelope,
         },
         {
           fetchKeys: fetchPeerKeys, verifyAndPinPeer: verifyPeer,
@@ -232,14 +228,14 @@ export function startListener(deps: ListenerDeps): { stop(): Promise<void> } {
       // first and report corruption as a rejection.
       //
       // Access is resolved by resolveAdmission, which refuses a blocked caller
-      // before this line. Nothing further is derived from it: with one grantable
+      // before this point. Nothing further is derived from it: with one grantable
       // level there is no per-caller narrowing left to do, so the workdir and
       // the readable list are the same for every caller the line answers.
       // #372 deleted line and task `workdir`. Where the agent runs is now the
       // richest labelled source THIS caller is cleared for, so a public caller
       // is never spawned inside internal content they could only be refused
       // on. shareDir is the fallback when the map names nothing they may see.
-      const workdirDir = workdirFor(scope, deps.paths.shareDir, deps.paths.machine.userHome);
+      const workdirDir = workdirFor(scope, deps.paths.shareDir, deps.paths.userHome);
 
       // Task resolution above ran on the verified `from` and local files only
       // (see policy.ts's CaMeL invariant). context_id is caller-controlled, so
@@ -284,7 +280,7 @@ export function startListener(deps: ListenerDeps): { stop(): Promise<void> } {
           const out = await run({
             kind: config.agent_kind,
             prompt: buildPrompt(config.handle, from, message, task, {
-              dir: workdirDir, readable: readableRoots(scope, deps.paths.machine.userHome),
+              dir: workdirDir, readable: readableRoots(scope, deps.paths.userHome),
             }, binding !== undefined),
             workdir: workdirDir,
             timeoutMs,
@@ -293,13 +289,12 @@ export function startListener(deps: ListenerDeps): { stop(): Promise<void> } {
             // The line this call came in on — the PreToolUse guard needs it to
             // know which line's calls.log and task dirs it's policing, and
             // fails closed without it.
-            lineName: deps.paths.name,
             resume: binding?.agent_session_id,
             correlationId: correlation_id,
             // Enumerated from the owner's own config, not configured per line:
             // `mcp__*` is not expressible in an allowlist, so every server the
             // owner already installed is named explicitly or is unreachable.
-            mcpServers: discoverMcpServers(deps.paths.machine.userHome),
+            mcpServers: discoverMcpServers(deps.paths.userHome),
             // Already narrowed above, where the workdir was derived from it.
           });
 
@@ -453,10 +448,8 @@ export function startListener(deps: ListenerDeps): { stop(): Promise<void> } {
           // loadConfig threw on this reconnect attempt — a
           // corrupt config.json, or the file deleted out from under a running
           // listener, etc. See the comment above connect(): this must not
-          // propagate, or one line's bad config takes down every other
-          // line's socket in this same process — an unhandled throw here is
-          // a multi-line outage, not a single-line one. console.error, not a
-          // new log file: the launchd plist already routes stderr to
+          // propagate and terminate the listener. console.error, not a new
+          // log file: the launchd plist already routes stderr to
           // listenerLog, so this lands in the right place with no plumbing,
           // and it's visible in a foreground `agentcall listen` too. Named by
           // line, since with N lines in one process an error that doesn't
@@ -465,8 +458,8 @@ export function startListener(deps: ListenerDeps): { stop(): Promise<void> } {
           // rewriting the file underneath this read, and a line that
           // permanently drops out on one bad read would need a full process
           // restart to come back — worse than a noisy retry loop. `doctor`
-          // and `line list` are what surface a line stuck offline.
-          console.error(`agentcall: line "${deps.paths.name}" reconnect failed, retrying: ${String(e)}`);
+          // and `doctor` surface an installation stuck offline.
+          console.error(`agentcall: listener reconnect failed, retrying: ${String(e)}`);
           scheduleReconnect();
         }
       }, backoff(attempt++)).unref?.();

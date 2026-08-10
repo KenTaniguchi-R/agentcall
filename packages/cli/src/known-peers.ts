@@ -6,7 +6,7 @@ import { ADDRESS_RE, BASE64URL_RE, FINGERPRINT_RE, RELAY_ORIGIN_RE,
 } from "@benree/agentcall-shared";
 import { assertPrivateFile, readJsonStore, writeJsonAtomic } from "./json-store.js";
 import { withFileLock } from "./file-lock.js";
-import type { MachinePaths } from "./paths.js";
+import type { Paths } from "./paths.js";
 
 export const MAX_KNOWN_PEERS = 10_000;
 
@@ -32,7 +32,7 @@ const KnownPeersSchema = z.object({ peers: z.array(KnownPeerSchema).max(MAX_KNOW
 });
 export type KnownPeer = z.infer<typeof KnownPeerSchema>;
 
-export function loadKnownPeers(machine: MachinePaths): KnownPeer[] {
+export function loadKnownPeers(machine: Paths): KnownPeer[] {
   return readJsonStore(machine.knownPeersFile, KnownPeersSchema, {
     missing: () => ({ peers: [] }),
     requirePrivate: { dir: machine.dir },
@@ -42,12 +42,12 @@ export function loadKnownPeers(machine: MachinePaths): KnownPeer[] {
   }).peers;
 }
 
-function saveKnownPeers(machine: MachinePaths, peers: KnownPeer[]): void {
+function saveKnownPeers(machine: Paths, peers: KnownPeer[]): void {
   writeJsonAtomic(machine.knownPeersFile, KnownPeersSchema.parse({ peers }));
   chmodSync(machine.dir, 0o700);
 }
 
-async function withStoreLock<T>(machine: MachinePaths, operation: () => Promise<T>): Promise<T> {
+async function withStoreLock<T>(machine: Paths, operation: () => Promise<T>): Promise<T> {
   // Never silently repair permissions around an existing trust root. If it
   // may have been exposed, fail closed and make the owner inspect it first.
   if (existsSync(machine.knownPeersFile)) {
@@ -60,7 +60,7 @@ async function withStoreLock<T>(machine: MachinePaths, operation: () => Promise<
 }
 
 export async function verifyAndPinPeer(
-  machine: MachinePaths,
+  machine: Paths,
   expectedAddress: string,
   bundle: { identity: IdentityRecordType; encryption: { record: EncryptionKeyRecordType; signature: string } },
   now = Date.now(),
@@ -125,7 +125,7 @@ export async function verifyAndPinPeer(
   });
 }
 
-export async function resetPeerTrust(machine: MachinePaths, address: string): Promise<KnownPeer> {
+export async function resetPeerTrust(machine: Paths, address: string): Promise<KnownPeer> {
   return withStoreLock(machine, async () => {
     const peers = loadKnownPeers(machine);
     const peer = peers.find((entry) => entry.address === address);
@@ -135,7 +135,7 @@ export async function resetPeerTrust(machine: MachinePaths, address: string): Pr
   });
 }
 
-export function checkKnownPeersStore(machine: MachinePaths): { ok: boolean; detail: string } {
+export function checkKnownPeersStore(machine: Paths): { ok: boolean; detail: string } {
   try {
     const peers = loadKnownPeers(machine);
     return { ok: true, detail: existsSync(machine.knownPeersFile) ? `${peers.length} pinned peer${peers.length === 1 ? "" : "s"}` : "not created yet" };

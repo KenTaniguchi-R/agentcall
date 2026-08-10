@@ -256,8 +256,6 @@ export interface SpawnOptions {
   kind: AgentKind;
   prompt: string;
   workdir: string;
-  /** The line this call came in on. The PreToolUse guard fails closed without it. */
-  lineName: string;
   resolveBin?: (kind: AgentKind) => string;
   callId?: string;
   /**
@@ -283,7 +281,7 @@ export interface SpawnOptions {
 // compile error instead of a runtime surprise.
 export function buildSpawnSpec(options: SpawnOptions): SpawnSpec {
   const {
-    kind, prompt, workdir, lineName,
+    kind, prompt, workdir,
     resolveBin = resolveAgentBin, callId = "unknown", resume, correlationId,
     mcpServers = [],
   } = options;
@@ -300,7 +298,7 @@ export function buildSpawnSpec(options: SpawnOptions): SpawnSpec {
       ],
       cwd: workdir,
       env: {
-        ...childEnv, ...correlationEnv, AGENTCALL_CALL_ID: callId, AGENTCALL_LINE: lineName,
+        ...childEnv, ...correlationEnv, AGENTCALL_CALL_ID: callId,
         // Replaces AGENTCALL_ALLOWED_ROOT. The guard no longer confines the run
         // to one directory; it asks whether each path's sensitivity is within
         // this clearance, which the sensitivity map on disk answers.
@@ -337,11 +335,8 @@ export function buildSpawnSpec(options: SpawnOptions): SpawnSpec {
         "--json", ...codexRemoteBoundary,
         "-c", `sandbox_mode="${sandbox}"`, prompt],
       cwd: workdir,
-      // AGENTCALL_LINE is as required here as on the non-resume branch: the
-      // guard resolves the line's tasksDir from it and fails closed without
-      // it, so omitting it would deny every tool call on a resumed session.
       env: {
-        ...childEnv, ...correlationEnv, AGENTCALL_CALL_ID: callId, AGENTCALL_LINE: lineName,
+        ...childEnv, ...correlationEnv, AGENTCALL_CALL_ID: callId,
       },
     };
   }
@@ -360,7 +355,7 @@ export function buildSpawnSpec(options: SpawnOptions): SpawnSpec {
       "--skip-git-repo-check", "--json", ...codexRemoteBoundary, prompt],
     cwd: workdir,
     env: {
-      ...childEnv, ...correlationEnv, AGENTCALL_CALL_ID: callId, AGENTCALL_LINE: lineName,
+      ...childEnv, ...correlationEnv, AGENTCALL_CALL_ID: callId,
     },
   };
 }
@@ -405,14 +400,6 @@ export function truncateUtf8(text: string, maxBytes: number): string {
   return buf.subarray(0, maxBytes).toString("utf8").replace(/�+$/, "");
 }
 
-// specOverride and signal are given explicit `= undefined` defaults, not `?`,
-// so lineName below can be a trailing REQUIRED parameter: TS forbids a
-// required parameter from following a `?`-marked one, but not one that
-// follows a defaulted one. lineName has no default on purpose — it used to
-// (silently defaulting to "", which makes the PreToolUse guard fail closed on
-// every tool call, see runner.ts history) — so the only production caller
-// (the listener) is forced to pass the real line name or fail to compile,
-// instead of a caller forgetting it and getting a silently-broken guard.
 export interface RunOptions extends SpawnOptions {
   timeoutMs?: number;
   specOverride?: SpawnSpec;

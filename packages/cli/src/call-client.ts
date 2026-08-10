@@ -9,7 +9,7 @@ import { ApiError, assertValidHandle, fetchKeys } from "./api.js";
 import { openE2EEResponse, sealE2EERequest } from "./e2ee.js";
 import { loadKeys } from "./keys.js";
 import { verifyAndPinPeer } from "./known-peers.js";
-import type { LinePaths } from "./paths.js";
+import type { Paths } from "./paths.js";
 import { relayHostOf } from "./config.js";
 
 export class CallError extends Error {
@@ -43,7 +43,7 @@ const HUMAN: Record<string, string> = {
 
 export interface CallOpts {
   relay: string; org: string; from: string; token: string; to: string; message: string;
-  paths: LinePaths;
+  paths: Paths;
   contextId?: string;
   onStatus?: (state: CallStatusType["state"], frame: CallStatusType) => void;
   timeoutMs?: number;
@@ -132,7 +132,7 @@ export async function callAgent(opts: CallOpts): Promise<CallReply> {
     );
   }
   const recipientPeer = await (opts.keyDeps?.verifyAndPinPeer ?? verifyAndPinPeer)(
-    opts.paths.machine, toAddress, recipientBundle,
+    opts.paths, toAddress, recipientBundle,
   );
   const senderKeys = (opts.keyDeps?.loadKeys ?? loadKeys)(opts.paths);
   const issuedAt = (opts.keyDeps?.now ?? Date.now)();

@@ -19,7 +19,7 @@ import {
   choosePendingEncryptionPublication, loadKeys, loadPendingEncryptionPublication,
   rememberPublishedEncryptionKey, type StoredKeys,
 } from "./keys.js";
-import type { LinePaths } from "./paths.js";
+import type { Paths } from "./paths.js";
 
 export class ApiError extends Error {
   constructor(
@@ -32,7 +32,7 @@ export class ApiError extends Error {
 
 export type Auth = { org: string; handle: string; token: string };
 
-// Callers hold a LineConfig, which carries more than these three fields.
+// Callers hold a Config, which carries more than these three fields.
 // Copying the three out — rather than passing the config straight through —
 // is the point: TypeScript's excess-property check only fires on object
 // literals, so a whole config would be accepted structurally and every field
@@ -332,7 +332,7 @@ export async function publishIdentityKey(
 }
 
 export async function publishEncryptionKey(
-  relay: string, auth: Auth, paths: LinePaths, now: number = Date.now(),
+  relay: string, auth: Auth, paths: Paths, now: number = Date.now(),
 ): Promise<void> {
   let keys = loadKeys(paths);
   let publication = loadPendingEncryptionPublication(paths, keys);

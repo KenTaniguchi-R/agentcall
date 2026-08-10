@@ -1,27 +1,25 @@
 import { authOf, getStatus } from "../api.js";
-import { relayUrl } from "../config.js";
+import { relayUrl, type Installation } from "../config.js";
 import { resolveAddress } from "../contacts.js";
-import type { LineContext } from "../line-context.js";
-import { pickOutboundLine } from "../outbound.js";
-import { getMachinePaths } from "../paths.js";
+import { outboundInstallation } from "../outbound.js";
+import { getPaths } from "../paths.js";
 import { fail } from "../errors.js";
 
 export function register(program: { command(name: string): any }): void {
   program
     .command("status")
-    .description("check whether this line's agent is currently online")
+.description("check whether an agent is currently online")
     .argument("<address>", "contact name or @org/handle to check")
-    .option("--as <line>", "line to check from (defaults to the primary line on the destination's relay)")
-    .action(async (address: string, o: { as?: string }) => {
-      const machine = getMachinePaths();
+    .action(async (address: string) => {
+      const machine = getPaths();
       const firstPass = resolveAddress(machine, address);
       if (!firstPass.ok) {
         fail(firstPass.error);
         return;
       }
-      let ctx: LineContext;
+      let ctx: Installation;
       try {
-        ctx = pickOutboundLine(machine, firstPass.org, { as: o.as });
+        ctx = outboundInstallation(machine, firstPass.org);
       } catch (e) {
         fail(e);
         return;

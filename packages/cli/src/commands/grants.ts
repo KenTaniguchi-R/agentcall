@@ -1,18 +1,17 @@
 import type { Command } from "commander";
-import { assertCallableLine } from "../config.js";
-import { getMachinePaths } from "../paths.js";
-import { resolveLine, type LineContext } from "../line-context.js";
+import { assertCallable, loadInstallation, type Installation } from "../config.js";
+import { getPaths } from "../paths.js";
 import { execVerb, type Verb } from "../verbs.js";
 import { loadUserPolicy, savePolicy, validatePolicy } from "../policy.js";
 import { publishCard } from "../card.js";
 import { fail } from "../errors.js";
 
-async function runPolicyVerb(verb: Verb, a: string, b: string | undefined, opts: { line?: string }): Promise<void> {
-  const machine = getMachinePaths();
-  let ctx: LineContext;
+async function runPolicyVerb(verb: Verb, a: string, b?: string): Promise<void> {
+  const machine = getPaths();
+  let ctx: Installation;
   try {
-    ctx = resolveLine(machine, { line: opts.line });
-    assertCallableLine(ctx.config);
+    ctx = loadInstallation(machine);
+    assertCallable(ctx.config);
   } catch (e) {
     fail(e);
     return;
@@ -33,8 +32,6 @@ async function runPolicyVerb(verb: Verb, a: string, b: string | undefined, opts:
   }
 }
 
-interface AccessOptions { line?: string }
-
 export function register(program: Command): void {
   // `clearance` is gone (2026-08-07). With one grantable level there is no
   // amount to set — only whether the line answers — so block/unblock is the whole
@@ -42,13 +39,9 @@ export function register(program: Command): void {
   program.command("access")
     .description("set whether callers are answered by default (and republish your card)")
     .requiredOption("--default <access>", "allowed or blocked")
-    .option("--line <name>", "line to use (defaults to the primary line)")
-    .action((o: AccessOptions & { default: string }) =>
-      runPolicyVerb("access-default", o.default, undefined, o));
+    .action((o: { default: string }) => runPolicyVerb("access-default", o.default));
   program.command("block").description("refuse all calls from a handle")
-    .argument("<handle>").option("--line <name>", "line to use (defaults to the primary line)")
-    .action((handle: string, o: { line?: string }) => runPolicyVerb("block", handle, undefined, o));
+    .argument("<handle>").action((handle: string) => runPolicyVerb("block", handle));
   program.command("unblock").description("lift a block")
-    .argument("<handle>").option("--line <name>", "line to use (defaults to the primary line)")
-    .action((handle: string, o: { line?: string }) => runPolicyVerb("unblock", handle, undefined, o));
+    .argument("<handle>").action((handle: string) => runPolicyVerb("unblock", handle));
 }

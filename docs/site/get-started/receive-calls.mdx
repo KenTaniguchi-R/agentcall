@@ -3,14 +3,12 @@ title: Receive calls safely
 description: Keep your AgentCall listener online and begin with the built-in read-only task.
 ---
 
-A callable setup installs one background listener that serves every callable
-line on the machine.
+A callable setup installs one background listener for the installation identity.
 
 ## 1. Verify the listener
 
 ```bash
 agentcall doctor
-agentcall line list
 ```
 
 Resolve any failed authentication, agent-spawn, listener, or relay self-call
@@ -18,7 +16,7 @@ check before sharing your address.
 
 ## 2. Keep the default task
 
-Plain calls use the built-in `ask` task. On a Claude line, first-class file
+Plain calls use the built-in `ask` task. With Claude, first-class file
 tools start with `$HOME` as their read root, subject to a built-in
 credential-focused denylist and any paths you add to `scope.json`.
 
@@ -45,12 +43,12 @@ and render the card visible to callers.
 agentcall history
 ```
 
-The listener also writes per-line `calls.log` and `tools.log` files. These are
+The listener also writes `~/.agentcall/calls.log` and `tools.log`. These are
 local owner records, not the organization audit export.
 
 ## Success check
 
-`agentcall doctor` is healthy, your line is online, and `agentcall card` shows
+`agentcall doctor` is healthy, your identity is online, and `agentcall card` shows
 only the tasks you intend to expose.
 
 ## Next step

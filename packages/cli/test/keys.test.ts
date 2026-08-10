@@ -6,7 +6,7 @@ import { spawn } from "node:child_process";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { getLinePaths, getMachinePaths } from "../src/paths.js";
+import { getPaths } from "../src/paths.js";
 import {
   generateIdentityKeys, keysExist, loadKeys, rememberPublishedEncryptionKey,
   rotateEncryptionKey, type StoredKeys,
@@ -15,7 +15,7 @@ import {
 let home: string;
 
 // The identity key is line-scoped, so every case here works through a line.
-function linePaths(root: string) { return getLinePaths(getMachinePaths(root, root), "claude"); }
+function linePaths(root: string) { return getPaths(root, root); }
 
 function markPublished(paths: ReturnType<typeof linePaths>, keys: StoredKeys, digit: string): StoredKeys {
   return rememberPublishedEncryptionKey(paths, keys, digit.repeat(32));
