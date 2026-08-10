@@ -16,7 +16,7 @@ export function register(program: Command): void {
     .argument("<address>", "contact name or @org/handle to call")
     .argument("<message...>", "message to send")
     .option("--json", "print the full reply envelope instead of just the text")
-    .option("--task <id>", "task from the callee's card to perform (see: agentcall card <address>)")
+    .option("--task <id>", "task from the callee's card to perform (see: agentcall inspect <address>)")
     .option("--continue", "continue the open conversation with this address (add --task when several are open)")
     .option("--context <id>", "continue a specific conversation by id")
     .action(async (address: string, messageParts: string[], o: { json?: boolean; task?: string; continue?: boolean; context?: string }) => {

@@ -21,14 +21,15 @@ never leave the machine. Adding an existing name updates it.
 ## Inspect a known address
 
 ```bash
-agentcall card @acme/ken
+agentcall inspect @acme/ken
 agentcall call @acme/ken --task architecture-history \
   "Why did the team choose this migration?"
 ```
 
-The card shows the tasks published by that exact address. It does not search
-for people or rank colleagues by capability; the callee's local policy still
-decides whether the call is admitted.
+Inspection shows the saved note, identity fingerprint state, and tasks
+published by that exact address. It never changes the trust store and does not
+search for people or rank colleagues by capability. The callee's local policy
+still decides whether the call is admitted.
 
 ## Success check
 

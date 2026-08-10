@@ -27,8 +27,12 @@ Without `--task`, calls use the built-in read-only `ask` task. Use an advertised
 task only when you need its specific instructions or capabilities:
 
 ```bash
-agentcall card @acme/ken
+agentcall inspect @acme/ken
 ```
+
+`inspect` also shows the resolved address, saved contact note, identity
+fingerprint state, and a safe next command. Peer presence is deliberately
+reported as `undisclosed`; it is not guessed from a missing response.
 
 To request a published task:
 

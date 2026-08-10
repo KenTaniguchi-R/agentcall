@@ -76,8 +76,8 @@ export type Resolved =
   | { ok: true; org: string; handle: string; address: string }
   | { ok: false; error: string };
 
-// The single resolution path shared by `call`, `status`, and `card`, so the
-// three commands cannot drift: "@" means a literal address, anything else is
+// The single resolution path shared by `call` and `inspect`, so the commands
+// cannot drift: "@" means a literal address, anything else is
 // a contact-book lookup.
 //
 // It used to take the relay URL as well, because the tenant check derived the

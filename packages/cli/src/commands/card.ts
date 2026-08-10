@@ -1,11 +1,8 @@
 import type { Command } from "commander";
-import { authOf, fetchCard } from "../api.js";
-import { assertCallable, loadInstallation, relayUrl, type Installation } from "../config.js";
+import { assertCallable, loadInstallation, type Installation } from "../config.js";
 import { buildCardReport } from "../lint.js";
 import { getPaths } from "../paths.js";
-import { resolveAddress } from "../contacts.js";
 import { publishCard } from "../card.js";
-import { sanitizeTerminalOutput } from "@benree/agentcall-shared";
 import { fail } from "../errors.js";
 
 const reviewOwnCard = () => {
@@ -39,15 +36,15 @@ export function registerLint(program: Command): void {
 export function registerCard(program: Command): void {
   program
     .command("card")
-    .description("show your own card with problems, another agent's menu, or publish yours (push)")
-    .argument("[target]", "contact name or @org/handle to fetch, 'push' to publish, or omit to review your own card")
-    .action(async (target: string | undefined) => {
+    .description("show your own card with problems, or publish it (push)")
+    .argument("[action]", "'push' to publish, or omit to review your own card")
+    .action(async (action: string | undefined) => {
       const machine = getPaths();
-      if (target === undefined) {
+      if (action === undefined) {
         reviewOwnCard();
         return;
       }
-      if (target === "push") {
+      if (action === "push") {
         let ctx: Installation;
         try {
           ctx = loadInstallation(machine);
@@ -60,35 +57,7 @@ export function registerCard(program: Command): void {
         console.log("Card published.");
         return;
       }
-      let ctx: Installation;
-      try {
-        ctx = loadInstallation(machine);
-      } catch (e) {
-        fail(e);
-        return;
-      }
-      const cfg = ctx.config;
-      const parsed = resolveAddress(machine, target, cfg.org);
-      if (!parsed.ok) {
-        console.error(`${parsed.error} (or 'push')`);
-        process.exitCode = 1;
-        return;
-      }
-      try {
-        const card = await fetchCard(
-          relayUrl(cfg), parsed.handle,
-          authOf(cfg),
-        );
-        const description = sanitizeTerminalOutput(card.description);
-        console.log(`${card.handle} (${card.agent_kind})${description ? ` — ${description}` : ""}`);
-        for (const t of card.tasks) {
-          console.log(`  ${t.id} — ${sanitizeTerminalOutput(t.description)}`);
-          for (const ex of t.examples) console.log(`      e.g. ${sanitizeTerminalOutput(ex)}`);
-        }
-        console.log(`\nCall with: agentcall call ${target} --task <id> "<message>"`);
-      } catch (e) {
-        fail(e);
-      }
+      fail(new Error(`Unknown card action "${action}". Use \`agentcall inspect ${action}\` for a peer, or \`agentcall card push\` to publish yours.`));
     });
 }
 
