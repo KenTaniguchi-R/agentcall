@@ -7,6 +7,7 @@ import {
   type A2AListTasksResponseType,
   type A2ATaskStateType,
   type A2ATaskType,
+  type AgentCallTerminalReasonType,
   type CallStatusType,
   type HpkeEnvelopeType,
 } from "@benree/agentcall-shared";
@@ -25,6 +26,26 @@ export type PersistedTask = {
   updated_at: number;
   principal?: TeamCallPrincipal;
   outcome_envelope?: HpkeEnvelopeType;
+  message_id?: string;
+  from_agent_id?: string;
+  from_credential_generation?: number;
+  target_agent_id?: string;
+  request_envelope?: HpkeEnvelopeType;
+  request_envelope_sha256?: string;
+  delivery_state?: "queued" | "leased" | "started" | "terminal";
+  traceparent?: string;
+  lease?: {
+    lease_id: string;
+    listener_session_id: string;
+    expires_at: number;
+    attempt: number;
+  };
+  execute_by?: number;
+  execution_deadline?: number;
+  purge_at?: number;
+  terminal_reason?: AgentCallTerminalReasonType;
+  ciphertext_bytes?: number;
+  quota_released?: boolean;
 };
 
 export type TaskListQuery = {
@@ -61,7 +82,7 @@ export function taskUpdatedAt(task: PersistedTask): number {
   return task.updated_at;
 }
 
-export function toA2ATask(task: PersistedTask): A2ATaskType {
+export function toA2ATask(task: PersistedTask, includeArtifacts = false): A2ATaskType {
   const projected: A2ATaskType = {
     id: task.call_id,
     status: {
@@ -69,6 +90,18 @@ export function toA2ATask(task: PersistedTask): A2ATaskType {
       timestamp: new Date(taskUpdatedAt(task)).toISOString(),
     },
   };
+  if (task.terminal_reason) {
+    projected.metadata = { "agentcall.dev/terminalReason": task.terminal_reason };
+  }
+  if (includeArtifacts && task.outcome_envelope) {
+    projected.artifacts = [{
+      artifactId: `${task.call_id}:result`,
+      parts: [{
+        raw: btoa(JSON.stringify(task.outcome_envelope)),
+        mediaType: "application/vnd.agentcall.hpke+json",
+      }],
+    }];
+  }
   return A2ATask.parse(projected);
 }
 
@@ -159,7 +192,7 @@ export async function listCallerTasks(
   const remaining = cursor ? visible.filter((task) => afterCursor(task, cursor)) : visible;
   const selected = remaining.slice(0, query.pageSize);
   const response: A2AListTasksResponseType = {
-    tasks: selected.map((task) => toA2ATask(task)),
+    tasks: selected.map((task) => toA2ATask(task, query.includeArtifacts)),
     nextPageToken: remaining.length > selected.length && selected.length > 0
       ? await encodeCursor(selected[selected.length - 1]!, caller, query, cursorKey, cursorScope)
       : "",

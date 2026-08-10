@@ -8,9 +8,11 @@ import {
 import { z } from "zod";
 import {
   EncryptionKeyRecord, exportPublicKey, generateEncryptionKeyPair, generateIdentityKeyPair,
+  MAILBOX_TTL_MS, RELAY_CALL_TIMEOUT_MS,
   toBase64Url,
 } from "@benree/agentcall-shared";
 import { assertPrivateFile, writeJsonAtomic } from "./json-store.js";
+import { loadOutboundJobs } from "./outbound-jobs.js";
 import type { Paths } from "./paths.js";
 
 const HASH = /^[0-9a-f]{32}$/;
@@ -46,6 +48,19 @@ const RetiredEpochStateSchema = z.object({
   previous_encryption_transcript_hash: z.string().regex(HASH),
 }).strict();
 type RetiredEpochState = z.infer<typeof RetiredEpochStateSchema>;
+
+const RETAINED_KEY_SKEW_MS = 120_000;
+const RETAINED_KEY_TTL_MS = MAILBOX_TTL_MS + RELAY_CALL_TIMEOUT_MS + RETAINED_KEY_SKEW_MS;
+const MAX_LIVE_ENCRYPTION_EPOCHS = 8;
+const RetainedEpochKeySchema = z.object({
+  format: z.literal(1),
+  encryption_pkcs8: z.string().min(1),
+  encryption_pub: z.string().min(1),
+  epoch: z.number().int().positive(),
+  previous_encryption_transcript_hash: z.string().regex(HASH).nullable(),
+  retained_until: z.number().int().positive(),
+}).strict();
+type RetainedEpochKey = z.infer<typeof RetainedEpochKeySchema>;
 
 const EpochStateSchema = z.union([ActiveEpochStateSchema, RetiredEpochStateSchema]);
 
@@ -98,6 +113,47 @@ function pendingPublicationFile(paths: Paths, epoch: number): string {
 
 function publishedEpochFile(paths: Paths, epoch: number): string {
   return `${paths.identityKeyFile}.epoch-${epoch}.published.json`;
+}
+
+function retainedEpochFile(paths: Paths, epoch: number): string {
+  return `${paths.identityKeyFile}.epoch-${epoch}.retained.json`;
+}
+
+function listRetainedEpochs(paths: Paths): RetainedEpochKey[] {
+  const prefix = `${basename(paths.identityKeyFile)}.epoch-`;
+  const suffix = ".retained.json";
+  const retained: RetainedEpochKey[] = [];
+  for (const name of readdirSync(paths.dir)) {
+    if (!name.startsWith(prefix) || !name.endsWith(suffix)) continue;
+    const epochText = name.slice(prefix.length, -suffix.length);
+    if (!/^[1-9]\d*$/.test(epochText)) continue;
+    const file = join(paths.dir, name);
+    const parsed = RetainedEpochKeySchema.safeParse(readJson(file));
+    if (!parsed.success || parsed.data.epoch !== Number(epochText)) {
+      throw new Error(`${file} could not be read: unexpected contents.`);
+    }
+    retained.push(parsed.data);
+  }
+  return retained;
+}
+
+function retainEpoch(paths: Paths, keys: StoredKeys, now = Date.now()): void {
+  const candidate: RetainedEpochKey = {
+    format: 1,
+    encryption_pkcs8: keys.encryption_pkcs8,
+    encryption_pub: keys.encryption_pub,
+    epoch: keys.epoch,
+    previous_encryption_transcript_hash: keys.previous_encryption_transcript_hash,
+    retained_until: now + RETAINED_KEY_TTL_MS,
+  };
+  const file = retainedEpochFile(paths, keys.epoch);
+  installFirstWriterWins(file, candidate);
+  const persisted = RetainedEpochKeySchema.safeParse(readJson(file));
+  if (
+    !persisted.success || persisted.data.epoch !== candidate.epoch ||
+    persisted.data.encryption_pub !== candidate.encryption_pub ||
+    persisted.data.encryption_pkcs8 !== candidate.encryption_pkcs8
+  ) throw new Error(`Retained encryption-key epoch ${keys.epoch} is inconsistent.`);
 }
 
 function waitForElectionSlot(file: string, waitMs = 5_000): void {
@@ -239,6 +295,7 @@ function loadPublishedEpoch(paths: Paths, current: StoredKeys): PublishedEpoch |
 }
 
 function retireEpoch(paths: Paths, keys: StoredKeys): void {
+  retainEpoch(paths, keys);
   if (keys.epoch === 1) {
     const root = loadIdentityRoot(paths);
     if (!root.initial) return;
@@ -339,6 +396,24 @@ export async function rotateEncryptionKey(
   paths: Paths, hooks: KeyRotationHooks = {},
 ): Promise<StoredKeys> {
   const base = loadKeys(paths);
+  const liveRetained = listRetainedEpochs(paths).filter((key) => Date.now() < key.retained_until);
+  if (liveRetained.length + 1 >= MAX_LIVE_ENCRYPTION_EPOCHS) {
+    const oldest = liveRetained.reduce((candidate, key) =>
+      key.epoch < candidate.epoch ? key : candidate);
+    const now = Date.now();
+    const blockingTasks = loadOutboundJobs(paths).filter(
+      (job) => job.expires_at > now && job.sender_epoch === oldest.epoch,
+    ).length;
+    if (blockingTasks > 0) {
+      throw new Error(
+        "Eight live encryption-key epochs are already retained for durable delivery. " +
+        `${blockingTasks} live mailbox task(s) still require epoch ${oldest.epoch}; ` +
+        `it releases no later than ${new Date(oldest.retained_until).toISOString()}. ` +
+        "Wait for those tasks to finish or expire before rotating again.",
+      );
+    }
+    unlinkSync(retainedEpochFile(paths, oldest.epoch));
+  }
   if (!base.published_encryption_transcript_hash) {
     throw new Error(
       `Encryption-key epoch ${base.epoch} has not been published successfully. ` +
@@ -458,4 +533,37 @@ export function loadKeys(paths: Paths): StoredKeys {
   const published = loadPublishedEpoch(paths, current);
   if (published) current.published_encryption_transcript_hash = published.transcript_hash;
   return StoredKeysSchema.parse(current);
+}
+
+/** Selects the private encryption epoch named by an HPKE envelope. */
+export function loadEncryptionKeysForEpoch(paths: Paths, epoch: number, now = Date.now()): StoredKeys {
+  const current = loadKeys(paths);
+  if (current.epoch === epoch) return current;
+  const retained = listRetainedEpochs(paths).find((key) => key.epoch === epoch);
+  if (!retained || now >= retained.retained_until) {
+    throw new Error(`Encryption-key epoch ${epoch} is not available for decryption.`);
+  }
+  return StoredKeysSchema.parse({
+    identity_pkcs8: current.identity_pkcs8,
+    identity_pub: current.identity_pub,
+    encryption_pkcs8: retained.encryption_pkcs8,
+    encryption_pub: retained.encryption_pub,
+    epoch: retained.epoch,
+    previous_encryption_transcript_hash: retained.previous_encryption_transcript_hash,
+  });
+}
+
+export function inspectEncryptionKeyRing(paths: Paths, now = Date.now()): {
+  current_epoch: number; retained_live_epochs: number[]; earliest_release_at?: number;
+} {
+  const current = loadKeys(paths);
+  const live = listRetainedEpochs(paths)
+    .filter((key) => now < key.retained_until)
+    .sort((left, right) => left.epoch - right.epoch);
+  const earliest = live.reduce((value, key) => Math.min(value, key.retained_until), Infinity);
+  return {
+    current_epoch: current.epoch,
+    retained_live_epochs: live.map((key) => key.epoch),
+    ...(earliest === Infinity ? {} : { earliest_release_at: earliest }),
+  };
 }

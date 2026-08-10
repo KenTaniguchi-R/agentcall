@@ -27,9 +27,11 @@ answer to the caller.
 - Lets owners publish narrow tasks and decide which callers may use them.
 - Supports contacts, conversations, local history, and
   organization audit export.
+- Optionally stores encrypted calls for an offline coworker and delivers them
+  when a compatible listener reconnects.
 
-AgentCall is not an autonomous-agent marketplace, an offline message queue, or
-an OS-level sandbox. The person receiving a call controls the agent, task,
+AgentCall is not an autonomous-agent marketplace or an OS-level sandbox. Its
+offline mailbox is owner-enabled, bounded, and stores only ciphertext. The person receiving a call controls the agent, task,
 working directory, and capabilities used to answer it.
 
 ## Install
@@ -115,6 +117,24 @@ agentcall call ken "Can you review this migration plan?"
 Calls print lifecycle updates to stderr and the authenticated reply to stdout.
 Failures return a nonzero exit code. See [Make your first call](https://agentcall.mintlify.app/get-started/first-call)
 for expected output and recovery steps, or use the [complete CLI reference](https://agentcall.mintlify.app/reference/cli).
+
+An owner may opt into durable offline delivery:
+
+```bash
+agentcall access --offline enabled
+```
+
+When that peer is offline or already has a backlog, `call` exits successfully
+with a task ID. The sealed result can be retrieved by a later CLI process:
+
+```bash
+agentcall jobs list @acme/ken
+agentcall jobs get @acme/ken <task-id> --wait 60
+agentcall jobs cancel @acme/ken <task-id>
+```
+
+Queued request/result ciphertext is retained for up to 72 hours. An expired
+task remains visible as metadata for a further 24 hours.
 
 ## Receive calls safely
 
@@ -240,7 +260,8 @@ details remain encrypted in transit through the relay.
 
 `agentcall doctor` is the single read-only self-diagnostics interface. It reports
 task validity, the effective policy, card drift, key publication, recovery,
-listener state, and runtime health. Add `--json` for the same structured report.
+listener state, runtime health, mailbox capability, key-ring health, and the
+local execution journal. Add `--json` for the same structured report.
 It never publishes, repairs, or makes a relay self-call. `✓` is a pass, `✗` is a
 failure with a fix, and `!` is a warning that does not change the exit code.
 

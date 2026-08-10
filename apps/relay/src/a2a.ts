@@ -163,6 +163,7 @@ export function mountA2A(app: Hono<RelayAppEnv>): void {
       // A card carries no per-group task grants since #379.
       tasks: visibleTasks(upload, viewer),
       baseUrl: `${origin}/v1/a2a/${handle}`,
+      offlineDelivery: upload.offline_delivery.enabled,
     });
 
     return c.json(card, 200, privateCardHeaders(`${org}-${viewer}-${handle}-${row.updated_at}`, row.updated_at));

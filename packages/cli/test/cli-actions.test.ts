@@ -277,6 +277,8 @@ async function startCallRelay(
           const response: E2EEResponsePayloadType = {
             v: 1, direction: "response", relay_origin: relayOrigin,
             from: remoteAddress, to: "@acme/ken", request_id: request.request_id,
+            message_id: request.message_id,
+            ...(request.delivery_mode ? { delivery_mode: request.delivery_mode } : {}),
             sender_identity_key_id: await keyIdFor(remote.identity_pub),
             recipient_encryption_key_id: await keyIdFor(local.encryption_pub),
             recipient_epoch: local.epoch, issued_at: issuedAt,

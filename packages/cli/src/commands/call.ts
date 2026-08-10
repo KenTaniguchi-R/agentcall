@@ -85,6 +85,21 @@ export function register(program: Command): void {
             console.error(callStatusMessage(s));
           },
         });
+        if (reply.type === "call_queued") {
+          const queued = {
+            state: "queued",
+            task_id: reply.call_id,
+            address: reply.address,
+            submitted_at: new Date(reply.submitted_at).toISOString(),
+            expires_at: new Date(reply.expires_at).toISOString(),
+          };
+          if (o.json) console.log(stringifyTerminalSafeJson(queued));
+          else {
+            console.log(`Queued task ${reply.call_id}; expires ${queued.expires_at}.`);
+            console.log(`Retrieve it with: agentcall jobs get ${reply.address} ${reply.call_id}`);
+          }
+          return;
+        }
         if (reply.context_id && reply.task) {
           rememberOutbound(ctx.paths, { relay: relayUrl(cfg), from: cfg.handle, to: parsed.handle, task: reply.task, context_id: reply.context_id, at: Date.now() });
           console.error("conversation open — add --continue to follow up");

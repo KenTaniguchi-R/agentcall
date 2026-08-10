@@ -1,4 +1,5 @@
 import WebSocket, { type RawData } from "ws";
+import { randomUUID } from "node:crypto";
 import {
   AGENT_TIMEOUT_MS, E2EERelayToListenerFrame, MAX_E2EE_WIRE_BYTES,
   requestTranscript, safeParseFrame, transcriptHash,
@@ -18,9 +19,12 @@ import { SerialQueue } from "./queue.js";
 import { loadPolicy } from "./policy.js";
 import { appendPrivateLogLine } from "./audit-log.js";
 import { sealE2EEResponse } from "./e2ee.js";
-import { loadKeys } from "./keys.js";
+import { loadEncryptionKeysForEpoch, loadKeys } from "./keys.js";
 import { verifyAndPinPeer } from "./known-peers.js";
 import { reserveReplay } from "./replay-store.js";
+import {
+  claimExecution, executionEnvelopeDigest, markExecutionStarted, markExecutionTerminal,
+} from "./execution-journal.js";
 import { signalForInboundStatus } from "./abuse-signals.js";
 import {
   admitBinding, handleCancel, makeOutcomeSender, openInboundEnvelope, resolveAdmission,
@@ -47,8 +51,12 @@ export interface ListenerDeps {
   fetchKeys?: typeof fetchKeys;
   verifyAndPinPeer?: typeof verifyAndPinPeer;
   loadKeys?: typeof loadKeys;
+  loadKeysForEpoch?: typeof loadEncryptionKeysForEpoch;
   reserveReplay?: typeof reserveReplay;
   sealE2EEResponse?: typeof sealE2EEResponse;
+  claimExecution?: typeof claimExecution;
+  markExecutionStarted?: typeof markExecutionStarted;
+  markExecutionTerminal?: typeof markExecutionTerminal;
 }
 
 function rawWireBytes(raw: RawData): number {
@@ -67,8 +75,14 @@ export function startListener(deps: ListenerDeps): { stop(): Promise<void> } {
   const fetchPeerKeys = deps.fetchKeys ?? fetchKeys;
   const verifyPeer = deps.verifyAndPinPeer ?? verifyAndPinPeer;
   const loadLocalKeys = deps.loadKeys ?? loadKeys;
+  const loadLocalKeysForEpoch = deps.loadKeysForEpoch ?? (
+    deps.loadKeys ? undefined : loadEncryptionKeysForEpoch
+  );
   const reserveRequest = deps.reserveReplay ?? reserveReplay;
   const sealResponse = deps.sealE2EEResponse ?? sealE2EEResponse;
+  const claimDurableExecution = deps.claimExecution ?? claimExecution;
+  const markDurableExecutionStarted = deps.markExecutionStarted ?? markExecutionStarted;
+  const markDurableExecutionTerminal = deps.markExecutionTerminal ?? markExecutionTerminal;
   // Validate before opening the socket. Hot edits are still loaded per call
   // below, but a listener must never advertise availability when its initial
   // effective policy (user layer + the machine's managed ceiling) is malformed
@@ -139,7 +153,9 @@ export function startListener(deps: ListenerDeps): { stop(): Promise<void> } {
     // re-derived from `loadConfig()`'s return value, only its other fields
     // were. Deliberate partial reload, documented here so it doesn't read as
     // a bug to the next person tracing a relay-host change that didn't take.
-    const url = deps.relay.replace(/^http/, "ws") + "/v1/ws?role=listen";
+    const listenerSessionId = randomUUID();
+    const url = deps.relay.replace(/^http/, "ws") +
+      `/v1/ws?role=listen&capability=durable-mailbox-v1&listener_session_id=${listenerSessionId}`;
     ws = newSocket(url, {
       headers: {
         Authorization: `Bearer ${config.token}`,
@@ -179,14 +195,19 @@ export function startListener(deps: ListenerDeps): { stop(): Promise<void> } {
         {
           relay: deps.relay, org: config.org, handle: config.handle, token: config.token,
           paths: deps.paths, from, envelope: frame.envelope,
+          reserveReplay: frame.delivery_mode !== "durable",
         },
         {
           fetchKeys: fetchPeerKeys, verifyAndPinPeer: verifyPeer,
-          loadKeys: loadLocalKeys, reserveReplay: reserveRequest,
+          loadKeys: loadLocalKeys, loadKeysForEpoch: loadLocalKeysForEpoch,
+          reserveReplay: reserveRequest,
         },
       );
       if (!opened.ok) {
-        send({ type: "call_rejected", call_id, code: "protocol_error" });
+        send({
+          type: "call_rejected", call_id, code: "protocol_error",
+          ...(frame.lease_id ? { lease_id: frame.lease_id } : {}),
+        });
         audit({
           call_id, ...correlation, from, status: "protocol_error", duration_ms: Date.now() - started,
           error: String(opened.error).slice(0, 2_000),
@@ -197,12 +218,51 @@ export function startListener(deps: ListenerDeps): { stop(): Promise<void> } {
         request, callerBundle, localKeys, relayOrigin, fromAddress, toAddress,
       } = opened.envelope;
 
+      if (
+        (frame.message_id !== undefined && frame.message_id !== request.message_id) ||
+        (frame.delivery_mode === "durable" && request.delivery_mode !== "durable")
+      ) {
+        send({
+          type: "call_rejected", call_id, code: "protocol_error",
+          ...(frame.lease_id ? { lease_id: frame.lease_id } : {}),
+        });
+        return;
+      }
+
       const { message, task: requestedTask, context_id } = request;
       const requestHash = await transcriptHash(requestTranscript(request));
-      const trySendOutcome = makeOutcomeSender(
-        { callId: call_id, relayOrigin, fromAddress, toAddress, request, requestHash, localKeys, callerBundle, send },
+      const durableDigest = frame.delivery_mode === "durable"
+        ? executionEnvelopeDigest(frame.envelope)
+        : undefined;
+      const sendOutcome = makeOutcomeSender(
+        {
+          callId: call_id, relayOrigin, fromAddress, toAddress, request, requestHash,
+          localKeys, callerBundle, send, leaseId: frame.lease_id,
+        },
         sealResponse,
       );
+      const trySendOutcome: typeof sendOutcome = async (outcome, terminalReason) => {
+        const error = await sendOutcome(outcome, terminalReason);
+        if (!error && durableDigest) {
+          await markDurableExecutionTerminal(deps.paths, call_id, durableDigest);
+        }
+        return error;
+      };
+
+      if (durableDigest) {
+        const claim = await claimDurableExecution(deps.paths, call_id, durableDigest);
+        if (claim.decision === "conflict") {
+          send({ type: "call_rejected", call_id, code: "protocol_error", lease_id: frame.lease_id });
+          return;
+        }
+        if (claim.decision === "indeterminate" || claim.decision === "terminal") {
+          await sendOutcome(
+            { kind: "failure", code: "agent_error", detail: "Execution status is indeterminate after listener recovery." },
+            "indeterminate_execution",
+          );
+          return;
+        }
+      }
 
       // Resolve caller -> task BEFORE the message is placed in any prompt (see
       // policy.ts). Refusals never enqueue and never spawn: no tokens are
@@ -274,8 +334,17 @@ export function startListener(deps: ListenerDeps): { stop(): Promise<void> } {
         // See "Deliberately NOT in this plan" in
         // docs/superpowers/plans/2026-08-01-a2a-listener-protocol.md before
         // raising maxPending.
-        send({ type: "call_accepted", call_id });
-        send({ type: "call_started", call_id });
+        send({ type: "call_accepted", call_id, ...(frame.lease_id ? { lease_id: frame.lease_id } : {}) });
+        if (durableDigest) {
+          try {
+            await markDurableExecutionStarted(deps.paths, call_id, durableDigest);
+          } catch (error) {
+            await trySendOutcome({ kind: "failure", code: "agent_error", detail: "The local execution journal could not record process start." }, "delivery_failed");
+            audit({ call_id, ...correlation, from, status: "journal_error", duration_ms: Date.now() - started, error: String(error).slice(0, 2_000) });
+            return;
+          }
+        }
+        send({ type: "call_started", call_id, ...(frame.lease_id ? { lease_id: frame.lease_id } : {}) });
         try {
           const out = await run({
             kind: config.agent_kind,
@@ -373,7 +442,10 @@ export function startListener(deps: ListenerDeps): { stop(): Promise<void> } {
           // runAgent settles from the child's exit handler, so reaching here
           // with "canceled" means the process group is actually gone.
           if (code === "canceled") {
-            send({ type: "call_cancelled", call_id, phase: "running" });
+            send({
+              type: "call_cancelled", call_id, phase: "running",
+              ...(frame.lease_id ? { lease_id: frame.lease_id } : {}),
+            });
             audit({ call_id, ...correlation, from, message: message.slice(0, 500), task: task.id, status: "canceled", duration_ms: Date.now() - started });
             return;
           }
@@ -430,7 +502,10 @@ export function startListener(deps: ListenerDeps): { stop(): Promise<void> } {
         // EventEmitter does not observe a rejected async message callback.
         // Contain unexpected key-store/sealing failures here so one malformed
         // or expired call cannot become an unhandled process rejection.
-        send({ type: "call_rejected", call_id: frame.call_id, code: "protocol_error" });
+        send({
+          type: "call_rejected", call_id: frame.call_id, code: "protocol_error",
+          ...(frame.lease_id ? { lease_id: frame.lease_id } : {}),
+        });
         console.error(
           `Listener could not finish encrypted call ${frame.call_id}: ` +
           `${error instanceof Error ? error.message : String(error)}`,

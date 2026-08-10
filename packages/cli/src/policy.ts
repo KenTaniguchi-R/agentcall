@@ -38,7 +38,7 @@ const PolicySchema = AccessPolicySchema.extend({
 export type Policy = z.infer<typeof PolicySchema>;
 
 export const DEFAULT_POLICY: Policy = {
-  description: "", default_access: "allowed", callers: {},
+  description: "", default_access: "allowed", callers: {}, offline_delivery: { enabled: false },
 };
 
 // Missing file -> safe default (fresh install). Malformed file -> THROW:

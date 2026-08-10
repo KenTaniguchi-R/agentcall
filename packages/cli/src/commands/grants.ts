@@ -37,9 +37,18 @@ export function register(program: Command): void {
   // amount to set — only whether the line answers — so block/unblock is the whole
   // per-caller surface, and `access --default` is the line-wide posture.
   program.command("access")
-    .description("set whether callers are answered by default (and republish your card)")
-    .requiredOption("--default <access>", "allowed or blocked")
-    .action((o: { default: string }) => runPolicyVerb("access-default", o.default));
+    .description("set default access or durable offline delivery (and republish your card)")
+    .option("--default <access>", "allowed or blocked")
+    .option("--offline <state>", "enabled or disabled")
+    .action((o: { default?: string; offline?: string }) => {
+      if ((o.default === undefined) === (o.offline === undefined)) {
+        fail("Choose exactly one of --default or --offline.");
+        return;
+      }
+      return o.default !== undefined
+        ? runPolicyVerb("access-default", o.default)
+        : runPolicyVerb("offline-delivery", o.offline!);
+    });
   program.command("block").description("refuse all calls from a handle")
     .argument("<handle>").action((handle: string) => runPolicyVerb("block", handle));
   program.command("unblock").description("lift a block")

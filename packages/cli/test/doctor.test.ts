@@ -83,6 +83,10 @@ describe("diagnoseInstallation", () => {
       expect.objectContaining({ name: "task validity", status: "pass" }),
       expect.objectContaining({ name: "effective policy", status: "pass" }),
       expect.objectContaining({ name: "card drift", status: "warning" }),
+      expect.objectContaining({ name: "durable mailbox capability", status: "pass" }),
+      expect.objectContaining({ name: "mailbox key ring", status: "warning" }),
+      expect.objectContaining({ name: "execution journal", status: "pass" }),
+      expect.objectContaining({ name: "durable listener compatibility", status: "pass" }),
       expect.objectContaining({ name: "relay status", status: "pass", detail: "online" }),
     ]));
     expect(renderDoctorHuman(report)).toMatch(/Effective policy.*allowed/is);

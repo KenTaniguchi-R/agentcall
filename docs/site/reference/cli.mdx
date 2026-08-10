@@ -21,6 +21,7 @@ Commands:
   invite                                 manage one-time organization invites
   audit                                  export organization audit evidence
   call [options] <address> <message...>  call another handle's agent with a message and print its reply
+  jobs                                   retrieve and cancel durable calls
   inspect [options] <address>            inspect one peer's address, trust state, availability, and offered tasks
   trust [options]                        manage explicitly pinned peer identities
   admin                                  explicit remote publication operations
@@ -28,7 +29,7 @@ Commands:
   history [options]                      show call activity stored locally on this machine
   contacts                               manage your local address book of callable agents
   task                                   manage the tasks your agent offers
-  access [options]                       set whether callers are answered by default (and republish your card)
+  access [options]                       set default access or durable offline delivery (and republish your card)
   block <handle>                         refuse all calls from a handle
   unblock <handle>                       lift a block
   listen                                 run the foreground listener (the platform service runs this after setup)
@@ -175,6 +176,67 @@ Options:
                   when several are open)
   --context <id>  continue a specific conversation by id
   -h, --help      display help for command
+```
+
+## jobs
+
+```text
+Usage: agentcall jobs [options] [command]
+
+retrieve and cancel durable calls
+
+Options:
+  -h, --help                            display help for command
+
+Commands:
+  list [options] <address>
+  get [options] <address> <task-id>
+  cancel [options] <address> <task-id>
+  help [command]                        display help for command
+```
+
+## jobs list
+
+```text
+Usage: agentcall jobs list [options] <address>
+
+Arguments:
+  address          contact name or @org/handle
+
+Options:
+  --state <state>  A2A task state
+  --json           print machine-readable JSON
+  -h, --help       display help for command
+```
+
+## jobs get
+
+```text
+Usage: agentcall jobs get [options] <address> <task-id>
+
+Arguments:
+  address           contact name or @org/handle
+  task-id           durable task id
+
+Options:
+  --wait <seconds>  wait up to this many seconds for a terminal result
+                    (default: "0")
+  --json            print machine-readable JSON
+  -h, --help        display help for command
+```
+
+## jobs cancel
+
+```text
+Usage: agentcall jobs cancel [options] <address> <task-id>
+
+Arguments:
+  address     contact name or @org/handle
+  task-id     durable task id
+
+Options:
+  --json      print machine-readable JSON
+  -h, --help  display help for command
 ```
 
 ## inspect
@@ -395,10 +457,11 @@ Options:
 ```text
 Usage: agentcall access [options]
 
-set whether callers are answered by default (and republish your card)
+set default access or durable offline delivery (and republish your card)
 
 Options:
   --default <access>  allowed or blocked
+  --offline <state>   enabled or disabled
   -h, --help          display help for command
 ```
 

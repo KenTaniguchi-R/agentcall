@@ -78,6 +78,7 @@ async function buildEnvelope(opts: { from: string; to: string; message: string }
   const request = {
     v: 1 as const, direction: "request" as const, relay_origin: "127.0.0.1",
     from: `@acme/${opts.from}`, to: `@acme/${opts.to}`,
+    message_id: crypto.randomUUID().replaceAll("-", ""),
     request_id: crypto.randomUUID().replaceAll("-", ""),
     sender_identity_key_id: await keyIdFor(callerKeys.identity_pub),
     recipient_encryption_key_id: await keyIdFor(listenerKeys.encryption_pub),
@@ -93,14 +94,14 @@ async function buildEnvelope(opts: { from: string; to: string; message: string }
 describe("handleCancel", () => {
   it("confirms cancellation of a pending call", () => {
     const sent: unknown[] = [];
-    handleCancel({ call_id: "c1" }, { cancel: () => "pending" }, (obj) => sent.push(obj));
-    expect(sent).toEqual([{ type: "call_cancelled", call_id: "c1", phase: "pending" }]);
+    handleCancel({ call_id: "c1", lease_id: "lease-1" }, { cancel: () => "pending" }, (obj) => sent.push(obj));
+    expect(sent).toEqual([{ type: "call_cancelled", call_id: "c1", phase: "pending", lease_id: "lease-1" }]);
   });
 
   it("reports an unknown call as not cancelled", () => {
     const sent: unknown[] = [];
-    handleCancel({ call_id: "c2" }, { cancel: () => "unknown" }, (obj) => sent.push(obj));
-    expect(sent).toEqual([{ type: "call_not_cancelled", call_id: "c2", reason: "unknown" }]);
+    handleCancel({ call_id: "c2", lease_id: "lease-2" }, { cancel: () => "unknown" }, (obj) => sent.push(obj));
+    expect(sent).toEqual([{ type: "call_not_cancelled", call_id: "c2", reason: "unknown", lease_id: "lease-2" }]);
   });
 
   // A running job is only signalled (via AbortController, inside SerialQueue
@@ -173,6 +174,27 @@ describe("openInboundEnvelope", () => {
     expect(result.ok).toBe(false);
     if (result.ok) throw new Error("expected failure");
     expect(result.error).toBeInstanceOf(ReplayDetectedError);
+  });
+
+  it("defers replay ownership to the durable execution journal", async () => {
+    const { envelope } = await buildEnvelope({ from: "shusaku", to: "ken", message: "hi" });
+    const bundle = await callerBundleFor("shusaku");
+    let reserved = false;
+    const paths = freshMachine();
+    const result = await openInboundEnvelope(
+      {
+        relay: "http://127.0.0.1:9", org: "acme", handle: "ken", token: "tok", paths,
+        from: "shusaku", envelope, reserveReplay: false,
+      },
+      {
+        fetchKeys: async () => bundle,
+        verifyAndPinPeer: async (_m, address) => fakePeer(address),
+        loadKeys: () => listenerKeys,
+        reserveReplay: async (_m, reservation) => { reserved = true; return reservation; },
+      },
+    );
+    expect(result.ok).toBe(true);
+    expect(reserved).toBe(false);
   });
 
   it("fails closed when the envelope cannot be decrypted with the local keys", async () => {

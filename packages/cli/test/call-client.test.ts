@@ -5,7 +5,7 @@ import { join } from "node:path";
 import { WebSocketServer } from "ws";
 import { afterEach, describe, expect, it } from "vitest";
 import {
-  CORRELATION_ID_RE, HPKE_SUITE, MAX_E2EE_WIRE_BYTES, RELAY_CALL_TIMEOUT_MS,
+  CORRELATION_ID_RE, HPKE_SUITE, MAILBOX_TTL_MS, MAX_E2EE_WIRE_BYTES, RELAY_CALL_TIMEOUT_MS,
   keyIdFor, requestTranscript, transcriptHash,
   type E2EEOutcomeType, type E2EEResponsePayloadType, type EncryptionKeyRecordType,
 } from "@benree/agentcall-shared";
@@ -14,6 +14,7 @@ import { ApiError } from "../src/api.js";
 import { openE2EERequest, sealE2EEResponse } from "../src/e2ee.js";
 import { generateIdentityKeys, type StoredKeys } from "../src/keys.js";
 import { getPaths } from "../src/paths.js";
+import { loadOutboundJobs } from "../src/outbound-jobs.js";
 
 let httpServer: Server | undefined;
 const roots: string[] = [];
@@ -111,21 +112,28 @@ async function fixture(relay: string, overrides: Partial<CallOpts> = {}) {
         highest_encryption_epoch: recipient.keys.epoch, call_count: 1,
       }),
       loadKeys: () => sender.keys,
+      fetchCard: async () => ({
+        handle: to, description: "", agent_kind: "claude", tasks: [],
+        offline_delivery: { enabled: false }, updated_at: 1,
+      }),
     },
   };
 
-  const outcomeFrame = async (outer: any, outcome: E2EEOutcomeType) => {
-    const request = await openE2EERequest(
+  const openRequest = (outer: any) => openE2EERequest(
       outer.envelope, recipient.keys.encryption_pkcs8, sender.keys.identity_pub,
       {
         relay_origin: origin, from: fromAddress, to: toAddress,
         key_id: recipientRecord.key_id, epoch: recipient.keys.epoch,
       },
+      opts.keyDeps?.now?.() ?? Date.now(),
     );
+  const outcomeFrame = async (outer: any, outcome: E2EEOutcomeType) => {
+    const request = await openRequest(outer);
     const issuedAt = Date.now();
     const payload: E2EEResponsePayloadType = {
       v: 1, direction: "response", relay_origin: origin, from: toAddress, to: fromAddress,
-      request_id: request.request_id,
+      message_id: request.message_id, request_id: request.request_id,
+      ...(request.delivery_mode ? { delivery_mode: request.delivery_mode } : {}),
       sender_identity_key_id: await keyIdFor(recipient.keys.identity_pub),
       recipient_encryption_key_id: await keyIdFor(sender.keys.encryption_pub),
       recipient_epoch: sender.keys.epoch, issued_at: issuedAt,
@@ -139,7 +147,7 @@ async function fixture(relay: string, overrides: Partial<CallOpts> = {}) {
     });
     return { type: "call_outcome", call_id: "c1", terminal: outcome.kind === "reply" ? "completed" : "failed", envelope };
   };
-  return { opts, outcomeFrame };
+  return { opts, outcomeFrame, openRequest };
 }
 
 describe("callAgent", () => {
@@ -181,6 +189,39 @@ describe("callAgent", () => {
     expect(states).toEqual(["ringing", "answered", "working"]);
   });
 
+  it("returns a durable receipt immediately for an opted-in offline target", async () => {
+    let fx!: Awaited<ReturnType<typeof fixture>>;
+    const relay = await fakeRelay((ws) => ws.on("message", async (raw) => {
+      if (String(raw) === "ping") return;
+      const outer = JSON.parse(String(raw));
+      const request = await fx.openRequest(outer);
+      expect(outer.delivery_mode).toBe("durable");
+      expect(outer.message_id).toBe(request.message_id);
+      expect(request.delivery_mode).toBe("durable");
+      expect(request.expires_at - request.issued_at).toBe(MAILBOX_TTL_MS);
+      ws.send(JSON.stringify({
+        type: "call_queued", call_id: "queued-1", message_id: request.message_id,
+        correlation_id: outer.correlation_id, submitted_at: 1_000, expires_at: 2_000,
+      }));
+    }));
+    fx = await fixture(relay);
+    fx.opts.keyDeps!.fetchCard = async () => ({
+      handle: "ken", description: "", agent_kind: "claude", tasks: [],
+      offline_delivery: { enabled: true }, updated_at: 1,
+    });
+    fx.opts.keyDeps!.now = () => 1_000;
+
+    await expect(callAgent(fx.opts)).resolves.toEqual({
+      type: "call_queued", call_id: "queued-1", message_id: expect.any(String),
+      correlation_id: expect.any(String), address: "@acme/ken",
+      submitted_at: 1_000, expires_at: 2_000,
+    });
+    expect(loadOutboundJobs(fx.opts.paths)).toMatchObject([{
+      message_id: expect.any(String), task_id: "queued-1", state: "queued",
+      frame: { type: "call_request", delivery_mode: "durable" },
+    }]);
+  });
+
   it("carries task and trace context only in their intended visibility zones", async () => {
     const correlationId = "a".repeat(32);
     const traceparent = `00-${correlationId}-${"b".repeat(16)}-01`;
@@ -196,6 +237,7 @@ describe("callAgent", () => {
     }));
     fx = await fixture(relay, { correlationId, traceparent, task: "schedule-meeting" });
     const reply = await callAgent(fx.opts);
+    if (reply.type !== "call_reply") throw new Error("expected synchronous reply");
     expect(captured).toMatchObject({ correlation_id: correlationId, traceparent });
     expect(reply.task).toBe("schedule-meeting");
   });
@@ -339,7 +381,9 @@ describe("callAgent", () => {
       )), 60);
     }));
     fx = await fixture(relay, { pingIntervalMs: 20 });
-    expect((await callAgent(fx.opts)).text).toBe("yo");
+    const reply = await callAgent(fx.opts);
+    if (reply.type !== "call_reply") throw new Error("expected synchronous reply");
+    expect(reply.text).toBe("yo");
     expect(pings.length).toBeGreaterThan(0);
   });
 });

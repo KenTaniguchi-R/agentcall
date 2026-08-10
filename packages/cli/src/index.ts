@@ -17,6 +17,7 @@ import { register as registerHistory } from "./commands/history.js";
 import { register as registerListen } from "./commands/listen.js";
 import { register as registerTask } from "./commands/task.js";
 import { register as registerGrants } from "./commands/grants.js";
+import { register as registerJobs } from "./commands/jobs.js";
 export function createProgram(): Command {
 const program = new Command();
 program.name("agentcall").description("Call other people's coding agents").version("0.4.0");
@@ -24,6 +25,7 @@ registerSetup(program);
 registerInvite(program, installationFor);
 registerAudit(program, installationFor);
 registerCall(program);
+registerJobs(program);
 registerInspect(program);
 registerPeer(program);
 registerAdmin(program);

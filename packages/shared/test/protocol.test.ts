@@ -11,6 +11,8 @@ import {
   CORRELATION_ID_RE, normalizeTraceparent, CallStatus,
   CONTEXT_ID_RE, ErrorCode,
   CONTEXT_TTL_MS, MAX_CONTEXT_TURNS, MAX_CONTEXTS, RATE_LIMIT_PER_HOUR,
+  MAILBOX_MAX_OUTSTANDING_PER_CALLER, MAILBOX_MAX_QUEUED_TASKS,
+  MAILBOX_MAX_STARTS_PER_DAY, MAILBOX_MAX_STORED_CIPHERTEXT_BYTES,
   RecoveryIssueRequest, RecoveryRedeemRequest, RecoveryReceipt,
 } from "../src/index.js";
 
@@ -22,7 +24,7 @@ const requestEnvelope = {
 
 const innerRequest = {
   v: 1 as const, direction: "request" as const, relay_origin: "relay.test",
-  from: "@acme/alice", to: "@acme/ken", request_id: "1".repeat(32),
+  from: "@acme/alice", to: "@acme/ken", message_id: "9".repeat(32), request_id: "1".repeat(32),
   sender_identity_key_id: "2".repeat(32), recipient_encryption_key_id: "3".repeat(32),
   recipient_epoch: 1, issued_at: 1, expires_at: 2, message: "hi",
 };
@@ -144,7 +146,10 @@ describe("address grammar", () => {
 
 describe("frames", () => {
   it("round-trips an encrypted call_request", () => {
-    const f = { type: "call_request", envelope: requestEnvelope, correlation_id: "a".repeat(32) };
+    const f = {
+      type: "call_request", envelope: requestEnvelope,
+      message_id: "9".repeat(32), correlation_id: "a".repeat(32),
+    };
     expect(safeParseFrame(E2EECallerFrame, JSON.stringify(f))).toEqual(f);
   });
   it("rejects unknown type via safeParseFrame", () => {
@@ -186,7 +191,8 @@ describe("call correlation", () => {
 
   it("ignores invalid optional traceparent without rejecting a valid call", () => {
     const parsed = E2EECallerFrame.parse({
-      type: "call_request", envelope: requestEnvelope, correlation_id: correlationId,
+      type: "call_request", envelope: requestEnvelope,
+      message_id: "9".repeat(32), correlation_id: correlationId,
       traceparent: `00-${"3".repeat(32)}-${parentId}-01`,
     });
     expect(parsed).toMatchObject({ correlation_id: correlationId });
@@ -421,5 +427,9 @@ describe("context_id", () => {
     expect(MAX_CONTEXT_TURNS).toBe(10);
     expect(MAX_CONTEXTS).toBe(100);
     expect(RATE_LIMIT_PER_HOUR).toBe(30);
+    expect(MAILBOX_MAX_QUEUED_TASKS).toBe(100);
+    expect(MAILBOX_MAX_OUTSTANDING_PER_CALLER).toBe(10);
+    expect(MAILBOX_MAX_STORED_CIPHERTEXT_BYTES).toBe(32 * 1024 * 1024);
+    expect(MAILBOX_MAX_STARTS_PER_DAY).toBe(30);
   });
 });

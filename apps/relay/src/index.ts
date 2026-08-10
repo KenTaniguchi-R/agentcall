@@ -190,6 +190,7 @@ app.get("/v1/card/:handle", rateLimit(NATIVE_READ, "ip"), async (c) => {
     description: upload.description,
     agent_kind: upload.agent_kind,
     tasks: visibleTasks(upload, viewer),
+    offline_delivery: upload.offline_delivery,
     updated_at: row.updated_at,
   });
 });
@@ -205,6 +206,8 @@ app.get("/v1/ws", async (c) => {
   // here down so neither is used for the other's job.
   let target: string;
   let targetAgentId: string;
+  let mailboxEnabled = false;
+  let callerBlocked = false;
   if (role === "listen") {
     target = handle;
     targetAgentId = identity.agentId;
@@ -223,6 +226,12 @@ app.get("/v1/ws", async (c) => {
     if (!resolved) return c.json({ error: "unknown handle" }, 404);
     target = to;
     targetAgentId = resolved;
+    const cardRow = await c.env.DB.prepare(
+      "SELECT card_json FROM cards WHERE org = ? AND agent_id = ?",
+    ).bind(org, targetAgentId).first<{ card_json: string }>();
+    const targetCard = cardRow ? parseStoredCard(cardRow.card_json, org, target) : null;
+    mailboxEnabled = targetCard?.offline_delivery.enabled === true;
+    callerBlocked = targetCard?.blocked.includes(handle) === true;
   } else {
     return c.json({ error: "bad role" }, 400);
   }
@@ -230,12 +239,25 @@ app.get("/v1/ws", async (c) => {
   const stub = c.env.HANDLE_DO.get(
     c.env.HANDLE_DO.idFromName(identityObjectName({ org, agentId: targetAgentId })),
   );
-  const fwd = new Request(`https://do/ws?role=${role}&test_timeout_ms=${c.req.query("test_timeout_ms") ?? ""}`, c.req.raw);
+  const doUrl = new URL("https://do/ws");
+  doUrl.searchParams.set("role", role);
+  doUrl.searchParams.set("test_timeout_ms", c.req.query("test_timeout_ms") ?? "");
+  doUrl.searchParams.set("test_execution_timeout_ms", c.req.query("test_execution_timeout_ms") ?? "");
+  if (role === "listen") {
+    const capability = c.req.query("capability");
+    const listenerSessionId = c.req.query("listener_session_id");
+    if (capability) doUrl.searchParams.set("capability", capability);
+    if (listenerSessionId) doUrl.searchParams.set("listener_session_id", listenerSessionId);
+  }
+  const fwd = new Request(doUrl, c.req.raw);
   fwd.headers.set("X-Verified-From", handle);
   // The connecting party's stable identity. X-Verified-From stays the address
   // because the object echoes it into call records and audit, where the name
   // shown at the time is the point; this is what keys durable state.
   fwd.headers.set("X-Verified-Agent-Id", identity.agentId);
+  fwd.headers.set("X-Verified-Target-Agent-Id", targetAgentId);
+  fwd.headers.set("X-Verified-Mailbox-Enabled", mailboxEnabled ? "true" : "false");
+  fwd.headers.set("X-Verified-Caller-Blocked", callerBlocked ? "true" : "false");
   fwd.headers.set("X-Verified-Org", org);
   fwd.headers.set("X-Verified-Target", target);
   fwd.headers.set("X-Verified-Credential-Generation", String(identity.recoveryGeneration));

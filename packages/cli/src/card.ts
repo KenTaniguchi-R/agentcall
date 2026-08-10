@@ -39,6 +39,7 @@ export function buildCardUpload(cfg: Config, policy: Policy, tasks: Task[]): Car
     tasks: tasks.map(({ id, name, description, examples, keywords }) =>
       ({ id, name, description, examples, keywords })),
     blocked: Object.entries(policy.callers).filter(([, e]) => e.access === "blocked").map(([caller]) => caller),
+    offline_delivery: policy.offline_delivery,
   };
 }
 

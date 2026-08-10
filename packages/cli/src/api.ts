@@ -1,4 +1,5 @@
 import {
+  A2A_PROTOCOL_VERSION, A2AListTasksResponse, A2ATask,
   DEFAULT_ORG_INVITE_EXPIRY_DAYS,
   HANDLE_RE, AgentCard, AuditExportPage, CreateOrgInviteResponse,
   ListOrgInvitesResponse, RegisterResponse, RevokeOrgInviteResponse,
@@ -8,6 +9,7 @@ import {
   // AgentKind is ours: registerHandle takes it, and it is the shared type that
   // replaced the inline "claude" | "codex" unions.
   type AgentCardType, type AgentKind, type AuditExportPageType, type CardUploadType,
+  type A2AListTasksResponseType, type A2ATaskType, type A2ATaskStateType,
   type OrgInviteMetadataType,
   type OrgRoleType,
   type EncryptionKeyRecordType, type IdentityRecordType,
@@ -298,6 +300,44 @@ export async function fetchCard(
 ): Promise<AgentCardType> {
   return relayCall({ relay, path: `/v1/card/${handle}`, auth, timeoutMs: opts.timeoutMs,
     schema: AgentCard, errors: { 404: relayError(`No card published for "${handle}".`, "unknown_handle") }, failed: "Card fetch" });
+}
+
+const A2A_HEADERS = { "A2A-Version": A2A_PROTOCOL_VERSION, Accept: "application/a2a+json" };
+
+export function listAgentJobs(
+  relay: string,
+  handle: string,
+  auth: Auth,
+  options: { status?: A2ATaskStateType; pageSize?: number } = {},
+): Promise<A2AListTasksResponseType> {
+  const query = new URLSearchParams({ pageSize: String(options.pageSize ?? 50) });
+  if (options.status) query.set("status", options.status);
+  return relayCall({
+    relay, path: `/v1/a2a/${encodeURIComponent(handle)}/tasks?${query}`,
+    auth, headers: A2A_HEADERS, schema: A2AListTasksResponse, failed: "Job list",
+  });
+}
+
+export function getAgentJob(
+  relay: string, handle: string, taskId: string, auth: Auth, includeArtifacts = true,
+): Promise<A2ATaskType> {
+  return relayCall({
+    relay,
+    path: `/v1/a2a/${encodeURIComponent(handle)}/tasks/${encodeURIComponent(taskId)}` +
+      `?includeArtifacts=${includeArtifacts ? "true" : "false"}`,
+    auth, headers: A2A_HEADERS, schema: A2ATask, failed: "Job fetch",
+  });
+}
+
+export function cancelAgentJob(
+  relay: string, handle: string, taskId: string, auth: Auth,
+): Promise<A2ATaskType> {
+  return relayCall({
+    relay, path: `/v1/a2a/${encodeURIComponent(handle)}/tasks/${encodeURIComponent(taskId)}:cancel`,
+    method: "POST", auth,
+    headers: { ...A2A_HEADERS, "content-type": "application/a2a+json" },
+    body: {}, schema: A2ATask, failed: "Job cancel",
+  });
 }
 
 // Uses fromBase64Url from @benree/agentcall-shared (Task 3) rather than

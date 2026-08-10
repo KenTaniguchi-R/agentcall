@@ -6,7 +6,7 @@ import {
 
 const request = {
   v: 1 as const, direction: "request" as const, relay_origin: "relay.test",
-  from: "@acme/alice", to: "@acme/ken", request_id: "1".repeat(32),
+  from: "@acme/alice", to: "@acme/ken", message_id: "9".repeat(32), request_id: "1".repeat(32),
   sender_identity_key_id: "2".repeat(32), recipient_encryption_key_id: "3".repeat(32),
   recipient_epoch: 1, issued_at: 1, expires_at: 2, message: "hi",
 };
@@ -80,6 +80,7 @@ describe("card schemas", () => {
   const task = { id: "ask", name: "Ask", description: "Answer questions.", examples: [], keywords: [] };
   const upload = {
     description: "", agent_kind: "claude" as const, tasks: [task], blocked: [],
+    offline_delivery: { enabled: false },
   };
   it("round-trips a current CardUpload", () => {
     expect(CardUpload.parse(upload)).toEqual(upload);

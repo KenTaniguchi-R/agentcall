@@ -22,6 +22,8 @@ export interface Paths {
   contextsFile: string;
   contextsOutFile: string;
   recoveryPendingFile: string;
+  outboundJobsFile: string;
+  executionJournalFile: string;
 }
 
 export function getPaths(
@@ -50,5 +52,7 @@ export function getPaths(
     contextsFile: join(dir, "contexts.json"),
     contextsOutFile: join(dir, "contexts-out.json"),
     recoveryPendingFile: join(dir, "recovery-pending.json"),
+    outboundJobsFile: join(dir, "outbound-jobs.json"),
+    executionJournalFile: join(dir, "execution-journal.json"),
   };
 }

@@ -16,6 +16,7 @@ import { loadContexts, mintContextId, saveContexts, type ContextBinding } from "
 import type { CallableConfig } from "../src/config.js";
 import { openE2EEResponse, sealE2EERequest } from "../src/e2ee.js";
 import { generateIdentityKeys, type StoredKeys } from "../src/keys.js";
+import { loadExecutionJournal } from "../src/execution-journal.js";
 import { tempLine, tempMachine } from "./helpers.js";
 
 let httpServer: Server;
@@ -77,8 +78,10 @@ function frames(ws: WsSocket, n: number): Promise<any[]> {
               key_id: await keyIdFor(callerKeys.encryption_pub), epoch: callerKeys.epoch,
             },
             {
+              message_id: request.message_id!,
               request_id: request.request_id,
               request_transcript_hash: await transcriptHash(requestTranscript(request)),
+              ...(request.delivery_mode ? { delivery_mode: request.delivery_mode } : {}),
             },
           );
           got.push(response.outcome.kind === "reply"
@@ -95,18 +98,21 @@ async function sendIncoming(
   ws: WsSocket,
   frame: {
     call_id: string; from: string; message: string; task?: string; context_id?: string;
-    correlation_id?: string; traceparent?: string;
+    correlation_id?: string; traceparent?: string; durable?: boolean; lease_id?: string;
   },
 ): Promise<{ request: E2EERequestPayloadType; wire: Record<string, unknown> }> {
   const issuedAt = Date.now();
   const request: E2EERequestPayloadType = {
     v: 1, direction: "request", relay_origin: "127.0.0.1",
     from: `@acme/${frame.from}`, to: "@acme/ken",
+    message_id: crypto.randomUUID().replaceAll("-", ""),
     request_id: crypto.randomUUID().replaceAll("-", ""),
     sender_identity_key_id: await keyIdFor(callerKeys.identity_pub),
     recipient_encryption_key_id: await keyIdFor(listenerKeys.encryption_pub),
     recipient_epoch: listenerKeys.epoch, issued_at: issuedAt,
-    expires_at: issuedAt + RELAY_CALL_TIMEOUT_MS, message: frame.message,
+    expires_at: issuedAt + (frame.durable ? 72 * 60 * 60 * 1_000 : RELAY_CALL_TIMEOUT_MS),
+    ...(frame.durable ? { delivery_mode: "durable" as const } : {}),
+    message: frame.message,
     ...(frame.task ? { task: frame.task } : {}),
     ...(frame.context_id ? { context_id: frame.context_id } : {}),
   };
@@ -118,7 +124,11 @@ async function sendIncoming(
   });
   const wire = {
     type: "incoming_call", call_id: frame.call_id, from: frame.from,
-    envelope,
+    envelope, message_id: request.message_id,
+    ...(frame.durable ? {
+      delivery_mode: "durable", lease_id: frame.lease_id ?? "lease-1",
+      execute_by: request.expires_at,
+    } : {}),
     correlation_id: frame.correlation_id ?? "f".repeat(32),
     ...(frame.traceparent ? { traceparent: frame.traceparent } : {}),
   };
@@ -355,6 +365,57 @@ describe("startListener", () => {
     });
     expect(statSync(paths.dir).mode & 0o777).toBe(0o700);
     expect(statSync(paths.callsLog).mode & 0o777).toBe(0o600);
+  });
+
+  it("binds durable acknowledgements to the lease and journals the process boundary", async () => {
+    const leaseId = "00000000-0000-4000-8000-000000000007";
+    let paths!: Paths;
+    const relayReady = new Promise<WsSocket>((resolveWs) => {
+      void fakeRelay((ws) => resolveWs(ws)).then((url) => {
+        const deps = baseDeps(url);
+        paths = deps.paths;
+        stopper = startListener({ ...deps, run: async () => ({ text: "later answer" }) });
+      });
+    });
+    const ws = await relayReady;
+    const expectFrames = frames(ws, 3);
+    await sendIncoming(ws, {
+      call_id: "durable-1", from: "shusaku", message: "q?", durable: true, lease_id: leaseId,
+    });
+    const [accepted, started, result] = await expectFrames;
+    expect(accepted).toMatchObject({ type: "call_accepted", lease_id: leaseId });
+    expect(started).toMatchObject({ type: "call_started", lease_id: leaseId });
+    expect(result._wire).toMatchObject({ type: "call_outcome", lease_id: leaseId });
+    expect(loadExecutionJournal(paths)).toMatchObject([{ call_id: "durable-1", state: "terminal" }]);
+  });
+
+  it("never respawns a durable call already past the journal start boundary", async () => {
+    let runs = 0;
+    const relayReady = new Promise<WsSocket>((resolveWs) => {
+      void fakeRelay((ws) => resolveWs(ws)).then((url) => {
+        stopper = startListener({
+          ...baseDeps(url), run: async () => { runs += 1; return { text: "once" }; },
+        });
+      });
+    });
+    const ws = await relayReady;
+    const firstFrames = frames(ws, 3);
+    const first = await sendIncoming(ws, {
+      call_id: "durable-once", from: "shusaku", message: "side effect", durable: true,
+      lease_id: "00000000-0000-4000-8000-000000000008",
+    });
+    await firstFrames;
+
+    const secondFrame = frames(ws, 1);
+    ws.send(JSON.stringify({
+      ...first.wire, lease_id: "00000000-0000-4000-8000-000000000009",
+    }));
+    const [failure] = await secondFrame;
+    expect(failure).toMatchObject({
+      type: "call_failed", code: "agent_error",
+      _wire: { terminal_reason: "indeterminate_execution" },
+    });
+    expect(runs).toBe(1);
   });
 
   // The reply is E2EE, so this process is the last place a credential the agent

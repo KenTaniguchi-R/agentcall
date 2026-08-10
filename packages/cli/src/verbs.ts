@@ -9,7 +9,7 @@ import { callerEntry, type Policy } from "./policy.js";
 // `block`/`unblock` are the whole per-caller surface. `access-default` remains
 // because closing a line by default — answer only named callers — is a real
 // posture the binary model can still express.
-export type Verb = "block" | "unblock" | "access-default";
+export type Verb = "block" | "unblock" | "access-default" | "offline-delivery";
 
 // Pure policy mutations behind the flat CLI verbs. Each returns a NEW
 // Policy plus the lines the CLI prints. Validation throws Error with a
@@ -38,6 +38,7 @@ export function execVerb(
         k, v.access === undefined ? {} : { access: v.access },
       ]),
     ),
+    offline_delivery: { enabled: policy.offline_delivery.enabled },
     ...(policy.tests === undefined ? {} : {
       tests: policy.tests.map((test) => ({
         caller: test.caller,
@@ -78,6 +79,16 @@ export function execVerb(
         lines: next.default_access === "blocked"
           ? ["Only named callers are answered."]
           : ["Anyone registered is answered."],
+      };
+    }
+    case "offline-delivery": {
+      if (a !== "enabled" && a !== "disabled") {
+        throw new Error("access --offline needs enabled or disabled.");
+      }
+      next.offline_delivery = { enabled: a === "enabled" };
+      return {
+        policy: next,
+        lines: [`Durable offline delivery ${a}.`],
       };
     }
   }

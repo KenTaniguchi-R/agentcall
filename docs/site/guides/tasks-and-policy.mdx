@@ -57,6 +57,17 @@ agentcall unblock spammer
 agentcall access --default blocked
 ```
 
+Offline delivery is a separate owner opt-in and defaults to disabled:
+
+```bash
+agentcall access --offline enabled
+agentcall access --offline disabled
+```
+
+Enabling it republishes the installation card with `durable-mailbox-v1`.
+Disabling it stops new durable admissions; queued work is revalidated before
+lease and becomes terminal `revoked` if delivery remains disabled.
+
 `secret` is not grantable. It means "never leaves this machine", so no caller
 and no caller can reach it.
 
@@ -105,6 +116,7 @@ back to the last-looking configuration.
 ## Success check
 
 `agentcall doctor` exits successfully, shows the intended tasks, default access,
-each named caller's resolved access, and a current card publication.
+each named caller's resolved access, mailbox capability, key-ring and execution
+journal health, and a current card publication.
 
 Source of truth: [README task and policy behavior](https://github.com/KenTaniguchi-R/agentcall#usage).

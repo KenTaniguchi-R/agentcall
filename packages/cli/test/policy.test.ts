@@ -27,6 +27,7 @@ const meet: Task = {
 const TASKS = [ASK_TASK, intro, meet];
 const policy: Policy = {
   description: "",
+  offline_delivery: { enabled: false },
   default_access: "allowed", callers: {
     ken: {},
     spammer: { access: "blocked" },
@@ -84,7 +85,7 @@ describe("loadPolicy", () => {
     const p = missingManagedPaths(home);
     mkdirSync(dirname(p.policyFile), { recursive: true });
     writeFileSync(p.policyFile, JSON.stringify(policy));
-    expect(loadPolicy(p)).toEqual(policy);
+    expect(loadPolicy(p)).toEqual({ ...policy, offline_delivery: { enabled: false } });
   });
 
   // The relay card can only carry so many blocked handles, so a policy that
@@ -197,6 +198,7 @@ describe("savePolicy", () => {
     mkdirSync(dirname(p.policyFile), { recursive: true });
     const pol: Policy = {
       description: "x", default_access: "allowed", callers: { ken: {} },
+      offline_delivery: { enabled: false },
     };
     savePolicy(p, pol);
     expect(loadPolicy(p)).toEqual(pol);

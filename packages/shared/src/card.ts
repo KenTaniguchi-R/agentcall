@@ -37,6 +37,7 @@ export const CardUpload = z.object({
   agent_kind: AgentKindSchema,
   tasks: z.array(CardTask).max(MAX_CARD_TASKS),
   blocked: z.array(z.string().regex(HANDLE_RE)).max(MAX_CARD_BLOCKED_CALLERS),
+  offline_delivery: z.object({ enabled: z.boolean() }).strict().default({ enabled: false }),
 }).strict();
 
 // What a caller gets back from GET /v1/card/:handle — already filtered to
@@ -46,6 +47,7 @@ export const AgentCard = z.object({
   description: z.string(),
   agent_kind: AgentKindSchema,
   tasks: z.array(CardTask),
+  offline_delivery: z.object({ enabled: z.boolean() }).strict().default({ enabled: false }),
   updated_at: z.number(),
 });
 

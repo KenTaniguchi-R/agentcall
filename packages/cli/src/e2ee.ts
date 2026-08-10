@@ -31,8 +31,10 @@ type ExpectedEnvelope = Pick<
   HpkeEnvelopeHeaderType, "relay_origin" | "from" | "to" | "key_id" | "epoch"
 >;
 interface ExpectedResponseBinding {
+  message_id: string;
   request_id: string;
   request_transcript_hash: string;
+  delivery_mode?: "sync" | "durable";
 }
 
 async function importIdentityPrivateKey(pkcs8: string): Promise<CryptoKey> {
@@ -180,7 +182,12 @@ export async function openE2EEResponse(
   const payload = await openSigned<E2EEResponsePayloadType>(
     "response", envelope, recipientEncryptionPkcs8, pinnedSenderIdentityPub, expected, now,
   );
-  if (payload.request_id !== request.request_id || payload.request_transcript_hash !== request.request_transcript_hash) {
+  if (
+    payload.message_id !== request.message_id ||
+    payload.request_id !== request.request_id ||
+    payload.request_transcript_hash !== request.request_transcript_hash ||
+    payload.delivery_mode !== request.delivery_mode
+  ) {
     throw new Error("Encrypted response does not bind to the expected request transcript.");
   }
   return payload;

@@ -9,6 +9,8 @@ describe("getPaths", () => {
     expect(p.identityKeyFile).toBe("/state/.agentcall/identity.key.json");
     expect(p.policyFile).toBe("/state/.agentcall/policy.json");
     expect(p.contactsFile).toBe("/state/.agentcall/contacts.json");
+    expect(p.outboundJobsFile).toBe("/state/.agentcall/outbound-jobs.json");
+    expect(p.executionJournalFile).toBe("/state/.agentcall/execution-journal.json");
     expect(p.tasksDir).toBe("/real/AgentCall/tasks");
     expect(p.shareDir).toBe("/real/AgentCall/public");
     expect(p.userHome).toBe("/real");
