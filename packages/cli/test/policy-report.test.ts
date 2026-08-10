@@ -73,7 +73,8 @@ describe("renderPolicyReport", () => {
     expect(report).toContain("For one caller: a named rule wins; otherwise a blocked roster wins over an allowed one; otherwise the base rule.");
     expect(report).toContain("Claude may read under: /srv/agentcall-default, /srv/shared.");
     expect(report).toContain("Paths outside those roots, and paths on the built-in or owner denylist, are refused at the read.");
-    expect(report).toContain("Bash is recorded, not blocked, and bypasses this read guard.");
+    expect(report).toContain("Local Write, Edit, NotebookEdit, and Bash are denied.");
+    expect(report).toContain("Connected MCP servers, installed skills, and web tools are available by default.");
     expect(report).toContain("The answer itself is not inspected");
     expect(report).not.toMatch(/reply is refused/i);
   });
@@ -93,7 +94,7 @@ describe("renderPolicyReport", () => {
     expect(report).toContain("on Codex there is NO read guard");
     expect(report).toContain("--sandbox read-only stops writes, not reads or");
     expect(report).toContain("can be told to read anything on this machine");
-    expect(report).toContain("Bundled authenticated Codex apps, web search, and image generation are disabled on every spawn");
+    expect(report).toContain("The owner's MCP servers, skills, apps, web search, and image generation are loaded on every spawn");
     // No control may be named that does not exist. These three all described
     // the observe-mode hook, which is gone; a report that still mentioned it
     // would be the #390 defect again.

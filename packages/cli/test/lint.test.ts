@@ -124,6 +124,7 @@ describe("buildCardReport", () => {
     const r = buildCardReport(codexCfg, p);
     const notices = r.notices.join("\n");
     expect(notices).toMatch(/task "runner": codex has no per-tool restriction/);
+    expect(notices).toMatch(/owner's MCP servers, skills, apps, web, and image tools/);
     expect(notices).not.toMatch(/task "ask"/);
   });
 

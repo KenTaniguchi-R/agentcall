@@ -72,14 +72,17 @@ export function renderPolicyReport(
   );
   if (options.agentKind === "claude") {
     lines.push(
-      "  Claude permits read-only first-class tools; Bash is recorded, not blocked, and bypasses this read guard.",
+      "  Local Write, Edit, NotebookEdit, and Bash are denied.",
+      "  Connected MCP servers, installed skills, and web tools are available by default.",
+      "  MCP tools may change external services using the owner's authenticated accounts.",
     );
   } else {
     lines.push(
       "  WARNING: on Codex there is NO read guard. Nothing stops the agent reading a secret",
       "  path, and nothing checks the answer. --sandbox read-only stops writes, not reads or",
       "  execution. A Codex line can be told to read anything on this machine.",
-      "  Bundled authenticated Codex apps, web search, and image generation are disabled on every spawn.",
+      "  The owner's MCP servers, skills, apps, web search, and image generation are loaded on every spawn.",
+      "  MCP processes may act outside Codex's read-only sandbox.",
       "  Use Claude for any line where what leaves the machine has to be bounded.",
     );
   }

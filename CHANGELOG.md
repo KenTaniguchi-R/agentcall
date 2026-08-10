@@ -6,6 +6,19 @@ which are released together.
 
 ## Unreleased
 
+### Answering agents inherit the owner's connected tools (#392)
+
+- Claude calls now grant installed skills, web research, user-configured MCP
+  servers, claude.ai hosted connectors, and MCP servers bundled by installed
+  plugins. Deferred MCP schemas load through `ToolSearch`.
+- Codex calls now load the owner's normal user configuration, including MCP
+  servers, skills, apps, web search, and image generation. Its native
+  read-only sandbox remains enabled, but MCP processes may act outside it.
+- Claude's local `Write`, `Edit`, `NotebookEdit`, and `Bash` tools remain out of
+  the spawn allowlist and are now also denied by the PreToolUse guard.
+- Connected tools are delegated authority: their own send, update, delete, and
+  payment operations are available to every caller the line answers.
+
 ### The Room membership code is reported, not asked (#369)
 
 - Joining a Room no longer stops on `Does everyone see the same code? [y/N]`.

@@ -1,7 +1,7 @@
 import { dirname, isAbsolute, join, sep } from "node:path";
 import { fileURLToPath } from "node:url";
 import { lineTaskDirs } from "./line-task-dirs.js";
-import { canonical, expandHome, fold, isAncestorOf, isInside } from "./path-canon.js";
+import { canonical, expandHome, isAncestorOf, isInside } from "./path-canon.js";
 import { getMachinePaths, type LinePaths } from "./paths.js";
 import { deniedBasename, deniedRoots, isReadable, type Scope } from "./scope.js";
 
@@ -50,7 +50,7 @@ const DEFAULT_PACKAGE_ROOT = dirname(dirname(fileURLToPath(import.meta.url)));
 // an argument shape this function cannot inspect. `LS` was missed exactly that
 // way in an earlier draft and fell through to allow.
 const EXACT_TARGET: Record<string, string> = {
-  Read: "file_path", Write: "file_path", Edit: "file_path", NotebookEdit: "notebook_path",
+  Read: "file_path",
 };
 // Tools whose `path` argument names a root that is then searched or listed.
 // `Glob` joins them below: its root is implicit, but it is checked the same way.
@@ -124,17 +124,29 @@ export function decide(input: GuardInput, ctx: DecideContext): GuardVerdict {
     denied.find((d) => isInside(root, d) || isAncestorOf(root, d));
   const targetInsideSecret = (target: string) => denied.find((d) => isInside(target, d));
 
-  if (tool === "Bash") {
-    const command = typeof args.command === "string" ? args.command : "";
-    const hit = denied.find((d) =>
-      fold(command).includes(fold(d)) || fold(command).includes(fold(d.replace(userHome, "~"))));
-    // Record and allow: string matching is too weak to be a boundary and too
-    // eager to be harmless. See the spec's Bash section — and note this means
-    // an `exec`-granted task has NO read floor.
-    return hit ? { allow: true, flag: { rule: "bash-references-denied-path", detail: hit } } : { allow: true };
+  // Remote services are the delegated capability; local mutation is not.
+  // Enforce this in the hook as well as the Claude allowlist so a CLI
+  // permission-mode change cannot silently turn an answered call into shell or
+  // filesystem write access.
+  if (["Bash", "Write", "Edit", "NotebookEdit"].includes(tool)) {
+    return { allow: false, rule: "local-mutation-disabled", detail: tool };
   }
 
   if (NO_PATH_SURFACE.has(tool)) return { allow: true };
+
+  // ToolSearch only selects and loads the schema of an already-present tool;
+  // it does not execute that tool or touch the filesystem itself. The selected
+  // tool arrives as a separate PreToolUse event and is evaluated below on its
+  // own merits. Keep this named rather than widening NO_PATH_SURFACE so a new,
+  // unknown tool continues to fail closed.
+  if (tool === "ToolSearch") return { allow: true };
+
+  // MCP calls have no filesystem-shaped argument for this guard to inspect.
+  // The runner separately pre-approves only server names derived from the
+  // owner's own Claude configuration; dontAsk rejects every other server
+  // before execution. Match the complete Claude MCP tool shape here rather
+  // than a loose prefix so a look-alike remains on the fail-closed path.
+  if (/^mcp__[A-Za-z0-9_-]+__[A-Za-z0-9_-]+$/.test(tool)) return { allow: true };
 
   // Skills are dispatched by NAME, and under #412 there is no per-name label to
   // check: a skill's own files sit under a root (or under the ~/.claude/skills

@@ -58,7 +58,9 @@ export function buildCardReport(cfg: LineConfig, p: LinePaths): CardReport {
       notices.push(
         `task "${t.id}": codex has no per-tool restriction and no read guard, so it can run ` +
         `shell commands and read anything on this machine. --sandbox read-only prevents writes ` +
-        `but not reads or execution, and nothing checks the answer. Use Claude for a bounded line.`,
+        `but not reads or execution, and nothing checks the answer. It also loads the owner's MCP ` +
+        `servers, skills, apps, web, and image tools; MCP processes may act outside that sandbox. ` +
+        `Use Claude for a bounded line.`,
       );
     }
   }

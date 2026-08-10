@@ -168,9 +168,12 @@ function canonicalize(value: unknown): unknown {
 //
 // Fixed and read-only (#372). A call answers a question and the reply is the
 // only sink, so there is nothing for Write, Edit or Bash to be granted FOR.
-// WebFetch/WebSearch are out for a different reason: they are a second exit
-// from the machine, and the clearance check only governs the reply.
-export const CLAUDE_READ_ONLY_TOOLS = ["Read", "Grep", "Glob", "LS", "Skill"] as const;
+// WebSearch and http(s)-only WebFetch are included because an answering agent
+// is expected to use the owner's real research tools; guard.ts rejects other
+// WebFetch schemes. Local mutation tools remain outside this list.
+export const CLAUDE_READ_ONLY_TOOLS = [
+  "Read", "Grep", "Glob", "LS", "Skill", "ToolSearch", "WebSearch", "WebFetch",
+] as const;
 
 // A server name is pasted into an allowlist entry, so it has to be a single
 // safe segment. A name carrying a comma would split into a SECOND entry and
@@ -187,8 +190,8 @@ const MCP_SERVER_NAME_RE = /^[A-Za-z0-9_-]+$/;
  * the reply is the only sink, so there is nothing for Write, Edit or Bash to be
  * granted FOR. Opening reads on 2026-08-07 deliberately did NOT open those — a
  * caller's message must not be able to change the owner's machine.
- * WebFetch/WebSearch stay out for a different reason: they are a second exit
- * from the machine.
+ * WebFetch/WebSearch are included as explicit remote research capabilities;
+ * the guard still restricts WebFetch to http(s).
  *
  * `mcpServers` is enumerated from the owner's own configuration at spawn time,
  * not typed by anyone. It has to be enumerated because **`mcp__*` is not
@@ -214,21 +217,103 @@ const MCP_SERVER_NAME_RE = /^[A-Za-z0-9_-]+$/;
  */
 export function mcpServerNamesFrom(raw: string): string[] {
   try {
-    const parsed = JSON.parse(raw) as { mcpServers?: unknown };
+    const parsed = JSON.parse(raw) as {
+      mcpServers?: unknown;
+      claudeAiMcpEverConnected?: unknown;
+    };
     const servers = parsed.mcpServers;
-    if (servers === null || typeof servers !== "object" || Array.isArray(servers)) return [];
-    return Object.keys(servers);
+    const configured = servers !== null && typeof servers === "object" && !Array.isArray(servers)
+      ? Object.keys(servers)
+      : [];
+    const hosted = Array.isArray(parsed.claudeAiMcpEverConnected)
+      ? parsed.claudeAiMcpEverConnected
+        .filter((name): name is string => typeof name === "string" && name.startsWith("claude.ai "))
+        .map((name) => name.replace(/[^A-Za-z0-9_-]/g, "_"))
+      : [];
+    return [...new Set([...configured, ...hosted])];
   } catch {
     return [];
   }
 }
 
-export function discoverMcpServers(userHome: string, read = readFileSync): string[] {
+type ReadText = (path: string) => string;
+
+function mcpConfigServerNames(raw: string): string[] {
   try {
-    return mcpServerNamesFrom(read(join(userHome, ".claude.json"), "utf8") as string);
+    const parsed = JSON.parse(raw) as { mcpServers?: unknown } & Record<string, unknown>;
+    const servers = parsed.mcpServers ?? parsed;
+    if (servers === null || typeof servers !== "object" || Array.isArray(servers)) return [];
+    return Object.keys(servers).filter((name) => MCP_SERVER_NAME_RE.test(name));
   } catch {
     return [];
   }
+}
+
+/** MCP server allowlist segments contributed by installed Claude plugins. */
+export function pluginMcpServerNamesFrom(raw: string, read: ReadText): string[] {
+  try {
+    const parsed = JSON.parse(raw) as { plugins?: unknown };
+    if (parsed.plugins === null || typeof parsed.plugins !== "object" || Array.isArray(parsed.plugins)) return [];
+    const names = new Set<string>();
+
+    for (const [pluginId, value] of Object.entries(parsed.plugins as Record<string, unknown>)) {
+      const pluginName = pluginId.split("@", 1)[0]!;
+      if (!MCP_SERVER_NAME_RE.test(pluginName)) continue;
+      const installs = Array.isArray(value) ? value : [value];
+      for (const install of installs) {
+        if (install === null || typeof install !== "object") continue;
+        const installPath = (install as { installPath?: unknown }).installPath;
+        if (typeof installPath !== "string" || installPath === "") continue;
+
+        const add = (serverNames: readonly string[]) => {
+          for (const serverName of serverNames) names.add(`plugin_${pluginName}_${serverName}`);
+        };
+        for (const manifestPath of [
+          join(installPath, ".claude-plugin", "plugin.json"),
+          join(installPath, "plugin.json"),
+        ]) {
+          try {
+            const manifest = JSON.parse(read(manifestPath)) as { mcpServers?: unknown };
+            if (typeof manifest.mcpServers === "string") {
+              add(mcpConfigServerNames(read(join(installPath, manifest.mcpServers))));
+            } else if (manifest.mcpServers !== null && typeof manifest.mcpServers === "object" &&
+              !Array.isArray(manifest.mcpServers)) {
+              add(Object.keys(manifest.mcpServers).filter((name) => MCP_SERVER_NAME_RE.test(name)));
+            }
+          } catch {
+            // A plugin without this optional manifest shape contributes no MCP.
+          }
+        }
+        try {
+          add(mcpConfigServerNames(read(join(installPath, ".mcp.json"))));
+        } catch {
+          // Most plugins do not bundle an MCP config.
+        }
+      }
+    }
+    return [...names];
+  } catch {
+    return [];
+  }
+}
+
+export function discoverMcpServers(
+  userHome: string,
+  read: ReadText = (path) => readFileSync(path, "utf8"),
+): string[] {
+  const names: string[] = [];
+  try {
+    names.push(...mcpServerNamesFrom(read(join(userHome, ".claude.json"))));
+  } catch {
+    // The owner may have no user-level or hosted MCP configuration.
+  }
+  try {
+    const installed = read(join(userHome, ".claude", "plugins", "installed_plugins.json"));
+    names.push(...pluginMcpServerNamesFrom(installed, read));
+  } catch {
+    // The owner may have no installed Claude plugins.
+  }
+  return [...new Set(names)];
 }
 
 export function claudeAllowedTools(mcpServers: readonly string[] = []): string {
@@ -312,17 +397,6 @@ export function buildSpawnSpec(options: SpawnOptions): SpawnSpec {
   // confining its writes. Always read-only now. Note it does
   // NOT confine reads: `codex exec --sandbox read-only` still reads ~/.ssh.
   const sandbox = "read-only";
-  // --ignore-user-config does not remove Codex's bundled authenticated apps,
-  // web search, or image generation. Disable every bundled remote surface on
-  // fresh and resumed spawns: no AgentCall task cap grants account mutation or
-  // undeclared egress. --strict-config turns a renamed/removed setting into a
-  // startup failure instead of silently restoring a surface.
-  const codexRemoteBoundary = [
-    "--disable", "apps",
-    "--disable", "image_generation",
-    "-c", `web_search="disabled"`,
-    "--strict-config",
-  ];
   if (resume) {
     // `codex exec resume` accepts neither --sandbox nor --cd (verified against
     // the installed CLI, 2026-08-01). --sandbox is the ONLY thing confining
@@ -333,8 +407,7 @@ export function buildSpawnSpec(options: SpawnOptions): SpawnSpec {
     // refuses a resume when it changed.
     return {
       cmd: resolveBin(kind),
-      args: ["exec", "resume", resume, "--ignore-user-config", "--skip-git-repo-check",
-        "--json", ...codexRemoteBoundary,
+      args: ["exec", "resume", resume, "--skip-git-repo-check", "--json",
         "-c", `sandbox_mode="${sandbox}"`, prompt],
       cwd: workdir,
       // AGENTCALL_LINE is as required here as on the non-resume branch: the
@@ -347,17 +420,13 @@ export function buildSpawnSpec(options: SpawnOptions): SpawnSpec {
   }
   return {
     cmd: resolveBin(kind),
-    // --ignore-user-config drops the owner's ~/.codex: their configured MCP
-    // servers and plugins. Those are separate processes that reach the
-    // filesystem outside codex's sandbox entirely, so a remote caller could
-    // otherwise route around every control here — on a typical dev machine
-    // that means a filesystem MCP server, and often `claude mcp serve`, which
-    // re-exposes Read and Bash. Claude fences these off with --allowedTools,
-    // an allowlist that `mcp__*` names never match. Codex's bundled apps remain
-    // loaded even with this flag, so codexRemoteBoundary removes them explicitly.
+    // Load the owner's normal Codex configuration so an answered call can use
+    // their MCP servers, skills, apps, web, and image tools. MCP processes may
+    // hold authority beyond Codex's own sandbox; that delegated authority is an
+    // explicit part of AgentCall's default tool-access model.
     // The prompt stays last: codex takes the final positional as the prompt.
-    args: ["exec", "--ignore-user-config", "--sandbox", sandbox, "--cd", workdir,
-      "--skip-git-repo-check", "--json", ...codexRemoteBoundary, prompt],
+    args: ["exec", "--sandbox", sandbox, "--cd", workdir,
+      "--skip-git-repo-check", "--json", prompt],
     cwd: workdir,
     env: {
       ...childEnv, ...correlationEnv, AGENTCALL_CALL_ID: callId, AGENTCALL_LINE: lineName,

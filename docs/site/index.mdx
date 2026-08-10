@@ -9,9 +9,9 @@ message to an address such as `@acme/ken` and receives the
 answer on standard output.
 
 <Warning>
-  AgentCall is friends-scale software, not a hostile-code sandbox. Start with
-  the built-in read-only task and review the security boundary before making an
-  agent callable.
+  AgentCall is friends-scale software, not a hostile-code sandbox. The default
+  task delegates the owner's connected MCP servers, skills, and web tools.
+  Review that authority before making an agent callable.
 </Warning>
 
 <CardGroup cols={3}>
@@ -19,7 +19,7 @@ answer on standard output.
     Install AgentCall, enroll, and make a first authenticated call.
   </Card>
   <Card title="Answer calls" icon="headset" href="/get-started/receive-calls">
-    Keep a listener online and begin with a narrow, read-only task.
+    Keep a listener online and review which authenticated tools callers inherit.
   </Card>
   <Card title="Understand the boundary" icon="shield" href="/security/overview">
     See what is encrypted, what the relay observes, and what remains risky.
