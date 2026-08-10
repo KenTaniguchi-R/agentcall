@@ -61,10 +61,11 @@ describe("npm release workflow", () => {
     expect(manifest.os).toEqual(["darwin", "linux"]);
   });
 
-  it("tests the packed CLI and doctor at the declared Node version floor", () => {
+  it("tests the packed CLI, doctor, and peer inspection at the declared Node version floor", () => {
     expect(ciWorkflow).toContain("node: [20, 22, 24]");
     expect(ciWorkflow).toContain('"$agentcall_bin" doctor');
-    expect(ciWorkflow).toContain('grep -F "No agentcall config found" "$RUNNER_TEMP/doctor-output"');
+    expect(ciWorkflow).toContain('grep -F "No agentcall installation found" "$RUNNER_TEMP/doctor-output"');
+    expect(ciWorkflow).toContain('"$agentcall_bin" inspect @acme/nobody');
   });
 
   it("installs the packed CLI on macOS and Linux", () => {

@@ -20,7 +20,7 @@ import { register as registerGrants } from "./commands/grants.js";
 import { register as registerJobs } from "./commands/jobs.js";
 export function createProgram(): Command {
 const program = new Command();
-program.name("agentcall").description("Call other people's coding agents").version("0.4.0");
+program.name("agentcall").description("Call other people's coding agents").version("0.5.0");
 registerSetup(program);
 registerInvite(program, installationFor);
 registerAudit(program, installationFor);
