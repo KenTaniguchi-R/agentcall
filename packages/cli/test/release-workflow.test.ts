@@ -131,6 +131,12 @@ describe("npm release workflow", () => {
     expect(publish).not.toContain("contents: write");
   });
 
+  it("identifies the release repository without requiring a checkout in the attach job", () => {
+    const attach = workflow.slice(workflow.indexOf("  attach:"));
+    expect(attach).toContain("GH_REPO: ${{ github.repository }}");
+    expect(attach).not.toContain("actions/checkout@");
+  });
+
   it("builds an SBOM and publishes the shared dependency before the CLI", () => {
     expect(workflow).toContain("--sbom-format cyclonedx");
     const shared = workflow.lastIndexOf("publish_one @benree/agentcall-shared");
