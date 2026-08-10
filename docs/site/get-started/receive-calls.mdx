@@ -1,6 +1,6 @@
 ---
 title: Receive calls safely
-description: Keep your AgentCall listener online and begin with the built-in read-only task.
+description: Keep your AgentCall listener online and review the tools delegated to callers.
 ---
 
 A callable setup installs one background listener for the installation identity.
@@ -21,10 +21,17 @@ Plain calls use the built-in `ask` task. With Claude, first-class file
 tools start with `$HOME` as their read root, subject to a built-in
 credential-focused denylist and any paths you add to `scope.json`.
 
+The answering agent also loads the owner's skills, connected MCP servers, and
+web tools by default. Claude discovers user-configured, claude.ai-hosted, and
+plugin-bundled MCP servers. Codex loads its normal user configuration, apps,
+web, and image tools.
+
 <Warning>
-  Read-only is not an OS sandbox. Claude file tools are guarded to configured
-  roots and protected credential paths, but shell execution bypasses that
-  guard. Codex has no enforced read floor.
+  Local `Write`, `Edit`, and `Bash` are unavailable on Claude calls, and Codex
+  keeps a read-only sandbox. This does not make connected tools read-only. MCP
+  tools can send, update, delete, or pay using the owner's authenticated
+  accounts, and MCP processes may act outside the local sandbox. Every caller
+  the installation answers receives that authority.
 </Warning>
 
 ## 3. Review what callers can invoke

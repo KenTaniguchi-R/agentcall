@@ -23,8 +23,9 @@ agentcall call @acme/ken "List the failing checks" --json
 
 ## 2. Inspect the task menu
 
-Without `--task`, calls use the built-in read-only `ask` task. Use an advertised
-task only when you need its specific instructions or capabilities:
+Without `--task`, calls use the built-in `ask` task. It blocks Claude's local
+mutation tools but can use the callee's installed skills, connected MCPs, and
+web tools. Use an advertised task when you need its specific instructions:
 
 ```bash
 agentcall inspect @acme/ken

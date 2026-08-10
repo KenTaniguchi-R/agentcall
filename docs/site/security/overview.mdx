@@ -17,13 +17,18 @@ description: Understand AgentCall's current security controls, capability bounda
 - Task policy is resolved before the caller's message enters an agent prompt.
 - Policy decides whether a named caller or the organization default is answered.
 - Claude file-shaped tools are guarded against protected credential paths and paths outside configured scope roots.
+- Claude local mutation tools are denied, while installed skills, connected
+  MCP servers, and web research tools are available by default.
+- Codex keeps a read-only sandbox but loads the owner's MCP servers, skills,
+  apps, web, and image tools.
 - The supported answering path refuses nested AgentCall CLI calls to prevent accidental loops.
 - Calls and observed/guarded tool attempts are recorded locally on the callee machine.
 
 ## Residual risks
 
 - The answering process runs as its owner. There is no OS-level sandbox or AgentCall domain firewall.
-- Claude shell execution can read and change data outside the working directory; it is recorded, not blocked.
+- Connected MCP servers and apps can read or change external accounts and may
+  operate outside the answering process's local sandbox.
 - Codex has no AgentCall read guard or enforced read floor.
 - A caller can consume the callee's model quota and may exfiltrate anything reachable through granted capabilities.
 - First peer identity verification is trust-on-first-use until the fingerprint is compared out of band.
@@ -33,9 +38,9 @@ description: Understand AgentCall's current security controls, capability bounda
 
 ## Capability guidance
 
-Start with the built-in read-only `ask` task. Shell execution is not bounded by
-scope, so do not treat a task as a security boundary. Run these commands after
-policy or task changes:
+The built-in `ask` task blocks local mutation but delegates every connected
+tool. Treat every answered caller as holding the authority of those MCP servers,
+skills, and apps. Run these commands after policy or task changes:
 
 ```bash
 agentcall doctor

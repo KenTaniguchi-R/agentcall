@@ -104,15 +104,19 @@ describe("decide — labelling bounds what a root can reach", () => {
       guardRoot: "/opt/agentcall",
     });
 
-  it("allows file tools inside the labelled root", () => {
+  it("allows file reads inside the labelled root", () => {
     expect(bounded("Read", { file_path: `${ROOT}/src/index.ts` }).allow).toBe(true);
-    expect(bounded("Write", { file_path: `${ROOT}/notes/new.md` }).allow).toBe(true);
+  });
+
+  it("denies local mutation tools even inside a readable root", () => {
+    expect(bounded("Write", { file_path: `${ROOT}/notes/new.md` }).allow).toBe(false);
+    expect(bounded("Edit", { file_path: `${ROOT}/src/index.ts` }).allow).toBe(false);
+    expect(bounded("NotebookEdit", { notebook_path: `${ROOT}/analysis.ipynb` }).allow).toBe(false);
+    expect(bounded("Bash", { command: "touch notes/new.md" }).allow).toBe(false);
   });
 
   it("denies exact file targets in an unlabelled sibling", () => {
     expect(bounded("Read", { file_path: "/Users/owner/code/payroll/secrets.ts" }))
-      .toMatchObject({ allow: false, rule: "source-is-secret" });
-    expect(bounded("Edit", { file_path: "../payroll/secrets.ts" }))
       .toMatchObject({ allow: false, rule: "source-is-secret" });
   });
 
@@ -136,8 +140,8 @@ describe("decide — labelling bounds what a root can reach", () => {
     }).allow).toBe(true);
   });
 
-  it("still records but allows Bash because exec is an explicit residual", () => {
-    expect(bounded("Bash", { command: "cat /Users/owner/code/payroll/secrets.ts" }).allow).toBe(true);
+  it("denies Bash even when the command only names a readable path", () => {
+    expect(bounded("Bash", { command: `cat ${ROOT}/src/index.ts` }).allow).toBe(false);
   });
 });
 
@@ -296,9 +300,9 @@ describe("decide — the guard protects its own installed code", () => {
     expect(v.allow).toBe(false);
   });
 
-  it("still allows writes outside the guard root with the same override in place", () => {
+  it("denies writes outside the guard root too", () => {
     const v = decide(call("Write", { file_path: "/Users/owner/proj/src/index.ts" }), ctx({ guardRoot: GUARD_ROOT }));
-    expect(v.allow).toBe(true);
+    expect(v.allow).toBe(false);
   });
 
   it("denies a Grep rooted at the guard's package root", () => {
@@ -379,9 +383,9 @@ describe("per-line task directories are denied", () => {
     expect(verdict.allow).toBe(false);
   });
 
-  it("still allows the line's own share directory", () => {
+  it("still allows reads from the line's own share directory", () => {
     const verdict = decide(
-      { tool_name: "Write", tool_input: { file_path: "/Users/real/AgentCall/codex/public/notes.md" }, cwd: "/tmp/work" },
+      { tool_name: "Read", tool_input: { file_path: "/Users/real/AgentCall/codex/public/notes.md" }, cwd: "/tmp/work" },
       {
         userHome: "/Users/real", realpath: id, guardRoot: "/pkg",
         scope: scopeFor("/Users/real", ["/Users/real/AgentCall"]),
@@ -414,10 +418,9 @@ describe("decide — a denied directory that is itself a symlink", () => {
     expect(v.allow).toBe(false);
   });
 
-  it("keeps flagging a Bash command that names the symlink — the lexical form survives", () => {
+  it("denies a Bash command that names the symlink", () => {
     const v = decide(call("Bash", { command: "cat ~/.aws/credentials" }), ctx({ realpath }));
-    expect(v.allow).toBe(true);
-    expect(v.allow === true && v.flag?.rule).toBeTruthy();
+    expect(v).toMatchObject({ allow: false, rule: "local-mutation-disabled" });
   });
 });
 
@@ -434,17 +437,15 @@ describe("decide — writes to a path that does not exist yet", () => {
   });
 });
 
-describe("decide — Bash records but does not deny", () => {
-  it("flags a command referencing a denied path, and still allows it", () => {
+describe("decide — Bash is disabled for answered calls", () => {
+  it("denies a command referencing a denied path", () => {
     const v = decide(call("Bash", { command: "cat ~/.ssh/id_rsa" }), ctx());
-    expect(v.allow).toBe(true);
-    expect(v.allow === true && v.flag?.rule).toBeTruthy();
+    expect(v).toMatchObject({ allow: false, rule: "local-mutation-disabled" });
   });
 
-  it("does not flag ordinary work", () => {
+  it("also denies an ordinary command", () => {
     const v = decide(call("Bash", { command: "npm test" }), ctx());
-    expect(v.allow).toBe(true);
-    expect(v.allow === true && v.flag).toBeUndefined();
+    expect(v).toMatchObject({ allow: false, rule: "local-mutation-disabled" });
   });
 });
 
@@ -469,6 +470,17 @@ describe("decide — unknown shapes fail closed", () => {
   it("allows a tool with no filesystem surface", () => {
     expect(decide(call("WebSearch", { query: "typescript" }), ctx()).allow).toBe(true);
     expect(decide(call("WebFetch", { url: "https://example.com" }), ctx()).allow).toBe(true);
+  });
+
+  it("allows ToolSearch to load an authenticated tool's deferred schema", () => {
+    expect(decide(call("ToolSearch", { query: "select:mcp__calendar__list_events" }), ctx()))
+      .toEqual({ allow: true });
+  });
+
+  it("allows an MCP tool after its schema has been selected", () => {
+    expect(decide(call("mcp__claude_ai_Google_Calendar__list_events", {
+      calendar_id: "primary",
+    }), ctx())).toEqual({ allow: true });
   });
 
   it("DENIES a tool it has never been taught", () => {
@@ -570,13 +582,13 @@ describe("runGuard", () => {
     expect(JSON.stringify(h.calls()[0])).toContain("id_rsa");
   });
 
-  it("records a flagged Bash command without denying it", () => {
+  it("denies and records a Bash command", () => {
     const h = harness();
     const out = runGuard(payload("Bash", { command: "cat /Users/owner/.ssh/id_rsa" }), h.deps);
     expect(out.exitCode).toBe(0);
-    expect(out.stdout).toBe("");
-    expect(h.calls()[0]).toMatchObject({ type: "tool_flagged", tool: "Bash" });
-    expect(h.tools()[0]).toMatchObject({ allowed: true });
+    expect(JSON.parse(out.stdout).hookSpecificOutput.permissionDecision).toBe("deny");
+    expect(h.calls()[0]).toMatchObject({ type: "tool_denied", tool: "Bash" });
+    expect(h.tools()[0]).toMatchObject({ allowed: false });
   });
 
   it("fails closed on unparseable input", () => {
@@ -668,14 +680,14 @@ describe("runGuard — protects installation tasks under the real home", () => {
   it("denies the single installation task path", () => {
     const { stateRoot, userHome } = splitHomes();
     const legacyTask = join(userHome, "AgentCall", "tasks", "ask", "SKILL.md");
-    const out = runGuard(payload("Write", { file_path: legacyTask }), actingDeps(stateRoot, userHome));
+    const out = runGuard(payload("Read", { file_path: legacyTask }), actingDeps(stateRoot, userHome));
     expect(JSON.parse(out.stdout).hookSpecificOutput.permissionDecision).toBe("deny");
   });
 
-  it("still allows writing to the acting line's own share directory", () => {
+  it("still allows reading from the installation's own share directory", () => {
     const { stateRoot, userHome } = splitHomes();
     const deps = actingDeps(stateRoot, userHome);
-    const out = runGuard(payload("Write", { file_path: join(deps.paths.shareDir, "notes.md") }), deps);
+    const out = runGuard(payload("Read", { file_path: join(deps.paths.shareDir, "notes.md") }), deps);
     expect(out.stdout).toBe("");
     expect(out.exitCode).toBe(0);
   });

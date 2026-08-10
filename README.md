@@ -138,8 +138,10 @@ task remains visible as metadata for a further 24 hours.
 
 ## Receive calls safely
 
-Plain calls use the built-in, read-only `ask` task. Create a named task only
-when a caller needs more specific instructions:
+Plain calls use the built-in `ask` task. It cannot use Claude's local
+`Write`/`Edit`/`Bash` tools, but it can use the owner's installed skills,
+connected MCP servers, and web tools by default. Create a named task when a
+caller needs more specific instructions:
 
 ```bash
 agentcall task new architecture-history
@@ -179,6 +181,12 @@ agentcall access --default blocked   # answer only named callers
 > **A Codex-backed installation has no read guard at all.** Nothing stops the agent reading a
 > denied path, and nothing inspects the answer. Use Claude for anything you
 > actually need bounded.
+>
+> **Connected tools are delegated authority.** Any caller this installation answers can
+> invoke every MCP server, skill, app, and web tool loaded by the answering
+> agent. MCP tools may send mail, modify calendars, change cloud data, or make
+> payments. Blocking local `Write`/`Edit`/`Bash` does not constrain an MCP
+> process or the external account it controls.
 
 The [receive-a-call guide](https://agentcall.mintlify.app/get-started/receive-calls)
 and [tasks and policy guide](https://agentcall.mintlify.app/guides/tasks-and-policy)
@@ -284,7 +292,8 @@ from its owner's operating-system account.
 - Any authenticated handle may call another handle in the same organization.
   An address is a routing identifier, not a secret capability.
 - The callee's policy selects the task before untrusted message text enters the
-  prompt. The built-in `ask` task is read-only.
+  prompt. The built-in `ask` task blocks Claude's local mutation tools but
+  delegates installed skills, connected MCP servers, and web tools.
 - The caller's message is defanged before it is placed in the prompt: AgentCall's
   own instruction fence and model control tokens are replaced with `[filtered]`,
   so a caller cannot forge the syntax that separates the owner's instructions
@@ -292,12 +301,13 @@ from its owner's operating-system account.
   harmful instruction written as ordinary prose still reaches the agent, and the
   task and its capabilities are what bound it.
 - Claude file tools are guarded against credential paths and paths outside the
-  task working directory. Shell access is recorded but not confined by that
-  guard.
-- Codex uses its native read-only or workspace-write sandbox and an observe-only
-  hook. Its read-only mode prevents writes but does not confine reads.
-- A task that grants shell execution gives broad local and network authority.
-  AgentCall has no domain firewall.
+  configured scope. Local `Write`, `Edit`, `NotebookEdit`, and `Bash` are denied.
+- Claude automatically grants MCP servers from `~/.claude.json`, claude.ai
+  hosted connectors, installed plugin MCPs, skills, and web research tools.
+- Codex keeps its native read-only sandbox but loads the owner's normal user
+  configuration, including MCP servers, skills, apps, web, and image tools.
+- MCP processes and authenticated remote tools may act outside the local
+  sandbox. AgentCall has no per-operation MCP firewall.
 - A caller's prompt can induce the answering agent to read and echo back
   material the guard does not cover — a key pasted into a tracked config file, a
   credential printed by an allowed command. Replies are scanned locally for

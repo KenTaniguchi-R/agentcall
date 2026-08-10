@@ -5,7 +5,7 @@ import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
 import { buildPrompt } from "../src/prompt.js";
 import {
-  buildSpawnSpec, claudeAllowedTools, mcpServerNamesFrom,
+  buildSpawnSpec, claudeAllowedTools, discoverMcpServers, mcpServerNamesFrom, pluginMcpServerNamesFrom,
   guardSettingsJson, GUARD_TIMEOUT_S,
   codexThreadingEnabled, codexToolTelemetryEnabled, CODEX_HOOK_TRUST_VERIFIED_VERSION,
   CODEX_THREADING_VERIFIED_VERSION,
@@ -15,6 +15,7 @@ import {
 import { resolveAgentBin } from "../src/bin.js";
 import { getPaths } from "../src/paths.js";
 import { ASK_TASK, type Task } from "../src/tasks.js";
+import { tempDir } from "./helpers.js";
 
 // runAgent/buildSpawnSpec take the resolved working directory, not a paths object.
 const WORKDIR = getPaths("/tmp/fakehome").shareDir;
@@ -186,9 +187,8 @@ describe("buildSpawnSpec", () => {
     // No guard hook: Codex gets none as of 2026-08-07, so the whole arg list is
     // pinned here rather than filtered.
     expect(s.args).toEqual([
-      "exec", "--ignore-user-config", "--sandbox", "read-only", "--cd", WORKDIR,
-      "--skip-git-repo-check", "--json", "--disable", "apps",
-      "--disable", "image_generation", "-c", `web_search="disabled"`, "--strict-config", "PROMPT",
+      "exec", "--sandbox", "read-only", "--cd", WORKDIR,
+      "--skip-git-repo-check", "--json", "PROMPT",
     ]);
     expect(s.cwd).toBe(WORKDIR);
   });
@@ -459,12 +459,10 @@ describe("runAgent -> buildSpawnSpec forwarding", () => {
 
 describe("read-only spawn spec", () => {
   it("claudeAllowedTools stays read-only — Write/Edit/Bash are never grantable", () => {
-    // #372: the reply is the only sink, so Write/Edit/Bash have nothing to be
-    // granted for, and WebFetch/WebSearch are a second exit the clearance
-    // check on the reply does not govern. Opening READS (2026-08-07) did not
-    // open writes: a caller's message must not be able to change the machine.
+    // AgentCall exposes research and authenticated remote tools, but local
+    // mutation remains outside the answering envelope.
     const tools = claudeAllowedTools().split(",");
-    for (const forbidden of ["Write", "Edit", "Bash", "WebFetch", "WebSearch", "NotebookEdit", "Task"]) {
+    for (const forbidden of ["Write", "Edit", "Bash", "NotebookEdit", "Task"]) {
       expect(tools).not.toContain(forbidden);
     }
   });
@@ -473,6 +471,15 @@ describe("read-only spawn spec", () => {
     // Not because the allowlist gates it — measured 2026-08-06, it does not —
     // but so the grant is stated in one place rather than resting on that.
     expect(claudeAllowedTools().split(",")).toContain("Skill");
+  });
+
+  it("claudeAllowedTools includes ToolSearch for deferred authenticated tools", () => {
+    expect(claudeAllowedTools().split(",")).toContain("ToolSearch");
+  });
+
+  it("claudeAllowedTools includes web research tools", () => {
+    expect(claudeAllowedTools().split(","))
+      .toEqual(expect.arrayContaining(["WebSearch", "WebFetch"]));
   });
 
   it("claudeAllowedTools expands each configured MCP server to a glob", () => {
@@ -500,6 +507,56 @@ describe("read-only spawn spec", () => {
     expect(mcpServerNamesFrom(JSON.stringify({
       mcpServers: { jira: { command: "npx" }, openmemory: { url: "https://x" } },
     }))).toEqual(["jira", "openmemory"]);
+  });
+
+  it("reads claude.ai hosted connectors from ~/.claude.json", () => {
+    expect(mcpServerNamesFrom(JSON.stringify({
+      claudeAiMcpEverConnected: ["claude.ai Google Calendar", "claude.ai Gmail"],
+    }))).toEqual(["claude_ai_Google_Calendar", "claude_ai_Gmail"]);
+  });
+
+  it("reads MCP server names bundled by installed Claude plugins", () => {
+    const files = new Map([
+      ["/plugins/exa/.claude-plugin/plugin.json", JSON.stringify({ mcpServers: { exa: {} } })],
+      ["/plugins/honcho/.claude-plugin/plugin.json", JSON.stringify({ mcpServers: "./mcp-servers.json" })],
+      ["/plugins/honcho/mcp-servers.json", JSON.stringify({ honcho: {} })],
+    ]);
+    const read = (path: string) => {
+      const raw = files.get(path);
+      if (raw === undefined) throw new Error("ENOENT");
+      return raw;
+    };
+
+    expect(pluginMcpServerNamesFrom(JSON.stringify({
+      plugins: {
+        "exa@claude-plugins-official": [{ installPath: "/plugins/exa" }],
+        "honcho@honcho": [{ installPath: "/plugins/honcho" }],
+      },
+    }), read)).toEqual(["plugin_exa_exa", "plugin_honcho_honcho"]);
+  });
+
+  it("discovers configured, hosted, and plugin MCP servers together", () => {
+    const home = tempDir("agentcall-mcp-discovery-");
+    const plugin = join(home, ".claude", "plugins", "cache", "exa");
+    try {
+      mkdirSync(join(plugin, ".claude-plugin"), { recursive: true });
+      writeFileSync(join(home, ".claude.json"), JSON.stringify({
+        mcpServers: { local: {} },
+        claudeAiMcpEverConnected: ["claude.ai Google Calendar"],
+      }));
+      writeFileSync(join(home, ".claude", "plugins", "installed_plugins.json"), JSON.stringify({
+        plugins: { "exa@official": [{ installPath: plugin }] },
+      }));
+      writeFileSync(join(plugin, ".claude-plugin", "plugin.json"), JSON.stringify({
+        mcpServers: { exa: {} },
+      }));
+
+      expect(discoverMcpServers(home)).toEqual([
+        "local", "claude_ai_Google_Calendar", "plugin_exa_exa",
+      ]);
+    } finally {
+      rmSync(home, { recursive: true, force: true });
+    }
   });
 
   it("returns nothing rather than throwing on a missing or unreadable config", () => {
@@ -531,6 +588,14 @@ describe("read-only spawn spec", () => {
     const s = spawnSpec("codex", "PROMPT", WORKDIR, () => "/abs/codex");
     const idx = s.args.indexOf("--sandbox");
     expect(s.args[idx + 1]).toBe("read-only");
+  });
+
+  it("codex loads the owner's MCP, skills, apps, and web configuration", () => {
+    const s = spawnSpec("codex", "PROMPT", WORKDIR, () => "/abs/codex");
+    expect(s.args).not.toContain("--ignore-user-config");
+    expect(s.args).not.toContain("--disable");
+    expect(s.args).not.toContain(`web_search="disabled"`);
+    expect(s.args[s.args.indexOf("--sandbox") + 1]).toBe("read-only");
   });
 
 });
@@ -590,12 +655,11 @@ describe("guard hook wiring", () => {
 
 
 
-  it("disables bundled Codex remote tools with strict recognized configuration", () => {
+  it("leaves bundled Codex remote tools enabled", () => {
     const spec = spawnSpec("codex", "hi", WORKDIR, () => "/bin/codex", "call-9");
-    const disabled = spec.args.flatMap((arg, index) => arg === "--disable" ? [spec.args[index + 1]] : []);
-    expect(disabled).toEqual(["apps", "image_generation"]);
-    expect(spec.args).toContain(`web_search="disabled"`);
-    expect(spec.args).toContain("--strict-config");
+    expect(spec.args).not.toContain("--disable");
+    expect(spec.args).not.toContain(`web_search="disabled"`);
+    expect(spec.args).not.toContain("--strict-config");
   });
 
   it("leaves the claude spawn in enforcing mode", () => {
@@ -667,13 +731,11 @@ describe("buildSpawnSpec resume (codex)", () => {
     expect(spec.args).not.toContain("--cd");
   });
 
-  it("keeps --ignore-user-config and the sandbox on a resumed spawn", () => {
-    // The guard hook assertions that used to sit here are gone with the hook.
-    // What still has to survive a resume is the config that bounds the runtime:
-    // the owner's ~/.codex stays out, and the sandbox rides the -c override
-    // because `codex exec resume` accepts no --sandbox.
+  it("loads user config and keeps the sandbox on a resumed spawn", () => {
+    // User tools remain available on follow-ups; the sandbox rides the -c
+    // override because `codex exec resume` accepts no --sandbox.
     const spec = buildSpawnSpec({ kind: "codex", prompt: "hi", workdir: "/w", resolveBin: bin, callId: "c1", resume: "sess-abc" });
-    expect(spec.args).toContain("--ignore-user-config");
+    expect(spec.args).not.toContain("--ignore-user-config");
     expect(spec.args).toContain('sandbox_mode="read-only"');
     expect(spec.args.some((a) => a.startsWith("hooks."))).toBe(false);
   });
@@ -684,26 +746,20 @@ describe("buildSpawnSpec resume (codex)", () => {
   });
 
 
-  it("keeps bundled remote tools disabled with strict configuration on resume", () => {
+  it("keeps bundled remote tools enabled on resume", () => {
     const spec = buildSpawnSpec({ kind: "codex", prompt: "hi", workdir: "/w", resolveBin: bin, callId: "c1", resume: "sess-abc" });
-    const disabled = spec.args.flatMap((arg, index) => arg === "--disable" ? [spec.args[index + 1]] : []);
-    expect(disabled).toEqual(["apps", "image_generation"]);
-    expect(spec.args).toContain(`web_search="disabled"`);
-    expect(spec.args).toContain("--strict-config");
+    expect(spec.args).not.toContain("--disable");
+    expect(spec.args).not.toContain(`web_search="disabled"`);
+    expect(spec.args).not.toContain("--strict-config");
   });
 });
 
-// A codex spawn otherwise inherits every configured MCP server and plugin in the owner's
-// ~/.codex — separate processes that read the filesystem outside codex's
-// sandbox entirely. On a developer machine that routinely includes a
-// filesystem server (serena) and `claude mcp serve`, which re-exposes Read
-// and Bash. Unlike claude, codex has no --allowedTools to fence them off, so
-// the first lever is to not load them. Bundled apps survive that isolation and
-// are removed by the explicit strict feature override above.
-describe("codex user-config isolation", () => {
-  it("ignores the owner's codex config when answering a remote call", () => {
+// Codex has no per-tool MCP allowlist, so loading the owner's config delegates
+// every configured MCP, skill, app, and web surface to answered callers.
+describe("codex user tool access", () => {
+  it("loads the owner's codex config when answering a remote call", () => {
     const spec = spawnSpec("codex", "hi", WORKDIR, () => "/bin/codex");
-    expect(spec.args).toContain("--ignore-user-config");
+    expect(spec.args).not.toContain("--ignore-user-config");
   });
 });
 
