@@ -4,7 +4,7 @@ All notable changes to agentcall are recorded here. Versions apply to both
 `@benree/agentcall` (the CLI) and `@benree/agentcall-shared` (protocol schemas),
 which are released together.
 
-## Unreleased
+## 0.5.0 — 2026-08-10
 
 ### Answering agents inherit the owner's connected tools (#392)
 

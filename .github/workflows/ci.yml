@@ -102,12 +102,12 @@ jobs:
             echo "doctor unexpectedly reported a clean, unconfigured install as healthy"
             exit 1
           fi
-          grep -F "No agentcall config found" "$RUNNER_TEMP/doctor-output"
-          if "$agentcall_bin" status @acme/nobody >"$RUNNER_TEMP/status-output" 2>&1; then
-            echo "status unexpectedly succeeded without a configured identity"
+          grep -F "No agentcall installation found" "$RUNNER_TEMP/doctor-output"
+          if "$agentcall_bin" inspect @acme/nobody >"$RUNNER_TEMP/inspect-output" 2>&1; then
+            echo "inspect unexpectedly succeeded without a configured identity"
             exit 1
           fi
-          grep -F "No agentcall config found" "$RUNNER_TEMP/status-output"
+          grep -F "No agentcall installation found" "$RUNNER_TEMP/inspect-output"
 
   # Compatibility evidence only: #251 owns functional Windows support. Keep
   # the published OS restriction in place and force-install only the tarball
