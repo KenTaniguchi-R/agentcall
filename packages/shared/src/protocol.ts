@@ -57,6 +57,7 @@ export const MAX_DETAIL_LENGTH = 500;
 // the schema boundary — before it reaches any store lookup.
 export const CONTEXT_ID_RE = /^ctx_[A-Za-z0-9_-]{22}$/;
 export const CORRELATION_ID_RE = /^(?!0{32}$)[0-9a-f]{32}$/;
+export const MESSAGE_ID_RE = /^(?!0{32}$)[0-9a-f]{32}$/;
 const TRACEPARENT_V00_RE = /^00-([0-9a-f]{32})-([0-9a-f]{16})-(0[01])$/;
 
 export function normalizeTraceparent(correlationId: string | undefined, value: unknown): string | undefined {
@@ -79,6 +80,8 @@ export function normalizeTraceContext(input: unknown): unknown {
 }
 
 export const CorrelationId = z.string().regex(CORRELATION_ID_RE);
+export const MessageId = z.string().regex(MESSAGE_ID_RE);
+export const LeaseId = z.string().uuid();
 
 // A context is a follow-up within one sitting, not a durable relationship. See
 // the "Out of scope" section of the multi-turn design for why cross-day
@@ -91,6 +94,12 @@ export const MAX_CONTEXT_TURNS = 10;
 export const MAX_CONTEXTS = 100;
 export const RELAY_CALL_TIMEOUT_MS = 360_000;
 export const AGENT_TIMEOUT_MS = 300_000;
+export const MAILBOX_TTL_MS = 72 * 60 * 60_000;
+export const MAILBOX_TOMBSTONE_TTL_MS = 24 * 60 * 60_000;
+export const MAILBOX_MAX_QUEUED_TASKS = 100;
+export const MAILBOX_MAX_OUTSTANDING_PER_CALLER = 10;
+export const MAILBOX_MAX_STORED_CIPHERTEXT_BYTES = 32 * 1024 * 1024;
+export const MAILBOX_MAX_STARTS_PER_DAY = 30;
 // Was 10, raised when multi-turn landed. A threaded turn spawns a full agent,
 // so charging per turn is correct and stays — but at 10 a single five-turn
 // conversation consumed half a caller's hourly budget and two conversations
@@ -112,7 +121,7 @@ export const ErrorCode = z.enum([
 ]);
 export const RelayOperationalErrorCode = z.enum([
   "unknown_handle", "offline", "timeout", "canceled", "unauthorized",
-  "rate_limited", "message_too_large", "protocol_error",
+  "rate_limited", "message_too_large", "protocol_error", "busy",
 ]);
 export const PeerFailureCode = z.enum([
   "busy", "timeout", "agent_error", "blocked", "task_unknown", "context_unknown",
@@ -123,6 +132,16 @@ export const CallStatus = z.object({
   state: z.enum(["ringing", "answered", "working"]),
   call_id: z.string().optional(),
   correlation_id: CorrelationId.optional(),
+});
+export const CallQueued = z.object({
+  type: z.literal("call_queued"),
+  call_id: z.string().min(1),
+  message_id: MessageId,
+  correlation_id: CorrelationId,
+  submitted_at: z.number().int().nonnegative(),
+  expires_at: z.number().int().positive(),
+}).strict().refine((value) => value.expires_at > value.submitted_at, {
+  message: "queued call must expire after submission",
 });
 export const RelayCallError = z.object({
   type: z.literal("call_error"),
@@ -136,10 +155,16 @@ export const RelayCallError = z.object({
 // from "listener owns it but hasn't spawned yet". The task store needs that
 // distinction to map SUBMITTED vs WORKING and to decide whether a cancel
 // request must be negotiated with the listener at all.
-export const CallAccepted = z.object({ type: z.literal("call_accepted"), call_id: z.string() });
-export const CallStarted = z.object({ type: z.literal("call_started"), call_id: z.string() });
+export const CallAccepted = z.object({
+  type: z.literal("call_accepted"), call_id: z.string(), lease_id: LeaseId.optional(),
+}).strict();
+export const CallStarted = z.object({
+  type: z.literal("call_started"), call_id: z.string(), lease_id: LeaseId.optional(),
+}).strict();
 
-export const CancelCall = z.object({ type: z.literal("cancel_call"), call_id: z.string() });
+export const CancelCall = z.object({
+  type: z.literal("cancel_call"), call_id: z.string(), lease_id: LeaseId.optional(),
+}).strict();
 
 // Sent ONLY after the pending closure was definitely removed, or the process
 // group was observed exited. Acknowledging on signal-sent would let the relay
@@ -148,16 +173,19 @@ export const CallCancelled = z.object({
   type: z.literal("call_cancelled"),
   call_id: z.string(),
   phase: z.enum(["pending", "running"]),
-});
+  lease_id: LeaseId.optional(),
+}).strict();
 export const CallNotCancelled = z.object({
   type: z.literal("call_not_cancelled"),
   call_id: z.string(),
   reason: z.enum(["already_terminal", "unknown", "too_late"]),
-});
+  lease_id: LeaseId.optional(),
+}).strict();
 export const CallRejected = z.object({
   type: z.literal("call_rejected"),
   call_id: z.string(),
   code: z.literal("protocol_error"),
+  lease_id: LeaseId.optional(),
 }).strict();
 
 export const AGENT_KINDS = ["claude", "codex"] as const;

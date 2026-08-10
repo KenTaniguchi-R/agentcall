@@ -161,6 +161,58 @@ exports[`CLI command tree > pins command paths, aliases, descriptions, and optio
     },
     {
       "alias": undefined,
+      "commands": [
+        {
+          "alias": undefined,
+          "commands": [],
+          "description": "",
+          "name": "list",
+          "options": [
+            {
+              "description": "A2A task state",
+              "flags": "--state <state>",
+            },
+            {
+              "description": "print machine-readable JSON",
+              "flags": "--json",
+            },
+          ],
+        },
+        {
+          "alias": undefined,
+          "commands": [],
+          "description": "",
+          "name": "get",
+          "options": [
+            {
+              "description": "wait up to this many seconds for a terminal result",
+              "flags": "--wait <seconds>",
+            },
+            {
+              "description": "print machine-readable JSON",
+              "flags": "--json",
+            },
+          ],
+        },
+        {
+          "alias": undefined,
+          "commands": [],
+          "description": "",
+          "name": "cancel",
+          "options": [
+            {
+              "description": "print machine-readable JSON",
+              "flags": "--json",
+            },
+          ],
+        },
+      ],
+      "description": "retrieve and cancel durable calls",
+      "name": "jobs",
+      "options": [],
+    },
+    {
+      "alias": undefined,
       "commands": [],
       "description": "inspect one peer's address, trust state, availability, and offered tasks",
       "name": "inspect",
@@ -310,12 +362,16 @@ exports[`CLI command tree > pins command paths, aliases, descriptions, and optio
     {
       "alias": undefined,
       "commands": [],
-      "description": "set whether callers are answered by default (and republish your card)",
+      "description": "set default access or durable offline delivery (and republish your card)",
       "name": "access",
       "options": [
         {
           "description": "allowed or blocked",
           "flags": "--default <access>",
+        },
+        {
+          "description": "enabled or disabled",
+          "flags": "--offline <state>",
         },
       ],
     },

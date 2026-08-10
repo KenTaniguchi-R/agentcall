@@ -13,6 +13,7 @@ limits are product behavior, not a roadmap promise.
 - Foreground/container-supervised listeners
 - Organization-scoped authenticated calls
 - Signed HPKE-encrypted request and outcome content
+- Owner-enabled durable offline delivery with local result decryption
 - Caller/task policy, task cards, contacts, and multiple local lines
 - Short multi-turn conversations
 - Local call history
@@ -21,7 +22,8 @@ limits are product behavior, not a roadmap promise.
 ## Important limitations
 
 - No native Windows listener installer
-- No offline delivery or store-and-forward mailbox
+- No guaranteed exactly-once network delivery; mailbox delivery is at-least-once,
+  with an endpoint journal preventing automatic duplicate process spawn
 - No cross-organization calling
 - No handle release or reclaim; removing a line does not free its handle
 - No OS-level sandbox around the answering process

@@ -32,6 +32,7 @@ export const AccessPolicySchema = z.object({
   description: z.string().max(500).default(""),
   default_access: AccessSchema.default(DEFAULT_ACCESS),
   callers: z.record(z.string(), CallerAccessSchema).default({}),
+  offline_delivery: z.object({ enabled: z.boolean() }).strict().default({ enabled: false }),
 }).strict();
 
 export type AccessPolicy = z.infer<typeof AccessPolicySchema>;

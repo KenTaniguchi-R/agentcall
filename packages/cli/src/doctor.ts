@@ -1,5 +1,5 @@
 import { authOf, fetchKeys, getRecoveryStatus, getStatus } from "./api.js";
-import { existsSync, lstatSync, readFileSync, realpathSync } from "node:fs";
+import { accessSync, constants, existsSync, lstatSync, readFileSync, realpathSync } from "node:fs";
 import { execFileSync } from "node:child_process";
 import { encryptionKeyTranscript, importIdentityPublicKey, keyIdFor, verifyTranscript } from "@benree/agentcall-shared";
 import { configAddress, loadConfig, relayUrl, type Config } from "./config.js";
@@ -9,13 +9,14 @@ import {
   type ListenerServiceStatus,
 } from "./listener-service.js";
 import type { Paths } from "./paths.js";
-import { loadKeys } from "./keys.js";
+import { inspectEncryptionKeyRing, loadKeys } from "./keys.js";
 import { assertPrivateFile } from "./json-store.js";
 import { checkKnownPeersStore } from "./known-peers.js";
 import { buildCardUpload } from "./card.js";
 import { accessFor } from "./access.js";
 import { loadPolicy } from "./policy.js";
 import { loadTasks } from "./tasks.js";
+import { loadExecutionJournal } from "./execution-journal.js";
 import {
   checkGuard, formatCheck, short, verifyAgent,
   type GuardBinaryProbeFn, type GuardProbeFn,
@@ -327,6 +328,12 @@ export function diagnoseSelfConfiguration(
     name: "effective policy", ok: true,
     detail: `default ${policy.default_access}; ${callers.length} named caller(s); ${policy.tests?.length ?? 0} assertion(s) passed`,
   });
+  checks.push({
+    name: "durable mailbox capability", ok: true,
+    detail: policy.offline_delivery.enabled
+      ? "enabled; published card must advertise durable-mailbox-v1"
+      : "disabled (default)",
+  });
 
   let cardStatus: SelfDiagnostics["card"]["status"];
   const expected = buildCardUpload(cfg, policy, tasks);
@@ -459,10 +466,40 @@ export async function diagnoseInstallation(deps: DoctorDeps): Promise<DoctorRepo
 
     for (const keyCheck of await (deps.keyHealthFn ?? checkKeyHealth)(cfg, paths)) report(keyCheck);
 
+    try {
+      const ring = inspectEncryptionKeyRing(paths);
+      report({
+        name: "mailbox key ring", ok: true,
+        detail: `current epoch ${ring.current_epoch}; ${ring.retained_live_epochs.length} retained live epoch(s)`,
+      });
+    } catch (error) {
+      report({ name: "mailbox key ring", ok: true, warn: true, detail: short(error) });
+    }
+
+    try {
+      accessSync(paths.dir, constants.W_OK);
+      const records = existsSync(paths.executionJournalFile) ? loadExecutionJournal(paths) : [];
+      report({
+        name: "execution journal", ok: true,
+        detail: existsSync(paths.executionJournalFile)
+          ? `${records.length} retained durable execution record(s); private store is writable`
+          : "private store is writable; journal will be created on the first durable lease",
+      });
+    } catch (error) {
+      report({
+        name: "execution journal", ok: false, detail: short(error),
+        hint: `restore private writable state at ${paths.dir}`,
+      });
+    }
+
     if (!cfg.agent_kind) {
       notes.push("caller-only — no agent to verify. You can still call others.");
       return finishReport(checks, notes);
     }
+    report({
+      name: "durable listener compatibility", ok: true,
+      detail: "listener advertises durable-mailbox-v1 with lease-bound acknowledgements",
+    });
 
     const local = diagnoseSelfConfiguration(cfg as Config & { agent_kind: NonNullable<Config["agent_kind"]> }, paths);
     for (const check of local.checks) report(check);

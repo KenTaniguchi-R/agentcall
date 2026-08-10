@@ -7,6 +7,7 @@ const config = { org: "acme", handle: "me", token: "tok", relay: "https://relay.
 const card = {
   handle: "ken", description: "Architecture owner", agent_kind: "claude" as const,
   tasks: [{ id: "ask", name: "Ask", description: "Ask about architecture", examples: ["Why this design?"], keywords: [] }],
+  offline_delivery: { enabled: false },
   updated_at: 1,
 };
 

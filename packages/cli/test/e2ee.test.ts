@@ -25,7 +25,7 @@ async function request(sender: StoredKeys, recipient: StoredKeys): Promise<E2EER
   return {
     v: 1, direction: "request", relay_origin: "acme.agentcall.test",
     from: "@acme/alice", to: "@acme/bob",
-    request_id: "1".repeat(32), sender_identity_key_id: await keyIdFor(sender.identity_pub),
+    request_id: "1".repeat(32), message_id: "2".repeat(32), sender_identity_key_id: await keyIdFor(sender.identity_pub),
     recipient_encryption_key_id: await keyIdFor(recipient.encryption_pub),
     recipient_epoch: recipient.epoch, issued_at: NOW - 1, expires_at: NOW + 1_000,
     task: "ask", message: "private hello",
@@ -54,7 +54,7 @@ describe("E2EE HPKE envelopes", () => {
     const original = await request(alice, bob);
     const payload: E2EEResponsePayloadType = {
       v: 1, direction: "response", relay_origin: original.relay_origin,
-      from: original.to, to: original.from, request_id: original.request_id,
+      from: original.to, to: original.from, request_id: original.request_id, message_id: original.message_id,
       sender_identity_key_id: await keyIdFor(bob.identity_pub),
       recipient_encryption_key_id: await keyIdFor(alice.encryption_pub),
       recipient_epoch: alice.epoch, issued_at: NOW, expires_at: NOW + 1_000,
@@ -67,6 +67,7 @@ describe("E2EE HPKE envelopes", () => {
     expect(JSON.stringify(envelope)).not.toContain("private reply");
     const binding = {
       request_id: original.request_id,
+      message_id: original.message_id,
       request_transcript_hash: payload.request_transcript_hash,
     };
     await expect(openE2EEResponse(
@@ -92,6 +93,7 @@ describe("E2EE HPKE envelopes", () => {
     const maximumResponse: E2EEResponsePayloadType = {
       v: 1, direction: "response", relay_origin: maximumRequest.relay_origin,
       from: maximumRequest.to, to: maximumRequest.from, request_id: maximumRequest.request_id,
+      message_id: maximumRequest.message_id,
       sender_identity_key_id: await keyIdFor(bob.identity_pub),
       recipient_encryption_key_id: await keyIdFor(alice.encryption_pub),
       recipient_epoch: alice.epoch, issued_at: NOW, expires_at: NOW + 1_000,
@@ -103,7 +105,10 @@ describe("E2EE HPKE envelopes", () => {
     });
     await expect(openE2EEResponse(
       responseEnvelope, alice.encryption_pkcs8, bob.identity_pub, expected(maximumResponse),
-      { request_id: maximumResponse.request_id, request_transcript_hash: maximumResponse.request_transcript_hash }, NOW,
+      {
+        request_id: maximumResponse.request_id, message_id: maximumResponse.message_id,
+        request_transcript_hash: maximumResponse.request_transcript_hash,
+      }, NOW,
     )).resolves.toEqual(maximumResponse);
   });
 

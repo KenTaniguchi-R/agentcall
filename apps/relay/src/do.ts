@@ -1,7 +1,10 @@
 import { DurableObject } from "cloudflare:workers";
 import { formatAddress,
   a2aError, E2EECallerFrame, E2EEListenerToRelayFrame, MAX_E2EE_WIRE_BYTES,
-  RATE_LIMIT_PER_HOUR, RELAY_CALL_TIMEOUT_MS, safeParseFrame, standardError,
+  MAILBOX_TOMBSTONE_TTL_MS, MAILBOX_TTL_MS, RATE_LIMIT_PER_HOUR, RELAY_CALL_TIMEOUT_MS,
+  MAILBOX_MAX_OUTSTANDING_PER_CALLER, MAILBOX_MAX_QUEUED_TASKS,
+  MAILBOX_MAX_STARTS_PER_DAY, MAILBOX_MAX_STORED_CIPHERTEXT_BYTES,
+  safeParseFrame, standardError,
   type CallStatusType, type OrgAuditEvent, type RelayOperationalErrorCodeType,
 } from "@benree/agentcall-shared";
 import {
@@ -16,6 +19,7 @@ import {
   advanceAuthorizedCall, beginAuthorizedCall, expireAuthorizedCall, terminateAuthorizedCall,
   type CallLifecycle, type LiveCallPhase, type TeamCallPrincipal,
 } from "./call-lifecycle.js";
+import { parseStoredCard } from "./stored-card.js";
 
 export function recordCallPresenceRead(statusReads: AnalyticsEngineDataset): void {
   statusReads.writeDataPoint({ indexes: ["allowed"], doubles: [Date.now()] });
@@ -34,6 +38,9 @@ type CallerAttachment = {
   correlation_id?: string;
   timeoutMs?: number;
   credentialGeneration?: number;
+  fromAgentId: string;
+  targetAgentId: string;
+  mailboxEnabled: boolean;
 };
 type ListenerAttachment = {
   kind: "listener";
@@ -44,6 +51,9 @@ type ListenerAttachment = {
   actorCountry?: string;
   relayOrigin?: string;
   credentialGeneration?: number;
+  mailboxCapable?: boolean;
+  listenerSessionId?: string;
+  leaseMs?: number;
 };
 
 type CallAuditEvent = Extract<OrgAuditEvent, `call.${string}`>;
@@ -62,6 +72,12 @@ type CallAuditIntent = {
 };
 
 type CancelResolution = { kind: "canceled"; task: PersistedTask } | { kind: "not_cancelable" };
+type DedupeRecord = { call_id: string; request_envelope_sha256: string; purge_at: number };
+type DurableAdmission =
+  | { kind: "admitted"; task: PersistedTask }
+  | { kind: "existing"; task: PersistedTask }
+  | { kind: "capacity" }
+  | { kind: "conflict" };
 
 const DURABLE_PHASE: Record<CallStatusType["state"], LiveCallPhase> = {
   ringing: "submitted",
@@ -86,6 +102,23 @@ const CANCEL_CONFIRM_TIMEOUT_MS = 10_000;
 const CALL_AUDIT_PREFIX = "audit:";
 const CALL_AUDIT_RETRY_MS = 1_000;
 const CREDENTIAL_GENERATION_FLOOR_PREFIX = "meta:credential-generation-floor:";
+const DEDUPE_PREFIX = "dedupe:";
+const QUEUE_PREFIX = "queue:";
+const DUE_PREFIX = "due:";
+const ACTIVE_DURABLE_CALL_KEY = "meta:active-durable-call";
+const QUOTA_OUTSTANDING_KEY = "quota:outstanding";
+const QUOTA_CIPHERTEXT_BYTES_KEY = "quota:ciphertext-bytes";
+const START_PREFIX = "start:";
+const START_WINDOW_MS = 24 * 60 * 60_000;
+const startKey = (at: number, callId: string) => `${START_PREFIX}${String(at).padStart(16, "0")}:${callId}`;
+const quotaCallerKey = (fromAgentId: string) => `quota:caller:${fromAgentId}`;
+const DELIVERY_LEASE_MS = 30_000;
+const dedupeKey = (fromAgentId: string, messageId: string) =>
+  `${DEDUPE_PREFIX}${JSON.stringify([fromAgentId, messageId])}`;
+const queueKey = (task: Pick<PersistedTask, "created_at" | "call_id">) =>
+  `${QUEUE_PREFIX}${String(task.created_at).padStart(16, "0")}:${task.call_id}`;
+const dueKey = (task: Pick<PersistedTask, "deadline" | "call_id">) =>
+  `${DUE_PREFIX}${String(task.deadline).padStart(16, "0")}:${task.call_id}`;
 // Keyed by the stable identity, not the address (#154 slice 4). This floor is
 // what stops a credential revoked by recovery from reconnecting, and it is
 // durable object storage — keyed by handle it would reset the moment an
@@ -217,6 +250,8 @@ export class HandleDO extends DurableObject {
       // is what keeps a credential revoked by recovery from reconnecting, and
       // keyed by handle it would reset whenever an address moved.
       const fromAgentId = req.headers.get("X-Verified-Agent-Id") ?? "";
+      const targetAgentId = req.headers.get("X-Verified-Target-Agent-Id") ?? "";
+      const mailboxEnabled = req.headers.get("X-Verified-Mailbox-Enabled") === "true";
       const credentialGenerationFloor = await this.ctx.storage.get<number>(
         credentialGenerationFloorKey(org ?? "", fromAgentId),
       ) ?? 0;
@@ -228,12 +263,18 @@ export class HandleDO extends DurableObject {
       const client = pair[0];
       const server = pair[1];
       if (role === "listen") {
+        const listenerSessionId = url.searchParams.get("listener_session_id") ?? "";
+        const mailboxCapable = url.searchParams.get("capability") === "durable-mailbox-v1" &&
+          /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(listenerSessionId);
         for (const old of this.ctx.getWebSockets("listener")) old.close(4000, "replaced");
         this.ctx.acceptWebSocket(server, ["listener"]);
-        server.serializeAttachment({
+        const listenerAttachment = {
           kind: "listener", principal, org, handle: target, actorIp, actorCountry, relayOrigin,
-          credentialGeneration,
-        } satisfies ListenerAttachment);
+          credentialGeneration, mailboxCapable, listenerSessionId: mailboxCapable ? listenerSessionId : undefined,
+          leaseMs: Math.min(DELIVERY_LEASE_MS, testTimeout ?? DELIVERY_LEASE_MS),
+        } satisfies ListenerAttachment;
+        server.serializeAttachment(listenerAttachment);
+        if (mailboxCapable) await this.dispatchNext(server, listenerAttachment);
       } else {
         if (!org || !target || !relayOrigin || !principal) {
           return new Response("missing verified caller metadata", { status: 400 });
@@ -242,7 +283,7 @@ export class HandleDO extends DurableObject {
         server.serializeAttachment({
           kind: "caller", principal: principal!, from, org, to: target, actorIp, actorCountry,
           timeoutMs: testTimeout, relayOrigin,
-          credentialGeneration,
+          credentialGeneration, fromAgentId, targetAgentId, mailboxEnabled,
         } satisfies CallerAttachment);
       }
       return new Response(null, { status: 101, webSocket: client });
@@ -269,9 +310,13 @@ export class HandleDO extends DurableObject {
       const caller = req.headers.get("X-Verified-From") ?? "";
       if (!caller) return this.standardTaskError(401, "unauthorized");
       if (!validHistoryLength(url)) return this.standardTaskError(400, "invalid historyLength");
+      const includeArtifactsValue = url.searchParams.get("includeArtifacts");
+      if (includeArtifactsValue !== null && includeArtifactsValue !== "true" && includeArtifactsValue !== "false") {
+        return this.standardTaskError(400, "invalid includeArtifacts");
+      }
       const task = await this.ctx.storage.get<PersistedTask>(`call:${decodeURIComponent(getMatch[1]!)}`);
       if (!task || !taskBelongsToCaller(task, caller)) return this.taskNotFound();
-      return Response.json(toA2ATask(task), { headers: A2A_HEADERS });
+      return Response.json(toA2ATask(task, includeArtifactsValue === "true"), { headers: A2A_HEADERS });
     }
     return new Response("not found", { status: 404 });
   }
@@ -302,6 +347,35 @@ export class HandleDO extends DurableObject {
     const task = await this.ctx.storage.get<PersistedTask>(`call:${callId}`);
     if (!task || !taskBelongsToCaller(task, caller)) return this.taskNotFound();
     if (taskIsTerminal(task)) return this.taskNotCancelable();
+    if (task.delivery_state === "queued") {
+      const cancellation = terminateAuthorizedCall(teamCallLifecycle(task), "canceled");
+      const { request_envelope: _discarded, ...withoutCiphertext } = task;
+      const canceled: PersistedTask = {
+        ...withoutCiphertext,
+        principal: cancellation.principal,
+        deadline: task.purge_at ?? task.deadline,
+        task_state: "TASK_STATE_CANCELED",
+        delivery_state: "terminal",
+        terminal_reason: "canceled",
+        ciphertext_bytes: 0,
+        updated_at: Date.now(),
+      };
+      const intent = callAuditIntent(
+        "call.cancel", canceled, task.from, "handle", {}, canceled.updated_at,
+      );
+      await this.ctx.storage.transaction(async (txn) => {
+        await txn.put(`call:${callId}`, await this.releaseDurableQuota(txn, task, canceled));
+        await txn.delete(queueKey(task));
+        await txn.delete(dueKey(task));
+        await txn.put(dueKey(canceled), callId);
+        if (intent) {
+          await txn.put(this.auditOutboxKey(intent), intent);
+          await this.armAuditRetry(txn);
+        }
+      });
+      await this.flushAuditOutbox();
+      return Response.json(toA2ATask(canceled), { headers: A2A_HEADERS });
+    }
     const listener = this.ctx.getWebSockets("listener")[0];
     if (!listener) return this.taskNotCancelable();
 
@@ -350,15 +424,237 @@ export class HandleDO extends DurableObject {
     );
   }
 
+  private async releaseDurableQuota(
+    txn: DurableObjectTransaction, previous: PersistedTask, next: PersistedTask,
+  ): Promise<PersistedTask> {
+    if (!previous.delivery_state || previous.quota_released) return next;
+    const outstanding = await txn.get<number>(QUOTA_OUTSTANDING_KEY) ?? 0;
+    const callerKey = previous.from_agent_id ? quotaCallerKey(previous.from_agent_id) : undefined;
+    const callerOutstanding = callerKey ? await txn.get<number>(callerKey) ?? 0 : 0;
+    const storedBytes = await txn.get<number>(QUOTA_CIPHERTEXT_BYTES_KEY) ?? 0;
+    const previousBytes = previous.ciphertext_bytes ?? 0;
+    const retainedBytes = next.ciphertext_bytes ?? 0;
+    await txn.put(QUOTA_OUTSTANDING_KEY, Math.max(0, outstanding - 1));
+    if (callerKey) await txn.put(callerKey, Math.max(0, callerOutstanding - 1));
+    await txn.put(
+      QUOTA_CIPHERTEXT_BYTES_KEY,
+      Math.max(0, storedBytes - previousBytes + retainedBytes),
+    );
+    return { ...next, quota_released: true };
+  }
+
   private async persistTaskWithAudit(task: PersistedTask, intent?: CallAuditIntent): Promise<void> {
     await this.ctx.storage.transaction(async (txn) => {
-      await txn.put<PersistedTask>(`call:${task.call_id}`, task);
+      const previous = await txn.get<PersistedTask>(`call:${task.call_id}`);
+      const persisted = previous && taskIsTerminal(task)
+        ? await this.releaseDurableQuota(txn, previous, task)
+        : task;
+      await txn.put<PersistedTask>(`call:${task.call_id}`, persisted);
+      if (previous && dueKey(previous) !== dueKey(persisted)) await txn.delete(dueKey(previous));
+      await txn.put(dueKey(persisted), persisted.call_id);
       if (intent) {
         await txn.put<CallAuditIntent>(this.auditOutboxKey(intent), intent);
         await this.armAuditRetry(txn);
       }
     });
     await this.flushAuditOutbox();
+  }
+
+  private async admitDurableTask(task: PersistedTask, intent?: CallAuditIntent): Promise<DurableAdmission> {
+    const key = dedupeKey(task.from_agent_id!, task.message_id!);
+    let result: DurableAdmission = { kind: "conflict" };
+    await this.ctx.storage.transaction(async (txn) => {
+      const dedupe = await txn.get<DedupeRecord>(key);
+      if (dedupe) {
+        if (dedupe.request_envelope_sha256 !== task.request_envelope_sha256) return;
+        const existing = await txn.get<PersistedTask>(`call:${dedupe.call_id}`);
+        if (existing) result = { kind: "existing", task: existing };
+        return;
+      }
+      const outstanding = await txn.get<number>(QUOTA_OUTSTANDING_KEY) ?? 0;
+      const callerOutstanding = await txn.get<number>(quotaCallerKey(task.from_agent_id!)) ?? 0;
+      const storedBytes = await txn.get<number>(QUOTA_CIPHERTEXT_BYTES_KEY) ?? 0;
+      const taskBytes = task.ciphertext_bytes ?? 0;
+      if (
+        outstanding >= MAILBOX_MAX_QUEUED_TASKS ||
+        callerOutstanding >= MAILBOX_MAX_OUTSTANDING_PER_CALLER ||
+        storedBytes + taskBytes > MAILBOX_MAX_STORED_CIPHERTEXT_BYTES
+      ) {
+        result = { kind: "capacity" };
+        return;
+      }
+      await txn.put<PersistedTask>(`call:${task.call_id}`, task);
+      await txn.put<DedupeRecord>(key, {
+        call_id: task.call_id,
+        request_envelope_sha256: task.request_envelope_sha256!,
+        purge_at: task.purge_at!,
+      });
+      await txn.put(queueKey(task), task.call_id);
+      await txn.put(dueKey(task), task.call_id);
+      await txn.put(QUOTA_OUTSTANDING_KEY, outstanding + 1);
+      await txn.put(quotaCallerKey(task.from_agent_id!), callerOutstanding + 1);
+      await txn.put(QUOTA_CIPHERTEXT_BYTES_KEY, storedBytes + taskBytes);
+      if (intent) {
+        await txn.put<CallAuditIntent>(this.auditOutboxKey(intent), intent);
+        await this.armAuditRetry(txn);
+      }
+      result = { kind: "admitted", task };
+    });
+    const final = result as DurableAdmission;
+    if (final.kind === "admitted") await this.flushAuditOutbox();
+    return final;
+  }
+
+  private async envelopeDigest(envelope: unknown): Promise<string> {
+    const bytes = new TextEncoder().encode(JSON.stringify(envelope));
+    const digest = new Uint8Array(await crypto.subtle.digest("SHA-256", bytes));
+    return [...digest].map((byte) => byte.toString(16).padStart(2, "0")).join("");
+  }
+
+  private sendQueuedReceipt(ws: WebSocket, task: PersistedTask): void {
+    this.send(ws, {
+      type: "call_queued", call_id: task.call_id, message_id: task.message_id,
+      correlation_id: task.correlation_id, submitted_at: task.created_at,
+      expires_at: task.execute_by,
+    });
+    try { ws.close(1000, "queued"); } catch { /* already closed */ }
+  }
+
+  private async durableAuthorityIsCurrent(task: PersistedTask): Promise<boolean> {
+    if (!task.from_agent_id || !task.target_agent_id) return false;
+    const [caller, target, cardRow] = await Promise.all([
+      this.db.prepare(
+        "SELECT agent_id, recovery_generation FROM handles WHERE org = ? AND handle = ?",
+      ).bind(task.org, task.from).first<{ agent_id: string | null; recovery_generation: number }>(),
+      this.db.prepare(
+        "SELECT agent_id FROM handles WHERE org = ? AND handle = ?",
+      ).bind(task.org, task.to).first<{ agent_id: string | null }>(),
+      this.db.prepare(
+        "SELECT card_json FROM cards WHERE org = ? AND agent_id = ?",
+      ).bind(task.org, task.target_agent_id).first<{ card_json: string }>(),
+    ]);
+    const card = cardRow ? parseStoredCard(cardRow.card_json, task.org, task.to) : null;
+    return caller?.agent_id === task.from_agent_id &&
+      caller.recovery_generation === task.from_credential_generation &&
+      target?.agent_id === task.target_agent_id &&
+      card?.offline_delivery.enabled === true && !card.blocked.includes(task.from);
+  }
+
+  private async revokeDurableTask(task: PersistedTask): Promise<void> {
+    const { request_envelope: _discarded, lease: _lease, ...rest } = task;
+    const revoked: PersistedTask = {
+      ...rest,
+      deadline: task.purge_at ?? task.deadline,
+      task_state: "TASK_STATE_REJECTED",
+      delivery_state: "terminal",
+      terminal_reason: "revoked",
+      ciphertext_bytes: 0,
+      updated_at: Date.now(),
+    };
+    const intent = callAuditIntent("call.fail", revoked, "relay", "system", {}, revoked.updated_at);
+    await this.ctx.storage.transaction(async (txn) => {
+      const current = await txn.get<PersistedTask>(`call:${task.call_id}`);
+      if (!current || taskIsTerminal(current) || current.delivery_state !== "queued") return;
+      await txn.put(
+        `call:${task.call_id}`,
+        await this.releaseDurableQuota(txn, current, revoked),
+      );
+      await txn.delete(queueKey(current));
+      await txn.delete(dueKey(current));
+      await txn.put(dueKey(revoked), revoked.call_id);
+      if (intent) {
+        await txn.put(this.auditOutboxKey(intent), intent);
+        await this.armAuditRetry(txn);
+      }
+    });
+    await this.flushAuditOutbox();
+  }
+
+  private async dispatchNext(listener: WebSocket, attachment: ListenerAttachment): Promise<void> {
+    if (!attachment.mailboxCapable || !attachment.listenerSessionId) return;
+    const queuedHead = await this.ctx.storage.list<string>({ prefix: QUEUE_PREFIX, limit: 1 });
+    const head = queuedHead.entries().next().value as [string, string] | undefined;
+    if (head) {
+      const candidate = await this.ctx.storage.get<PersistedTask>(`call:${head[1]}`);
+      if (candidate?.delivery_state === "queued" && !taskIsTerminal(candidate)) {
+        const now = Date.now();
+        const starts = await this.ctx.storage.list<number>({ prefix: START_PREFIX });
+        const liveStarts = [...starts.entries()].filter(([key]) => {
+          const at = Number(key.slice(START_PREFIX.length, START_PREFIX.length + 16));
+          return Number.isSafeInteger(at) && at + START_WINDOW_MS > now;
+        });
+        const staleStarts = [...starts.keys()].filter((key) => !liveStarts.some(([live]) => live === key));
+        if (staleStarts.length > 0) await this.ctx.storage.delete(staleStarts);
+        if (liveStarts.length >= MAILBOX_MAX_STARTS_PER_DAY) {
+          const oldest = Math.min(...liveStarts.map(([key]) => Number(
+            key.slice(START_PREFIX.length, START_PREFIX.length + 16),
+          )));
+          const releaseAt = oldest + START_WINDOW_MS;
+          const alarm = await this.ctx.storage.getAlarm();
+          if (alarm === null || alarm > releaseAt) await this.ctx.storage.setAlarm(releaseAt);
+          return;
+        }
+        if (!await this.durableAuthorityIsCurrent(candidate)) {
+          await this.revokeDurableTask(candidate);
+          await this.dispatchNext(listener, attachment);
+          return;
+        }
+        if ((candidate.execute_by ?? 0) - Date.now() < RELAY_CALL_TIMEOUT_MS) return;
+      }
+    }
+    let leased: PersistedTask | undefined;
+    await this.ctx.storage.transaction(async (txn) => {
+      if (await txn.get<string>(ACTIVE_DURABLE_CALL_KEY)) return;
+      const queued = await txn.list<string>({ prefix: QUEUE_PREFIX, limit: 1 });
+      const first = queued.entries().next().value as [string, string] | undefined;
+      if (!first) return;
+      const [key, callId] = first;
+      const task = await txn.get<PersistedTask>(`call:${callId}`);
+      if (!task || taskIsTerminal(task) || task.delivery_state !== "queued") {
+        await txn.delete(key);
+        return;
+      }
+      const now = Date.now();
+      const lease = {
+        lease_id: crypto.randomUUID(),
+        listener_session_id: attachment.listenerSessionId!,
+        expires_at: now + (attachment.leaseMs ?? DELIVERY_LEASE_MS),
+        attempt: (task.lease?.attempt ?? 0) + 1,
+      };
+      leased = { ...task, delivery_state: "leased", lease, updated_at: now };
+      await txn.put(`call:${callId}`, leased);
+      await txn.put(ACTIVE_DURABLE_CALL_KEY, callId);
+      const alarm = await txn.getAlarm();
+      if (alarm === null || alarm > lease.expires_at) await txn.setAlarm(lease.expires_at);
+    });
+    if (!leased?.request_envelope || !leased.message_id || !leased.lease || !leased.execute_by) return;
+    this.send(listener, {
+      type: "incoming_call", call_id: leased.call_id, from: leased.from,
+      envelope: leased.request_envelope, message_id: leased.message_id,
+      delivery_mode: "durable", lease_id: leased.lease.lease_id,
+      execute_by: leased.execute_by, correlation_id: leased.correlation_id,
+      traceparent: leased.traceparent,
+    });
+  }
+
+  private validDurableLease(
+    task: PersistedTask,
+    frame: { lease_id?: string },
+    listener: ListenerAttachment,
+  ): boolean {
+    if (!task.delivery_state) return true;
+    return !!task.lease && frame.lease_id === task.lease.lease_id &&
+      listener.listenerSessionId === task.lease.listener_session_id;
+  }
+
+  private async finishDurableTask(task: PersistedTask, listener: WebSocket, attachment: ListenerAttachment): Promise<void> {
+    if (!task.delivery_state) return;
+    await this.ctx.storage.transaction(async (txn) => {
+      await txn.delete(queueKey(task));
+      const active = await txn.get<string>(ACTIVE_DURABLE_CALL_KEY);
+      if (active === task.call_id) await txn.delete(ACTIVE_DURABLE_CALL_KEY);
+    });
+    await this.dispatchNext(listener, attachment);
   }
 
   private async armAuditRetry(txn: DurableObjectTransaction): Promise<void> {
@@ -418,11 +714,61 @@ export class HandleDO extends DurableObject {
       // Re-read and decide inside the same transaction that deletes/enqueues so
       // a concurrent terminal completion can never be overwritten by timeout.
       const current = await txn.get<PersistedTask>(`call:${callId}`);
-      if (!current || !expireAuthorizedCall(teamCallLifecycle(current), now)) return;
-      await txn.delete(`call:${callId}`);
-      if (taskIsTerminal(current)) {
-        return { task: current, timedOut: false };
+      if (!current) return;
+      if (current.delivery_state) {
+        if (current.deadline > now) return;
+        if (taskIsTerminal(current)) {
+          if (current.purge_at && current.purge_at > now) {
+            const retained = { ...current, deadline: current.purge_at };
+            await txn.put(`call:${callId}`, retained);
+            await txn.delete(dueKey(current));
+            await txn.put(dueKey(retained), callId);
+            return { task: current, timedOut: false };
+          }
+          await txn.delete(`call:${callId}`);
+          await txn.delete(queueKey(current));
+          await txn.delete(dueKey(current));
+          if (current.from_agent_id && current.message_id) {
+            await txn.delete(dedupeKey(current.from_agent_id, current.message_id));
+          }
+          if (current.quota_released && (current.ciphertext_bytes ?? 0) > 0) {
+            const storedBytes = await txn.get<number>(QUOTA_CIPHERTEXT_BYTES_KEY) ?? 0;
+            await txn.put(
+              QUOTA_CIPHERTEXT_BYTES_KEY,
+              Math.max(0, storedBytes - (current.ciphertext_bytes ?? 0)),
+            );
+          }
+          const active = await txn.get<string>(ACTIVE_DURABLE_CALL_KEY);
+          if (active === callId) await txn.delete(ACTIVE_DURABLE_CALL_KEY);
+          return { task: current, timedOut: false };
+        }
+        const { request_envelope: _discarded, lease: _lease, ...rest } = current;
+        const expired: PersistedTask = {
+          ...rest,
+          deadline: current.purge_at ?? now + MAILBOX_TOMBSTONE_TTL_MS,
+          task_state: "TASK_STATE_FAILED",
+          delivery_state: "terminal",
+          terminal_reason: "expired",
+          ciphertext_bytes: 0,
+          updated_at: now,
+        };
+        await txn.put(`call:${callId}`, await this.releaseDurableQuota(txn, current, expired));
+        await txn.delete(queueKey(current));
+        await txn.delete(dueKey(current));
+        await txn.put(dueKey(expired), callId);
+        const active = await txn.get<string>(ACTIVE_DURABLE_CALL_KEY);
+        if (active === callId) await txn.delete(ACTIVE_DURABLE_CALL_KEY);
+        const intent = callAuditIntent("call.timeout", expired, "relay", "system", {}, now);
+        if (intent) {
+          await txn.put<CallAuditIntent>(this.auditOutboxKey(intent), intent);
+          await this.armAuditRetry(txn);
+        }
+        return { task: expired, timedOut: true };
       }
+      if (!expireAuthorizedCall(teamCallLifecycle(current), now)) return;
+      await txn.delete(`call:${callId}`);
+      await txn.delete(dueKey(current));
+      if (taskIsTerminal(current)) return { task: current, timedOut: false };
       const intent = callAuditIntent("call.timeout", current, "relay", "system", {}, now);
       if (intent) {
         await txn.put<CallAuditIntent>(this.auditOutboxKey(intent), intent);
@@ -447,6 +793,7 @@ export class HandleDO extends DurableObject {
       ...record,
       state,
       task_state: state === "working" ? "TASK_STATE_WORKING" : record.task_state,
+      delivery_state: state === "working" && record.delivery_state ? "started" : record.delivery_state,
       updated_at: Date.now(),
     } satisfies PersistedTask;
     // Starting work from ringing is an implicit acceptance, so it must not
@@ -455,7 +802,17 @@ export class HandleDO extends DurableObject {
     const accepted = state === "answered" || (state === "working" && current === "ringing")
       ? callAuditIntent("call.accept", next, record.to, "handle", listener, next.updated_at)
       : undefined;
-    if (accepted) await this.persistTaskWithAudit(next, accepted);
+    if (next.delivery_state === "started" && state === "working") {
+      await this.ctx.storage.transaction(async (txn) => {
+        await txn.put<PersistedTask>(`call:${record.call_id}`, next);
+        await txn.put(startKey(next.updated_at, next.call_id), next.updated_at);
+        if (accepted) {
+          await txn.put(this.auditOutboxKey(accepted), accepted);
+          await this.armAuditRetry(txn);
+        }
+      });
+      if (accepted) await this.flushAuditOutbox();
+    } else if (accepted) await this.persistTaskWithAudit(next, accepted);
     else await this.ctx.storage.put<PersistedTask>(`call:${record.call_id}`, next);
     if (caller) {
       this.send(caller, {
@@ -480,10 +837,8 @@ export class HandleDO extends DurableObject {
       const oversized = new TextEncoder().encode(raw).byteLength > MAX_E2EE_WIRE_BYTES;
       const now = Date.now();
       const stamps = await readLiveRateLimitStamps(this.ctx.storage, att.from, now);
-      if (stamps.length >= RATE_LIMIT_PER_HOUR) {
-        return this.fail(ws, "rate_limited", true);
-      }
       if (oversized) {
+        if (stamps.length >= RATE_LIMIT_PER_HOUR) return this.fail(ws, "rate_limited", true);
         await recordRateLimitHit(this.ctx.storage, att.from, stamps, now);
         await this.scheduleNextAlarm();
         return this.fail(ws, "message_too_large");
@@ -497,11 +852,72 @@ export class HandleDO extends DurableObject {
         frame.envelope.to !== formatAddress(att.org, att.to)
       ) return this.fail(ws, "protocol_error");
       const correlation_id = frame.correlation_id!;
+      let durableEnvelopeDigest: string | undefined;
+      if (frame.delivery_mode === "durable") {
+        durableEnvelopeDigest = await this.envelopeDigest(frame.envelope);
+        const dedupe = await this.ctx.storage.get<DedupeRecord>(dedupeKey(att.fromAgentId, frame.message_id));
+        if (dedupe) {
+          if (dedupe.request_envelope_sha256 !== durableEnvelopeDigest) {
+            return this.fail(ws, "protocol_error", true, { correlation_id });
+          }
+          const existing = await this.ctx.storage.get<PersistedTask>(`call:${dedupe.call_id}`);
+          if (!existing) return this.fail(ws, "protocol_error", true, { correlation_id });
+          this.sendQueuedReceipt(ws, existing);
+          return;
+        }
+      }
+      if (stamps.length >= RATE_LIMIT_PER_HOUR) return this.fail(ws, "rate_limited", true);
 
       const listener = this.ctx.getWebSockets("listener")[0];
-      if (!listener) {
-        try { recordCallPresenceRead(this.statusReads); } catch { /* telemetry cannot block calls */ }
-        return this.fail(ws, "offline", true, { correlation_id });
+      const backlog = frame.delivery_mode === "durable" && (
+        await this.ctx.storage.list({ prefix: QUEUE_PREFIX, limit: 1 })
+      ).size > 0;
+      if (!listener || backlog) {
+        if (frame.delivery_mode === "durable" && att.mailboxEnabled) {
+          const call_id = crypto.randomUUID();
+          const executeBy = now + Math.min(MAILBOX_TTL_MS, att.timeoutMs ?? MAILBOX_TTL_MS);
+          ws.serializeAttachment({ ...att, call_id, correlation_id });
+          const task = {
+            call_id, correlation_id, from: att.from, org: att.org, to: att.to,
+            deadline: executeBy, state: "ringing" as const,
+            task_state: "TASK_STATE_SUBMITTED" as const, created_at: now, updated_at: now,
+            principal: beginAuthorizedCall(att.principal, executeBy).principal,
+            message_id: frame.message_id,
+            from_agent_id: att.fromAgentId,
+            from_credential_generation: att.credentialGeneration ?? 0,
+            target_agent_id: att.targetAgentId,
+            request_envelope: frame.envelope,
+            request_envelope_sha256: durableEnvelopeDigest!,
+            ciphertext_bytes: new TextEncoder().encode(JSON.stringify(frame.envelope)).byteLength,
+            traceparent: frame.traceparent,
+            delivery_state: "queued" as const,
+            execute_by: executeBy,
+            purge_at: executeBy + MAILBOX_TOMBSTONE_TTL_MS,
+          } satisfies PersistedTask;
+          const admission = await this.admitDurableTask(
+            task,
+            callAuditIntent("call.submit", task, att.from, "handle", att, now),
+          );
+          if (admission.kind === "conflict") {
+            return this.fail(ws, "protocol_error", true, { correlation_id });
+          }
+          if (admission.kind === "existing") {
+            this.sendQueuedReceipt(ws, admission.task);
+            return;
+          }
+          if (admission.kind === "capacity") {
+            await recordRateLimitHit(this.ctx.storage, att.from, stamps, now);
+            return this.fail(ws, "busy", true, { correlation_id });
+          }
+          await recordRateLimitHit(this.ctx.storage, att.from, stamps, now);
+          await this.scheduleNextAlarm();
+          this.sendQueuedReceipt(ws, task);
+          return;
+        }
+        if (!listener) {
+          try { recordCallPresenceRead(this.statusReads); } catch { /* telemetry cannot block calls */ }
+          return this.fail(ws, "offline", true, { correlation_id });
+        }
       }
 
       await recordRateLimitHit(this.ctx.storage, att.from, stamps, now);
@@ -535,6 +951,7 @@ export class HandleDO extends DurableObject {
     if (!record) return; // stale/unknown call
     if (taskIsTerminal(record)) return; // duplicate/out-of-order terminal frame
     const caller = this.callerFor(frame.call_id);
+    if (!this.validDurableLease(record, frame, att)) return;
 
     if (frame.type === "call_accepted") {
       await this.advanceCall(record, "answered", caller, att);
@@ -551,12 +968,21 @@ export class HandleDO extends DurableObject {
       const cancellation = terminateAuthorizedCall(teamCallLifecycle(record), "canceled");
       const canceled = updateTask(record, { task_state: "TASK_STATE_CANCELED" });
       canceled.principal = cancellation.principal;
+      if (canceled.delivery_state) {
+        delete canceled.request_envelope;
+        delete canceled.lease;
+        canceled.deadline = canceled.purge_at ?? canceled.deadline;
+        canceled.delivery_state = "terminal";
+        canceled.terminal_reason = "canceled";
+        canceled.ciphertext_bytes = 0;
+      }
       // Persist terminal truth before fan-out. Once a caller observes a
       // terminal response, a concurrent GetTask must never move backward.
       await this.persistTaskWithAudit(
         canceled,
         callAuditIntent("call.cancel", canceled, record.to, "handle", att, canceled.updated_at),
       );
+      await this.finishDurableTask(canceled, ws, att);
       if (caller) {
         this.fail(caller, "canceled", true, {
           call_id: frame.call_id, correlation_id: record.correlation_id,
@@ -575,6 +1001,14 @@ export class HandleDO extends DurableObject {
     }
     if (frame.type === "call_rejected") {
       const failed = updateTask(record, { task_state: "TASK_STATE_FAILED" });
+      if (failed.delivery_state) {
+        delete failed.request_envelope;
+        delete failed.lease;
+        failed.deadline = failed.purge_at ?? failed.deadline;
+        failed.delivery_state = "terminal";
+        failed.terminal_reason = "delivery_failed";
+        failed.ciphertext_bytes = 0;
+      }
       await this.persistTaskWithAudit(
         failed,
         callAuditIntent("call.fail", failed, record.to, "handle", att, failed.updated_at),
@@ -583,6 +1017,7 @@ export class HandleDO extends DurableObject {
         call_id: frame.call_id, correlation_id: record.correlation_id,
       });
       this.settleCancellation(frame.call_id, { kind: "not_cancelable" });
+      await this.finishDurableTask(failed, ws, att);
       return;
     }
     if (frame.type === "call_outcome") {
@@ -599,6 +1034,14 @@ export class HandleDO extends DurableObject {
         task_state: terminal,
         outcome_envelope: frame.envelope,
       });
+      if (finished.delivery_state) {
+        delete finished.request_envelope;
+        delete finished.lease;
+        finished.deadline = finished.purge_at ?? finished.deadline;
+        finished.delivery_state = "terminal";
+        finished.terminal_reason = frame.terminal_reason ?? frame.terminal;
+        finished.ciphertext_bytes = new TextEncoder().encode(JSON.stringify(frame.envelope)).byteLength;
+      }
       const intent = frame.terminal === "completed"
         ? callAuditIntent("call.complete", finished, record.to, "handle", att, finished.updated_at)
         : callAuditIntent("call.fail", finished, record.to, "handle", att, finished.updated_at);
@@ -606,6 +1049,7 @@ export class HandleDO extends DurableObject {
         finished,
         intent,
       );
+      await this.finishDurableTask(finished, ws, att);
       if (caller) {
         this.send(caller, frame);
         try { caller.close(1000, "done"); } catch { /* closed */ }
@@ -621,10 +1065,53 @@ export class HandleDO extends DurableObject {
     // listener close: keep in-flight calls; a reconnected listener may still deliver results.
   }
 
+  private async recoverExpiredLease(callId: string, now: number): Promise<void> {
+    await this.ctx.storage.transaction(async (txn) => {
+      const current = await txn.get<PersistedTask>(`call:${callId}`);
+      if (
+        !current || current.delivery_state !== "leased" || !current.lease ||
+        current.lease.expires_at > now || taskIsTerminal(current)
+      ) return;
+      const active = await txn.get<string>(ACTIVE_DURABLE_CALL_KEY);
+      if (active === callId) await txn.delete(ACTIVE_DURABLE_CALL_KEY);
+      if (current.lease.attempt < 3) {
+        await txn.put<PersistedTask>(`call:${callId}`, {
+          ...current, delivery_state: "queued", updated_at: now,
+        });
+        return;
+      }
+      const { request_envelope: _discarded, lease: _expiredLease, ...rest } = current;
+      const failed: PersistedTask = {
+        ...rest,
+        deadline: current.purge_at ?? current.deadline,
+        task_state: "TASK_STATE_FAILED",
+        delivery_state: "terminal",
+        terminal_reason: "delivery_failed",
+        ciphertext_bytes: 0,
+        updated_at: now,
+      };
+      await txn.put(`call:${callId}`, await this.releaseDurableQuota(txn, current, failed));
+      await txn.delete(queueKey(current));
+      await txn.delete(dueKey(current));
+      await txn.put(dueKey(failed), callId);
+      const intent = callAuditIntent("call.fail", failed, "relay", "system", {}, now);
+      if (intent) {
+        await txn.put<CallAuditIntent>(this.auditOutboxKey(intent), intent);
+        await this.armAuditRetry(txn);
+      }
+    });
+  }
+
   private async scheduleNextAlarm(): Promise<void> {
-    const calls = await this.ctx.storage.list<PersistedTask>({ prefix: "call:" });
     let min = Infinity;
-    for (const rec of calls.values()) min = Math.min(min, rec.deadline);
+    const due = await this.ctx.storage.list<string>({ prefix: DUE_PREFIX, limit: 1 });
+    const firstDue = due.keys().next().value as string | undefined;
+    if (firstDue) min = Math.min(min, Number(firstDue.slice(DUE_PREFIX.length, DUE_PREFIX.length + 16)));
+    const activeId = await this.ctx.storage.get<string>(ACTIVE_DURABLE_CALL_KEY);
+    if (activeId) {
+      const active = await this.ctx.storage.get<PersistedTask>(`call:${activeId}`);
+      if (active?.lease) min = Math.min(min, active.lease.expires_at);
+    }
     const pendingAudit = await this.ctx.storage.list<CallAuditIntent>({ prefix: CALL_AUDIT_PREFIX, limit: 1 });
     if (pendingAudit.size > 0) min = Math.min(min, Date.now() + CALL_AUDIT_RETRY_MS);
     const maintenance = await readRateLimitMaintenance(this.ctx.storage);
@@ -634,14 +1121,16 @@ export class HandleDO extends DurableObject {
 
   override async alarm(): Promise<void> {
     const now = Date.now();
-    const calls = await this.ctx.storage.list<PersistedTask>({ prefix: "call:" });
     const timedOut: PersistedTask[] = [];
-    for (const rec of calls.values()) {
-      if (rec.deadline <= now) {
-        if (timedOut.length >= CALL_AUDIT_DRAIN_LIMIT) break;
-        const expired = await this.expireTask(rec.call_id, now);
-        if (expired?.timedOut) timedOut.push(expired.task);
-      }
+    const activeId = await this.ctx.storage.get<string>(ACTIVE_DURABLE_CALL_KEY);
+    if (activeId) await this.recoverExpiredLease(activeId, now);
+    const due = await this.ctx.storage.list<string>({ prefix: DUE_PREFIX, limit: CALL_AUDIT_DRAIN_LIMIT });
+    for (const [key, callId] of due) {
+      const at = Number(key.slice(DUE_PREFIX.length, DUE_PREFIX.length + 16));
+      if (!Number.isSafeInteger(at) || at > now) break;
+      const expired = await this.expireTask(callId, now);
+      if (!expired) await this.ctx.storage.delete(key);
+      else if (expired.timedOut) timedOut.push(expired.task);
     }
     // One budget-safe D1 drain per alarm invocation. A larger retained backlog
     // keeps the atomically armed alarm and drains over subsequent invocations.
@@ -656,6 +1145,11 @@ export class HandleDO extends DurableObject {
       this.settleCancellation(rec.call_id, { kind: "not_cancelable" });
     }
     await continueRateLimitMaintenance(this.ctx.storage, now);
+    const listener = this.ctx.getWebSockets("listener")[0];
+    if (listener) {
+      const attachment = listener.deserializeAttachment() as ListenerAttachment | null;
+      if (attachment?.kind === "listener") await this.dispatchNext(listener, attachment);
+    }
     await this.scheduleNextAlarm();
   }
 }

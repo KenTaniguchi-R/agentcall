@@ -9,7 +9,7 @@ import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { getPaths } from "../src/paths.js";
 import {
   generateIdentityKeys, keysExist, loadKeys, rememberPublishedEncryptionKey,
-  rotateEncryptionKey, type StoredKeys,
+  loadEncryptionKeysForEpoch, rotateEncryptionKey, type StoredKeys,
 } from "../src/keys.js";
 
 let home: string;
@@ -223,7 +223,7 @@ describe("key storage", () => {
     expect(loadKeys(paths).epoch).toBe(3);
   });
 
-  it("retires superseded epoch files without retaining historical private keys", async () => {
+  it("retains superseded private keys long enough to decrypt durable mailbox traffic", async () => {
     const paths = linePaths(home);
     const first = await generateIdentityKeys(paths);
     markPublished(paths, first, "a");
@@ -236,12 +236,26 @@ describe("key storage", () => {
       .map((name) => readFileSync(join(paths.dir, name), "utf8"))
       .join("\n");
     expect(names.some((name) => name.endsWith(".candidate") || name.endsWith(".tmp"))).toBe(false);
-    expect(persisted).not.toContain(first.encryption_pkcs8);
-    expect(persisted).not.toContain(second.encryption_pkcs8);
+    expect(persisted).toContain(first.encryption_pkcs8);
+    expect(persisted).toContain(second.encryption_pkcs8);
     expect(persisted).toContain(third.encryption_pkcs8);
+    expect(loadEncryptionKeysForEpoch(paths, 1).encryption_pkcs8).toBe(first.encryption_pkcs8);
+    expect(loadEncryptionKeysForEpoch(paths, 2).encryption_pkcs8).toBe(second.encryption_pkcs8);
     expect(JSON.parse(readFileSync(paths.identityKeyFile, "utf8"))).toEqual({
       format: 2, identity_pkcs8: first.identity_pkcs8, identity_pub: first.identity_pub,
     });
+  });
+
+  it("refuses a rapid ninth live epoch instead of evicting a decryptable key", async () => {
+    const paths = linePaths(home);
+    let keys = await generateIdentityKeys(paths);
+    for (let epoch = 1; epoch < 8; epoch += 1) {
+      keys = markPublished(paths, keys, epoch.toString(16));
+      keys = await rotateEncryptionKey(paths);
+    }
+    keys = markPublished(paths, keys, "8");
+    await expect(rotateEncryptionKey(paths)).rejects.toThrow(/eight.*live encryption-key epochs/i);
+    expect(loadKeys(paths).epoch).toBe(8);
   });
 
   it("refuses to rotate an epoch that was never successfully published", async () => {

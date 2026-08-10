@@ -15,6 +15,8 @@ Send an encrypted call payload.
 | --- | --- | --- |
 | `type` | `call_request` | yes |
 | `envelope` | object | yes |
+| `message_id` | string | yes |
+| `delivery_mode` | `sync` / `durable` | no |
 | `correlation_id` | string | yes |
 | `traceparent` | string | no |
 
@@ -39,7 +41,7 @@ Return an unauthenticated relay-operational error.
 | --- | --- | --- |
 | `type` | `call_error` | yes |
 | `origin` | `relay` | yes |
-| `code` | `unknown_handle` / `offline` / `timeout` / `canceled` / `unauthorized` / `rate_limited` / `message_too_large` / `protocol_error` | yes |
+| `code` | `unknown_handle` / `offline` / `timeout` / `canceled` / `unauthorized` / `rate_limited` / `message_too_large` / `protocol_error` / `busy` | yes |
 | `call_id` | string | no |
 | `correlation_id` | string | no |
 
@@ -52,7 +54,9 @@ Return an encrypted, authenticated peer outcome.
 | `type` | `call_outcome` | yes |
 | `call_id` | string | yes |
 | `terminal` | `completed` / `failed` | yes |
+| `terminal_reason` | `completed` / `failed` / `canceled` / `expired` / `delivery_failed` / `revoked` / `indeterminate_execution` | no |
 | `envelope` | object | yes |
+| `lease_id` | string | no |
 
 ## Relay to listener
 
@@ -66,6 +70,10 @@ Deliver an encrypted call with relay-attested routing metadata.
 | `call_id` | string | yes |
 | `from` | string | yes |
 | `envelope` | object | yes |
+| `message_id` | string | no |
+| `delivery_mode` | `sync` / `durable` | no |
+| `lease_id` | string | no |
+| `execute_by` | integer | no |
 | `correlation_id` | string | yes |
 | `traceparent` | string | no |
 
@@ -77,6 +85,7 @@ Request cancellation.
 | --- | --- | --- |
 | `type` | `cancel_call` | yes |
 | `call_id` | string | yes |
+| `lease_id` | string | no |
 
 ## Listener to relay
 
@@ -88,6 +97,7 @@ Confirm ownership of queued work.
 | --- | --- | --- |
 | `type` | `call_accepted` | yes |
 | `call_id` | string | yes |
+| `lease_id` | string | no |
 
 ### `call_started`
 
@@ -97,6 +107,7 @@ Confirm the answering process started.
 | --- | --- | --- |
 | `type` | `call_started` | yes |
 | `call_id` | string | yes |
+| `lease_id` | string | no |
 
 ### `call_outcome`
 
@@ -107,7 +118,9 @@ Return an encrypted, authenticated peer outcome.
 | `type` | `call_outcome` | yes |
 | `call_id` | string | yes |
 | `terminal` | `completed` / `failed` | yes |
+| `terminal_reason` | `completed` / `failed` / `canceled` / `expired` / `delivery_failed` / `revoked` / `indeterminate_execution` | no |
 | `envelope` | object | yes |
+| `lease_id` | string | no |
 
 ### `call_rejected`
 
@@ -118,6 +131,7 @@ Reject an invalid encrypted request.
 | `type` | `call_rejected` | yes |
 | `call_id` | string | yes |
 | `code` | `protocol_error` | yes |
+| `lease_id` | string | no |
 
 ### `call_cancelled`
 
@@ -128,6 +142,7 @@ Confirm cancellation completed.
 | `type` | `call_cancelled` | yes |
 | `call_id` | string | yes |
 | `phase` | `pending` / `running` | yes |
+| `lease_id` | string | no |
 
 ### `call_not_cancelled`
 
@@ -138,6 +153,7 @@ Explain why cancellation did not complete.
 | `type` | `call_not_cancelled` | yes |
 | `call_id` | string | yes |
 | `reason` | `already_terminal` / `unknown` / `too_late` | yes |
+| `lease_id` | string | no |
 
 ## Important bounds
 

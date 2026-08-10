@@ -6,7 +6,9 @@ import { type Policy } from "../src/policy.js";
 // `clearance-reset` and `clearance-default` verbs are gone: with one grantable
 // level there is no amount to set, only whether the line answers. What survives
 // is block/unblock plus the line-wide posture.
-const base: Policy = { description: "", default_access: "allowed", callers: {} };
+const base: Policy = {
+  description: "", default_access: "allowed", callers: {}, offline_delivery: { enabled: false },
+};
 
 describe("execVerb", () => {
   describe("block", () => {
@@ -74,6 +76,15 @@ describe("execVerb", () => {
         expect(() => execVerb(base, "access-default", bad as string))
           .toThrow(/allowed or blocked/);
       }
+    });
+  });
+
+  describe("offline-delivery", () => {
+    it("enables and disables durable admission explicitly", () => {
+      const enabled = execVerb(base, "offline-delivery", "enabled").policy;
+      expect(enabled.offline_delivery).toEqual({ enabled: true });
+      expect(execVerb(enabled, "offline-delivery", "disabled").policy.offline_delivery)
+        .toEqual({ enabled: false });
     });
   });
 

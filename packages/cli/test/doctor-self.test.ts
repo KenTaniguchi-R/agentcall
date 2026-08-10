@@ -66,7 +66,7 @@ describe("diagnoseSelfConfiguration", () => {
     const expected = {
       description: "", agent_kind: "claude",
       tasks: [{ id: "ask", name: "Ask a question", description: "Answer questions using the files in the public directory.", examples: [], keywords: [] }],
-      blocked: [],
+      blocked: [], offline_delivery: { enabled: false },
     };
     writeFileSync(paths.cardSnapshotFile, JSON.stringify(expected));
     expect(diagnoseSelfConfiguration(claude, paths).self.card.status).toBe("current");

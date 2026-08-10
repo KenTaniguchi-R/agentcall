@@ -19,6 +19,7 @@ const meet: Task = {
 describe("buildCardUpload", () => {
   const policy: Policy = {
     description: "Ken's agent",
+    offline_delivery: { enabled: false },
     default_access: "allowed", callers: {
       mia: {},
       spammer: { access: "blocked" },
@@ -42,7 +43,9 @@ describe("buildCardUpload", () => {
   it("publishes every task on disk, and no per-caller menu", () => {
     const upload = buildCardUpload(cfg, policy, [ASK_TASK, intro, meet]);
     expect(upload.tasks.map((t) => t.id)).toEqual(["ask", "owner-introduction", "schedule-meeting"]);
-    expect(Object.keys(upload)).toEqual(["description", "agent_kind", "tasks", "blocked"]);
+    expect(Object.keys(upload)).toEqual([
+      "description", "agent_kind", "tasks", "blocked", "offline_delivery",
+    ]);
   });
 
   // The clearance table is the owner's assessment of their own callers. It
@@ -60,7 +63,7 @@ describe("buildCardUpload", () => {
   it("publishes task keywords to the relay", () => {
     const upload = buildCardUpload(
       { org: "acme", handle: "ken", token: "t", agent_kind: "claude", relay: "https://r.test" },
-      { description: "d", default_access: "allowed", callers: {} },
+      { description: "d", default_access: "allowed", callers: {}, offline_delivery: { enabled: false } },
       [{ id: "adr", name: "ADR", description: "Why.", examples: [],
          keywords: ["auth", "migration"], threadable: true, skill: "" }],
     );

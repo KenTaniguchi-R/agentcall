@@ -1,6 +1,6 @@
 ---
 title: A2A task retrieval
-description: Retrieve or cancel the short-lived A2A lifecycle record associated with an AgentCall call.
+description: Retrieve or cancel the A2A lifecycle record associated with a live or durable AgentCall task.
 ---
 
 Every admitted native call uses its relay-minted `call_id` as an A2A task ID.
@@ -29,20 +29,27 @@ task.
 
 ## Cancellation
 
-Cancellation becomes terminal only after the listener confirms that queued work
-was removed or the running process exited. The lifecycle distinguishes a
+Queued durable work is canceled atomically in the target Durable Object and
+does not require a connected listener. Once work has started, cancellation
+becomes terminal only after the listener confirms the running process exited. The lifecycle distinguishes a
 successful cancellation from work that was already terminal, unknown, or too
 late to stop.
 
 ## Retention and content boundary
 
-This is a short-lived status store, not offline delivery. Records remain only
-through the original six-minute call deadline. Prompts, replies, peer failure
-details, task IDs, context IDs, and conversation history are not exposed as A2A
-artifacts because they are inside endpoint-encrypted envelopes.
+Synchronous records remain through their original six-minute deadline. An
+owner-enabled durable task may remain queued for 72 hours. Expired request and
+result ciphertext is deleted immediately; strict metadata
+`{"agentcall.dev/terminalReason":"expired"}` remains for a 24-hour tombstone.
 
-`includeArtifacts` therefore cannot reveal reply text. An offline callee still
-fails immediately and no mailbox is created.
+Prompts, replies, peer failure details, task IDs, context IDs, and conversation
+history remain inside endpoint-encrypted envelopes.
+
+With `includeArtifacts=true`, a terminal encrypted result is returned as an A2A
+raw part with media type `application/vnd.agentcall.hpke+json`. It cannot reveal
+reply text to the relay; `agentcall jobs get` authenticates and decrypts it on
+the caller's machine. An offline callee still fails immediately when the owner
+has not enabled durable delivery.
 
 See [protocol frames](/reference/protocol) for the live call lifecycle.
 

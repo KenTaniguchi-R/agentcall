@@ -54,11 +54,19 @@ function envelope(direction: "request" | "response", from: string, to: string, o
 }
 
 export function encryptedCallRequest(
-  from: string, to: string, metadata: { correlation_id?: string; traceparent?: string; org?: string } = {},
+  from: string, to: string, metadata: {
+    correlation_id?: string;
+    traceparent?: string;
+    org?: string;
+    message_id?: string;
+    delivery_mode?: "sync" | "durable";
+  } = {},
 ) {
   return {
     type: "call_request" as const,
     envelope: envelope("request", from, to, metadata.org),
+    message_id: metadata.message_id ?? crypto.randomUUID().replaceAll("-", ""),
+    ...(metadata.delivery_mode ? { delivery_mode: metadata.delivery_mode } : {}),
     correlation_id: metadata.correlation_id ?? "f".repeat(32),
     ...(metadata.traceparent ? { traceparent: metadata.traceparent } : {}),
   };

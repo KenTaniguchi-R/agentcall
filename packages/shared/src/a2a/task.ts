@@ -20,18 +20,31 @@ export const A2ATaskStatus = z.object({
 // full A2A Part union so every response we produce is validated without
 // pretending the relay supports file, URL, or structured-data parts yet.
 export const A2ATextPart = z.object({ text: z.string() }).strict();
+export const A2ARawPart = z.object({
+  raw: z.string().regex(/^(?:[A-Za-z0-9+/]{4})*(?:[A-Za-z0-9+/]{2}==|[A-Za-z0-9+/]{3}=)?$/),
+  mediaType: z.string().min(1),
+}).strict();
+export const A2APart = z.union([A2ATextPart, A2ARawPart]);
+
+export const AgentCallTerminalReason = z.enum([
+  "completed", "failed", "canceled", "expired", "delivery_failed", "revoked", "indeterminate_execution",
+]);
+export const AgentCallTaskMetadata = z.object({
+  "agentcall.dev/terminalReason": AgentCallTerminalReason,
+}).strict();
 
 export const A2AArtifact = z.object({
   artifactId: z.string().min(1),
   name: z.string().optional(),
   description: z.string().optional(),
-  parts: z.array(A2ATextPart).min(1),
+  parts: z.array(A2APart).min(1),
 }).strict();
 
 export const A2ATask = z.object({
   id: z.string().min(1),
   contextId: z.string().min(1).optional(),
   status: A2ATaskStatus,
+  metadata: AgentCallTaskMetadata.optional(),
   artifacts: z.array(A2AArtifact).optional(),
 }).strict();
 

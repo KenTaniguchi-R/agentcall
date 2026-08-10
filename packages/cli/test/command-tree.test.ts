@@ -34,4 +34,9 @@ describe("CLI command tree", () => {
       ["keys", ["publish"]],
     ]);
   });
+
+  it("groups durable task retrieval under one jobs noun", () => {
+    const jobs = createProgram().commands.find((command) => command.name() === "jobs")!;
+    expect(jobs.commands.map((command) => command.name())).toEqual(["list", "get", "cancel"]);
+  });
 });
