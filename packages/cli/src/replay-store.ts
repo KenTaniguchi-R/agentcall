@@ -3,7 +3,7 @@ import { z } from "zod";
 import { FINGERPRINT_RE, RELAY_CALL_TIMEOUT_MS } from "@benree/agentcall-shared";
 import { withFileLock, type FileLockOptions } from "./file-lock.js";
 import { assertPrivateFile, readJsonStore, writeJsonAtomic } from "./json-store.js";
-import type { MachinePaths } from "./paths.js";
+import type { Paths } from "./paths.js";
 
 export const MAX_REPLAY_RESERVATIONS = 10_000;
 export const REPLAY_RETENTION_SKEW_MS = 120_000;
@@ -38,7 +38,7 @@ export class ReplayDetectedError extends Error {
   }
 }
 
-export function loadReplayReservations(machine: MachinePaths): ReplayReservation[] {
+export function loadReplayReservations(machine: Paths): ReplayReservation[] {
   return readJsonStore(machine.replayReservationsFile, ReplayStoreSchema, {
     missing: () => ({ v: 1 as const, reservations: [] }),
     requirePrivate: { dir: machine.dir },
@@ -48,13 +48,13 @@ export function loadReplayReservations(machine: MachinePaths): ReplayReservation
   }).reservations;
 }
 
-function saveReplayReservations(machine: MachinePaths, reservations: ReplayReservation[]): void {
+function saveReplayReservations(machine: Paths, reservations: ReplayReservation[]): void {
   writeJsonAtomic(machine.replayReservationsFile, ReplayStoreSchema.parse({ v: 1, reservations }));
   chmodSync(machine.dir, 0o700);
 }
 
 export async function reserveReplay(
-  machine: MachinePaths,
+  machine: Paths,
   rawReservation: ReplayReservation,
   now = Date.now(),
   lockOptions: FileLockOptions = {},

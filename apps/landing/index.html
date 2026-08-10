@@ -1129,14 +1129,6 @@ footer{background:rgba(4,9,24,.55);padding:clamp(3rem,6vw,4.5rem) 0 2rem;border-
       ['  scaffolds one SKILL.md with description, keywords, and tools','dim'],
       ['  use agentcall card to review the tasks callers can see','dim']
     ],
-    search:[
-      ['  the relay returns a pre-filtered index; ranking runs here','dim'],
-      ['  your query text never leaves this machine','dim'],
-      ['',''],
-      ['  1  @acme/ken   repo-context     owns auth/, wrote ADR-017',''],
-      ['  2  @acme/mei   repo-context     reviewed the migration PR',''],
-      ['  3  @acme/raj   release-notes    shipped v3.1','']
-    ],
     invite:[
       ['  invite  ac_inv_7f3c9b21','blue'],
       ['  enrolls exactly one identity · expires in 7 days','dim'],
@@ -1147,7 +1139,7 @@ footer{background:rgba(4,9,24,.55);padding:clamp(3rem,6vw,4.5rem) 0 2rem;border-
     ],
     help:[
       ['  call <handle> "<message>"     ask someone\'s agent  [--continue] [--json]',''],
-      ['  search "<what you need>"      find who to ask',''],
+      ['  contacts list                 show saved addresses',''],
       ['  policy                        your effective menu, after the IT ceiling',''],
       ['  card                          what callers see',''],
       ['  task · contacts list · lint   tasks, saved handles, policy assertions',''],
@@ -1182,11 +1174,10 @@ footer{background:rgba(4,9,24,.55);padding:clamp(3rem,6vw,4.5rem) 0 2rem;border-
       await doCall(m[1].toLowerCase(), m[2], /--continue|-c\b/.test(input));
       return;
     }
-    if(/^search\b/.test(input)) return printStatic('search');
     if(/^invite\b/.test(input)) return printStatic('invite');
     if(/^(doctor|policy|card|listen|lint|task|help)$/.test(input)) return printStatic(input);
     if(input==='contacts list') return printStatic('contacts');
-    if(/^(offer|block|roster)\b/.test(input)){
+    if(/^(offer|block)\b/.test(input)){
       w(out,'  saved to ~/.agentcall/policy.json','ok');
       w(out,'  run agentcall lint to prove the assertions still hold','dim');
       gap(out); return;

@@ -21,7 +21,7 @@ async function register(body: unknown, ip = "203.0.113.1") {
 
 describe("POST /v1/register", () => {
   // #319, first slice of #154. agent_id is the stable principal that later
-  // slices move DO naming, cards, roster membership, policy, and audit
+// slices move DO naming, cards, policy, and audit
   // subjects onto. Nothing reads it yet, so these tests pin the properties
   // the rest of the cutover will depend on before anything relies on them.
   describe("stable agent identity", () => {

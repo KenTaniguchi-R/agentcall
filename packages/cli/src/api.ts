@@ -1,17 +1,17 @@
 import {
+  A2A_PROTOCOL_VERSION, A2AListTasksResponse, A2ATask,
   DEFAULT_ORG_INVITE_EXPIRY_DAYS,
-  HANDLE_RE, AgentCard, AuditExportPage, CreateOrgInviteResponse, CreateRosterResponse, IssueRosterJoinKeyResponse,
-  ListOrgInvitesResponse, ListRosterJoinKeysResponse, RegisterResponse, RevokeOrgInviteResponse,
+  HANDLE_RE, AgentCard, AuditExportPage, CreateOrgInviteResponse,
+  ListOrgInvitesResponse, RegisterResponse, RevokeOrgInviteResponse,
   RecoveryIssueResponse, RecoveryReceipt, RecoveryStatusResponse,
-  RevokeRosterJoinKeyResponse, RosterBundle,
   EncryptionKeyRecord, formatAddress, IdentityRecord, HPKE_SUITE, MAX_ENCRYPTION_KEY_VALIDITY_MS, parseAddress,
   encryptionKeyTranscript, encryptionKeyTranscriptHash, fromBase64Url, identityTranscript, keyIdFor, signTranscript,
   // AgentKind is ours: registerHandle takes it, and it is the shared type that
   // replaced the inline "claude" | "codex" unions.
   type AgentCardType, type AgentKind, type AuditExportPageType, type CardUploadType,
-  type OrgInviteMetadataType, type RosterBundleType,
+  type A2AListTasksResponseType, type A2ATaskType, type A2ATaskStateType,
+  type OrgInviteMetadataType,
   type OrgRoleType,
-  type RosterJoinKeyMetadataType,
   type EncryptionKeyRecordType, type IdentityRecordType,
   type RecoveryIssueRequestType, type RecoveryIssueResponseType,
   type RecoveryStatusResponseType,
@@ -21,7 +21,7 @@ import {
   choosePendingEncryptionPublication, loadKeys, loadPendingEncryptionPublication,
   rememberPublishedEncryptionKey, type StoredKeys,
 } from "./keys.js";
-import type { LinePaths } from "./paths.js";
+import type { Paths } from "./paths.js";
 
 export class ApiError extends Error {
   constructor(
@@ -34,7 +34,7 @@ export class ApiError extends Error {
 
 export type Auth = { org: string; handle: string; token: string };
 
-// Callers hold a LineConfig, which carries more than these three fields.
+// Callers hold a Config, which carries more than these three fields.
 // Copying the three out — rather than passing the config straight through —
 // is the point: TypeScript's excess-property check only fires on object
 // literals, so a whole config would be accepted structurally and every field
@@ -236,8 +236,8 @@ export async function fetchAuditExportPage(
   return AuditExportPage.parse(await res.json());
 }
 
-// Presence is self-or-shared-roster on the relay, so this always authenticates.
-// `auth` is required rather than optional to make that a compile-time fact.
+// Presence is self-only on the relay, so this always authenticates. `auth` is
+// required rather than optional to make that a compile-time fact.
 export async function getStatus(
   relay: string, handle: string, auth: Auth, opts: { timeoutMs?: number } = {},
 ): Promise<{ online: boolean }> {
@@ -245,7 +245,7 @@ export async function getStatus(
     schema: { parse: (value) => value as { online: boolean } },
     errors: {
       429: relayError("Too many status checks — try again in a minute."),
-      404: relayError(`Status unavailable for "${handle}": the target does not exist or does not share a roster with you.`, "status_unavailable"),
+      404: relayError(`Status unavailable for "${handle}": only the current line may inspect its listener status.`, "status_unavailable"),
     }, failed: "Status check" });
 }
 
@@ -294,104 +294,50 @@ export async function pushCard(
     timeoutMs: opts.timeoutMs, failed: "Card push" });
 }
 
-export async function createRoster(
-  relay: string, auth: Auth, opts: { timeoutMs?: number } = {},
-): Promise<{ roster_id: string; join_key: string; admin_secret: string }> {
-  return relayCall({ relay, path: "/v1/roster", method: "POST", auth, timeoutMs: opts.timeoutMs,
-    schema: CreateRosterResponse, errors: { 429: relayError("Too many rosters created — try again in a minute.") }, failed: "Roster creation" });
-}
-
-export async function joinRoster(
-  relay: string, auth: Auth, rosterId: string, joinKey: string,
-  opts: { timeoutMs?: number } = {},
-): Promise<void> {
-  // The relay deliberately cannot tell these apart, and neither can this
-  // message: distinguishing them would make roster ids enumerable.
-  await relayCall({ relay, path: `/v1/roster/${rosterId}/join`, method: "POST", auth,
-    body: { join_key: joinKey }, timeoutMs: opts.timeoutMs,
-    errors: { 429: relayError("Too many join attempts — try again in a minute."), 404: relayError("No such roster, or the join key is invalid, expired, used, or revoked.", "unknown_handle"), 409: relayError("That roster is full.", "invalid") },
-    failed: "Joining the roster" });
-}
-
-async function rosterMutation(
-  relay: string, auth: Auth, rosterId: string, operation: string, body: unknown,
-  opts: { timeoutMs?: number } = {},
-): Promise<Response> {
-  return relayCall({ relay, path: `/v1/roster/${rosterId}/${operation}`, method: "POST", auth,
-    body, timeoutMs: opts.timeoutMs, response: true,
-    errors: { 429: relayError(`Too many roster ${operation} attempts — try again in a minute.`), 404: relayError("That roster, member, or administrative secret was not found.", "unknown_handle") },
-    failed: `Roster ${operation}` });
-}
-
-export async function leaveRoster(relay: string, auth: Auth, rosterId: string): Promise<void> {
-  await rosterMutation(relay, auth, rosterId, "leave", {});
-}
-
-export async function expelRosterMember(
-  relay: string, auth: Auth, rosterId: string, handle: string, adminSecret: string,
-): Promise<void> {
-  await rosterMutation(relay, auth, rosterId, "expel", { handle, admin_secret: adminSecret });
-}
-
-export async function issueRosterJoinKey(
-  relay: string, auth: Auth, rosterId: string, adminSecret: string,
-  options: { description?: string; expiresInDays?: number; reusable?: boolean } = {},
-): Promise<{ join_key: string; key: RosterJoinKeyMetadataType }> {
-  const res = await rosterMutation(relay, auth, rosterId, "keys", {
-    admin_secret: adminSecret,
-    description: options.description,
-    expires_in_days: options.expiresInDays,
-    reusable: options.reusable,
-  });
-  return IssueRosterJoinKeyResponse.parse(await res.json());
-}
-
-export async function listRosterJoinKeys(
-  relay: string, auth: Auth, rosterId: string, adminSecret: string,
-): Promise<RosterJoinKeyMetadataType[]> {
-  const res = await rosterMutation(relay, auth, rosterId, "keys/list", { admin_secret: adminSecret });
-  return ListRosterJoinKeysResponse.parse(await res.json()).keys;
-}
-
-export async function revokeRosterJoinKey(
-  relay: string, auth: Auth, rosterId: string, prefix: string, adminSecret: string, evict = false,
-): Promise<{ prefix: string; revoked_at: number; evicted: number }> {
-  const res = await rosterMutation(relay, auth, rosterId, `keys/${prefix}/revoke`, {
-    admin_secret: adminSecret, evict,
-  });
-  return RevokeRosterJoinKeyResponse.parse(await res.json());
-}
-
-export async function deleteRoster(
-  relay: string, auth: Auth, rosterId: string, adminSecret: string,
-): Promise<void> {
-  await rosterMutation(relay, auth, rosterId, "delete", { admin_secret: adminSecret });
-}
-
-// Returns "not-modified" rather than a bundle when the relay 304s, so the
-// caller keeps its cached entries instead of parsing an empty body.
-export async function fetchRosterBundle(
-  relay: string, auth: Auth, rosterId: string, etag?: string,
-  opts: { timeoutMs?: number } = {},
-): Promise<{ bundle: RosterBundleType; etag?: string } | "not-modified"> {
-  const headers: Record<string, string> = authHeaders(auth);
-  if (etag) headers["If-None-Match"] = etag;
-  const res = await relayCall({ relay, path: `/v1/roster/${rosterId}/bundle`, headers,
-    timeoutMs: opts.timeoutMs, raw: true, failed: "Roster refresh" });
-  if (res.status === 304) return "not-modified";
-  if (res.status === 401) throw new ApiError(CREDENTIALS_REJECTED, "invalid");
-  if (res.status === 429) throw new ApiError("Too many roster refreshes — try again in a minute.", "network");
-  if (res.status === 404) throw new ApiError("That roster is gone, or you are no longer a member.", "unknown_handle");
-  if (!res.ok) throw new ApiError(`Roster refresh failed (${res.status}).`, "network");
-  return { bundle: RosterBundle.parse(await res.json()), etag: res.headers.get("ETag") ?? undefined };
-}
-
 export async function fetchCard(
   relay: string, handle: string, auth: Auth,
   opts: { timeoutMs?: number } = {},
 ): Promise<AgentCardType> {
   return relayCall({ relay, path: `/v1/card/${handle}`, auth, timeoutMs: opts.timeoutMs,
     schema: AgentCard, errors: { 404: relayError(`No card published for "${handle}".`, "unknown_handle") }, failed: "Card fetch" });
+}
+
+const A2A_HEADERS = { "A2A-Version": A2A_PROTOCOL_VERSION, Accept: "application/a2a+json" };
+
+export function listAgentJobs(
+  relay: string,
+  handle: string,
+  auth: Auth,
+  options: { status?: A2ATaskStateType; pageSize?: number } = {},
+): Promise<A2AListTasksResponseType> {
+  const query = new URLSearchParams({ pageSize: String(options.pageSize ?? 50) });
+  if (options.status) query.set("status", options.status);
+  return relayCall({
+    relay, path: `/v1/a2a/${encodeURIComponent(handle)}/tasks?${query}`,
+    auth, headers: A2A_HEADERS, schema: A2AListTasksResponse, failed: "Job list",
+  });
+}
+
+export function getAgentJob(
+  relay: string, handle: string, taskId: string, auth: Auth, includeArtifacts = true,
+): Promise<A2ATaskType> {
+  return relayCall({
+    relay,
+    path: `/v1/a2a/${encodeURIComponent(handle)}/tasks/${encodeURIComponent(taskId)}` +
+      `?includeArtifacts=${includeArtifacts ? "true" : "false"}`,
+    auth, headers: A2A_HEADERS, schema: A2ATask, failed: "Job fetch",
+  });
+}
+
+export function cancelAgentJob(
+  relay: string, handle: string, taskId: string, auth: Auth,
+): Promise<A2ATaskType> {
+  return relayCall({
+    relay, path: `/v1/a2a/${encodeURIComponent(handle)}/tasks/${encodeURIComponent(taskId)}:cancel`,
+    method: "POST", auth,
+    headers: { ...A2A_HEADERS, "content-type": "application/a2a+json" },
+    body: {}, schema: A2ATask, failed: "Job cancel",
+  });
 }
 
 // Uses fromBase64Url from @benree/agentcall-shared (Task 3) rather than
@@ -426,7 +372,7 @@ export async function publishIdentityKey(
 }
 
 export async function publishEncryptionKey(
-  relay: string, auth: Auth, paths: LinePaths, now: number = Date.now(),
+  relay: string, auth: Auth, paths: Paths, now: number = Date.now(),
 ): Promise<void> {
   let keys = loadKeys(paths);
   let publication = loadPendingEncryptionPublication(paths, keys);

@@ -6,8 +6,9 @@ import { type Policy } from "../src/policy.js";
 // `clearance-reset` and `clearance-default` verbs are gone: with one grantable
 // level there is no amount to set, only whether the line answers. What survives
 // is block/unblock plus the line-wide posture.
-const base: Policy = { description: "", default_access: "allowed", callers: {}, groups: {} };
-const ENG = "e".repeat(22);
+const base: Policy = {
+  description: "", default_access: "allowed", callers: {}, offline_delivery: { enabled: false },
+};
 
 describe("execVerb", () => {
   describe("block", () => {
@@ -54,21 +55,13 @@ describe("execVerb", () => {
       expect(lines.join("\n")).toContain("ken is blocked");
     });
 
-    it("reports blocked when an attested roster would still block them", () => {
-      const withGroup: Policy = {
-        ...base, groups: { eng: { roster_id: ENG, access: "blocked" } },
-      };
-      // accessFor is consulted without attestation here, so this resolves to the
-      // default — the point is that the line reports a resolution, not a write.
-      expect(execVerb(withGroup, "unblock", "ken").lines.join("\n")).toContain("ken is answered");
-    });
   });
 
   describe("access-default", () => {
     it("closes the line", () => {
       const { policy, lines } = execVerb(base, "access-default", "blocked");
       expect(policy.default_access).toBe("blocked");
-      expect(lines.join("\n")).toContain("Only named callers and attested rosters are answered.");
+      expect(lines.join("\n")).toContain("Only named callers are answered.");
     });
 
     it("opens the line", () => {
@@ -83,6 +76,15 @@ describe("execVerb", () => {
         expect(() => execVerb(base, "access-default", bad as string))
           .toThrow(/allowed or blocked/);
       }
+    });
+  });
+
+  describe("offline-delivery", () => {
+    it("enables and disables durable admission explicitly", () => {
+      const enabled = execVerb(base, "offline-delivery", "enabled").policy;
+      expect(enabled.offline_delivery).toEqual({ enabled: true });
+      expect(execVerb(enabled, "offline-delivery", "disabled").policy.offline_delivery)
+        .toEqual({ enabled: false });
     });
   });
 

@@ -33,6 +33,16 @@ describe("CardTask.keywords", () => {
     }).success).toBe(false);
   });
 
+  it("defaults legacy uploads to mailbox disabled and round-trips explicit opt-in", () => {
+    const legacy = CardUpload.parse({
+      description: "d", agent_kind: "claude", tasks: [TASK], blocked: [],
+    });
+    expect(legacy.offline_delivery).toEqual({ enabled: false });
+    expect(CardUpload.parse({
+      ...legacy, offline_delivery: { enabled: true },
+    }).offline_delivery).toEqual({ enabled: true });
+  });
+
   // #379 deleted the per-caller menu from the card. A file still carrying it
   // must fail rather than parse with the menu silently ignored — a card that
   // quietly drops `grants` would advertise every task to callers the owner

@@ -50,35 +50,6 @@ exports[`CLI command tree > pins command paths, aliases, descriptions, and optio
         {
           "alias": undefined,
           "commands": [],
-          "description": "join a Room using an invitation from its host",
-          "name": "join",
-          "options": [
-            {
-              "description": "relay URL",
-              "flags": "--relay <url>",
-            },
-          ],
-        },
-      ],
-      "description": "host a temporary, accountless group Room — no account, handle, or listener required",
-      "name": "room",
-      "options": [
-        {
-          "description": "relay URL",
-          "flags": "--relay <url>",
-        },
-        {
-          "description": "your display name in this Room",
-          "flags": "--name <name>",
-        },
-      ],
-    },
-    {
-      "alias": undefined,
-      "commands": [
-        {
-          "alias": undefined,
-          "commands": [],
           "description": "create a one-time invite",
           "name": "create",
           "options": [
@@ -94,10 +65,6 @@ exports[`CLI command tree > pins command paths, aliases, descriptions, and optio
               "description": "enrolled organization role: member or admin",
               "flags": "--role <role>",
             },
-            {
-              "description": "line whose organization to invite into (defaults to the primary line)",
-              "flags": "--line <name>",
-            },
           ],
         },
         {
@@ -110,10 +77,6 @@ exports[`CLI command tree > pins command paths, aliases, descriptions, and optio
               "description": "print the raw invite array",
               "flags": "--json",
             },
-            {
-              "description": "line whose organization to list (defaults to the primary line)",
-              "flags": "--line <name>",
-            },
           ],
         },
         {
@@ -121,12 +84,7 @@ exports[`CLI command tree > pins command paths, aliases, descriptions, and optio
           "commands": [],
           "description": "revoke an unused organization invite",
           "name": "revoke",
-          "options": [
-            {
-              "description": "line whose organization the invite belongs to (defaults to the primary line)",
-              "flags": "--line <name>",
-            },
-          ],
+          "options": [],
         },
       ],
       "description": "manage one-time organization invites",
@@ -170,10 +128,6 @@ exports[`CLI command tree > pins command paths, aliases, descriptions, and optio
               "description": "events fetched per relay page, from 1 to 500",
               "flags": "--page-size <count>",
             },
-            {
-              "description": "line whose organization to export (defaults to the primary line)",
-              "flags": "--line <name>",
-            },
           ],
         },
       ],
@@ -192,12 +146,8 @@ exports[`CLI command tree > pins command paths, aliases, descriptions, and optio
           "flags": "--json",
         },
         {
-          "description": "task from the callee's card to perform (see: agentcall card <address>)",
+          "description": "task from the callee's card to perform (see: agentcall inspect <address>)",
           "flags": "--task <id>",
-        },
-        {
-          "description": "line to call from (defaults to the primary line on the destination's relay)",
-          "flags": "--as <line>",
         },
         {
           "description": "continue the open conversation with this address (add --task when several are open)",
@@ -211,25 +161,65 @@ exports[`CLI command tree > pins command paths, aliases, descriptions, and optio
     },
     {
       "alias": undefined,
-      "commands": [],
-      "description": "check whether a handle's agent is currently online",
-      "name": "status",
-      "options": [
+      "commands": [
         {
-          "description": "line to check from (defaults to the primary line on the destination's relay)",
-          "flags": "--as <line>",
+          "alias": undefined,
+          "commands": [],
+          "description": "",
+          "name": "list",
+          "options": [
+            {
+              "description": "A2A task state",
+              "flags": "--state <state>",
+            },
+            {
+              "description": "print machine-readable JSON",
+              "flags": "--json",
+            },
+          ],
+        },
+        {
+          "alias": undefined,
+          "commands": [],
+          "description": "",
+          "name": "get",
+          "options": [
+            {
+              "description": "wait up to this many seconds for a terminal result",
+              "flags": "--wait <seconds>",
+            },
+            {
+              "description": "print machine-readable JSON",
+              "flags": "--json",
+            },
+          ],
+        },
+        {
+          "alias": undefined,
+          "commands": [],
+          "description": "",
+          "name": "cancel",
+          "options": [
+            {
+              "description": "print machine-readable JSON",
+              "flags": "--json",
+            },
+          ],
         },
       ],
+      "description": "retrieve and cancel durable calls",
+      "name": "jobs",
+      "options": [],
     },
     {
       "alias": undefined,
       "commands": [],
-      "description": "fetch and verify a peer's pinned identity fingerprint",
-      "name": "verify",
+      "description": "inspect one peer's address, trust state, availability, and offered tasks",
+      "name": "inspect",
       "options": [
         {
-          "description": "line whose relay credentials to use",
-          "flags": "--as <line>",
+          "description": "print the structured inspection result",
+          "flags": "--json",
         },
       ],
     },
@@ -250,27 +240,50 @@ exports[`CLI command tree > pins command paths, aliases, descriptions, and optio
       "commands": [
         {
           "alias": undefined,
-          "commands": [],
-          "description": "publish the identity and current encryption key already stored on disk",
-          "name": "publish",
-          "options": [
+          "commands": [
             {
-              "description": "line whose persisted keys to publish",
-              "flags": "--line <name>",
+              "alias": undefined,
+              "commands": [],
+              "description": "publish the current local card to the relay",
+              "name": "publish",
+              "options": [],
             },
           ],
+          "description": "administer this installation's published card",
+          "name": "card",
+          "options": [],
+        },
+        {
+          "alias": undefined,
+          "commands": [
+            {
+              "alias": undefined,
+              "commands": [],
+              "description": "publish the identity and current encryption key already stored on disk",
+              "name": "publish",
+              "options": [],
+            },
+          ],
+          "description": "administer this installation's published keys",
+          "name": "keys",
+          "options": [],
         },
       ],
-      "description": "manage this line's end-to-end encryption keys",
-      "name": "keys",
+      "description": "explicit remote publication operations",
+      "name": "admin",
       "options": [],
     },
     {
       "alias": undefined,
       "commands": [],
-      "description": "verify this install can answer calls: binary, auth, agent spawn, listener, relay self-call",
+      "description": "read-only diagnostics for tasks, policy, publication, recovery, listener, and runtime health",
       "name": "doctor",
-      "options": [],
+      "options": [
+        {
+          "description": "emit the structured diagnostic report as JSON",
+          "flags": "--json",
+        },
+      ],
     },
     {
       "alias": undefined,
@@ -289,46 +302,6 @@ exports[`CLI command tree > pins command paths, aliases, descriptions, and optio
         {
           "description": "print machine-readable local history",
           "flags": "--json",
-        },
-        {
-          "description": "line whose history to show (defaults to the primary line)",
-          "flags": "--line <name>",
-        },
-      ],
-    },
-    {
-      "alias": undefined,
-      "commands": [],
-      "description": "validate tasks, effective policy assertions, and the published card",
-      "name": "lint",
-      "options": [
-        {
-          "description": "line to lint (defaults to the primary line)",
-          "flags": "--line <name>",
-        },
-      ],
-    },
-    {
-      "alias": undefined,
-      "commands": [],
-      "description": "show the effective caller-access policy, tasks, and read scope",
-      "name": "policy",
-      "options": [
-        {
-          "description": "line to report on (defaults to the primary line)",
-          "flags": "--line <name>",
-        },
-      ],
-    },
-    {
-      "alias": undefined,
-      "commands": [],
-      "description": "show your own card with problems, another agent's menu, or publish yours (push)",
-      "name": "card",
-      "options": [
-        {
-          "description": "line to use (defaults to the primary line)",
-          "flags": "--line <name>",
         },
       ],
     },
@@ -377,234 +350,9 @@ exports[`CLI command tree > pins command paths, aliases, descriptions, and optio
         {
           "alias": undefined,
           "commands": [],
-          "description": "create a roster and print its initial reusable join key",
-          "name": "create",
-          "options": [
-            {
-              "description": "local name to record it under",
-              "flags": "--as <name>",
-            },
-            {
-              "description": "line to create it as (defaults to the primary line)",
-              "flags": "--line <name>",
-            },
-          ],
-        },
-        {
-          "alias": undefined,
-          "commands": [],
-          "description": "join a roster so \`agentcall search\` can see its members",
-          "name": "join",
-          "options": [
-            {
-              "description": "a roster join key",
-              "flags": "--key <key>",
-            },
-            {
-              "description": "local name for this roster",
-              "flags": "--as <name>",
-            },
-            {
-              "description": "line to join as (defaults to the primary line)",
-              "flags": "--line <name>",
-            },
-          ],
-        },
-        {
-          "alias": undefined,
-          "commands": [],
-          "description": "list rosters this line has joined",
-          "name": "list",
-          "options": [
-            {
-              "description": "line to list for (defaults to the primary line)",
-              "flags": "--line <name>",
-            },
-          ],
-        },
-        {
-          "alias": undefined,
-          "commands": [],
-          "description": "leave a roster on the relay and remove its local record",
-          "name": "leave",
-          "options": [
-            {
-              "description": "line to leave it for (defaults to the primary line)",
-              "flags": "--line <name>",
-            },
-          ],
-        },
-        {
-          "alias": undefined,
-          "commands": [],
-          "description": "remove a member using the roster admin secret",
-          "name": "expel",
-          "options": [
-            {
-              "description": "admin secret (prefer AGENTCALL_ADMIN_SECRET to avoid shell history)",
-              "flags": "--admin-secret <secret>",
-            },
-            {
-              "description": "line to act as (defaults to the primary line)",
-              "flags": "--line <name>",
-            },
-          ],
-        },
-        {
-          "alias": undefined,
-          "commands": [
-            {
-              "alias": undefined,
-              "commands": [],
-              "description": "issue a one-off join key (use --reusable for a shared key)",
-              "name": "issue",
-              "options": [
-                {
-                  "description": "admin secret (prefer AGENTCALL_ADMIN_SECRET to avoid shell history)",
-                  "flags": "--admin-secret <secret>",
-                },
-                {
-                  "description": "short label shown by \`roster key list\`",
-                  "flags": "--description <text>",
-                },
-                {
-                  "description": "expiry in days (1-90)",
-                  "flags": "--expires-in <days>",
-                },
-                {
-                  "description": "allow more than one member to use this key",
-                  "flags": "--reusable",
-                },
-                {
-                  "description": "line to act as (defaults to the primary line)",
-                  "flags": "--line <name>",
-                },
-              ],
-            },
-            {
-              "alias": undefined,
-              "commands": [],
-              "description": "list join-key metadata without revealing secrets",
-              "name": "list",
-              "options": [
-                {
-                  "description": "admin secret (prefer AGENTCALL_ADMIN_SECRET to avoid shell history)",
-                  "flags": "--admin-secret <secret>",
-                },
-                {
-                  "description": "line to act as (defaults to the primary line)",
-                  "flags": "--line <name>",
-                },
-              ],
-            },
-            {
-              "alias": undefined,
-              "commands": [],
-              "description": "revoke one join key; --evict removes only members admitted by it",
-              "name": "revoke",
-              "options": [
-                {
-                  "description": "admin secret (prefer AGENTCALL_ADMIN_SECRET to avoid shell history)",
-                  "flags": "--admin-secret <secret>",
-                },
-                {
-                  "description": "remove members admitted by this key",
-                  "flags": "--evict",
-                },
-                {
-                  "description": "confirm targeted eviction",
-                  "flags": "--yes",
-                },
-                {
-                  "description": "line to act as (defaults to the primary line)",
-                  "flags": "--line <name>",
-                },
-              ],
-            },
-          ],
-          "description": "issue, list, and revoke scoped roster join keys",
-          "name": "key",
-          "options": [],
-        },
-        {
-          "alias": undefined,
-          "commands": [],
-          "description": "permanently delete a roster while retaining its relay audit events",
-          "name": "delete",
-          "options": [
-            {
-              "description": "admin secret (prefer AGENTCALL_ADMIN_SECRET to avoid shell history)",
-              "flags": "--admin-secret <secret>",
-            },
-            {
-              "description": "confirm deletion",
-              "flags": "--yes",
-            },
-            {
-              "description": "line to act as (defaults to the primary line)",
-              "flags": "--line <name>",
-            },
-          ],
-        },
-        {
-          "alias": undefined,
-          "commands": [],
-          "description": "drop only the local roster record; use \`roster leave\` to remove relay membership",
-          "name": "forget",
-          "options": [
-            {
-              "description": "line to forget it for (defaults to the primary line)",
-              "flags": "--line <name>",
-            },
-          ],
-        },
-      ],
-      "description": "join and manage discovery rosters for \`agentcall search\`",
-      "name": "roster",
-      "options": [],
-    },
-    {
-      "alias": undefined,
-      "commands": [],
-      "description": "find which colleague's agent can answer something",
-      "name": "search",
-      "options": [
-        {
-          "description": "search only this roster (default: all joined rosters)",
-          "flags": "--roster <name>",
-        },
-        {
-          "description": "maximum results",
-          "flags": "--limit <n>",
-        },
-        {
-          "description": "machine-readable output for your own agent",
-          "flags": "--json",
-        },
-        {
-          "description": "never refresh; use whatever is cached",
-          "flags": "--offline",
-        },
-        {
-          "description": "line to search as (defaults to the primary line)",
-          "flags": "--line <name>",
-        },
-      ],
-    },
-    {
-      "alias": undefined,
-      "commands": [
-        {
-          "alias": undefined,
-          "commands": [],
           "description": "scaffold a new task (does not publish it)",
           "name": "new",
-          "options": [
-            {
-              "description": "line to use (defaults to the primary line)",
-              "flags": "--line <name>",
-            },
-          ],
+          "options": [],
         },
       ],
       "description": "manage the tasks your agent offers",
@@ -614,7 +362,7 @@ exports[`CLI command tree > pins command paths, aliases, descriptions, and optio
     {
       "alias": undefined,
       "commands": [],
-      "description": "set whether callers are answered by default (and republish your card)",
+      "description": "set default access or durable offline delivery (and republish your card)",
       "name": "access",
       "options": [
         {
@@ -622,8 +370,8 @@ exports[`CLI command tree > pins command paths, aliases, descriptions, and optio
           "flags": "--default <access>",
         },
         {
-          "description": "line to use (defaults to the primary line)",
-          "flags": "--line <name>",
+          "description": "enabled or disabled",
+          "flags": "--offline <state>",
         },
       ],
     },
@@ -632,102 +380,13 @@ exports[`CLI command tree > pins command paths, aliases, descriptions, and optio
       "commands": [],
       "description": "refuse all calls from a handle",
       "name": "block",
-      "options": [
-        {
-          "description": "line to use (defaults to the primary line)",
-          "flags": "--line <name>",
-        },
-      ],
+      "options": [],
     },
     {
       "alias": undefined,
       "commands": [],
       "description": "lift a block",
       "name": "unblock",
-      "options": [
-        {
-          "description": "line to use (defaults to the primary line)",
-          "flags": "--line <name>",
-        },
-      ],
-    },
-    {
-      "alias": undefined,
-      "commands": [
-        {
-          "alias": undefined,
-          "commands": [],
-          "description": "register another address on this machine",
-          "name": "add",
-          "options": [
-            {
-              "description": "handle to register (prompted if omitted)",
-              "flags": "--handle <handle>",
-            },
-            {
-              "description": "one-time organization invite (required — each line enrolls in its own tenant)",
-              "flags": "--invite <token>",
-            },
-            {
-              "description": "agent kind: claude or codex (omit with --caller-only)",
-              "flags": "--agent <agent>",
-            },
-            {
-              "description": "relay URL to register against",
-              "flags": "--relay <url>",
-            },
-            {
-              "description": "register a handle to call others without making this line's agent callable",
-              "flags": "--caller-only",
-            },
-            {
-              "description": "skip reinstalling the background listener service",
-              "flags": "--skip-service",
-            },
-            {
-              "description": "skip verifying the agent can answer a test call",
-              "flags": "--no-verify",
-            },
-          ],
-        },
-        {
-          "alias": undefined,
-          "commands": [],
-          "description": "list the addresses this machine holds, which is primary, and whether each is online",
-          "name": "list",
-          "options": [
-            {
-              "description": "print the full row data (name, address, relay, state, primary) as JSON",
-              "flags": "--json",
-            },
-          ],
-        },
-        {
-          "alias": undefined,
-          "commands": [],
-          "description": "remove a line (archives calls.log; the handle can never be reused, see README)",
-          "name": "remove",
-          "options": [
-            {
-              "description": "confirm removal — required, since the handle can never be reclaimed",
-              "flags": "--yes",
-            },
-            {
-              "description": "delete outright instead of archiving calls.log",
-              "flags": "--purge",
-            },
-          ],
-        },
-        {
-          "alias": undefined,
-          "commands": [],
-          "description": "set which line places an outbound call when several could answer it",
-          "name": "primary",
-          "options": [],
-        },
-      ],
-      "description": "manage the addresses (lines) this machine answers on and calls from",
-      "name": "line",
       "options": [],
     },
     {
@@ -735,24 +394,14 @@ exports[`CLI command tree > pins command paths, aliases, descriptions, and optio
       "commands": [],
       "description": "run the foreground listener (the platform service runs this after setup)",
       "name": "listen",
-      "options": [
-        {
-          "description": "run only this line instead of every callable line",
-          "flags": "--line <name>",
-        },
-      ],
+      "options": [],
     },
     {
       "alias": undefined,
       "commands": [],
-      "description": "replace a line's relay token (use if it may have leaked)",
+      "description": "replace this installation's relay token (use if it may have leaked)",
       "name": "rotate",
-      "options": [
-        {
-          "description": "line to rotate (defaults to the primary line)",
-          "flags": "--line <name>",
-        },
-      ],
+      "options": [],
     },
     {
       "alias": undefined,
@@ -760,25 +409,16 @@ exports[`CLI command tree > pins command paths, aliases, descriptions, and optio
         {
           "alias": undefined,
           "commands": [],
-          "description": "issue or replace a recovery proof while the line token still works",
+          "description": "issue or replace a recovery proof while the token still works",
           "name": "issue",
-          "options": [
-            {
-              "description": "line to protect (defaults to the primary line)",
-              "flags": "--line <name>",
-            },
-          ],
+          "options": [],
         },
         {
           "alias": undefined,
           "commands": [],
-          "description": "recover one line using an out-of-band proof",
+          "description": "recover this installation using an out-of-band proof",
           "name": "redeem",
           "options": [
-            {
-              "description": "local line name to recover",
-              "flags": "--line <name>",
-            },
             {
               "description": "organization (required when local config is missing)",
               "flags": "--org <org>",

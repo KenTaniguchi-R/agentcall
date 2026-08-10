@@ -47,7 +47,7 @@ test("navigation publishes every core reader journey", () => {
     "guides/tasks-and-policy",
     "guides/discovery-and-contacts",
     "guides/identity-and-keys",
-    "guides/multiple-lines",
+    "guides/single-identity-migration",
     // Renamed from guides/listener-and-workdirs by #372, which deleted the
     // `workdir` setting the old title promised. The reader question is
     // unchanged — "what can my agent see?" — only the answer moved.

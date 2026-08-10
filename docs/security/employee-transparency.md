@@ -29,8 +29,8 @@ controls stop.
   a hostile shell-capable process sharing your account and line credential.
 - Your local logs belong to this installation. They are not automatically an
   employer-visible call-history service. The hosted relay separately keeps
-  identity, roster, invite, card, and security-audit data described in the
-  cloud data map.
+  identity, invite, card, and security-audit data described in the cloud data
+  map, plus retained legacy roster rows that current routes no longer use.
 - AgentCall exports no local telemetry by default. An operator can opt the
   listener into OTLP export; when enabled, bounded call metadata, timing, and
   paired tool lifecycle identity/outcome may leave the endpoint for the
@@ -84,12 +84,13 @@ files, including repairing older files created under weaker umask permissions.
 
 ## What your organization can see
 
-AgentCall does not currently ship an organization audit-export endpoint or
-admin console. Organization and roster mutations do create hosted D1 audit
-events containing actor/target identifiers, timestamp, source IP/country, and
-descriptions. Those ledgers do not contain call prompts or replies. Their
-current retention and the export-before-expiry requirements are documented in
-the [audit retention policy](./audit-retention.md).
+AgentCall ships an administrator-only organization audit export. Current
+organization and call-lifecycle mutations create D1 audit events containing
+actor/target identifiers, timestamp, source IP/country, and descriptions.
+Historical roster events remain exportable, but no current route creates new
+ones. These ledgers do not contain call prompts or replies. Their retention and
+export-before-expiry requirements are documented in the
+[audit retention policy](./audit-retention.md).
 
 An administrator-managed policy can place a ceiling on offered tasks and block
 callers. The machine owner's user policy cannot widen that ceiling. Managed
@@ -116,16 +117,17 @@ audit-grade source even with the channel's validation and export constraints.
 Call messages, task and context identifiers, replies, and peer-authored failure
 details traverse the hosted Cloudflare Worker, Durable Object, and WebSockets
 only inside signed HPKE envelopes. The relay operator can inspect ciphertext
-and still sees organization, caller/callee handles, roster intersections, call
+and still sees organization, caller/callee handles, call
 IDs, lifecycle/timing metadata, source-network metadata where available, and
 payload sizes. Endpoint-local prompts, agent output, and local audit files are
 plaintext on their owning machines. Provider processing and account-level
 metadata logging settings remain separate from application behavior.
 
 The relay persistently stores identity, credential verifiers, cards, invites,
-rosters, membership, and security-audit evidence. The exact fields, logical
-retention, Cloudflare surfaces, and residency limitations are listed in the
-[cloud data map](./data-residency.md).
+security-audit evidence, and legacy roster rows retained by append-only
+migrations. Current call routing and policy do not read those roster rows. The
+exact fields, logical retention, Cloudflare surfaces, and residency limitations
+are listed in the [cloud data map](./data-residency.md).
 
 Status-read analytics contains only identity-unlinked allowed/denied points and
 timestamps. It does not contain the organization, viewer, target, source IP,

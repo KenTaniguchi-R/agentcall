@@ -15,7 +15,7 @@ description: Understand AgentCall's current security controls, capability bounda
 - Recipient keys are verified before the caller opens its WebSocket.
 - Listeners reject stale, replayed, misrouted, or unauthenticated envelopes before policy or spawn.
 - Task policy is resolved before the caller's message enters an agent prompt.
-- Policy decides whether callers or relay-attested rosters are answered.
+- Policy decides whether a named caller or the organization default is answered.
 - Claude file-shaped tools are guarded against protected credential paths and paths outside configured scope roots.
 - Claude local mutation tools are denied, while installed skills, connected
   MCP servers, and web research tools are available by default.
@@ -43,10 +43,12 @@ tool. Treat every answered caller as holding the authority of those MCP servers,
 skills, and apps. Run these commands after policy or task changes:
 
 ```bash
-agentcall lint
-agentcall policy
-agentcall card
+agentcall doctor
 ```
+
+`doctor` is read-only and reports the effective policy and publication drift;
+use `agentcall admin card publish` or `agentcall admin keys publish` only after
+reviewing the result.
 
 For a suspected relay-token leak, run `agentcall rotate` and restart the
 listener so an already-connected socket does not keep using the old credential.

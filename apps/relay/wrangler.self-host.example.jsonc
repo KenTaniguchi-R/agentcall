@@ -21,13 +21,11 @@
   "durable_objects": {
     "bindings": [
       { "name": "HANDLE_DO", "class_name": "HandleDO" },
-      { "name": "ROOM_DO", "class_name": "RoomDO" },
       { "name": "RATE_LIMITER_DO", "class_name": "RateLimiterDO" }
     ]
   },
   "exports": {
     "HandleDO": { "type": "durable-object", "storage": "sqlite" },
-    "RoomDO": { "type": "durable-object", "storage": "sqlite" },
     "RateLimiterDO": { "type": "durable-object", "storage": "sqlite" }
   },
   "routes": [{ "pattern": "relay.example.com", "custom_domain": true }],
@@ -42,11 +40,6 @@
       "name": "READ_RL",
       "namespace_id": "1002",
       "simple": { "limit": 60, "period": 60 }
-    },
-    {
-      "name": "ROSTER_READ_RL",
-      "namespace_id": "1003",
-      "simple": { "limit": 10, "period": 60 }
     }
   ]
 }

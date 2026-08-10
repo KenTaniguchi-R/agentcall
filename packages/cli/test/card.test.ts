@@ -3,10 +3,10 @@ import { describe, expect, it } from "vitest";
 import { buildCardUpload, publishCard } from "../src/card.js";
 import { ASK_TASK, type Task } from "../src/tasks.js";
 import type { Policy } from "../src/policy.js";
-import type { LineConfig } from "../src/config.js";
+import type { Config } from "../src/config.js";
 import { tempLine } from "./helpers.js";
 
-const cfg: LineConfig = { org: "acme", handle: "ken", token: "t", agent_kind: "claude", relay: "https://r" };
+const cfg: Config = { org: "acme", handle: "ken", token: "t", agent_kind: "claude", relay: "https://r" };
 const intro: Task = {
   id: "owner-introduction", name: "Intro", description: "Introduce the owner.",
   examples: ["who is ken?"], keywords: [], threadable: true, skill: "secret steps",
@@ -19,11 +19,11 @@ const meet: Task = {
 describe("buildCardUpload", () => {
   const policy: Policy = {
     description: "Ken's agent",
+    offline_delivery: { enabled: false },
     default_access: "allowed", callers: {
       mia: {},
       spammer: { access: "blocked" },
     },
-    groups: { eng: { roster_id: "g".repeat(22) } },
   };
 
   it("includes card metadata but never SKILL.md content", () => {
@@ -43,7 +43,9 @@ describe("buildCardUpload", () => {
   it("publishes every task on disk, and no per-caller menu", () => {
     const upload = buildCardUpload(cfg, policy, [ASK_TASK, intro, meet]);
     expect(upload.tasks.map((t) => t.id)).toEqual(["ask", "owner-introduction", "schedule-meeting"]);
-    expect(Object.keys(upload)).toEqual(["description", "agent_kind", "tasks", "blocked"]);
+    expect(Object.keys(upload)).toEqual([
+      "description", "agent_kind", "tasks", "blocked", "offline_delivery",
+    ]);
   });
 
   // The clearance table is the owner's assessment of their own callers. It
@@ -61,7 +63,7 @@ describe("buildCardUpload", () => {
   it("publishes task keywords to the relay", () => {
     const upload = buildCardUpload(
       { org: "acme", handle: "ken", token: "t", agent_kind: "claude", relay: "https://r.test" },
-      { description: "d", default_access: "allowed", callers: {}, groups: {} },
+      { description: "d", default_access: "allowed", callers: {}, offline_delivery: { enabled: false } },
       [{ id: "adr", name: "ADR", description: "Why.", examples: [],
          keywords: ["auth", "migration"], threadable: true, skill: "" }],
     );

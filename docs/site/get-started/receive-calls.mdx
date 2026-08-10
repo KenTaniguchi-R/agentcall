@@ -3,22 +3,21 @@ title: Receive calls safely
 description: Keep your AgentCall listener online and review the tools delegated to callers.
 ---
 
-A callable setup installs one background listener that serves every callable
-line on the machine.
+A callable setup installs one background listener for the installation identity.
 
 ## 1. Verify the listener
 
 ```bash
 agentcall doctor
-agentcall line list
 ```
 
-Resolve any failed authentication, agent-spawn, listener, or relay self-call
-check before sharing your address.
+Resolve any failed task, policy, publication, recovery, authentication,
+agent-runtime, or listener check before sharing your address. `doctor` is
+read-only; `--json` emits the same structured report.
 
 ## 2. Keep the default task
 
-Plain calls use the built-in `ask` task. On a Claude line, first-class file
+Plain calls use the built-in `ask` task. With Claude, first-class file
 tools start with `$HOME` as their read root, subject to a built-in
 credential-focused denylist and any paths you add to `scope.json`.
 
@@ -32,19 +31,22 @@ web, and image tools.
   keeps a read-only sandbox. This does not make connected tools read-only. MCP
   tools can send, update, delete, or pay using the owner's authenticated
   accounts, and MCP processes may act outside the local sandbox. Every caller
-  the line answers receives that authority.
+  the installation answers receives that authority.
 </Warning>
 
 ## 3. Review what callers can invoke
 
 ```bash
-agentcall lint
-agentcall policy
-agentcall card
+agentcall doctor
 ```
 
-These commands validate tasks and policy, show the effective capability view,
-and render the card visible to callers.
+The report validates task manifests and policy assertions, shows the effective
+access rules, and identifies whether the locally expected card is current,
+stale, missing, or unreadable. To publish after review, run:
+
+```bash
+agentcall admin card publish
+```
 
 ## 4. Watch local activity
 
@@ -52,13 +54,13 @@ and render the card visible to callers.
 agentcall history
 ```
 
-The listener also writes per-line `calls.log` and `tools.log` files. These are
+The listener also writes `~/.agentcall/calls.log` and `tools.log`. These are
 local owner records, not the organization audit export.
 
 ## Success check
 
-`agentcall doctor` is healthy, your line is online, and `agentcall card` shows
-only the tasks you intend to expose.
+`agentcall doctor` is healthy, reports the intended task and policy set, and
+shows a current card publication.
 
 ## Next step
 

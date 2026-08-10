@@ -11,7 +11,7 @@ certification or a promise that deletion is available.
 
 | Ledger | Current application retention | Deletion and export |
 |---|---|---|
-| `roster_events` | Indefinite, including after roster deletion. The 10,000-event audit budget suppresses member-driven join/leave churn after exhaustion; administrator and system security events remain appendable, so it is not a row-count ceiling. | No customer or application deletion path. Included in the supported administrator export. |
+| `roster_events` | Retained historical ledger. No current route appends to it; the former 10,000-event mutation budget remains only as historical schema state. | No customer or application deletion path. Included in the supported administrator export. |
 | `org_events` | Newest 10,000 events per organization. Audited invite and audit-control mutations trim in their D1 batch; call-lifecycle events trim when their idempotent Durable Object outbox reaches D1. There is no time-based window. | No customer deletion path. Included in the supported administrator export; rows removed by the rolling cap are not archived by the application. |
 
 Both tables contain actor and target identifiers, source IP/country, event
@@ -139,6 +139,6 @@ must not ship independently. Expiry is safe only when all of these are true:
 
 Until the remaining requirements are implemented, the honest statement is:
 both ledgers have a supported admin export and retention/hold control plane,
-roster audit evidence is retained indefinitely, organization audit evidence is
+historical roster audit evidence is retained indefinitely, organization audit evidence is
 count-bounded only, and neither ledger has automated expiry or a supported
 erasure workflow.

@@ -1,12 +1,13 @@
 ---
-title: Discovery and contacts
-description: Save AgentCall addresses, join opt-in rosters, and search locally for a colleague's published task.
+title: Contacts
+description: Save explicit AgentCall addresses locally and call colleagues by a memorable name.
 ---
 
-Use contacts when you know who to call. Use rosters and search when you know the
-capability you need but not the person who offers it.
+AgentCall does not provide a roster or discovery index. Get a colleague's
+organization-scoped address from them or your administrator, then save it as a
+local contact.
 
-## Save contacts
+## Save and use a contact
 
 ```bash
 agentcall contacts add ken @acme/ken --note "payments"
@@ -17,54 +18,22 @@ agentcall call ken "Which service owns refunds?"
 Contacts are stored locally in `~/.agentcall/contacts.json` with mode `0600` and
 never leave the machine. Adding an existing name updates it.
 
-## Create or join a roster
+## Inspect a known address
 
 ```bash
-# Creator: secrets are shown once
-agentcall roster create --line claude
-
-# Member
-agentcall roster join <roster-id> --key <join-key> --line claude
-agentcall roster list --line claude
+agentcall inspect @acme/ken
+agentcall call @acme/ken --task architecture-history \
+  "Why did the team choose this migration?"
 ```
 
-<Warning>
-  Store the roster admin secret in a password manager. AgentCall never stores it
-  and cannot recover it. A command-line `--admin-secret` can appear in shell
-  history and process listings; prefer the prompt or `AGENTCALL_ADMIN_SECRET`.
-</Warning>
-
-## Search by capability
-
-```bash
-agentcall search "why did we choose this authentication migration"
-agentcall search "authentication migration" --json
-```
-
-The relay returns a per-caller-filtered index. Ranking happens locally, so the
-query text is not sent to the relay. Refresh activity still reveals that your
-line refreshed a roster at that time.
-
-Task owners improve matching with `keywords` in task frontmatter. Keywords have
-more weight than the task ID or description.
-
-## Membership lifecycle
-
-```bash
-agentcall roster leave <name>
-agentcall roster key issue <name> --description contractor
-agentcall roster key list <name>
-agentcall roster key revoke <name> <prefix>
-agentcall roster expel <name> <handle>
-```
-
-Use `leave` for actual relay removal. `roster forget` only removes local state
-when the relay cannot be reached. Revoking a join key does not evict existing
-members unless the administrator uses `--evict --yes`.
+Inspection shows the saved note, identity fingerprint state, and tasks
+published by that exact address. It never changes the trust store and does not
+search for people or rank colleagues by capability. The callee's local policy
+still decides whether the call is admitted.
 
 ## Success check
 
-Search returns a task, address, match explanation, and a ready-to-run call
-command. Remember that search is a hint; callee policy decides admission.
+`contacts list` prints the saved name, address, and note. Calling either the
+contact name or its full address reaches the same organization-scoped target.
 
-Source of truth: [README discovery](https://github.com/KenTaniguchi-R/agentcall#finding-who-to-ask) and [contacts](https://github.com/KenTaniguchi-R/agentcall#contacts).
+Source of truth: [README usage](https://github.com/KenTaniguchi-R/agentcall#usage).

@@ -1,6 +1,6 @@
 import { z } from "zod";
 import { CONTEXT_ID_RE } from "@benree/agentcall-shared";
-import type { LinePaths } from "./paths.js";
+import type { Paths } from "./paths.js";
 import { readJsonStore, writeJsonAtomic } from "./json-store.js";
 
 // The caller's half, and deliberately a separate file from contexts.ts: this
@@ -32,7 +32,7 @@ const sameTarget = (a: OutboundContext, k: OutboundKey) =>
 // Fails SAFE, same posture as loadContexts: an unreadable or malformed store
 // yields no entries, so --continue reports "nothing stored" instead of
 // resuming against garbage.
-export function loadOutbound(p: LinePaths): OutboundContext[] {
+export function loadOutbound(p: Paths): OutboundContext[] {
   return readJsonStore(p.contextsOutFile, z.array(OutboundContextSchema), {
     missing: () => [],
     corrupt: () => [],
@@ -55,7 +55,7 @@ export function matchOutbound(list: OutboundContext[], key: OutboundKey): Outbou
 // The no-guessing property this store was built for is preserved in the
 // lookup instead of the write: `--continue` resumes only when exactly one
 // conversation matches, and asks for a `--task` when more than one does.
-export function rememberOutbound(p: LinePaths, entry: OutboundContext): void {
+export function rememberOutbound(p: Paths, entry: OutboundContext): void {
   // `entry` is itself a valid key with `task` always set, so this replaces on
   // the full (relay, from, to, task) tuple.
   const next = [entry, ...loadOutbound(p).filter((e) => !sameTarget(e, entry))];
@@ -71,7 +71,7 @@ export function rememberOutbound(p: LinePaths, entry: OutboundContext): void {
 // ever says so as `context_unknown`. Without this the caller's half outlives the
 // callee's binding and `--continue` re-sends the dead context_id forever, since
 // rememberOutbound only ever runs on the success path.
-export function forgetOutbound(p: LinePaths, key: OutboundKey): void {
+export function forgetOutbound(p: Paths, key: OutboundKey): void {
   const next = loadOutbound(p).filter((e) => !sameTarget(e, key));
   writeJsonAtomic(p.contextsOutFile, next);
 }

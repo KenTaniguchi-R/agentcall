@@ -1,6 +1,6 @@
 import { statSync, writeFileSync, mkdirSync, readFileSync } from "node:fs";
 import { describe, expect, it } from "vitest";
-import { getMachinePaths } from "../src/paths.js";
+import { getPaths } from "../src/paths.js";
 import { loadContacts, saveContacts, addContact, removeContact, NAME_RE, resolveAddress } from "../src/contacts.js";
 import { tempDir } from "./helpers.js";
 
@@ -8,15 +8,15 @@ function tempHome() { return tempDir("agentcall-ct-"); }
 
 describe("contacts store", () => {
   it("paths derives contactsFile from home", () => {
-    expect(getMachinePaths("/tmp/fakehome").contactsFile).toBe("/tmp/fakehome/.agentcall/contacts.json");
+    expect(getPaths("/tmp/fakehome").contactsFile).toBe("/tmp/fakehome/.agentcall/contacts.json");
   });
 
   it("missing file loads as an empty book", () => {
-    expect(loadContacts(getMachinePaths(tempHome()))).toEqual({ contacts: [] });
+    expect(loadContacts(getPaths(tempHome()))).toEqual({ contacts: [] });
   });
 
   it("round-trips and sets 0600/0700 perms", () => {
-    const p = getMachinePaths(tempHome());
+    const p = getPaths(tempHome());
     const book = { contacts: [{ name: "ken", address: "@acme/ken", note: "coworker" }] };
     saveContacts(p, book);
     expect(loadContacts(p)).toEqual(book);
@@ -31,7 +31,7 @@ describe("contacts store", () => {
   // the destination goes from old bytes to new with nothing in between. A new
   // inode is the observable evidence that a rename, not a rewrite, happened.
   it("replaces the file rather than rewriting it in place", () => {
-    const p = getMachinePaths(tempHome());
+    const p = getPaths(tempHome());
     saveContacts(p, { contacts: [{ name: "ken", address: "@acme/ken" }] });
     const before = statSync(p.contactsFile).ino;
     saveContacts(p, { contacts: [{ name: "sota", address: "@acme/sota" }] });
@@ -40,7 +40,7 @@ describe("contacts store", () => {
   });
 
   it("leaves the previous book intact when serialization fails", () => {
-    const p = getMachinePaths(tempHome());
+    const p = getPaths(tempHome());
     saveContacts(p, { contacts: [{ name: "ken", address: "@acme/ken" }] });
     const circular: { self?: unknown } = {};
     circular.self = circular;
@@ -49,14 +49,14 @@ describe("contacts store", () => {
   });
 
   it("corrupt file throws an error naming the path", () => {
-    const p = getMachinePaths(tempHome());
+    const p = getPaths(tempHome());
     mkdirSync(p.dir, { recursive: true });
     writeFileSync(p.contactsFile, "{not json");
     expect(() => loadContacts(p)).toThrow(p.contactsFile);
   });
 
   it("addContact adds, then upserts case-insensitively", () => {
-    const p = getMachinePaths(tempHome());
+    const p = getPaths(tempHome());
     expect(addContact(p, "Ken", "@acme/ken", "coworker")).toBe("added");
     expect(addContact(p, "ken", "@acme/ken2")).toBe("updated");
     const { contacts } = loadContacts(p);
@@ -65,14 +65,14 @@ describe("contacts store", () => {
   });
 
   it("upsert without --note preserves the existing note", () => {
-    const p = getMachinePaths(tempHome());
+    const p = getPaths(tempHome());
     addContact(p, "ken", "@acme/ken", "coworker, owns relay infra");
     addContact(p, "ken", "@acme/ken2");
     expect(loadContacts(p).contacts[0].note).toBe("coworker, owns relay infra");
   });
 
   it("rejects invalid names and invalid addresses without writing", () => {
-    const p = getMachinePaths(tempHome());
+    const p = getPaths(tempHome());
     expect(() => addContact(p, "ken@home", "@acme/ken")).toThrow(/Invalid contact name/);
     expect(() => addContact(p, "-ken", "@acme/ken")).toThrow(/Invalid contact name/);
     expect(() => addContact(p, "ken", "not-an-address")).toThrow(/@org\/handle/);
@@ -85,7 +85,7 @@ describe("contacts store", () => {
   });
 
   it("removeContact deletes case-insensitively and rejects unknown names", () => {
-    const p = getMachinePaths(tempHome());
+    const p = getPaths(tempHome());
     addContact(p, "ken", "@acme/ken");
     removeContact(p, "KEN");
     expect(loadContacts(p)).toEqual({ contacts: [] });
@@ -93,7 +93,7 @@ describe("contacts store", () => {
   });
 
   it("writes only fields owned by the current contacts schema", () => {
-    const p = getMachinePaths(tempHome());
+    const p = getPaths(tempHome());
     mkdirSync(p.dir, { recursive: true });
     writeFileSync(
       p.contactsFile,
@@ -111,14 +111,14 @@ describe("contacts store", () => {
 
 describe("resolveAddress", () => {
   it("passes a full address through unchanged", () => {
-    const p = getMachinePaths(tempHome());
+    const p = getPaths(tempHome());
     expect(resolveAddress(p, "@acme/ken")).toEqual({
       ok: true, org: "acme", handle: "ken", address: "@acme/ken",
     });
   });
 
   it("rejects a malformed address", () => {
-    const r = resolveAddress(getMachinePaths(tempHome()), "@acme/");
+    const r = resolveAddress(getPaths(tempHome()), "@acme/");
     expect(r.ok).toBe(false);
     if (!r.ok) expect(r.error).toContain("@org/handle");
   });
@@ -126,12 +126,12 @@ describe("resolveAddress", () => {
   // A DNS-shaped address must not resolve: nothing looks it up, so accepting
   // one would promise routing this system does not implement.
   it("rejects a host-shaped address outright", () => {
-    const r = resolveAddress(getMachinePaths(tempHome()), "ken@agentcall.benree.tech");
+    const r = resolveAddress(getPaths(tempHome()), "ken@agentcall.benree.tech");
     expect(r.ok).toBe(false);
   });
 
   it("resolves a saved name case-insensitively", () => {
-    const p = getMachinePaths(tempHome());
+    const p = getPaths(tempHome());
     addContact(p, "Ken", "@acme/ken", "coworker");
     expect(resolveAddress(p, "ken")).toEqual({
       ok: true, org: "acme", handle: "ken", address: "@acme/ken",
@@ -139,7 +139,7 @@ describe("resolveAddress", () => {
   });
 
   it("unknown name errors and suggests contacts list", () => {
-    const r = resolveAddress(getMachinePaths(tempHome()), "nobody");
+    const r = resolveAddress(getPaths(tempHome()), "nobody");
     expect(r.ok).toBe(false);
     if (!r.ok) {
       expect(r.error).toContain('No contact named "nobody"');
@@ -152,14 +152,14 @@ describe("resolveAddress", () => {
   // instead of matching a DNS suffix, so it no longer depends on the relay
   // host being spelled a particular way.
   it("rejects a literal address belonging to a different organization", () => {
-    const p = getMachinePaths(tempHome());
+    const p = getPaths(tempHome());
     const r = resolveAddress(p, "@other/ken", "acme");
     expect(r.ok).toBe(false);
     if (!r.ok) expect(r.error).toMatch(/organization "other".*"acme"/);
   });
 
   it("rejects a contact-book hit belonging to a different organization", () => {
-    const p = getMachinePaths(tempHome());
+    const p = getPaths(tempHome());
     addContact(p, "ken", "@other/ken");
     const r = resolveAddress(p, "ken", "acme");
     expect(r.ok).toBe(false);
@@ -167,13 +167,13 @@ describe("resolveAddress", () => {
   });
 
   it("accepts an address in the caller's own organization", () => {
-    const p = getMachinePaths(tempHome());
+    const p = getPaths(tempHome());
     const r = resolveAddress(p, "@acme/ken", "acme");
     expect(r.ok).toBe(true);
   });
 
   it("rejects a stored contact whose address is invalid (hand-edited file)", () => {
-    const p = getMachinePaths(tempHome());
+    const p = getPaths(tempHome());
     mkdirSync(p.dir, { recursive: true });
     writeFileSync(p.contactsFile, JSON.stringify({ contacts: [{ name: "bad", address: "not-an-address" }] }));
     const r = resolveAddress(p, "bad");

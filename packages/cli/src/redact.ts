@@ -31,8 +31,6 @@ const CREDENTIAL_SHAPES: readonly RegExp[] = [
   // A bearer credential presented in a header line. The length floor keeps
   // "Authorization: Bearer" with nothing after it from matching.
   /\bBearer\s+[A-Za-z0-9._~+/=-]{16,}/g,
-  // AgentCall roster join keys — ROSTER_JOIN_KEY_RE in packages/shared/src/roster.ts.
-  /\bagjk_[a-f0-9]{12}_[A-Za-z0-9_-]{32,128}/g,
 ];
 
 // A known secret is matched as a bare substring, so a short one is not a

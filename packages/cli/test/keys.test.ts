@@ -6,16 +6,16 @@ import { spawn } from "node:child_process";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { getLinePaths, getMachinePaths } from "../src/paths.js";
+import { getPaths } from "../src/paths.js";
 import {
   generateIdentityKeys, keysExist, loadKeys, rememberPublishedEncryptionKey,
-  rotateEncryptionKey, type StoredKeys,
+  loadEncryptionKeysForEpoch, rotateEncryptionKey, type StoredKeys,
 } from "../src/keys.js";
 
 let home: string;
 
 // The identity key is line-scoped, so every case here works through a line.
-function linePaths(root: string) { return getLinePaths(getMachinePaths(root, root), "claude"); }
+function linePaths(root: string) { return getPaths(root, root); }
 
 function markPublished(paths: ReturnType<typeof linePaths>, keys: StoredKeys, digit: string): StoredKeys {
   return rememberPublishedEncryptionKey(paths, keys, digit.repeat(32));
@@ -223,7 +223,7 @@ describe("key storage", () => {
     expect(loadKeys(paths).epoch).toBe(3);
   });
 
-  it("retires superseded epoch files without retaining historical private keys", async () => {
+  it("retains superseded private keys long enough to decrypt durable mailbox traffic", async () => {
     const paths = linePaths(home);
     const first = await generateIdentityKeys(paths);
     markPublished(paths, first, "a");
@@ -236,12 +236,57 @@ describe("key storage", () => {
       .map((name) => readFileSync(join(paths.dir, name), "utf8"))
       .join("\n");
     expect(names.some((name) => name.endsWith(".candidate") || name.endsWith(".tmp"))).toBe(false);
-    expect(persisted).not.toContain(first.encryption_pkcs8);
-    expect(persisted).not.toContain(second.encryption_pkcs8);
+    expect(persisted).toContain(first.encryption_pkcs8);
+    expect(persisted).toContain(second.encryption_pkcs8);
     expect(persisted).toContain(third.encryption_pkcs8);
+    expect(loadEncryptionKeysForEpoch(paths, 1).encryption_pkcs8).toBe(first.encryption_pkcs8);
+    expect(loadEncryptionKeysForEpoch(paths, 2).encryption_pkcs8).toBe(second.encryption_pkcs8);
     expect(JSON.parse(readFileSync(paths.identityKeyFile, "utf8"))).toEqual({
       format: 2, identity_pkcs8: first.identity_pkcs8, identity_pub: first.identity_pub,
     });
+  });
+
+  it("evicts an unreferenced retained epoch on a rapid ninth rotation", async () => {
+    const paths = linePaths(home);
+    let keys = await generateIdentityKeys(paths);
+    for (let epoch = 1; epoch < 8; epoch += 1) {
+      keys = markPublished(paths, keys, epoch.toString(16));
+      keys = await rotateEncryptionKey(paths);
+    }
+    keys = markPublished(paths, keys, "8");
+    expect((await rotateEncryptionKey(paths)).epoch).toBe(9);
+    expect(() => loadEncryptionKeysForEpoch(paths, 1)).toThrow(/not available/i);
+  });
+
+  it("refuses to evict an epoch referenced by a live durable task and reports the task count", async () => {
+    const paths = linePaths(home);
+    let keys = await generateIdentityKeys(paths);
+    for (let epoch = 1; epoch < 8; epoch += 1) {
+      keys = markPublished(paths, keys, epoch.toString(16));
+      keys = await rotateEncryptionKey(paths);
+    }
+    keys = markPublished(paths, keys, "8");
+    const now = Date.now();
+    writeFileSync(paths.outboundJobsFile, JSON.stringify({
+      v: 1,
+      jobs: [{
+        message_id: "9".repeat(32), relay: "https://relay.test", address: "@acme/bob",
+        frame: {
+          type: "call_request",
+          envelope: {
+            v: 1, direction: "request", relay_origin: "relay.test", from: "@acme/alice",
+            to: "@acme/bob", key_id: "a".repeat(32), epoch: 1, enc: "A", ct: "B",
+          },
+          message_id: "9".repeat(32), delivery_mode: "durable", correlation_id: "f".repeat(32),
+        },
+        request_id: "1".repeat(32), request_transcript_hash: "2".repeat(64),
+        recipient_identity_pub: "pub", sender_epoch: 1,
+        created_at: now, expires_at: now + 60_000, state: "queued", task_id: "task-1",
+        submitted_at: now,
+      }],
+    }), { mode: 0o600 });
+    await expect(rotateEncryptionKey(paths)).rejects.toThrow(/1 live mailbox task.*epoch 1/i);
+    expect(loadKeys(paths).epoch).toBe(8);
   });
 
   it("refuses to rotate an epoch that was never successfully published", async () => {

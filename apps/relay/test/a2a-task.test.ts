@@ -199,7 +199,10 @@ describe("A2A task store", () => {
       "filter-callee", "tasks?status=TASK_STATE_COMPLETED&includeArtifacts=true",
     ), { headers: wsAuth("filter-caller", callerToken) });
     const completedBody = await withArtifacts.json<any>();
-    expect(completedBody.tasks[0]).not.toHaveProperty("artifacts");
+    expect(completedBody.tasks[0].artifacts[0].parts[0]).toMatchObject({
+      mediaType: "application/vnd.agentcall.hpke+json",
+      raw: expect.any(String),
+    });
 
     const timestamp = completedBody.tasks[0].status.timestamp as string;
     const oneNanosecondAfter = timestamp.replace(/(\.\d{3})Z$/, "$1000001Z");

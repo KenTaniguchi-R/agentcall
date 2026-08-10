@@ -1,7 +1,7 @@
 // Per-callee inbound call-frame admission window, keyed off the RATE_LIMIT_PER_HOUR
 // budget from @benree/agentcall-shared. This is unrelated to apps/relay/src/ratelimit/,
 // which throttles HTTP requests per route (RateLimiterDO shards / native CF bindings,
-// REGISTER/ROSTER_WRITE/AUDIT_* policies). This module instead tracks a sliding window
+// REGISTER/ADMIN_WRITE/AUDIT_* policies). This module instead tracks a sliding window
 // of call timestamps in the callee's own HandleDO storage under the `rl:` prefix, and
 // is called from HandleDO.webSocketMessage and HandleDO.alarm, not from rateLimit(...)
 // middleware.

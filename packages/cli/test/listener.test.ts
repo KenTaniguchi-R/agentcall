@@ -10,12 +10,13 @@ import {
   type EncryptionKeyRecordType,
 } from "@benree/agentcall-shared";
 import { startListener } from "../src/listener.js";
-import { getLinePaths, getMachinePaths, type LinePaths, type MachinePaths } from "../src/paths.js";
+import { getPaths, type Paths } from "../src/paths.js";
 import { AgentRunError, buildSpawnSpec } from "../src/runner.js";
 import { loadContexts, mintContextId, saveContexts, type ContextBinding } from "../src/contexts.js";
-import type { CallableLineConfig } from "../src/config.js";
+import type { CallableConfig } from "../src/config.js";
 import { openE2EEResponse, sealE2EERequest } from "../src/e2ee.js";
 import { generateIdentityKeys, type StoredKeys } from "../src/keys.js";
+import { loadExecutionJournal } from "../src/execution-journal.js";
 import { tempLine, tempMachine } from "./helpers.js";
 
 let httpServer: Server;
@@ -28,9 +29,8 @@ const requestByCall = new Map<string, E2EERequestPayloadType>();
 
 beforeAll(async () => {
   cryptoRoot = mkdtempSync(join(tmpdir(), "agentcall-listener-crypto-"));
-  const machine = getMachinePaths(cryptoRoot, cryptoRoot);
-  callerKeys = await generateIdentityKeys(getLinePaths(machine, "caller"));
-  listenerKeys = await generateIdentityKeys(getLinePaths(machine, "listener"));
+  callerKeys = await generateIdentityKeys(getPaths(join(cryptoRoot, "caller"), join(cryptoRoot, "caller")));
+  listenerKeys = await generateIdentityKeys(getPaths(join(cryptoRoot, "listener"), join(cryptoRoot, "listener")));
 });
 afterAll(() => rmSync(cryptoRoot, { recursive: true, force: true }));
 // Resolves immediately when a test never started a relay — `httpServer?.close()`
@@ -52,11 +52,11 @@ function fakeRelay(onConn: (ws: WsSocket) => void): Promise<string> {
   });
 }
 
-// CallableLineConfig, not LineConfig: `startListener` only accepts a config
-// that has already passed `assertCallableLine`, and annotating the fixture as
-// the wider `LineConfig` widens agent_kind back to optional at every spread
+// CallableConfig, not Config: `startListener` only accepts a config
+// that has already passed `assertCallable`, and annotating the fixture as
+// the wider `Config` widens agent_kind back to optional at every spread
 // site.
-const cfg: CallableLineConfig = { org: "acme", handle: "ken", token: "tok", agent_kind: "claude", relay: "unused" };
+const cfg: CallableConfig = { org: "acme", handle: "ken", token: "tok", agent_kind: "claude", relay: "unused" };
 
 function frames(ws: WsSocket, n: number): Promise<any[]> {
   return new Promise((resolve) => {
@@ -78,8 +78,10 @@ function frames(ws: WsSocket, n: number): Promise<any[]> {
               key_id: await keyIdFor(callerKeys.encryption_pub), epoch: callerKeys.epoch,
             },
             {
+              message_id: request.message_id!,
               request_id: request.request_id,
               request_transcript_hash: await transcriptHash(requestTranscript(request)),
+              ...(request.delivery_mode ? { delivery_mode: request.delivery_mode } : {}),
             },
           );
           got.push(response.outcome.kind === "reply"
@@ -96,18 +98,21 @@ async function sendIncoming(
   ws: WsSocket,
   frame: {
     call_id: string; from: string; message: string; task?: string; context_id?: string;
-    groups?: string[]; correlation_id?: string; traceparent?: string;
+    correlation_id?: string; traceparent?: string; durable?: boolean; lease_id?: string;
   },
 ): Promise<{ request: E2EERequestPayloadType; wire: Record<string, unknown> }> {
   const issuedAt = Date.now();
   const request: E2EERequestPayloadType = {
     v: 1, direction: "request", relay_origin: "127.0.0.1",
     from: `@acme/${frame.from}`, to: "@acme/ken",
+    message_id: crypto.randomUUID().replaceAll("-", ""),
     request_id: crypto.randomUUID().replaceAll("-", ""),
     sender_identity_key_id: await keyIdFor(callerKeys.identity_pub),
     recipient_encryption_key_id: await keyIdFor(listenerKeys.encryption_pub),
     recipient_epoch: listenerKeys.epoch, issued_at: issuedAt,
-    expires_at: issuedAt + RELAY_CALL_TIMEOUT_MS, message: frame.message,
+    expires_at: issuedAt + (frame.durable ? 72 * 60 * 60 * 1_000 : RELAY_CALL_TIMEOUT_MS),
+    ...(frame.durable ? { delivery_mode: "durable" as const } : {}),
+    message: frame.message,
     ...(frame.task ? { task: frame.task } : {}),
     ...(frame.context_id ? { context_id: frame.context_id } : {}),
   };
@@ -119,7 +124,11 @@ async function sendIncoming(
   });
   const wire = {
     type: "incoming_call", call_id: frame.call_id, from: frame.from,
-    groups: frame.groups ?? [], envelope,
+    envelope, message_id: request.message_id,
+    ...(frame.durable ? {
+      delivery_mode: "durable", lease_id: frame.lease_id ?? "lease-1",
+      execute_by: request.expires_at,
+    } : {}),
     correlation_id: frame.correlation_id ?? "f".repeat(32),
     ...(frame.traceparent ? { traceparent: frame.traceparent } : {}),
   };
@@ -131,14 +140,14 @@ async function sendIncoming(
 // so nothing in these tests can accidentally touch the real machine. Delegates
 // to helpers.ts's tempMachine (modeled on this function) so every temp dir
 // this file creates gets auto-teardown instead of leaking.
-function freshMachine(): MachinePaths {
+function freshMachine(): Paths {
   return tempMachine("agentcall-l-");
 }
 
 // No policy/task seeded — loadPolicy and loadTasks both fall back to their
 // built-in defaults (default_the built-in "ask" task),
 // which is enough for a plain message to resolve.
-function seededPaths(): LinePaths {
+function seededPaths(): Paths {
   return tempLine("claude", "agentcall-l-");
 }
 
@@ -161,7 +170,7 @@ function baseDeps(relay: string) {
         encryption: { record, signature: "unused" },
       };
     },
-    verifyAndPinPeer: async (_machine: MachinePaths, address: string) => ({
+    verifyAndPinPeer: async (_machine: Paths, address: string) => ({
       relay_origin: "relay.test",
       address, identity_pub: callerKeys.identity_pub, fingerprint: `SHA256:${"a".repeat(32)}`,
       first_seen_at: 1, highest_encryption_epoch: callerKeys.epoch, call_count: 1,
@@ -182,7 +191,7 @@ describe("startListener spawn directory", () => {
   // directory that is not there. `doctor` is where the stale entry gets named.
   it("falls back to the share directory when no root is usable", async () => {
     const machine = freshMachine();
-    const paths = getLinePaths(machine, "claude");
+    const paths = machine;
     mkdirSync(paths.dir, { recursive: true });
     writeFileSync(paths.scopeFile, JSON.stringify({
       roots: [join(machine.stateRoot, "deleted-repo")],
@@ -213,7 +222,7 @@ describe("startListener spawn directory", () => {
   // this caller's clearance, rather than from config.
   it("spawns in the labelled source and tells the agent what it may read", async () => {
     const machine = freshMachine();
-    const paths = getLinePaths(machine, "claude");
+    const paths = machine;
     const project = join(machine.stateRoot, "code", "api");
     mkdirSync(project, { recursive: true });
     mkdirSync(paths.dir, { recursive: true });
@@ -244,7 +253,7 @@ describe("startListener spawn directory", () => {
   // every such call fills its context with material it can only be refused on.
   it("does not spawn a caller inside a secret source", async () => {
     const machine = freshMachine();
-    const paths = getLinePaths(machine, "claude");
+    const paths = machine;
     const project = join(machine.stateRoot, "code", "internal-api");
     mkdirSync(project, { recursive: true });
     mkdirSync(paths.dir, { recursive: true });
@@ -324,7 +333,7 @@ describe("startListener", () => {
   });
 
   it("answers an incoming call: accepted -> started -> result, and audits", async () => {
-    let paths!: LinePaths;
+    let paths!: Paths;
     const relayReady = new Promise<WsSocket>((resolveWs) => {
       void fakeRelay((ws) => resolveWs(ws)).then((url) => {
         const deps = baseDeps(url);
@@ -358,11 +367,62 @@ describe("startListener", () => {
     expect(statSync(paths.callsLog).mode & 0o777).toBe(0o600);
   });
 
+  it("binds durable acknowledgements to the lease and journals the process boundary", async () => {
+    const leaseId = "00000000-0000-4000-8000-000000000007";
+    let paths!: Paths;
+    const relayReady = new Promise<WsSocket>((resolveWs) => {
+      void fakeRelay((ws) => resolveWs(ws)).then((url) => {
+        const deps = baseDeps(url);
+        paths = deps.paths;
+        stopper = startListener({ ...deps, run: async () => ({ text: "later answer" }) });
+      });
+    });
+    const ws = await relayReady;
+    const expectFrames = frames(ws, 3);
+    await sendIncoming(ws, {
+      call_id: "durable-1", from: "shusaku", message: "q?", durable: true, lease_id: leaseId,
+    });
+    const [accepted, started, result] = await expectFrames;
+    expect(accepted).toMatchObject({ type: "call_accepted", lease_id: leaseId });
+    expect(started).toMatchObject({ type: "call_started", lease_id: leaseId });
+    expect(result._wire).toMatchObject({ type: "call_outcome", lease_id: leaseId });
+    expect(loadExecutionJournal(paths)).toMatchObject([{ call_id: "durable-1", state: "terminal" }]);
+  });
+
+  it("never respawns a durable call already past the journal start boundary", async () => {
+    let runs = 0;
+    const relayReady = new Promise<WsSocket>((resolveWs) => {
+      void fakeRelay((ws) => resolveWs(ws)).then((url) => {
+        stopper = startListener({
+          ...baseDeps(url), run: async () => { runs += 1; return { text: "once" }; },
+        });
+      });
+    });
+    const ws = await relayReady;
+    const firstFrames = frames(ws, 3);
+    const first = await sendIncoming(ws, {
+      call_id: "durable-once", from: "shusaku", message: "side effect", durable: true,
+      lease_id: "00000000-0000-4000-8000-000000000008",
+    });
+    await firstFrames;
+
+    const secondFrame = frames(ws, 1);
+    ws.send(JSON.stringify({
+      ...first.wire, lease_id: "00000000-0000-4000-8000-000000000009",
+    }));
+    const [failure] = await secondFrame;
+    expect(failure).toMatchObject({
+      type: "call_failed", code: "agent_error",
+      _wire: { terminal_reason: "indeterminate_execution" },
+    });
+    expect(runs).toBe(1);
+  });
+
   // The reply is E2EE, so this process is the last place a credential the agent
   // read can be caught. Redaction has to happen before the wire AND before the
   // audit slice — calls.log is what gets pasted into a bug report.
   it("redacts credentials from the reply on the wire and in the audit log", async () => {
-    let paths!: LinePaths;
+    let paths!: Paths;
     // Assembled, not a literal — see the note in test/redact.test.ts.
     const leaked = "ghp" + "_abcdefghijklmnopqrstuvwxyz0123456789AB";
     const relayReady = new Promise<WsSocket>((resolveWs) => {
@@ -391,7 +451,7 @@ describe("startListener", () => {
   });
 
   it("audits a reply sealing failure once without retrying it as an agent failure", async () => {
-    let paths!: LinePaths;
+    let paths!: Paths;
     let sealAttempts = 0;
     const errorSpy = vi.spyOn(console, "error").mockImplementation(() => {});
     try {
@@ -451,7 +511,7 @@ describe("startListener", () => {
   });
 
   it("maps runner failures to call_failed with the runner's code, without leaking stderr to the caller", async () => {
-    let paths!: LinePaths;
+    let paths!: Paths;
     const relayReady = new Promise<WsSocket>((resolveWs) => {
       void fakeRelay((ws) => resolveWs(ws)).then((url) => {
         const deps = baseDeps(url);
@@ -518,7 +578,7 @@ describe("startListener acceptance and cancellation", () => {
 
   it("acknowledges cancellation of a running call only after the agent exits", async () => {
     let exited = false;
-    let paths!: LinePaths;
+    let paths!: Paths;
     const relayReady = new Promise<WsSocket>((resolveWs) => {
       void fakeRelay((ws) => resolveWs(ws)).then((url) => {
         const deps = baseDeps(url);
@@ -560,12 +620,12 @@ describe("startListener acceptance and cancellation", () => {
   });
 });
 
-function seedPolicy(paths: LinePaths, policy: object) {
+function seedPolicy(paths: Paths, policy: object) {
   mkdirSync(paths.dir, { recursive: true });
   writeFileSync(paths.policyFile, JSON.stringify(policy));
 }
 
-function seedTask(paths: LinePaths, id: string, frontmatter: string[], body = "do it\n") {
+function seedTask(paths: Paths, id: string, frontmatter: string[], body = "do it\n") {
   const dir = join(paths.tasksDir, id);
   mkdirSync(dir, { recursive: true });
   writeFileSync(join(dir, "SKILL.md"), ["---", ...frontmatter, "---", body].join("\n"));
@@ -574,7 +634,7 @@ function seedTask(paths: LinePaths, id: string, frontmatter: string[], body = "d
 describe("startListener task resolution", () => {
   it("refuses a blocked caller without spawning, and audits it", async () => {
     let spawned = false;
-    let paths!: LinePaths;
+    let paths!: Paths;
     const relayReady = new Promise<WsSocket>((resolveWs) => {
       void fakeRelay((ws) => resolveWs(ws)).then((url) => {
         const deps = baseDeps(url);
@@ -619,72 +679,9 @@ describe("startListener task resolution", () => {
     expect(spawned).toBe(true);
   });
 
-  // Was "raises clearance for a relay-attested group". A group no longer raises
-  // an amount — with one grantable level it decides whether the line answers at
-  // all — so what an attestation must still do is open a line the default closes.
-  it("answers an attested group member on a line that is closed by default", async () => {
-    const rosterId = "g".repeat(22);
-    const seen: { ran?: boolean } = {};
-    const relayReady = new Promise<WsSocket>((resolveWs) => {
-      void fakeRelay((ws) => resolveWs(ws)).then((url) => {
-        const deps = baseDeps(url);
-        seedTask(deps.paths, "schedule-meeting", ["description: d"]);
-        seedPolicy(deps.paths, {
-          default_access: "blocked", callers: {},
-          groups: { eng: { roster_id: rosterId, access: "allowed" } },
-        });
-        stopper = startListener({
-          ...deps,
-          run: async () => { seen.ran = true; return { text: "booked" }; },
-        });
-      });
-    });
-    const ws = await relayReady;
-    const expectFrames = frames(ws, 3);
-    await sendIncoming(ws, {
-      call_id: "cg1", from: "stranger", groups: [rosterId], message: "book", task: "schedule-meeting",
-    });
-    const [, , result] = await expectFrames;
-    expect(seen.ran).toBe(true);
-    expect(result).toMatchObject({ type: "call_result", call_id: "cg1", task: "schedule-meeting" });
-  });
-
-  // The mirror of the above: an un-attested claim must not open anything.
-  // `groups` comes from the relay, but the un-attested path is what a caller
-  // could otherwise assert about themselves.
-  it("leaves an unattested caller at the default", async () => {
-    const rosterId = "g".repeat(22);
-    const seen: { ran?: boolean } = {};
-    const relayReady = new Promise<WsSocket>((resolveWs) => {
-      void fakeRelay((ws) => resolveWs(ws)).then((url) => {
-        const deps = baseDeps(url);
-        seedTask(deps.paths, "schedule-meeting", ["description: d"]);
-        seedPolicy(deps.paths, {
-          default_access: "blocked", callers: {},
-          groups: { eng: { roster_id: rosterId, access: "allowed" } },
-        });
-        stopper = startListener({
-          ...deps,
-          run: async () => { seen.ran = true; return { text: "booked" }; },
-        });
-      });
-    });
-    const ws = await relayReady;
-    // One frame, not three: a refused caller never reaches accepted/started.
-    const expectFrames = frames(ws, 1);
-    await sendIncoming(ws, {
-      call_id: "cg2", from: "stranger", message: "book", task: "schedule-meeting",
-    });
-    const [failed] = await expectFrames;
-    // The roster would have opened the line, but nothing attested it — so the
-    // caller stays at the closed default and no agent runs at all.
-    expect(failed).toMatchObject({ type: "call_failed", call_id: "cg2", code: "blocked" });
-    expect(seen.ran).toBeUndefined();
-  });
-
   it("runs a task with its timeout and derived workdir, echoing task in call_result", async () => {
     const seen: { prompt?: string; workdir?: string; timeout?: number } = {};
-    let paths!: LinePaths;
+    let paths!: Paths;
     const relayReady = new Promise<WsSocket>((resolveWs) => {
       void fakeRelay((ws) => resolveWs(ws)).then((url) => {
         const deps = baseDeps(url);
@@ -692,7 +689,7 @@ describe("startListener task resolution", () => {
         // Labelled in the map, not declared on the task: #372 deleted task
         // `workdir`, so the same directory now has to arrive through the
         // sensitivity map at the caller's clearance.
-        const calendar = join(paths.machine.stateRoot, "code", "calendar");
+        const calendar = join(paths.stateRoot, "code", "calendar");
         mkdirSync(calendar, { recursive: true });
         mkdirSync(deps.paths.dir, { recursive: true });
         writeFileSync(deps.paths.scopeFile, JSON.stringify({ roots: [calendar] }));
@@ -716,8 +713,8 @@ describe("startListener task resolution", () => {
     const [, , result] = await expectFrames;
     expect(result).toMatchObject({ type: "call_result", call_id: "c3", text: "booked", task: "schedule-meeting" });
     expect(seen.prompt).toContain("check the calendar");
-    expect(seen.prompt).toContain(join(paths.machine.stateRoot, "code", "calendar"));
-    expect(seen.workdir).toBe(join(paths.machine.stateRoot, "code", "calendar"));
+    expect(seen.prompt).toContain(join(paths.stateRoot, "code", "calendar"));
+    expect(seen.workdir).toBe(join(paths.stateRoot, "code", "calendar"));
     expect(seen.timeout).toBe(60_000);
     // The caller's OWN clearance, not the line default: this is the value
     // resolveAdmission's policy object carries through to the spawn, so a
@@ -748,7 +745,7 @@ describe("startListener task resolution", () => {
 
   it("maps a corrupt policy file to call_failed agent_error without spawning, and without leaking the parse error", async () => {
     let spawned = false;
-    let paths!: LinePaths;
+    let paths!: Paths;
     const relayReady = new Promise<WsSocket>((resolveWs) => {
       void fakeRelay((ws) => resolveWs(ws)).then((url) => {
         const deps = baseDeps(url);
@@ -772,21 +769,21 @@ describe("startListener task resolution", () => {
   });
 });
 
-describe("startListener line name propagation", () => {
-  it("regressing this breaks the PreToolUse guard fail-closed on every answered call: line name must reach AGENTCALL_LINE", async () => {
-    const paths = getLinePaths(freshMachine(), "sales");
+describe("startListener call identity propagation", () => {
+  it("passes the call and correlation ids to the agent runner", async () => {
+    const paths = freshMachine();
     const captured: {
       kind?: "claude" | "codex"; prompt?: string; workdir?: string;
-      envelope?: unknown; callId?: string; lineName?: string; correlationId?: string;
+      envelope?: unknown; callId?: string; correlationId?: string;
     } = {};
     const relayReady = new Promise<WsSocket>((resolveWs) => {
       void fakeRelay((ws) => resolveWs(ws)).then((url) => {
         stopper = startListener({
           ...baseDeps(url), paths,
           loadConfig: () => ({ ...cfg, relay: url }),
-          run: async ({ kind, prompt, workdir, callId, lineName, correlationId }) => {
+          run: async ({ kind, prompt, workdir, callId, correlationId }) => {
             captured.kind = kind; captured.prompt = prompt; captured.workdir = workdir;
-            captured.callId = callId; captured.lineName = lineName;
+            captured.callId = callId;
             captured.correlationId = correlationId;
             return { text: "ok" };
           },
@@ -805,37 +802,12 @@ describe("startListener line name propagation", () => {
     });
     await done;
 
-    // Compared against `paths.name`, the actual source of truth this test is
-    // exercising — not a second literal hand-typed to match it, which would
-    // let a wrong-but-internally-consistent value slip through undetected.
-    expect(captured.lineName).toBe(paths.name);
-
-    // Re-derive a spawn spec from exactly what the listener handed run(...),
-    // through the real buildSpawnSpec — same as runAgent itself would do —
-    // so the assertion lands on env.AGENTCALL_LINE, the value the guard
-    // subprocess actually reads, not on the intermediate lineName string.
-    //
-    // `toBe`, not `toContain`/`toMatch`, and this is load-bearing: the
-    // default workdir (position 2, `captured.workdir`, 0-based like the
-    // buildSpawnSpec positions cited below) resolves to
-    // `<stateRoot>/AgentCall/sales/public` — which CONTAINS "sales" as a path
-    // The workdir<->lineName swap this used to guard against is now a compile
-    // error rather than a runtime one, since both are named fields. Kept
-    // because it still pins that the listener passes the LINE name and not the
-    // handle, which no type can express.
     const spec = buildSpawnSpec({
       kind: captured.kind!, prompt: captured.prompt!, workdir: captured.workdir!,
       resolveBin: () => "/fake/claude",
-      callId: captured.callId!, lineName: captured.lineName!,
-    });
-    expect(spec.env?.AGENTCALL_LINE).toBe(paths.name);
-    // Pins the callId position too. buildSpawnSpec's tail has 4 plain-`string`-
-    // typed positions that a swap among them would compile clean: prompt,
-    // workdir, callId, lineName. `kind` also sits in that tail (position 0)
-    // but is typed `AgentKind` ("claude"|"codex"), not `string` — swapping it
-    // with any of the four above fails to typecheck, so it needs no separate
-    // runtime assertion here the way callId/workdir/lineName do.
+      callId: captured.callId!,     });
     expect(spec.env?.AGENTCALL_CALL_ID).toBe("c1");
+    expect(spec.env?.AGENTCALL_LINE).toBeUndefined();
     expect(captured.correlationId).toBe("a".repeat(32));
   });
 
@@ -875,7 +847,7 @@ function fakeSocketFactory(onConnect: (url: string, opts: { headers: Record<stri
 const tick = () => new Promise<void>((r) => setTimeout(r, 0));
 
 describe("startListener config reload", () => {
-  let linePaths: LinePaths;
+  let linePaths: Paths;
   beforeEach(() => { linePaths = seededPaths(); });
 
   // Config used to be resolved once at startListener() startup and captured
@@ -908,103 +880,20 @@ describe("startListener config reload", () => {
   });
 });
 
-describe("startListener reconnect isolation", () => {
-  // Proves the isolation claim behind putting N lines in one process: a line
-  // whose config goes bad AFTER startup (not the "throws at start" case
-  // above) must not crash any other line's socket in the same process, and
-  // must keep retrying rather than permanently dropping out. Two real
-  // `startListener` instances stand in for "two lines up" — production has
-  // exactly this shape via `startAllListeners`, one `startListener` call per
-  // line, all in the same process.
-  it("a reconnect that throws doesn't crash other lines, doesn't touch their sockets, and keeps retrying", async () => {
-    const errors: string[] = [];
-    const errorSpy = vi.spyOn(console, "error").mockImplementation((...args: unknown[]) => {
-      errors.push(args.map(String).join(" "));
-    });
-    try {
-      // The healthy line: normal config throughout, never reconnects on its
-      // own during this test.
-      const healthyPaths = getLinePaths(freshMachine(), "healthy");
-      const healthySockets = fakeSocketFactory(() => {});
-      const healthy = startListener({
-        relay: "https://r.example", paths: healthyPaths,
-        loadConfig: () => ({ org: "acme", handle: "h", token: "t", relay: "https://r.example", agent_kind: "claude" }),
-        socketFactory: healthySockets.factory,
-        backoffMs: () => 0,
-      });
-      const healthySocketBeforeBreak = healthySockets.last();
-
-      // The broken line's THIRD loadConfig() call throws — simulating a
-      // config.json that went bad, or a workdir removed, sometime after this
-      // line's listener already started successfully once. Three, not two:
-      // startListener reads loadConfig() once up front (call #1, purely to
-      // decide codex threading — see the `startupKind` comment in
-      // listener.ts) before connect() ever runs, then again for the initial
-      // synchronous connect() (call #2, must succeed or this whole
-      // `startListener` call throws instead of the reconnect below getting a
-      // chance to). Call #3 is the first actual reconnect, which is the one
-      // this test forces and which must be caught internally.
-      let loadConfigCalls = 0;
-      const brokenPaths = getLinePaths(freshMachine(), "broken");
-      const brokenSockets = fakeSocketFactory(() => {});
-      const broken = startListener({
-        relay: "https://r.example", paths: brokenPaths,
-        loadConfig: () => {
-          loadConfigCalls++;
-          if (loadConfigCalls === 3) throw new Error("config.json is corrupt");
-          return { org: "acme", handle: "b", token: "t", relay: "https://r.example", agent_kind: "claude" };
-        },
-        socketFactory: brokenSockets.factory,
-        backoffMs: () => 0,
-      });
-      const brokenSocketBeforeBreak = brokenSockets.last();
-
-      // Force the broken line's reconnect — this is the attempt whose
-      // loadConfig() throws (call #3).
-      brokenSockets.last().emit("close");
-      await tick();
-
-      // (a) nothing escaped the process — reaching this line at all is part
-      // of the proof, plus the throw was actually caught and reported.
-      expect(errors.some((e) => e.includes('"broken"') && e.includes("config.json is corrupt"))).toBe(true);
-      // No new socket was created for the broken line on this attempt:
-      // loadConfig() threw before the socket factory was ever called.
-      expect(brokenSockets.last()).toBe(brokenSocketBeforeBreak);
-
-      // (b) the healthy line's socket is untouched — same object, not
-      // silently torn down or replaced by a bug that reconnects every line
-      // instead of just the broken one.
-      expect(healthySockets.last()).toBe(healthySocketBeforeBreak);
-
-      // (c) the broken line keeps retrying rather than giving up: its
-      // scheduled reconnect fires again on its own (no external nudge needed
-      // here — the catch block calls scheduleReconnect()), and this time
-      // loadConfig() succeeds (call #4), producing a genuinely new socket.
-      await tick();
-      expect(brokenSockets.last()).not.toBe(brokenSocketBeforeBreak);
-
-      healthy.stop();
-      broken.stop();
-    } finally {
-      errorSpy.mockRestore();
-    }
-  });
-});
-
 // Drives one inbound call and returns the frames the listener sent back.
 // `seed` runs against the deps before the listener starts, so a test can plant
 // a binding, a policy, or a task.
 async function oneCall(
-  incoming: { message: string; task?: string; context_id?: string; groups?: string[] },
+  incoming: { message: string; task?: string; context_id?: string },
   opts: {
-    seed?: (paths: LinePaths) => void;
+    seed?: (paths: Paths) => void;
     run?: (...a: any[]) => Promise<{ text: string; session_id?: string }>;
     saveContexts?: () => void;
     frameCount?: number;
-    config?: CallableLineConfig;
+    config?: CallableConfig;
     codexThreadingEnabled?: () => boolean;
   } = {},
-): Promise<{ frames: any[]; paths: LinePaths }> {
+): Promise<{ frames: any[]; paths: Paths }> {
   let deps!: ReturnType<typeof baseDeps>;
   const got = await new Promise<any[]>((resolve) => {
     void fakeRelay((ws) => {
@@ -1039,7 +928,7 @@ describe("listener contexts", () => {
 
   const seedBinding =
     (over: Partial<ContextBinding> = {}) =>
-    (paths: LinePaths) => {
+    (paths: Paths) => {
       const b: ContextBinding = {
         context_id: SEEDED_CTX,
         agent_session_id: "real-agent-session",

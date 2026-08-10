@@ -5,13 +5,13 @@ import {
   installListenerService,
   listenerServiceFile,
 } from "../src/listener-service.js";
-import { getMachinePaths } from "../src/paths.js";
+import { getPaths } from "../src/paths.js";
 import { tempDir } from "./helpers.js";
 
 describe("background listener service", () => {
   it("installs and starts one user-level systemd service on Linux", () => {
     const home = tempDir("agentcall-systemd-");
-    const machine = getMachinePaths(home, home);
+    const machine = getPaths(home, home);
     const calls: string[][] = [];
 
     installListenerService(machine, {
@@ -39,7 +39,7 @@ describe("background listener service", () => {
 
   it("repairs an existing systemd unit to owner-only permissions", () => {
     const home = tempDir("agentcall-systemd-");
-    const machine = getMachinePaths(home, home);
+    const machine = getPaths(home, home);
     const unitFile = listenerServiceFile(machine, "linux");
     mkdirSync(join(home, ".config/systemd/user"), { recursive: true });
     writeFileSync(unitFile, "stale");

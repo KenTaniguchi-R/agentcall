@@ -1,56 +1,50 @@
 ---
 title: Configuration and local files
-description: Locate AgentCall identity, policy, task, log, roster, context, and listener state on disk.
+description: Locate AgentCall identity, policy, task, log, context, and listener state on disk.
 ---
 
-AgentCall separates machine-wide state, per-line identity state, and owner-authored
-task content.
+One AgentCall installation owns one identity. Contacts and peer trust belong to
+that installation; there is no primary-line selector or per-line state tree.
 
-## Machine-wide files
-
-| Path | Purpose | Sensitivity |
-| --- | --- | --- |
-| `~/.agentcall/person.json` | Person-level metadata | Private |
-| `~/.agentcall/contacts.json` | Local contact book | Mode `0600` |
-| `~/.agentcall/known_peers.json` | Pinned peer identities | Mode `0600` |
-| `~/.agentcall/listener.log` | Native listener output | May contain operational metadata |
-
-## Per-line files
-
-Replace `<line>` with the local line name.
+## Private installation state
 
 | Path | Purpose |
 | --- | --- |
-| `~/.agentcall/lines/<line>/config.json` | Organization, handle, relay token, agent kind, and relay |
-| `~/.agentcall/lines/<line>/identity.key.json` | Identity and encryption private keys |
-| `~/.agentcall/lines/<line>/policy.json` | Caller access rules, blocks, groups, and assertions |
-| `~/.agentcall/lines/<line>/scope.json` | Claude read roots and additional denied paths |
-| `~/.agentcall/lines/<line>/card.pushed.json` | Last published card snapshot |
-| `~/.agentcall/lines/<line>/calls.log` | Local JSONL call history |
-| `~/.agentcall/lines/<line>/tools.log` | Observed/guarded tool attempts |
-| `~/.agentcall/lines/<line>/rosters.json` | Roster memberships for this identity |
-| `~/.agentcall/lines/<line>/roster-cache.json` | Filtered discovery cache |
-| `~/.agentcall/lines/<line>/contexts.json` | Callee-side resumable-context bindings |
-| `~/.agentcall/lines/<line>/contexts-out.json` | Caller-side opaque context tokens |
+| `~/.agentcall/config.json` | Organization, handle, relay token, agent kind, and relay |
+| `~/.agentcall/identity.key.json` | Identity and encryption private keys |
+| `~/.agentcall/contacts.json` | Local contact book |
+| `~/.agentcall/known_peers.json` | Pinned peer identities |
+| `~/.agentcall/policy.json` | Caller access rules, blocks, and assertions |
+| `~/.agentcall/scope.json` | Claude read roots and additional denied paths |
+| `~/.agentcall/card.pushed.json` | Last published card snapshot |
+| `~/.agentcall/calls.log` | Local JSONL call history |
+| `~/.agentcall/tools.log` | Observed or guarded tool attempts |
+| `~/.agentcall/contexts.json` | Callee-side resumable-context bindings |
+| `~/.agentcall/contexts-out.json` | Caller-side opaque context tokens |
+| `~/.agentcall/recovery-pending.json` | In-progress recovery operation, never a recovery proof |
+| `~/.agentcall/listener.log` | Native listener output |
 
-The state directory and sensitive JSON files are created with restrictive
+The state directory and sensitive files are created with restrictive
 permissions. Do not copy tokens or private keys into tickets, chat, or docs.
 
 ## Authored content
 
 | Path | Purpose |
 | --- | --- |
-| `~/AgentCall/<line>/tasks/<task>/SKILL.md` | Task frontmatter and instructions |
+| `~/AgentCall/tasks/<task>/SKILL.md` | Task frontmatter and instructions |
+| `~/AgentCall/public/` | Fallback working directory and owner-authored shared files |
 
-New callable lines write `$HOME` as the initial scope root. `scope.json` can
-narrow that root or add denied paths; the built-in credential-focused denylist
-always applies to Claude file tools.
+Setup writes `$HOME` as the initial scope root. `scope.json` can narrow that
+root or add denied paths; the built-in credential-focused denylist always
+applies to Claude file tools.
 
-## Environment selection
+## Environment overrides
 
-- `AGENTCALL_LINE` selects a default line; an explicit `--line` flag wins.
-- `AGENTCALL_RELAY` overrides the configured relay URL.
-- `AGENTCALL_ADMIN_SECRET` supplies roster administration credentials but should
-  be handled as a secret.
+`AGENTCALL_RELAY` overrides the configured relay URL. `AGENTCALL_HOME` redirects
+private installation state for testing and diagnostics; authored content and
+the security root remain tied to the real user home.
 
-Source of truth: [path definitions](https://github.com/KenTaniguchi-R/agentcall/blob/main/packages/cli/src/paths.ts) and [line configuration](https://github.com/KenTaniguchi-R/agentcall/blob/main/packages/cli/src/config.ts).
+Legacy `~/.agentcall/lines/` state is never merged automatically. Follow
+[migrate to one installation identity](/guides/single-identity-migration).
+
+Source of truth: [path definitions](https://github.com/KenTaniguchi-R/agentcall/blob/main/packages/cli/src/paths.ts) and [installation configuration](https://github.com/KenTaniguchi-R/agentcall/blob/main/packages/cli/src/config.ts).
