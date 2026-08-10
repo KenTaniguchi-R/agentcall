@@ -1,5 +1,4 @@
 import { existsSync, mkdirSync, writeFileSync } from "node:fs";
-import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { describe, expect, it } from "vitest";
 import { tempDir } from "./helpers.js";
@@ -11,7 +10,6 @@ import {
   checkAgentBinary,
   checkCodexAuth,
   checkGuard,
-  checkRelaySelfCall,
   checkAgentSpawn,
   classifyAgentFailure,
   formatCheck,
@@ -306,34 +304,6 @@ describe("verifyAgent", () => {
     });
     expect(checks).toHaveLength(1);
     expect(checks[0].ok).toBe(false);
-  });
-});
-
-describe("checkRelaySelfCall", () => {
-  const cfg = { org: "acme", handle: "ken", token: "tok", agent_kind: "claude" as const, relay: "https://relay.example" };
-  const paths = getPaths(tmpdir(), tmpdir());
-
-  it("calls the agent's own address through the relay and passes on a reply", async () => {
-    const seen: Array<{ org: string; from: string; to: string; relay: string; token: string; message: string; timeoutMs?: number }> = [];
-    const c = await checkRelaySelfCall(cfg, paths, async (opts) => {
-      seen.push({ org: opts.org, from: opts.from, to: opts.to, relay: opts.relay, token: opts.token, message: opts.message, timeoutMs: opts.timeoutMs });
-      return { type: "call_reply", call_id: "c1", text: "hi", task: "ask" } as never;
-    });
-    expect(c).toMatchObject({ name: "relay self-call", ok: true });
-    expect(seen).toEqual([
-      {
-        from: "ken", to: "ken", relay: "https://relay.example", org: "acme", token: "tok",
-        message: "agentcall doctor self-test: reply briefly", timeoutMs: VERIFY_TIMEOUT_MS + 30_000,
-      },
-    ]);
-  });
-
-  it("fails with a launchd-environment hint when the call errors", async () => {
-    const c = await checkRelaySelfCall(cfg, paths, async () => {
-      throw new Error("The remote agent hit an error while answering.");
-    });
-    expect(c.ok).toBe(false);
-    expect(c.hint).toContain("listener");
   });
 });
 

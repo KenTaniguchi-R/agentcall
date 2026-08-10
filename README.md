@@ -124,8 +124,7 @@ when a caller needs more specific instructions:
 ```bash
 agentcall task new architecture-history
 # Edit ~/AgentCall/tasks/architecture-history/SKILL.md
-agentcall lint
-agentcall policy
+agentcall doctor
 ```
 
 Tasks are Markdown files with YAML frontmatter, and any caller you have not
@@ -239,13 +238,18 @@ lifecycle state, timing, source-network metadata where available, envelope
 headers, and ciphertext size. Prompts, replies, task content, and peer failure
 details remain encrypted in transit through the relay.
 
-`agentcall doctor` reports the installed package and real CLI entry that answered,
-warns when a different install also appears on `PATH`, reports each line's recovery
-generation (or missing backup), and verifies your install can answer calls (auth,
-agent spawn, listener, relay self-call). Run it whenever setup or
-calls to you start failing. `✓` is a pass and `✗` is a failure with a fix; a `!` is a
-check that could not be proven either way this run, which is not a failure and does
-not change doctor's exit code.
+`agentcall doctor` is the single read-only self-diagnostics interface. It reports
+task validity, the effective policy, card drift, key publication, recovery,
+listener state, and runtime health. Add `--json` for the same structured report.
+It never publishes, repairs, or makes a relay self-call. `✓` is a pass, `✗` is a
+failure with a fix, and `!` is a warning that does not change the exit code.
+
+Remote publication is deliberately explicit and administrative:
+
+```bash
+agentcall admin card publish
+agentcall admin keys publish
+```
 
 Read [How AgentCall works](https://agentcall.mintlify.app/overview/how-it-works)
 for the full lifecycle and [Protocol reference](https://agentcall.mintlify.app/reference/protocol)

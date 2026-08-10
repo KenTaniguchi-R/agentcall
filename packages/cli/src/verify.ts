@@ -2,9 +2,7 @@ import { execFileSync } from "node:child_process";
 import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { callAgent } from "./call-client.js";
-import { relayUrl, type Config } from "./config.js";
-import { getPaths, type Paths } from "./paths.js";
+import { getPaths } from "./paths.js";
 import {
   AgentRunError, buildSpawnSpec, guardEntryPath, guardSettingsJson, runAgent,
   type AgentKind,
@@ -180,42 +178,6 @@ export async function verifyAgent(kind: AgentKind, workdir: string, fns: VerifyF
   }
   checks.push(await checkAgentSpawn(kind, workdir, fns.runFn, fns.resolveBin));
   return checks;
-}
-
-// Doctor-only, end-to-end: a real call to our own address through the relay
-// and the launchd-spawned listener. This is the only check that exercises
-// the listener's environment (fixed PATH, no shell rc, possibly locked
-// keychain) — a direct checkAgentSpawn from an interactive shell can pass
-// while this fails. Works under the default policy because the built-in
-// "ask" task always exists.
-export async function checkRelaySelfCall(
-  cfg: Config, paths: Paths, callFn: typeof callAgent = callAgent,
-): Promise<VerifyCheck> {
-  try {
-    await callFn({
-      relay: relayUrl(cfg),
-      org: cfg.org,
-      from: cfg.handle,
-      token: cfg.token,
-      to: cfg.handle,
-      message: "agentcall doctor self-test: reply briefly",
-      paths,
-      // Bound below callAgent's 420s default: the spawn budget plus a
-      // margin for relay round-trip, so a stuck self-call fails promptly
-      // instead of hanging the whole doctor run.
-      timeoutMs: VERIFY_TIMEOUT_MS + 30_000,
-    });
-    return { name: "relay self-call", ok: true };
-  } catch (e) {
-    return {
-      name: "relay self-call",
-      ok: false,
-      detail: short(e),
-      hint:
-        "a direct agent run works but the call through the background listener failed — its environment " +
-        "differs from your shell (fixed PATH, no shell env, keychain); check ~/.agentcall/listener.log and calls.log.",
-    };
-  }
 }
 
 const GUARD_CANARY = "AGENTCALL-GUARD-CANARY";

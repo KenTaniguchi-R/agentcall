@@ -10,15 +10,13 @@ import { register as registerSetup } from "./commands/setup.js";
 import { register as registerRecovery } from "./commands/recovery-register.js";
 import { register as registerInvite } from "./commands/invite.js";
 import { register as registerInspect } from "./commands/inspect.js";
-import { register as registerKeys } from "./commands/keys.js";
+import { register as registerAdmin } from "./commands/admin.js";
 import { register as registerPeer } from "./commands/peer.js";
 import { register as registerDoctor } from "./commands/doctor.js";
 import { register as registerHistory } from "./commands/history.js";
-import { register as registerPolicy } from "./commands/policy.js";
 import { register as registerListen } from "./commands/listen.js";
 import { register as registerTask } from "./commands/task.js";
 import { register as registerGrants } from "./commands/grants.js";
-import { registerCard, registerLint } from "./commands/card.js";
 export function createProgram(): Command {
 const program = new Command();
 program.name("agentcall").description("Call other people's coding agents").version("0.4.0");
@@ -28,12 +26,9 @@ registerAudit(program, installationFor);
 registerCall(program);
 registerInspect(program);
 registerPeer(program);
-registerKeys(program);
+registerAdmin(program);
 registerDoctor(program);
 registerHistory(program, installationFor);
-registerLint(program);
-registerPolicy(program);
-registerCard(program);
 registerContacts(program);
 function installationFor(): Installation | undefined {
   try {

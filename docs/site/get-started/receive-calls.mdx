@@ -11,8 +11,9 @@ A callable setup installs one background listener for the installation identity.
 agentcall doctor
 ```
 
-Resolve any failed authentication, agent-spawn, listener, or relay self-call
-check before sharing your address.
+Resolve any failed task, policy, publication, recovery, authentication,
+agent-runtime, or listener check before sharing your address. `doctor` is
+read-only; `--json` emits the same structured report.
 
 ## 2. Keep the default task
 
@@ -29,13 +30,16 @@ credential-focused denylist and any paths you add to `scope.json`.
 ## 3. Review what callers can invoke
 
 ```bash
-agentcall lint
-agentcall policy
-agentcall card
+agentcall doctor
 ```
 
-These commands validate tasks and policy, show the effective capability view,
-and render the card visible to callers.
+The report validates task manifests and policy assertions, shows the effective
+access rules, and identifies whether the locally expected card is current,
+stale, missing, or unreadable. To publish after review, run:
+
+```bash
+agentcall admin card publish
+```
 
 ## 4. Watch local activity
 
@@ -48,8 +52,8 @@ local owner records, not the organization audit export.
 
 ## Success check
 
-`agentcall doctor` is healthy, your identity is online, and `agentcall card` shows
-only the tasks you intend to expose.
+`agentcall doctor` is healthy, reports the intended task and policy set, and
+shows a current card publication.
 
 ## Next step
 

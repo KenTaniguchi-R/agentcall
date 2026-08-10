@@ -38,10 +38,12 @@ scope, so do not treat a task as a security boundary. Run these commands after
 policy or task changes:
 
 ```bash
-agentcall lint
-agentcall policy
-agentcall card
+agentcall doctor
 ```
+
+`doctor` is read-only and reports the effective policy and publication drift;
+use `agentcall admin card publish` or `agentcall admin keys publish` only after
+reviewing the result.
 
 For a suspected relay-token leak, run `agentcall rotate` and restart the
 listener so an already-connected socket does not keep using the old credential.

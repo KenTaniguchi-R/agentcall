@@ -120,7 +120,7 @@ async function createInstallation(
     saveConfig(paths, config);
     writeJsonAtomic(paths.scopeFile, defaultScope(paths.userHome));
     try { await (opts.publishKeysFn ?? publishStoredKeys)(config, keys, paths); }
-    catch (error) { console.error(`Warning: keys are stored but could not be published (${String(error)}). Run \`agentcall keys publish\` later.`); }
+    catch (error) { console.error(`Warning: keys are stored but could not be published (${String(error)}). Run \`agentcall admin keys publish\` later.`); }
     return config;
   });
 }
@@ -131,7 +131,7 @@ async function prepareCallable(config: Config, paths: Paths, opts: SetupOpts, re
   mkdirSync(paths.tasksDir, { recursive: true });
   if (!existsSync(paths.policyFile)) writeJsonAtomic(paths.policyFile, DEFAULT_POLICY);
   try { await (opts.publishCardFn ?? publishCard)(config, paths); }
-  catch (error) { console.error(`Warning: could not publish the card (${String(error)}). Run \`agentcall card push\` later.`); }
+  catch (error) { console.error(`Warning: could not publish the card (${String(error)}). Run \`agentcall admin card publish\` later.`); }
   if (!opts.skipService) {
     (opts.installListenerServiceFn ?? installListenerService)(paths, {
       extraPathDirs: listenerPathDirs(config.agent_kind, resolveBin),
