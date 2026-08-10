@@ -13,7 +13,7 @@ import { callAgent, callStatusMessage, CallError, type CallOpts } from "../src/c
 import { ApiError } from "../src/api.js";
 import { openE2EERequest, sealE2EEResponse } from "../src/e2ee.js";
 import { generateIdentityKeys, type StoredKeys } from "../src/keys.js";
-import { getLinePaths, getMachinePaths } from "../src/paths.js";
+import { getPaths } from "../src/paths.js";
 
 let httpServer: Server | undefined;
 const roots: string[] = [];
@@ -68,10 +68,10 @@ function malformedKeyRelay(): Promise<string> {
   });
 }
 
-async function identity(name: string): Promise<{ keys: StoredKeys; paths: ReturnType<typeof getLinePaths> }> {
+async function identity(name: string): Promise<{ keys: StoredKeys; paths: ReturnType<typeof getPaths> }> {
   const root = mkdtempSync(join(tmpdir(), `agentcall-call-client-${name}-`));
   roots.push(root);
-  const paths = getLinePaths(getMachinePaths(root, root), name);
+  const paths = getPaths(root, root);
   return { keys: await generateIdentityKeys(paths), paths };
 }
 

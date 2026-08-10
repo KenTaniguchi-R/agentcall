@@ -1,11 +1,8 @@
 import { Command, CommanderError } from "commander";
-import { getMachinePaths } from "./paths.js";
-import { resolveLine } from "./line-context.js";
-import type { LineContext } from "./line-context.js";
+import { getPaths } from "./paths.js";
+import { loadInstallation, type Installation } from "./config.js";
 import { register as registerCall } from "./commands/call.js";
 import { register as registerRotate } from "./commands/rotate.js";
-import { register as registerLineCore } from "./commands/line-core.js";
-import { register as registerLineAdmin } from "./commands/line-admin.js";
 import { register as registerAudit } from "./commands/audit.js";
 import { register as registerUninstall } from "./commands/uninstall.js";
 import { register as registerContacts } from "./commands/contacts.js";
@@ -26,21 +23,21 @@ export function createProgram(): Command {
 const program = new Command();
 program.name("agentcall").description("Call other people's coding agents").version("0.4.0");
 registerSetup(program);
-registerInvite(program, lineFor);
-registerAudit(program, lineFor);
+registerInvite(program, installationFor);
+registerAudit(program, installationFor);
 registerCall(program);
 registerStatus(program);
 registerPeer(program);
 registerKeys(program);
 registerDoctor(program);
-registerHistory(program, lineFor);
+registerHistory(program, installationFor);
 registerLint(program);
 registerPolicy(program);
 registerCard(program);
 registerContacts(program);
-function lineFor(line: string | undefined): LineContext | undefined {
+function installationFor(): Installation | undefined {
   try {
-    return resolveLine(getMachinePaths(), { line });
+    return loadInstallation(getPaths());
   } catch (e) {
     console.error(String(e instanceof Error ? e.message : e));
     process.exitCode = 1;
@@ -49,9 +46,6 @@ function lineFor(line: string | undefined): LineContext | undefined {
 }
 registerTask(program);
 registerGrants(program);
-const line = program.command("line").description("manage the addresses (lines) this machine answers on and calls from");
-registerLineCore(line);
-registerLineAdmin(line);
 registerListen(program);
 registerRotate(program);
 registerRecovery(program);

@@ -1,12 +1,12 @@
 import type { Command } from "commander";
 import { sanitizeTerminalOutput, stringifyTerminalSafeJson } from "@benree/agentcall-shared";
 import { callAgent, callStatusMessage, CallError } from "../call-client.js";
-import { getMachinePaths } from "../paths.js";
+import { getPaths } from "../paths.js";
 import { relayUrl } from "../config.js";
 import { resolveAddress } from "../contacts.js";
-import { pickOutboundLine } from "../outbound.js";
+import { outboundInstallation } from "../outbound.js";
 import { forgetOutbound, matchOutbound, loadOutbound, rememberOutbound } from "../contexts-out.js";
-import type { LineContext } from "../line-context.js";
+import type { Installation } from "../config.js";
 import { fail } from "../errors.js";
 
 export function register(program: Command): void {
@@ -17,23 +17,22 @@ export function register(program: Command): void {
     .argument("<message...>", "message to send")
     .option("--json", "print the full reply envelope instead of just the text")
     .option("--task <id>", "task from the callee's card to perform (see: agentcall card <address>)")
-    .option("--as <line>", "line to call from (defaults to the primary line on the destination's relay)")
     .option("--continue", "continue the open conversation with this address (add --task when several are open)")
     .option("--context <id>", "continue a specific conversation by id")
-    .action(async (address: string, messageParts: string[], o: { json?: boolean; task?: string; as?: string; continue?: boolean; context?: string }) => {
+    .action(async (address: string, messageParts: string[], o: { json?: boolean; task?: string; continue?: boolean; context?: string }) => {
       if (process.env.AGENTCALL_CALL_ID !== undefined) {
         fail("Nested agentcall calls are disabled until relay-attested chains and secret-isolated per-run credentials exist.");
         return;
       }
-      const machine = getMachinePaths();
+      const machine = getPaths();
       const firstPass = resolveAddress(machine, address);
       if (!firstPass.ok) {
         fail(firstPass.error);
         return;
       }
-      let ctx: LineContext;
+      let ctx: Installation;
       try {
-        ctx = pickOutboundLine(machine, firstPass.org, { as: o.as });
+        ctx = outboundInstallation(machine, firstPass.org);
       } catch (e) {
         fail(e);
         return;

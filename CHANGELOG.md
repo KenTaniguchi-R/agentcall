@@ -6,6 +6,17 @@ which are released together.
 
 ## Unreleased
 
+### One installation identity (#427)
+
+- Replace local multi-line selection with one identity per installation. Remove
+  `line add/list/remove/primary`, multiple listeners, `--line`, `--as`,
+  `AGENTCALL_LINE`, primary-line state, and their tests and current docs.
+- Store identity, policy, keys, contexts, recovery state, and logs directly in
+  `~/.agentcall`; keep contacts installation-scoped and authored tasks in
+  `~/AgentCall/tasks`.
+- Refuse legacy `~/.agentcall/lines/` installations instead of choosing or
+  merging identities automatically, with an explicit migration guide.
+
 ### Roster and search removal (#424)
 
 - Remove roster/search CLI commands, local roster state and caches, relay

@@ -3,10 +3,10 @@ import {
 } from "@benree/agentcall-shared";
 import { authOf, createInvite, listInvites, revokeInvite } from "../api.js";
 import { relayUrl } from "../config.js";
-import type { LineContext } from "../line-context.js";
+import type { Installation } from "../config.js";
 import { fail } from "../errors.js";
 
-type LineFor = (line: string | undefined) => LineContext | undefined;
+type InstallationFor = () => Installation | undefined;
 
 // What an administrator does next with an invite is send it to a person, so
 // on a terminal print the message rather than the raw material for it. The
@@ -83,7 +83,7 @@ function inviteRows(invites: OrgInviteMetadataType[], now: number): string[] {
   );
 }
 
-export function register(program: { command(name: string): any }, lineFor: LineFor): void {
+export function register(program: { command(name: string): any }, installationFor: InstallationFor): void {
   const invite = program.command("invite").description("manage one-time organization invites");
 
   invite
@@ -92,9 +92,8 @@ export function register(program: { command(name: string): any }, lineFor: LineF
     .option("--description <text>", "purpose shown in the organization invite inventory", "")
     .option("--expires-in-days <days>", "expiry from 1 to 90 days", "7")
     .option("--role <role>", "enrolled organization role: member or admin")
-    .option("--line <name>", "line whose organization to invite into (defaults to the primary line)")
-    .action(async (o: { description: string; expiresInDays: string; role?: string; line?: string }) => {
-      const ctx = lineFor(o.line);
+    .action(async (o: { description: string; expiresInDays: string; role?: string }) => {
+      const ctx = installationFor();
       if (!ctx) return;
       const cfg = ctx.config;
       try {
@@ -125,9 +124,8 @@ export function register(program: { command(name: string): any }, lineFor: LineF
     .command("list")
     .description("list organization invites: state, role, expiry, and the ID to revoke")
     .option("--json", "print the raw invite array")
-    .option("--line <name>", "line whose organization to list (defaults to the primary line)")
-    .action(async (o: { json?: boolean; line?: string }) => {
-      const ctx = lineFor(o.line);
+    .action(async (o: { json?: boolean }) => {
+      const ctx = installationFor();
       if (!ctx) return;
       const cfg = ctx.config;
       try {
@@ -150,9 +148,8 @@ export function register(program: { command(name: string): any }, lineFor: LineF
     .command("revoke")
     .description("revoke an unused organization invite")
     .argument("<id>", "64-character invite ID from `agentcall invite list`")
-    .option("--line <name>", "line whose organization the invite belongs to (defaults to the primary line)")
-    .action(async (id: string, o: { line?: string }) => {
-      const ctx = lineFor(o.line);
+    .action(async (id: string) => {
+      const ctx = installationFor();
       if (!ctx) return;
       const cfg = ctx.config;
       try {

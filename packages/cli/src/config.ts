@@ -1,59 +1,89 @@
-import { formatAddress, HOSTED_RELAY_HOST, type AgentKind } from "@benree/agentcall-shared";
+import { existsSync, lstatSync, readFileSync } from "node:fs";
+import { join } from "node:path";
+import { z } from "zod";
+import {
+  AgentKindSchema, formatAddress, HOSTED_RELAY_HOST, ORG_RE, type AgentKind,
+} from "@benree/agentcall-shared";
+import { writeJsonAtomic } from "./json-store.js";
+import { getPaths, type Paths } from "./paths.js";
 
-// Per-line credentials and settings. Config (and the flat Paths it paired
-// with) used to be a single machine-wide record; Task 12 deleted that half
-// once every consumer moved to LineConfig/LinePaths.
-export interface LineConfig {
-  // The tenant this line is enrolled in. On the LINE, not on the machine:
-  // `org` and `relay` are two halves of one identity — the org names a tenant
-  // *on a relay* — and `relay` was already per-line. A machine-wide org would
-  // mean a second line on another relay silently inherited the first tenant's
-  // slug and addressed itself as `<handle>@<wrong-org>.<host>`.
+export interface Config {
   org: string;
   handle: string;
   token: string;
   relay: string;
-  /** Absent = answer-incapable. The line can still call out. */
+  /** Absent means this installation can call but cannot answer. */
   agent_kind?: AgentKind;
-  // No `workdir`. #372 deleted it: the sensitivity map already names the
-  // directories the owner cares about, and a second setting here could point
-  // the agent somewhere the guard would then refuse to let it read. The spawn
-  // directory is derived from the map instead — see sensitivity.ts's
-  // workdirFor.
 }
-export type CallableLineConfig = LineConfig & { agent_kind: AgentKind };
+export type CallableConfig = Config & { agent_kind: AgentKind };
 
-// Guards commands that spawn the local agent: a caller-only line has no
-// agent_kind and cannot answer calls.
-export function assertCallableLine(cfg: LineConfig): asserts cfg is CallableLineConfig {
-  if (!cfg.agent_kind) {
-    throw new Error("This line is caller-only — re-run `agentcall line add` with an agent to make it callable.");
+export const ConfigSchema = z.object({
+  org: z.string().regex(ORG_RE),
+  handle: z.string().min(1),
+  token: z.string().min(1),
+  relay: z.string().min(1),
+  agent_kind: AgentKindSchema.optional(),
+});
+
+export interface Installation {
+  paths: Paths;
+  config: Config;
+}
+
+function legacyInstallMessage(paths: Paths): string {
+  return `Legacy multi-line installation detected at ${join(paths.dir, "lines")}. ` +
+    "AgentCall will not choose or merge identities automatically. Follow the explicit migration guide at " +
+    "https://agentcall.mintlify.app/guides/single-identity-migration before continuing.";
+}
+
+export function loadConfig(paths: Paths): Config {
+  if (!existsSync(paths.configFile)) {
+    if (existsSync(join(paths.dir, "lines"))) throw new Error(legacyInstallMessage(paths));
+    throw new Error("No agentcall installation found. Run `agentcall setup` first.");
+  }
+  const dir = lstatSync(paths.dir);
+  if (!dir.isDirectory() || dir.isSymbolicLink()) {
+    throw new Error(`AgentCall state at ${paths.dir} must be a real directory, not a symlink.`);
+  }
+  const file = lstatSync(paths.configFile);
+  if (!file.isFile() || file.isSymbolicLink()) {
+    throw new Error(`AgentCall config at ${paths.configFile} must be a regular file, not a symlink.`);
+  }
+  let raw: unknown;
+  try {
+    raw = JSON.parse(readFileSync(paths.configFile, "utf8"));
+  } catch (error) {
+    throw new Error(`Corrupt config.json at ${paths.configFile}: invalid JSON (${error instanceof Error ? error.message : String(error)}).`);
+  }
+  try {
+    return ConfigSchema.parse(raw);
+  } catch (error) {
+    const detail = error instanceof z.ZodError
+      ? error.issues.map((issue) => `${issue.path.join(".") || "config"}: ${issue.message}`).join("; ")
+      : String(error);
+    throw new Error(`Corrupt config.json at ${paths.configFile}: ${detail}.`, { cause: error });
+  }
+}
+
+export function saveConfig(paths: Paths, config: Config): void {
+  writeJsonAtomic(paths.configFile, config);
+}
+
+export function loadInstallation(paths: Paths = getPaths()): Installation {
+  return { paths, config: loadConfig(paths) };
+}
+
+export function assertCallable(config: Config): asserts config is CallableConfig {
+  if (!config.agent_kind) {
+    throw new Error("This installation is caller-only — re-run `agentcall setup` after installing claude or codex to make it callable.");
   }
 }
 
 const DEFAULT_RELAY = `https://${HOSTED_RELAY_HOST}`;
-
-// Strips a trailing slash so callers can build "${relayUrl(cfg)}/v1/..." without
-// risking a double slash when the env/config/default value already ends in one.
-export function normalizeRelay(url: string): string {
-  return url.replace(/\/+$/, "");
-}
-
-export function relayUrl(cfg?: LineConfig): string {
-  // An empty-string AGENTCALL_RELAY (e.g. exported but unset in a shell profile)
-  // is treated as unset rather than as "point at the empty string".
+export function normalizeRelay(url: string): string { return url.replace(/\/+$/, ""); }
+export function relayUrl(config?: Config): string {
   const envRelay = process.env.AGENTCALL_RELAY || undefined;
-  return normalizeRelay(envRelay ?? cfg?.relay ?? DEFAULT_RELAY);
+  return normalizeRelay(envRelay ?? config?.relay ?? DEFAULT_RELAY);
 }
-
-// The relay's hostname, for the `relay_origin` binding. The org used to be
-// glued on as a subdomain; it travels in the address now.
-export function relayHostOf(relay: string): string {
-  return new URL(relay).hostname;
-}
-
-// The line's own address. Formatted from (org, handle), never composed from a
-// host and never stored — see the spec on address-as-rendering.
-export function lineAddress(cfg: LineConfig): string {
-  return formatAddress(cfg.org, cfg.handle);
-}
+export function relayHostOf(relay: string): string { return new URL(relay).hostname; }
+export function configAddress(config: Config): string { return formatAddress(config.org, config.handle); }

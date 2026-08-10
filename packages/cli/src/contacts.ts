@@ -1,6 +1,6 @@
 import { z } from "zod";
 import { parseAddress } from "@benree/agentcall-shared";
-import type { MachinePaths } from "./paths.js";
+import type { Paths } from "./paths.js";
 import { readJsonStore, writeJsonAtomic } from "./json-store.js";
 
 // Never matches "@" or "/", so a contact name can never be mistaken for an
@@ -21,26 +21,26 @@ type ContactsFile = z.infer<typeof ContactsFileSchema>;
 // Missing file -> empty book (nothing saved yet). Malformed file -> THROW
 // naming the path: the file is user data, silently resetting it would lose
 // every saved contact.
-export function loadContacts(p: MachinePaths): ContactsFile {
+export function loadContacts(p: Paths): ContactsFile {
   return readJsonStore(p.contactsFile, ContactsFileSchema, {
     missing: () => ({ contacts: [] }),
     corrupt: (detail) => { throw new Error(`Corrupt contacts file at ${p.contactsFile}: ${detail}`); },
   });
 }
 
-// Through writeJsonAtomic like saveLineConfig, which gets the 0600/0700 posture
+// Through writeJsonAtomic like saveConfig, which gets the 0600/0700 posture
 // (notes are personal data) and the atomic replace in one call. This used to
 // hand-roll the mkdir/chmod/write and rewrite the file in place, which left a
 // truncation window: a crash mid-write produced a half-written book, and
 // loadContacts throws on a malformed one rather than resetting it.
-export function saveContacts(p: MachinePaths, file: ContactsFile): void {
+export function saveContacts(p: Paths, file: ContactsFile): void {
   writeJsonAtomic(p.contactsFile, file);
 }
 
 const byName = (contacts: Contact[], name: string) =>
   contacts.findIndex((c) => c.name.toLowerCase() === name.toLowerCase());
 
-export function addContact(p: MachinePaths, name: string, address: string, note?: string): "added" | "updated" {
+export function addContact(p: Paths, name: string, address: string, note?: string): "added" | "updated" {
   if (!NAME_RE.test(name)) {
     throw new Error(`Invalid contact name "${name}" — start with a letter or digit, then letters, digits, ".", "_", "-" (no @ or /).`);
   }
@@ -62,7 +62,7 @@ export function addContact(p: MachinePaths, name: string, address: string, note?
   return "updated";
 }
 
-export function removeContact(p: MachinePaths, name: string): void {
+export function removeContact(p: Paths, name: string): void {
   const file = loadContacts(p);
   const idx = byName(file.contacts, name);
   if (idx === -1) {
@@ -88,7 +88,7 @@ export type Resolved =
 // `org` is the calling LINE's tenant, not the machine's: the contact book is
 // shared across lines (person-scoped) but the tenant check is per-call, so the
 // caller passes the org of whichever line is placing this call.
-export function resolveAddress(p: MachinePaths, arg: string, org?: string): Resolved {
+export function resolveAddress(p: Paths, arg: string, org?: string): Resolved {
   const check = (address: string, label?: string): Resolved => {
     const parsed = parseAddress(address);
     if (!parsed) {

@@ -1,22 +1,20 @@
 import { loadPolicy } from "../policy.js";
 import { loadTasks } from "../tasks.js";
 import { renderPolicyReport } from "../policy-report.js";
-import { resolveLine, type LineContext } from "../line-context.js";
-import { assertCallableLine } from "../config.js";
+import { assertCallable, loadInstallation, type Installation } from "../config.js";
 import { loadScope, readableRoots, workdirFor } from "../scope.js";
-import { getMachinePaths } from "../paths.js";
+import { getPaths } from "../paths.js";
 import { fail } from "../errors.js";
 
 export function register(program: { command(name: string): any }): void {
   program
     .command("policy")
     .description("show the effective caller-access policy, tasks, and read scope")
-    .option("--line <name>", "line to report on (defaults to the primary line)")
-    .action((o: { line?: string }) => {
-      let ctx: LineContext;
+    .action(() => {
+      let ctx: Installation;
       try {
-        ctx = resolveLine(getMachinePaths(), { line: o.line });
-        assertCallableLine(ctx.config);
+        ctx = loadInstallation(getPaths());
+        assertCallable(ctx.config);
       } catch (e) {
         fail(e);
         return;
@@ -26,8 +24,8 @@ export function register(program: { command(name: string): any }): void {
         const scope = loadScope(ctx.paths);
         const report = renderPolicyReport(loadPolicy(ctx.paths), loadTasks(ctx.paths), {
           agentKind: cfg.agent_kind,
-          defaultWorkdir: workdirFor(scope, ctx.paths.shareDir, ctx.paths.machine.userHome),
-          readableRoots: readableRoots(scope, ctx.paths.machine.userHome),
+          defaultWorkdir: workdirFor(scope, ctx.paths.shareDir, ctx.paths.userHome),
+          readableRoots: readableRoots(scope, ctx.paths.userHome),
         });
         console.log(report.trimEnd());
       } catch (e) {

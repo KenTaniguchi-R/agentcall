@@ -27,7 +27,7 @@ import { homedir } from "node:os";
 import { basename, isAbsolute, join, resolve } from "node:path";
 import { z } from "zod";
 import { canonical, expandHome, fold, isInside } from "./path-canon.js";
-import type { LinePaths } from "./paths.js";
+import type { Paths } from "./paths.js";
 
 export const ScopeSchema = z.object({
   /** Directories the agent may read under. Anything outside every root is refused. */
@@ -90,7 +90,7 @@ const DENIED_BASENAMES: RegExp[] = [
 //
 // A silent fallback would mean the owner's scope stopped applying without
 // anyone being told, and under this model that widens rather than narrows.
-export function loadScope(p: LinePaths): Scope {
+export function loadScope(p: Paths): Scope {
   let raw: string;
   try {
     raw = readFileSync(p.scopeFile, "utf8");

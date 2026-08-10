@@ -18,7 +18,7 @@ installed-but-stopped, and running native service.
 ## What the agent may read
 
 There is no `workdir` setting. What an answering agent can draw on is decided by
-one file, `~/.agentcall/lines/<line>/scope.json`:
+one file, `~/.agentcall/scope.json`:
 
 ```json
 {
@@ -28,7 +28,7 @@ one file, `~/.agentcall/lines/<line>/scope.json`:
 ```
 
 **Anything under a root is readable unless the denylist refuses it.** `setup`
-writes one root — `$HOME` — so a new line can answer from the owner's real
+writes one root — `$HOME` — so a new installation can answer from the owner's real
 context on day one. `denied` is for the subtrees you never want answered from;
 it is added to a built-in list you cannot override.
 
@@ -60,8 +60,8 @@ order they appear in the file.
 ## Where the agent starts
 
 The spawn directory is derived, not configured: it is the shortest usable root,
-or `~/AgentCall/<line>/public/` only as a fallback when none is usable. It is
-the same for every caller the line answers.
+or `~/AgentCall/public/` only as a fallback when none is usable. It is
+the same for every caller the installation answers.
 
 Block a caller with `agentcall block <handle>`, or close the line by default
 with `agentcall access --default blocked`; see
@@ -74,19 +74,19 @@ reading a denied path, or anything outside every root, is **refused at the tool 
 sees the content.
 
 The answer itself is **not** inspected. Credential-shaped strings and this
-line's own relay token are redacted from it, and nothing else looks at it. If
+installation's relay token are redacted from it, and nothing else looks at it. If
 the agent was permitted to read something, it is permitted to repeat it.
 
 <Warning>
-  **On a Codex line, none of this is enforced.** There is no read guard there at
+  **With Codex, none of this is enforced.** There is no read guard there at
   all; `--sandbox read-only` stops writes but not reads; and nothing inspects
-  the answer. A Codex line can be told to read anything on this machine. Use
+  the answer. A Codex-backed installation can be told to read anything on this machine. Use
   Claude for anything you need actually bounded.
 </Warning>
 
 ## Success check
 
-Run `agentcall doctor` and confirm, for every callable line, that it reports a
+Run `agentcall doctor` and confirm that it reports a
 healthy listener and shows the derived working directory you expect.
 
 Source of truth: [README callee behavior](https://github.com/KenTaniguchi-R/agentcall#receive-calls-safely).

@@ -1,8 +1,7 @@
 import { dirname, isAbsolute, join, sep } from "node:path";
 import { fileURLToPath } from "node:url";
-import { lineTaskDirs } from "./line-task-dirs.js";
 import { canonical, expandHome, fold, isAncestorOf, isInside } from "./path-canon.js";
-import { getMachinePaths, type LinePaths } from "./paths.js";
+import { getPaths, type Paths } from "./paths.js";
 import { deniedBasename, deniedRoots, isReadable, type Scope } from "./scope.js";
 
 export type GuardInput = {
@@ -32,9 +31,8 @@ export const FAIL_CLOSED_REASON =
   "The answering agent's policy guard could not evaluate this action.";
 
 // The home-relative denied paths live in scope.ts, alongside the roots, so one
-// list answers "may this be read". AgentCall/<line>/tasks has no fixed
-// home-relative form and is passed in per call — see runGuard's
-// extraSecretRoots.
+// list answers "may this be read". The authored tasks directory is added as
+// an explicit secret root by runGuard.
 
 // This module compiles to <package root>/dist/guard.js, one directory below
 // the installed package root — true both for a global npm install and for a
@@ -86,11 +84,11 @@ export interface DecideContext {
    *  while the real ~/.ssh stood open. */
   userHome: string;
   realpath: (p: string) => string;
-  /** What this line may read: roots plus the denylist. */
+  /** What the answering installation may read: roots plus the denylist. */
   scope: Scope;
   guardRoot?: string;
   /** Paths that are `secret` for this run regardless of the map — the guard's
-   *  own package root and every line's tasks directory. */
+   *  own package root and the installation's tasks directory. */
   extraSecretRoots?: string[];
 }
 
@@ -222,13 +220,13 @@ export function decide(input: GuardInput, ctx: DecideContext): GuardVerdict {
 }
 
 export interface GuardDeps {
-  line: LinePaths;
+  paths: Paths;
   callId: string;
   correlationId?: string;
   now: () => string;
   realpath: (p: string) => string;
   appendLine: (file: string, line: string) => void;
-  /** What this line may read: roots plus the denylist. */
+  /** What the answering installation may read: roots plus the denylist. */
   scope: Scope;
 }
 
@@ -249,7 +247,7 @@ export function runGuard(raw: string, deps: GuardDeps): GuardOutput {
     input = {
       tool_name: parsed.tool_name,
       tool_input: (parsed.tool_input ?? {}) as Record<string, unknown>,
-      cwd: typeof parsed.cwd === "string" ? parsed.cwd : deps.line.machine.userHome,
+      cwd: typeof parsed.cwd === "string" ? parsed.cwd : deps.paths.userHome,
     };
   } catch {
     // Exit 2 blocks bluntly. The guard never allows because it failed to decide.
@@ -262,23 +260,10 @@ export function runGuard(raw: string, deps: GuardDeps): GuardOutput {
   // read-only home would silently turn the guard off. Fail closed instead.
   try {
     // Task frontmatter declares which sources a task may read, so it is as
-    // sensitive as policy.json. Under the per-line layout these live at
-    // ~/AgentCall/<line>/tasks, which no fixed home-relative rule can match —
-    // enumerate them instead. Every line's, not just this one's: one line's
-    // agent must not rewrite another line's tasks either. lineTaskDirs, not
-    // listLines: this runs on every tool call, and listLines readFileSync's
-    // and zod-parses every line's config.json just to build a LineSummary
-    // this call only ever wants the tasksDir out of.
-    //
-    // Enumerated from a machine rooted at userHome — NOT deps.line.machine as
-    // given: deps.line.machine.linesDir sits under stateRoot, the exact
-    // AGENTCALL_HOME-redirectable value defect (a) exists to keep out of
-    // decide(). Passing deps.line.machine through unchanged would enumerate
-    // an empty (or nonexistent) redirected state dir, silently deny nothing,
-    // and leave the real machine's per-line task directories wide open —
-    // defect (a) fixed for .ssh and quietly reopened for tasks.
-    const userHome = deps.line.machine.userHome;
-    const taskRoots = lineTaskDirs(getMachinePaths(userHome, userHome));
+    // sensitive as policy.json. Authored tasks always live under the real
+    // user home, even when AGENTCALL_HOME redirects runtime state for a probe.
+    const userHome = deps.paths.userHome;
+    const taskRoots = [getPaths(deps.paths.stateRoot, userHome).tasksDir];
     const verdict = decide(input, {
       userHome,
       realpath: deps.realpath,
@@ -297,12 +282,12 @@ export function runGuard(raw: string, deps: GuardDeps): GuardOutput {
     // observe mode it is not: the tool proceeds regardless of the verdict, and
     // may still be stopped downstream by codex's sandbox. Recording `allowed`
     // there would assert an outcome this hook never sees.
-    write(deps.line.toolsLog,
+    write(deps.paths.toolsLog,
       { type: "tool_call", call_id: deps.callId, ...correlation, tool: input.tool_name, allowed: verdict.allow });
 
     const noteworthy = verdict.allow ? verdict.flag : verdict;
     if (noteworthy) {
-      write(deps.line.callsLog, {
+      write(deps.paths.callsLog, {
         // Three distinct names, because they are three distinct claims:
         // denied = we stopped it; flagged = we let it through and noticed.
         type: verdict.allow ? "tool_flagged" : "tool_denied",

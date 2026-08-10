@@ -2,20 +2,20 @@ import { mkdirSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 import { ASK_TASK, loadTasks, scaffoldTask, SkillFrontmatter, splitFrontmatter } from "../src/tasks.js";
-import { getLinePaths, getMachinePaths } from "../src/paths.js";
+import { getPaths } from "../src/paths.js";
 import { tempDir } from "./helpers.js";
 
 function tempHome() { return tempDir("agentcall-tasks-"); }
 
-// tasksDir/policyFile's exact shape (AgentCall/<line>/tasks, .agentcall/lines/<line>/policy.json)
-// is asserted once, in paths.test.ts's getLinePaths tests — this just needs a
-// LinePaths to hand to loadTasks/scaffoldTask below.
+// tasksDir/policyFile's exact shape (AgentCall/tasks, .agentcall/policy.json)
+// is asserted once, in paths.test.ts's getPaths tests — this just needs a
+// Paths to hand to loadTasks/scaffoldTask below.
 function linePaths(home: string) {
-  return getLinePaths(getMachinePaths(home, home), "line");
+  return getPaths(home, home);
 }
 
 function writeSkill(home: string, id: string, skillMd: string) {
-  const dir = join(home, "AgentCall", "line", "tasks", id);
+  const dir = join(home, "AgentCall", "tasks", id);
   mkdirSync(dir, { recursive: true });
   writeFileSync(join(dir, "SKILL.md"), skillMd);
 }
@@ -130,7 +130,7 @@ describe("loadTasks", () => {
   });
   it("skips missing SKILL.md, missing frontmatter, bad YAML, and schema violations — each with a warning", () => {
     const home = tempHome();
-    mkdirSync(join(home, "AgentCall", "line", "tasks", "empty-dir"), { recursive: true });
+    mkdirSync(join(home, "AgentCall", "tasks", "empty-dir"), { recursive: true });
     writeSkill(home, "no-fm", "# bare markdown, no frontmatter\n");
     writeSkill(home, "bad-yaml", "---\ndescription: [unclosed\n---\nbody\n");
     writeSkill(home, "bad-schema", "---\nname: X\n---\nbody\n"); // missing description

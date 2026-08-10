@@ -2,8 +2,6 @@ import { execFileSync } from "node:child_process";
 import { dirname } from "node:path";
 import type { AgentKind } from "@benree/agentcall-shared";
 import { isEphemeralDir, preferDurableBin } from "./bin.js";
-import { readyLines } from "./lines.js";
-import type { MachinePaths } from "./paths.js";
 
 // Dirnames of the resolved bins, deduped and skipping any that failed to
 // resolve. Used to widen the listener service's PATH so it can find an
@@ -28,19 +26,8 @@ export function defaultResolveBin(name: string): string | null {
   }
 }
 
-// One process serves every line (see listenAll.ts), so there is exactly one
-// listener service definition and its PATH has to cover every callable line's
-// agent binary, not just whichever line happened to be added first or most
-// recently. Computing this per-caller (as setup used to, for its own agentKind
-// only) silently drops coverage the moment a second line runs a different agent
-// — this derives it fresh from machine state instead, so every
-// installListenerService call site gets the same, complete answer.
 export function listenerPathDirs(
-  m: MachinePaths, resolveBin: (name: string) => string | null = defaultResolveBin,
+  agentKind: AgentKind, resolveBin: (name: string) => string | null = defaultResolveBin,
 ): string[] {
-  const kinds = new Set<AgentKind>();
-  for (const line of readyLines(m)) {
-    if (line.config.agent_kind) kinds.add(line.config.agent_kind);
-  }
-  return resolveExtraPathDirs([...kinds, "npx"], resolveBin);
+  return resolveExtraPathDirs([agentKind, "npx"], resolveBin);
 }

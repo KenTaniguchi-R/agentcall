@@ -11,7 +11,7 @@ import {
   toBase64Url,
 } from "@benree/agentcall-shared";
 import { assertPrivateFile, writeJsonAtomic } from "./json-store.js";
-import type { LinePaths } from "./paths.js";
+import type { Paths } from "./paths.js";
 
 const HASH = /^[0-9a-f]{32}$/;
 
@@ -88,15 +88,15 @@ type KeyRotationHooks = {
   electionWaitMs?: number;
 };
 
-function epochStateFile(paths: LinePaths, epoch: number): string {
+function epochStateFile(paths: Paths, epoch: number): string {
   return `${paths.identityKeyFile}.epoch-${epoch}.state.json`;
 }
 
-function pendingPublicationFile(paths: LinePaths, epoch: number): string {
+function pendingPublicationFile(paths: Paths, epoch: number): string {
   return `${paths.identityKeyFile}.epoch-${epoch}.pending.json`;
 }
 
-function publishedEpochFile(paths: LinePaths, epoch: number): string {
+function publishedEpochFile(paths: Paths, epoch: number): string {
   return `${paths.identityKeyFile}.epoch-${epoch}.published.json`;
 }
 
@@ -176,7 +176,7 @@ function installFirstWriterWins<T>(file: string, candidate: T, waitMs = 5_000): 
   rmdirSync(lock);
 }
 
-function listEpochStates(paths: LinePaths): Array<ActiveEpochState | RetiredEpochState> {
+function listEpochStates(paths: Paths): Array<ActiveEpochState | RetiredEpochState> {
   const prefix = `${basename(paths.identityKeyFile)}.epoch-`;
   const suffix = ".state.json";
   const states: Array<ActiveEpochState | RetiredEpochState> = [];
@@ -194,7 +194,7 @@ function listEpochStates(paths: LinePaths): Array<ActiveEpochState | RetiredEpoc
   return states;
 }
 
-function loadIdentityRoot(paths: LinePaths): {
+function loadIdentityRoot(paths: Paths): {
   identity_pkcs8: string;
   identity_pub: string;
   initial?: z.infer<typeof InitialKeyFileSchema>;
@@ -224,7 +224,7 @@ function loadIdentityRoot(paths: LinePaths): {
   throw new Error(`${paths.identityKeyFile} could not be read: unexpected contents.`);
 }
 
-function loadPublishedEpoch(paths: LinePaths, current: StoredKeys): PublishedEpoch | undefined {
+function loadPublishedEpoch(paths: Paths, current: StoredKeys): PublishedEpoch | undefined {
   const file = publishedEpochFile(paths, current.epoch);
   if (!existsSync(file)) return undefined;
   const parsed = PublishedEpochSchema.safeParse(readJson(file));
@@ -238,7 +238,7 @@ function loadPublishedEpoch(paths: LinePaths, current: StoredKeys): PublishedEpo
   return parsed.data;
 }
 
-function retireEpoch(paths: LinePaths, keys: StoredKeys): void {
+function retireEpoch(paths: Paths, keys: StoredKeys): void {
   if (keys.epoch === 1) {
     const root = loadIdentityRoot(paths);
     if (!root.initial) return;
@@ -283,7 +283,7 @@ function parsePendingForCurrent(raw: unknown, current: StoredKeys): PendingEncry
 }
 
 export function loadPendingEncryptionPublication(
-  paths: LinePaths, current: StoredKeys = loadKeys(paths),
+  paths: Paths, current: StoredKeys = loadKeys(paths),
 ): PendingEncryptionPublication | undefined {
   const file = pendingPublicationFile(paths, current.epoch);
   if (!existsSync(file)) return undefined;
@@ -292,7 +292,7 @@ export function loadPendingEncryptionPublication(
 
 /** First writer elects the exact signed public record for this immutable epoch. */
 export function choosePendingEncryptionPublication(
-  paths: LinePaths, candidate: PendingEncryptionPublication,
+  paths: Paths, candidate: PendingEncryptionPublication,
 ): { keys: StoredKeys; publication?: PendingEncryptionPublication } {
   const current = loadKeys(paths);
   if (current.published_encryption_transcript_hash) return { keys: current };
@@ -308,7 +308,7 @@ async function exportPrivate(key: CryptoKey): Promise<string> {
 }
 
 /** First-time setup writes one atomic epoch-1 identity/encryption state. */
-export async function generateIdentityKeys(paths: LinePaths): Promise<StoredKeys> {
+export async function generateIdentityKeys(paths: Paths): Promise<StoredKeys> {
   if (keysExist(paths)) {
     throw new Error(
       `${paths.identityKeyFile} already exists. Refusing to overwrite it: replacing the ` +
@@ -336,7 +336,7 @@ export async function generateIdentityKeys(paths: LinePaths): Promise<StoredKeys
  * the highest active epoch is current and lower private states are scrubbed.
  */
 export async function rotateEncryptionKey(
-  paths: LinePaths, hooks: KeyRotationHooks = {},
+  paths: Paths, hooks: KeyRotationHooks = {},
 ): Promise<StoredKeys> {
   const base = loadKeys(paths);
   if (!base.published_encryption_transcript_hash) {
@@ -375,7 +375,7 @@ export async function rotateEncryptionKey(
 
 /** Persist relay acceptance as an immutable public marker for this exact epoch. */
 export function rememberPublishedEncryptionKey(
-  paths: LinePaths, expected: StoredKeys, transcriptHash: string,
+  paths: Paths, expected: StoredKeys, transcriptHash: string,
 ): StoredKeys {
   if (!HASH.test(transcriptHash)) throw new Error("The published encryption transcript hash is malformed.");
   const root = loadIdentityRoot(paths);
@@ -402,12 +402,12 @@ export function rememberPublishedEncryptionKey(
   return loadKeys(paths);
 }
 
-export function keysExist(paths: LinePaths): boolean {
+export function keysExist(paths: Paths): boolean {
   return existsSync(paths.identityKeyFile);
 }
 
 /** Loads the highest elected private epoch and scrubs every superseded private state. */
-export function loadKeys(paths: LinePaths): StoredKeys {
+export function loadKeys(paths: Paths): StoredKeys {
   const root = loadIdentityRoot(paths);
   const states = listEpochStates(paths);
   const highestState = states.reduce((highest, state) => Math.max(highest, state.epoch), 0);

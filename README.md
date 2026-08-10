@@ -25,7 +25,7 @@ answer to the caller.
 - Delivers authenticated, end-to-end encrypted calls through a hosted relay.
 - Runs the answering agent in a task-specific working directory.
 - Lets owners publish narrow tasks and decide which callers may use them.
-- Supports contacts, conversations, multiple lines, local history, and
+- Supports contacts, conversations, local history, and
   organization audit export.
 
 AgentCall is not an autonomous-agent marketplace, an offline message queue, or
@@ -118,7 +118,7 @@ when a caller needs more specific instructions:
 
 ```bash
 agentcall task new architecture-history
-# Edit ~/AgentCall/<line>/tasks/architecture-history/SKILL.md
+# Edit ~/AgentCall/tasks/architecture-history/SKILL.md
 agentcall lint
 agentcall policy
 ```
@@ -141,7 +141,7 @@ agentcall access --default blocked   # answer only named callers
 ```
 
 > [!WARNING]
-> A fresh line roots at **`$HOME`**, minus a denylist you cannot override
+> A fresh installation roots at **`$HOME`**, minus a denylist you cannot override
 > (`~/.ssh`, `~/.aws`, `~/.gnupg`, keychains, `~/.agentcall`, `~/.codex`, the
 > shell rc files, and `.env`/`*.pem`-shaped names anywhere).
 >
@@ -152,7 +152,7 @@ agentcall access --default blocked   # answer only named callers
 > salary figure or an unreleased plan has no shape to match. What carries
 > confidentiality is the organization boundary.
 >
-> **A Codex line has no read guard at all.** Nothing stops the agent reading a
+> **A Codex-backed installation has no read guard at all.** Nothing stops the agent reading a
 > denied path, and nothing inspects the answer. Use Claude for anything you
 > actually need bounded.
 
@@ -160,30 +160,30 @@ The [receive-a-call guide](https://agentcall.mintlify.app/get-started/receive-ca
 and [tasks and policy guide](https://agentcall.mintlify.app/guides/tasks-and-policy)
 cover task design, caller rules, policy tests, cards, and safe defaults.
 
-## Recovering a lost line token
+## Recovering a lost installation token
 
-While a line still works, create its out-of-band recovery root:
+While the installation still works, create its out-of-band recovery root:
 
 ```bash
-agentcall recovery issue --line <name>
+agentcall recovery issue
 ```
 
 AgentCall shows the proof only on the controlling terminal and requires you to
 acknowledge that it is saved somewhere separate, such as a password manager.
-It is never written to line config, pending state, stdout/stderr, or logs. Record
+It is never written to config, pending state, stdout/stderr, or logs. Record
 the returned generation and public proof ID with it. Issuing again increments
 the generation and immediately invalidates the predecessor.
 
-If the line token is lost, retain both the current proof and the newly displayed
+If the installation token is lost, retain both the current proof and the newly displayed
 successor proof until recovery confirms its public receipt:
 
 ```bash
-agentcall recovery redeem --line <name> --org <org> --handle <handle> \
+agentcall recovery redeem --org <org> --handle <handle> \
   --relay <url> --generation <number>
 ```
 
 Before contacting the relay, the CLI atomically saves a locally generated
-candidate token and operation ID in that line's private pending file. Neither
+candidate token and operation ID in the installation's private pending file. Neither
 recovery proof is saved there. Recovery atomically consumes the current proof,
 replaces the online token, advances to the successor proof, and evicts sockets
 owned by the recovered identity's current Durable Object. Persistent token
@@ -191,22 +191,20 @@ replacement blocks every reconnect. Before the stable-identity cutover in #154,
 an already-open outbound caller socket lives in the remote target's Durable
 Object and is not globally evicted by this receipt; the cutover removes that
 topology limitation. If the response is lost, run
-`agentcall recovery redeem --line <name> --resume` and provide both retained
+`agentcall recovery redeem --resume` and provide both retained
 proofs. The consumed predecessor can then retrieve only the exact seven-day
 receipt already bound to that operation; changed or cross-identity payloads are
 rejected. Remove the predecessor backup only after the CLI confirms the receipt.
 
-`--line <name>` (or the `AGENTCALL_LINE` environment variable, same precedence
-order — an explicit `--line` wins) selects which line a command acts on wherever
-a machine has more than one: `rotate`, `card`, `task new`, and the six policy
-verbs (`allow`/`revoke`/`block`/`unblock`/`offer`/`unoffer`) all accept it. Omit
-it and these default to the primary line.
+One AgentCall installation has one identity. Contacts belong to the installation.
+Legacy installations with `~/.agentcall/lines/` are refused rather than merged
+or selected automatically; follow the [single-identity migration guide](https://agentcall.mintlify.app/guides/single-identity-migration).
 
 Current relay tokens do not expire, cannot be listed or individually revoked,
 and have no last-used timestamp; rotation is the immediate hard swap described
 above. The recovery proof is also intentionally long-lived because it must work
 after an offline backup has been untouched for a long time; `agentcall doctor`
-reports this sole long-lived full-authority exception and warns when a line has
+reports this sole long-lived full-authority exception and warns when an installation has
 no proof. The decided zero-user credential cutover will replace online tokens with
 90-day client credentials, one-hour access tokens, bounded overlap, revocation,
 and coarse liveness tracking. See the
@@ -274,7 +272,7 @@ from its owner's operating-system account.
   material the guard does not cover — a key pasted into a tracked config file, a
   credential printed by an allowed command. Replies are scanned locally for
   credential shapes (`sk-`, `gh*_`, AWS key ids, JWTs, bearer tokens) and for
-  this line's own relay token, and matches are replaced with
+  the installation's relay token, and matches are replaced with
   `[redacted]` before the reply is sealed and before it is written to the local
   log. The scan is a fixed local pass with no network call, so it cannot fail
   open — but it recognizes shapes, not secrets in general.

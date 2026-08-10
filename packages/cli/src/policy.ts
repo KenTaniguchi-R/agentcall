@@ -11,7 +11,7 @@ import { z } from "zod";
 import { HANDLE_RE, MAX_CARD_BLOCKED_CALLERS } from "@benree/agentcall-shared";
 import { AccessPolicySchema, AccessSchema, accessFor } from "./access.js";
 import { writeJsonAtomic } from "./json-store.js";
-import type { LinePaths } from "./paths.js";
+import type { Paths } from "./paths.js";
 import type { Task } from "./tasks.js";
 
 const MAX_POLICY_ASSERTIONS = 100;
@@ -60,7 +60,7 @@ function readOptionalJson<T>(file: string, label: string, schema: z.ZodType<T>):
   }
 }
 
-export function loadUserPolicy(p: LinePaths): Policy {
+export function loadUserPolicy(p: Paths): Policy {
   return readOptionalJson(p.policyFile, "user policy", PolicySchema) ?? DEFAULT_POLICY;
 }
 
@@ -77,7 +77,7 @@ function validateEffectivePolicy(policy: Policy): Policy {
 // Enforcement and publication use the effective policy. A missing managed
 // file is intentionally silent; any other read or parse failure is fatal so an
 // administrator restriction can never disappear through fallback.
-export function loadPolicy(p: LinePaths): Policy {
+export function loadPolicy(p: Paths): Policy {
   return validatePolicy(p, loadUserPolicy(p));
 }
 
@@ -92,7 +92,7 @@ export function loadPolicy(p: LinePaths): Policy {
 // path they could only find by reading this source. An enterprise control with
 // no tooling is one nobody can use. Restore it from git history alongside a
 // command that writes it, not on its own.
-export function validatePolicy(p: LinePaths, user: Policy): Policy {
+export function validatePolicy(p: Paths, user: Policy): Policy {
   const effective = validateEffectivePolicy(user);
   validatePolicyAssertions(effective, user.tests ?? [], "user policy");
   return effective;
@@ -100,7 +100,7 @@ export function validatePolicy(p: LinePaths, user: Policy): Policy {
 
 // Writes the exact shape PolicySchema parses, so hand-edits and the CLI
 // verbs (verbs.ts) interoperate on the same file.
-export function savePolicy(p: LinePaths, policy: Policy): void {
+export function savePolicy(p: Paths, policy: Policy): void {
   writeJsonAtomic(p.policyFile, policy);
 }
 

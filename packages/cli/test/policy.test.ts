@@ -3,17 +3,17 @@ import { dirname } from "node:path";
 import { describe, expect, it } from "vitest";
 import { DEFAULT_POLICY, loadPolicy, loadUserPolicy, resolveTask, savePolicy, type Policy } from "../src/policy.js";
 import { ASK_TASK, type Task } from "../src/tasks.js";
-import { getLinePaths, getMachinePaths } from "../src/paths.js";
+import { getPaths } from "../src/paths.js";
 import { tempDir } from "./helpers.js";
 
 function linePaths(home: string) {
-  return getLinePaths(getMachinePaths(home, home), "line");
+  return getPaths(home, home);
 }
 
 
-function missingManagedLinePaths(home: string) {
-  const m = getMachinePaths(home, home);
-  return getLinePaths(m, "line");
+function missingManagedPaths(home: string) {
+  const m = getPaths(home, home);
+  return m;
 }
 
 const intro: Task = {
@@ -81,7 +81,7 @@ describe("loadPolicy", () => {
 
   it("treats a missing managed policy as no administrator restriction", () => {
     const home = tempDir("agentcall-pol-");
-    const p = missingManagedLinePaths(home);
+    const p = missingManagedPaths(home);
     mkdirSync(dirname(p.policyFile), { recursive: true });
     writeFileSync(p.policyFile, JSON.stringify(policy));
     expect(loadPolicy(p)).toEqual(policy);

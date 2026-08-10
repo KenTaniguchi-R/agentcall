@@ -1,19 +1,18 @@
 import type { Command } from "commander";
 import { authOf, fetchCard } from "../api.js";
-import { assertCallableLine, relayUrl } from "../config.js";
+import { assertCallable, loadInstallation, relayUrl, type Installation } from "../config.js";
 import { buildCardReport } from "../lint.js";
-import { getMachinePaths } from "../paths.js";
+import { getPaths } from "../paths.js";
 import { resolveAddress } from "../contacts.js";
-import { resolveLine, type LineContext } from "../line-context.js";
 import { publishCard } from "../card.js";
 import { sanitizeTerminalOutput } from "@benree/agentcall-shared";
 import { fail } from "../errors.js";
 
-const reviewOwnCard = (o: { line?: string }) => {
-  let ctx: LineContext;
+const reviewOwnCard = () => {
+  let ctx: Installation;
   try {
-    ctx = resolveLine(getMachinePaths(), { line: o.line });
-    assertCallableLine(ctx.config);
+    ctx = loadInstallation(getPaths());
+    assertCallable(ctx.config);
   } catch (e) {
     fail(e);
     return;
@@ -34,7 +33,6 @@ const reviewOwnCard = (o: { line?: string }) => {
 export function registerLint(program: Command): void {
   program.command("lint")
     .description("validate tasks, effective policy assertions, and the published card")
-    .option("--line <name>", "line to lint (defaults to the primary line)")
     .action(reviewOwnCard);
 }
 
@@ -43,18 +41,17 @@ export function registerCard(program: Command): void {
     .command("card")
     .description("show your own card with problems, another agent's menu, or publish yours (push)")
     .argument("[target]", "contact name or @org/handle to fetch, 'push' to publish, or omit to review your own card")
-    .option("--line <name>", "line to use (defaults to the primary line)")
-    .action(async (target: string | undefined, o: { line?: string }) => {
-      const machine = getMachinePaths();
+    .action(async (target: string | undefined) => {
+      const machine = getPaths();
       if (target === undefined) {
-        reviewOwnCard(o);
+        reviewOwnCard();
         return;
       }
       if (target === "push") {
-        let ctx: LineContext;
+        let ctx: Installation;
         try {
-          ctx = resolveLine(machine, { line: o.line });
-          assertCallableLine(ctx.config);
+          ctx = loadInstallation(machine);
+          assertCallable(ctx.config);
         } catch (e) {
           fail(e);
           return;
@@ -63,9 +60,9 @@ export function registerCard(program: Command): void {
         console.log("Card published.");
         return;
       }
-      let ctx: LineContext;
+      let ctx: Installation;
       try {
-        ctx = resolveLine(machine, { line: o.line });
+        ctx = loadInstallation(machine);
       } catch (e) {
         fail(e);
         return;

@@ -13,7 +13,7 @@ import { authOf, fetchKeys } from "./api.js";
 import { verifyAndPinPeer, type KnownPeer } from "./known-peers.js";
 import { loadKeys, type StoredKeys } from "./keys.js";
 import { reserveReplay } from "./replay-store.js";
-import type { LinePaths, MachinePaths } from "./paths.js";
+import type { Paths } from "./paths.js";
 import { loadPolicy, resolveTask, type Policy, type TaskResolution } from "./policy.js";
 import { loadScope, type Scope } from "./scope.js";
 import { loadTasks, type Task } from "./tasks.js";
@@ -46,7 +46,7 @@ export function handleCancel(
 
 // ---------------------------------------------------------------------------
 // Stage 4: open the inbound E2EE envelope — fetch the caller's published
-// keys, verify/pin them against the local trust store, load this line's own
+// keys, verify/pin them against the local trust store, load this installation's
 // keys, open (decrypt + verify) the envelope, and reserve the request id
 // against replay. All four must succeed before anything else runs.
 // ---------------------------------------------------------------------------
@@ -77,7 +77,7 @@ interface OpenEnvelopeIo {
 export async function openInboundEnvelope(
   input: {
     relay: string; org: string; handle: string; token: string;
-    machine: MachinePaths; paths: LinePaths; from: string; envelope: unknown;
+    paths: Paths; from: string; envelope: unknown;
   },
   io: OpenEnvelopeIo,
 ): Promise<OpenEnvelopeResult> {
@@ -88,7 +88,7 @@ export async function openInboundEnvelope(
     const callerBundle = await io.fetchKeys(
       input.relay, authOf(input), input.from,
     );
-    const callerPeer = await io.verifyAndPinPeer(input.machine, fromAddress, callerBundle);
+    const callerPeer = await io.verifyAndPinPeer(input.paths, fromAddress, callerBundle);
     const localKeys = io.loadKeys(input.paths);
     const request = await openE2EERequest(
       input.envelope, localKeys.encryption_pkcs8, callerPeer.identity_pub,
@@ -97,7 +97,7 @@ export async function openInboundEnvelope(
         key_id: await keyIdFor(localKeys.encryption_pub), epoch: localKeys.epoch,
       },
     );
-    await io.reserveReplay(input.machine, {
+    await io.reserveReplay(input.paths, {
       sender_fingerprint: callerPeer.fingerprint,
       request_id: request.request_id,
       expires_at: request.expires_at,
@@ -192,7 +192,7 @@ type AdmissionDecision =
   | { ok: false; code: "blocked" | "task_unknown"; offered: string[] };
 
 export function resolveAdmission(
-  input: { paths: LinePaths; from: string; requestedTask?: string },
+  input: { paths: Paths; from: string; requestedTask?: string },
 ): AdmissionDecision {
   let policy: Policy;
   let scope: Scope;
@@ -238,7 +238,7 @@ type BindingDecision =
 
 export function admitBinding(
   input: {
-    paths: LinePaths; from: string; taskId: string; contextId: string | undefined;
+    paths: Paths; from: string; taskId: string; contextId: string | undefined;
     threadable: boolean; agentKind: "claude" | "codex"; codexCanThread: boolean;
     workdirDir: string; now?: number;
   },

@@ -7,7 +7,7 @@ import {
   type StoredKeys,
 } from "../src/keys.js";
 import { fetchKeys, publishEncryptionKey, publishIdentityKey } from "../src/api.js";
-import { getLinePaths, getMachinePaths } from "../src/paths.js";
+import { getPaths } from "../src/paths.js";
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -427,7 +427,7 @@ async function buildValidKeysResponse(
 }
 
 // The identity key is line-scoped, so every case here works through a line.
-function linePaths(root: string) { return getLinePaths(getMachinePaths(root, root), "claude"); }
+function linePaths(root: string) { return getPaths(root, root); }
 
 describe("key publication", () => {
   const auth = { org: "acme", handle: "ken", token: "t0ken" };

@@ -9,15 +9,15 @@ import {
 } from "@benree/agentcall-shared";
 import { loadKnownPeers, MAX_KNOWN_PEERS, resetPeerTrust, verifyAndPinPeer } from "../src/known-peers.js";
 import { writeJsonAtomic } from "../src/json-store.js";
-import { getMachinePaths, type MachinePaths } from "../src/paths.js";
+import { getPaths, type Paths } from "../src/paths.js";
 
 let root: string;
-let machine: MachinePaths;
+let machine: Paths;
 const PEER = "@acme/peer";
 const NOW = 500;
 beforeEach(() => {
   root = mkdtempSync(join(tmpdir(), "agentcall-peers-"));
-  machine = getMachinePaths(root, root);
+  machine = getPaths(root, root);
 });
 afterEach(() => {
   vi.useRealTimers();

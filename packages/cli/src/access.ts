@@ -1,4 +1,4 @@
-// Who this line answers at all. What a source is worth — `shared` or `secret` —
+// Who this installation answers at all. What a source is worth — `shared` or `secret` —
 // lives in sensitivity.ts.
 //
 // This module is resolution only: the shape of an access table and the rules for

@@ -3,20 +3,16 @@ import { existsSync, lstatSync, readFileSync, realpathSync } from "node:fs";
 import { execFileSync } from "node:child_process";
 import { encryptionKeyTranscript, importIdentityPublicKey, keyIdFor, verifyTranscript } from "@benree/agentcall-shared";
 import { callAgent } from "./call-client.js";
-import { lineAddress, relayUrl, type LineConfig } from "./config.js";
+import { configAddress, loadConfig, relayUrl, type Config } from "./config.js";
 import { loadScope, workdirFor } from "./scope.js";
 import {
   inspectListenerService,
   type ListenerServiceStatus,
 } from "./listener-service.js";
-import { listLines } from "./lines.js";
-import type { LinePaths, MachinePaths } from "./paths.js";
+import type { Paths } from "./paths.js";
 import { loadKeys } from "./keys.js";
 import { assertPrivateFile } from "./json-store.js";
 import { checkKnownPeersStore } from "./known-peers.js";
-import {
-  type AgentKind,
-} from "./runner.js";
 import {
   checkGuard, checkRelaySelfCall, formatCheck, short, verifyAgent,
   type GuardBinaryProbeFn, type GuardProbeFn,
@@ -24,18 +20,18 @@ import {
 } from "./verify.js";
 
 interface DoctorDeps {
-  machine: MachinePaths;
+  paths: Paths;
   // Test seams — production callers should leave these as the defaults.
   verifyFns?: VerifyFns;
   getStatusFn?: typeof getStatus;
   getRecoveryStatusFn?: typeof getRecoveryStatus;
   callFn?: typeof callAgent;
   platform?: NodeJS.Platform;
-  inspectListenerServiceFn?: (machine: MachinePaths) => ListenerServiceStatus;
+  inspectListenerServiceFn?: (paths: Paths) => ListenerServiceStatus;
   log?: (line: string) => void;
   guardFn?: GuardProbeFn;
   guardBinaryFn?: GuardBinaryProbeFn;
-  keyHealthFn?: (cfg: LineConfig, paths: LinePaths) => Promise<VerifyCheck[]>;
+  keyHealthFn?: (cfg: Config, paths: Paths) => Promise<VerifyCheck[]>;
   pkgFn?: () => CliPackageManifest;
   selfPathFn?: () => string;
   whichFn?: (bin: string) => string[];
@@ -121,7 +117,7 @@ function checkCliInstall(
 // directory. Report the exact storage location without ever reading or
 // printing the credential itself.
 export function checkCredentialStorage(
-  paths: LinePaths,
+  paths: Paths,
   platform: NodeJS.Platform = process.platform,
 ): VerifyCheck {
   try {
@@ -166,8 +162,8 @@ export function checkCredentialStorage(
   }
 }
 
-export async function checkLineKeyHealth(
-  cfg: LineConfig, paths: LinePaths, fetchFn: typeof fetchKeys = fetchKeys,
+export async function checkKeyHealth(
+  cfg: Config, paths: Paths, fetchFn: typeof fetchKeys = fetchKeys,
 ): Promise<VerifyCheck[]> {
   let local;
   try {
@@ -181,7 +177,7 @@ export async function checkLineKeyHealth(
     const remote = await fetchFn(
       relayUrl(cfg), authOf(cfg), cfg.handle,
     );
-    const expectedAddress = lineAddress(cfg);
+    const expectedAddress = configAddress(cfg);
     const signatureValid = await verifyTranscript(
       await importIdentityPublicKey(remote.identity.identity_pub),
       encryptionKeyTranscript(remote.encryption.record),
@@ -197,16 +193,16 @@ export async function checkLineKeyHealth(
     checks.push({
       name: "published identity keys", ok: matches,
       detail: matches ? `relay matches local epoch ${local.epoch}` : "relay records do not match the persisted local keys",
-      hint: matches ? undefined : `run \`agentcall keys publish --line ${paths.name}\``,
+      hint: matches ? undefined : "run `agentcall keys publish`",
     });
   } catch (error) {
-    checks.push({ name: "published identity keys", ok: false, detail: short(error), hint: `run \`agentcall keys publish --line ${paths.name}\`` });
+    checks.push({ name: "published identity keys", ok: false, detail: short(error), hint: "run `agentcall keys publish`" });
   }
   return checks;
 }
 
 export async function checkRecoveryHealth(
-  cfg: LineConfig, fetchFn: typeof getRecoveryStatus = getRecoveryStatus,
+  cfg: Config, fetchFn: typeof getRecoveryStatus = getRecoveryStatus,
 ): Promise<VerifyCheck> {
   try {
     const status = await fetchFn(
@@ -219,16 +215,15 @@ export async function checkRecoveryHealth(
       }
       : {
         name: "recovery proof", ok: true, warn: true,
-        detail: "not issued; loss of this line token is unrecoverable",
-        hint: "run `agentcall recovery issue` for this line and save the proof out of band",
+        detail: "not issued; loss of this installation token is unrecoverable",
+        hint: "run `agentcall recovery issue` and save the proof out of band",
       };
   } catch (error) {
     return { name: "recovery proof", ok: false, detail: short(error) };
   }
 }
 
-// Verifies every line on this install can answer calls, printing one line
-// per check under a `line <name>` header for each. Ladder semantics (see the
+// Verifies that this installation can answer calls. Ladder semantics (see the
 // design spec): static checks are informational and never block the agent
 // checks, EXCEPT a missing/corrupt config (nothing to verify) and
 // caller-only (nothing to verify, and that's fine — contributes no
@@ -246,13 +241,11 @@ export async function runDoctor(deps: DoctorDeps): Promise<number> {
 
   report(checkCliInstall(deps));
 
-  // Machine-level, once: there is one supervisor artifact and one process
-  // serving every line, so a per-line service check would be meaningless
-  // (and would misreport N-1 lines as broken whenever the listener is down).
+  // There is one supervisor artifact and one listener process per installation.
   const platform = deps.platform ?? process.platform;
   if (platform === "darwin" || platform === "linux") {
     const status = (deps.inspectListenerServiceFn ?? ((machine) =>
-      inspectListenerService(machine, { platform })))(deps.machine);
+      inspectListenerService(machine, { platform })))(deps.paths);
     report({
       name: `background listener (${status.kind})`,
       ok: status.running,
@@ -281,53 +274,29 @@ export async function runDoctor(deps: DoctorDeps): Promise<number> {
   }
 
 
-  const peerStore = checkKnownPeersStore(deps.machine);
+  const peerStore = checkKnownPeersStore(deps.paths);
   report({ name: "known-peer trust store", ok: peerStore.ok, detail: peerStore.detail });
 
-  const lineList = listLines(deps.machine);
-  if (lineList.length === 0) {
-    // "No agentcall config found" is pinned by the packed-CLI consumer job in
-    // .github/workflows/ci.yml, which asserts what an unconfigured install
-    // tells a first-time user. Keep the phrase if you reword this.
-    report({ name: "config", ok: false, detail: "No agentcall config found — this machine has no lines", hint: "run `agentcall setup` first" });
+  report(checkCredentialStorage(deps.paths, platform));
+  let cfg: Config;
+  try {
+    cfg = loadConfig(deps.paths);
+    report({ name: "config", ok: true, detail: `${cfg.handle} -> ${relayUrl(cfg)}` });
+  } catch (error) {
+    report({ name: "config", ok: false, detail: short(error), hint: "run `agentcall setup` first or follow the migration guidance" });
     return checks.every((c) => c.ok) ? 0 : 1;
   }
 
-  // Probed once per distinct agent_kind across all lines, not once per
-  // line — the claude guard protects the binary, not any particular line, so
-  // re-probing it for every line sharing that kind would just be N-1 wasted
-  // (and slow) spawns proving the same fact again. Only claude is cached: the
-  // codex probe takes the line's workdir as an input (hooks/list is asked
-  // about a specific cwd, and trust is per-directory), so its answer is not
-  // shared across lines.
-  const guardCache = new Map<AgentKind, VerifyCheck>();
-
-  for (const line of lineList) {
-    log(`line ${line.name}`);
-    // Report storage independently of JSON/schema validity. A corrupt
-    // credential file is still a credential file, and its permission/type
-    // failure must not disappear behind the config parse failure below.
-    report(checkCredentialStorage(line.paths, platform));
-
-    if (!line.ok || !line.config) {
-      report({
-        name: "config",
-        ok: false,
-        detail: short(line.error),
-        hint: `fix or remove this line: \`agentcall line remove ${line.name}\``,
-      });
-      continue;
-    }
-    const cfg: LineConfig = line.config;
-    report({ name: "config", ok: true, detail: `${cfg.handle} -> ${relayUrl(cfg)}` });
+  {
+    const paths = deps.paths;
 
     report(await checkRecoveryHealth(cfg, deps.getRecoveryStatusFn));
 
-    for (const keyCheck of await (deps.keyHealthFn ?? checkLineKeyHealth)(cfg, line.paths)) report(keyCheck);
+    for (const keyCheck of await (deps.keyHealthFn ?? checkKeyHealth)(cfg, paths)) report(keyCheck);
 
     if (!cfg.agent_kind) {
       log("caller-only — no agent to verify. You can still call others.");
-      continue;
+      return checks.every((check) => check.ok) ? 0 : 1;
     }
 
     // #372 deleted `workdir` from config.json; the spawn directory is derived
@@ -339,14 +308,14 @@ export async function runDoctor(deps: DoctorDeps): Promise<number> {
     // discovering it as an agent that suddenly knows nothing.
     let workdirDir: string | undefined;
     try {
-      const scope = loadScope(line.paths);
+      const scope = loadScope(paths);
       const missing = scope.roots.filter((r) => !existsSync(r));
-      workdirDir = workdirFor(scope, line.paths.shareDir, line.paths.machine.userHome);
+      workdirDir = workdirFor(scope, paths.shareDir, paths.userHome);
       if (missing.length > 0) {
         report({
           name: "scope", ok: false,
           detail: `${missing.length} root(s) missing: ${missing.join(", ")}`,
-          hint: "fix or remove those roots in ~/.agentcall/lines/<line>/scope.json",
+          hint: "fix or remove those roots in ~/.agentcall/scope.json",
         });
       } else if (scope.roots.length === 0) {
         // A warning, not a failure. A caller-only line legitimately has no
@@ -356,7 +325,7 @@ export async function runDoctor(deps: DoctorDeps): Promise<number> {
         report({
           name: "scope", ok: true, warn: true,
           detail: "no root is declared, so the agent can read nothing",
-          hint: "run `agentcall setup` again, or add a root to ~/.agentcall/lines/<line>/scope.json",
+          hint: "run `agentcall setup` again, or add a root to ~/.agentcall/scope.json",
         });
       } else {
         report({ name: "scope", ok: true, detail: `${scope.roots.length} root(s), ${scope.denied.length} extra denial(s)` });
@@ -365,11 +334,11 @@ export async function runDoctor(deps: DoctorDeps): Promise<number> {
     } catch (e) {
       report({
         name: "scope", ok: false, detail: short(e),
-        hint: "fix ~/.agentcall/lines/<line>/scope.json — a listener refuses every call while it is unparseable",
+        hint: "fix ~/.agentcall/scope.json — the listener refuses every call while it is unparseable",
       });
     }
 
-    // LineConfigSchema types `relay` as a bare string, so a syntactically
+    // ConfigSchema types `relay` as a bare string, so a syntactically
     // broken value still parses as a valid config and would otherwise only
     // surface as a network failure from the status check below —
     // indistinguishable from a listener that simply isn't running. Caught
@@ -388,7 +357,7 @@ export async function runDoctor(deps: DoctorDeps): Promise<number> {
         name: "relay config",
         ok: false,
         detail: `"${relayUrl(cfg)}" is not a valid URL`,
-        hint: "fix `relay` in ~/.agentcall/lines/<line>/config.json — or, if set, AGENTCALL_RELAY, which takes precedence",
+        hint: "fix `relay` in ~/.agentcall/config.json — or, if set, AGENTCALL_RELAY, which takes precedence",
       });
     }
 
@@ -412,7 +381,7 @@ export async function runDoctor(deps: DoctorDeps): Promise<number> {
     // Falls back to shareDir when workdir didn't resolve: per the ladder
     // semantics above, a static-check failure reports itself but must not
     // stop the agent checks from running.
-    const agentWorkdir = workdirDir ?? line.paths.shareDir;
+    const agentWorkdir = workdirDir ?? paths.shareDir;
     const agentChecks = await verifyAgent(cfg.agent_kind, agentWorkdir, deps.verifyFns);
     for (const c of agentChecks) report(c);
     const agentOk = agentChecks.every((c) => c.ok);
@@ -422,16 +391,11 @@ export async function runDoctor(deps: DoctorDeps): Promise<number> {
     // app-server without another model call. Gated on agentOk because probing
     // through a broken agent install tests nothing.
     if (cfg.agent_kind === "claude" && agentOk) {
-      let guardCheck = guardCache.get(cfg.agent_kind);
-      if (!guardCheck) {
-        guardCheck = await checkGuard(deps.guardFn, deps.guardBinaryFn);
-        guardCache.set(cfg.agent_kind, guardCheck);
-      }
-      report(guardCheck);
+      report(await checkGuard(deps.guardFn, deps.guardBinaryFn));
     }
 
     if (agentOk && online) {
-      report(await checkRelaySelfCall(cfg, line.paths, deps.callFn));
+      report(await checkRelaySelfCall(cfg, paths, deps.callFn));
     } else if (agentOk) {
       log("skipping relay self-call (agent offline).");
     }

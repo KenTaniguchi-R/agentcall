@@ -6,7 +6,7 @@ import {
   launchAgentFile,
   uninstallLaunchAgent,
 } from "./launchd.js";
-import type { MachinePaths } from "./paths.js";
+import type { Paths } from "./paths.js";
 import {
   installSystemdService,
   isSystemdServiceInstalled,
@@ -32,10 +32,10 @@ type QueryService = (command: string[]) => string;
 
 interface ListenerServiceAdapter {
   kind: ListenerServiceStatus["kind"];
-  file: (machine: MachinePaths) => string;
-  isInstalled: (machine: MachinePaths) => boolean;
-  install: (machine: MachinePaths, exec?: ServiceExec, extraPathDirs?: string[]) => void;
-  uninstall: (machine: MachinePaths, exec?: ServiceExec) => void;
+  file: (machine: Paths) => string;
+  isInstalled: (machine: Paths) => boolean;
+  install: (machine: Paths, exec?: ServiceExec, extraPathDirs?: string[]) => void;
+  uninstall: (machine: Paths, exec?: ServiceExec) => void;
   restartCommand: string;
   isRunning: (query: QueryService) => boolean;
 }
@@ -81,28 +81,28 @@ export function listenerServiceRestartCommand(platform: NodeJS.Platform = proces
 }
 
 export function listenerServiceFile(
-  machine: MachinePaths,
+  machine: Paths,
   platform: NodeJS.Platform = process.platform,
 ): string {
   return adapterFor(platform).file(machine);
 }
 
 export function installListenerService(
-  machine: MachinePaths,
+  machine: Paths,
   options: ListenerServiceOptions = {},
 ): void {
   adapterFor(platformFrom(options)).install(machine, options.execCmd, options.extraPathDirs);
 }
 
 export function uninstallListenerService(
-  machine: MachinePaths,
+  machine: Paths,
   options: Omit<ListenerServiceOptions, "extraPathDirs"> = {},
 ): void {
   adapterFor(platformFrom(options)).uninstall(machine, options.execCmd);
 }
 
 export function inspectListenerService(
-  machine: MachinePaths,
+  machine: Paths,
   options: { platform?: NodeJS.Platform; query?: QueryService } = {},
 ): ListenerServiceStatus {
   const platform = options.platform ?? process.platform;
