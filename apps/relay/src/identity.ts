@@ -1,7 +1,7 @@
 // Stable agent identity (#154). An agent_id is one principal lifetime inside
 // one organization; `@org/handle` is the routing address currently bound to it.
-// Later slices move Durable Object naming, cards, roster membership, policy,
-// and audit subjects onto this identifier.
+// Later slices move Durable Object naming, cards, policy, and audit subjects
+// onto this identifier.
 
 // Opaque and random, never derived from the handle, credential, device, or
 // signing key -- deriving it would make credential rotation look like a new

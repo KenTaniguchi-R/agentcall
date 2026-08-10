@@ -52,16 +52,16 @@ Who gets answered is a separate, yes/no question. **Everyone answered sees the
 same thing** — the organization is the boundary, not a per-caller level.
 
 ```bash
-# Deny a caller completely — beats the default and every roster rule
+# Deny a caller completely — beats the default
 agentcall block spammer
 agentcall unblock spammer
 
-# Answer only named callers and attested rosters
+# Answer only named callers
 agentcall access --default blocked
 ```
 
 `secret` is not grantable. It means "never leaves this machine", so no caller
-and no roster can reach it.
+and no caller can reach it.
 
 Policy verbs republish the card automatically. `agentcall card push` republishes
 after a direct policy-file edit.
@@ -79,20 +79,14 @@ leaves:
     "ken": { "access": "allowed" },
     "stranger": { "access": "blocked" }
   },
-  "groups": {
-    "eng": { "roster_id": "<relay-issued roster id>", "access": "allowed" }
-  },
   "tests": [
     { "caller": "ken", "expect_access": "allowed" },
-    { "caller": "stranger", "expect_access": "blocked" },
-    { "caller": "someone-else", "groups": ["eng"], "expect_access": "allowed" }
+    { "caller": "stranger", "expect_access": "blocked" }
   ]
 }
 ```
 
-A named caller wins over every roster, in both directions. Between two attested
-rosters that disagree, **blocked wins** — the cautious direction when the
-question is whether to answer at all.
+A named caller rule overrides the line default.
 
 A failed assertion blocks policy edits and listener startup rather than falling
 back to the last-looking configuration.

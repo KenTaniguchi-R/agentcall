@@ -137,24 +137,12 @@ describe("GET /v1/card/:handle", () => {
     expect(card.handle).toBe("pub");
     expect(card.tasks.map((t) => t.id)).toEqual(["ask", "schedule-meeting"]);
   });
-  // Replaces the three tests that pinned the per-caller extended view, the
-  // grant-leak check between two viewers, and the roster-attested group
-  // projection. #379 deleted all three mechanisms: every viewer now gets the
-  // identical list, so the property worth pinning is that it does NOT vary by
-  // viewer, roster membership, or anything else short of a block.
-  it("serves the identical list to every viewer, regardless of roster membership", async () => {
+  it("serves the identical list to every authenticated viewer", async () => {
     const target = await registerHandle("same-for-all");
-    const created = await (await SELF.fetch("https://relay.test/v1/roster", {
-      method: "POST", headers: wsAuth("same-for-all", target),
-    })).json<{ roster_id: string; join_key: string }>();
-    const member = await registerHandle("roster-member");
-    await SELF.fetch(`https://relay.test/v1/roster/${created.roster_id}/join`, {
-      method: "POST", headers: { "content-type": "application/json", ...wsAuth("roster-member", member) },
-      body: JSON.stringify({ join_key: created.join_key }),
-    });
     await putCard("same-for-all", target);
-    const stranger = await registerHandle("no-roster");
-    for (const [handle, token] of [["roster-member", member], ["no-roster", stranger]] as const) {
+    const first = await registerHandle("first-viewer");
+    const second = await registerHandle("second-viewer");
+    for (const [handle, token] of [["first-viewer", first], ["second-viewer", second]] as const) {
       const res = await SELF.fetch("https://relay.test/v1/card/same-for-all", { headers: wsAuth(handle, token) });
       expect((await res.json<{ tasks: { id: string }[] }>()).tasks.map((t) => t.id))
         .toEqual(["ask", "schedule-meeting"]);

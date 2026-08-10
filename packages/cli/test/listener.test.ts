@@ -96,7 +96,7 @@ async function sendIncoming(
   ws: WsSocket,
   frame: {
     call_id: string; from: string; message: string; task?: string; context_id?: string;
-    groups?: string[]; correlation_id?: string; traceparent?: string;
+    correlation_id?: string; traceparent?: string;
   },
 ): Promise<{ request: E2EERequestPayloadType; wire: Record<string, unknown> }> {
   const issuedAt = Date.now();
@@ -119,7 +119,7 @@ async function sendIncoming(
   });
   const wire = {
     type: "incoming_call", call_id: frame.call_id, from: frame.from,
-    groups: frame.groups ?? [], envelope,
+    envelope,
     correlation_id: frame.correlation_id ?? "f".repeat(32),
     ...(frame.traceparent ? { traceparent: frame.traceparent } : {}),
   };
@@ -619,69 +619,6 @@ describe("startListener task resolution", () => {
     expect(spawned).toBe(true);
   });
 
-  // Was "raises clearance for a relay-attested group". A group no longer raises
-  // an amount — with one grantable level it decides whether the line answers at
-  // all — so what an attestation must still do is open a line the default closes.
-  it("answers an attested group member on a line that is closed by default", async () => {
-    const rosterId = "g".repeat(22);
-    const seen: { ran?: boolean } = {};
-    const relayReady = new Promise<WsSocket>((resolveWs) => {
-      void fakeRelay((ws) => resolveWs(ws)).then((url) => {
-        const deps = baseDeps(url);
-        seedTask(deps.paths, "schedule-meeting", ["description: d"]);
-        seedPolicy(deps.paths, {
-          default_access: "blocked", callers: {},
-          groups: { eng: { roster_id: rosterId, access: "allowed" } },
-        });
-        stopper = startListener({
-          ...deps,
-          run: async () => { seen.ran = true; return { text: "booked" }; },
-        });
-      });
-    });
-    const ws = await relayReady;
-    const expectFrames = frames(ws, 3);
-    await sendIncoming(ws, {
-      call_id: "cg1", from: "stranger", groups: [rosterId], message: "book", task: "schedule-meeting",
-    });
-    const [, , result] = await expectFrames;
-    expect(seen.ran).toBe(true);
-    expect(result).toMatchObject({ type: "call_result", call_id: "cg1", task: "schedule-meeting" });
-  });
-
-  // The mirror of the above: an un-attested claim must not open anything.
-  // `groups` comes from the relay, but the un-attested path is what a caller
-  // could otherwise assert about themselves.
-  it("leaves an unattested caller at the default", async () => {
-    const rosterId = "g".repeat(22);
-    const seen: { ran?: boolean } = {};
-    const relayReady = new Promise<WsSocket>((resolveWs) => {
-      void fakeRelay((ws) => resolveWs(ws)).then((url) => {
-        const deps = baseDeps(url);
-        seedTask(deps.paths, "schedule-meeting", ["description: d"]);
-        seedPolicy(deps.paths, {
-          default_access: "blocked", callers: {},
-          groups: { eng: { roster_id: rosterId, access: "allowed" } },
-        });
-        stopper = startListener({
-          ...deps,
-          run: async () => { seen.ran = true; return { text: "booked" }; },
-        });
-      });
-    });
-    const ws = await relayReady;
-    // One frame, not three: a refused caller never reaches accepted/started.
-    const expectFrames = frames(ws, 1);
-    await sendIncoming(ws, {
-      call_id: "cg2", from: "stranger", message: "book", task: "schedule-meeting",
-    });
-    const [failed] = await expectFrames;
-    // The roster would have opened the line, but nothing attested it — so the
-    // caller stays at the closed default and no agent runs at all.
-    expect(failed).toMatchObject({ type: "call_failed", call_id: "cg2", code: "blocked" });
-    expect(seen.ran).toBeUndefined();
-  });
-
   it("runs a task with its timeout and derived workdir, echoing task in call_result", async () => {
     const seen: { prompt?: string; workdir?: string; timeout?: number } = {};
     let paths!: LinePaths;
@@ -995,7 +932,7 @@ describe("startListener reconnect isolation", () => {
 // `seed` runs against the deps before the listener starts, so a test can plant
 // a binding, a policy, or a task.
 async function oneCall(
-  incoming: { message: string; task?: string; context_id?: string; groups?: string[] },
+  incoming: { message: string; task?: string; context_id?: string },
   opts: {
     seed?: (paths: LinePaths) => void;
     run?: (...a: any[]) => Promise<{ text: string; session_id?: string }>;

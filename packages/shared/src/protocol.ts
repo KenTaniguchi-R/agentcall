@@ -89,10 +89,6 @@ export const MAX_CONTEXT_TURNS = 10;
 // Bounds the callee's on-disk binding store so inbound calls can never drive an
 // unbounded local write. Least-recently-used entries are evicted past this.
 export const MAX_CONTEXTS = 100;
-// A caller can share many rosters with a callee, but the attestation rides on
-// every inbound call. Bound it at the protocol edge so neither a pathological
-// account nor a compromised relay can hand the listener unbounded policy input.
-export const MAX_CALLER_GROUPS = 50;
 export const RELAY_CALL_TIMEOUT_MS = 360_000;
 export const AGENT_TIMEOUT_MS = 300_000;
 // Was 10, raised when multi-turn landed. A threaded turn spawns a full agent,

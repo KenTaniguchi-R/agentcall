@@ -30,7 +30,7 @@ export async function registerHandle(
   return (await res.json<{ token: string }>()).token;
 }
 
-// Cards, and later roster membership and policy, are keyed by the stable
+// Cards and policy are keyed by the stable
 // identity rather than the address (#154). Tests that seed those rows
 // directly need the id the relay minted at registration.
 export async function agentIdFor(handle: string, org = "acme"): Promise<string> {

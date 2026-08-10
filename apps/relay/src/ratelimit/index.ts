@@ -2,7 +2,6 @@ export type RateLimitEnv = {
   RATE_LIMITER_DO: DurableObjectNamespace;
   CARD_RL: RateLimit;
   READ_RL: RateLimit;
-  ROSTER_READ_RL: RateLimit;
   /** Fixed only by the isolated test runtime; production always uses Date.now(). */
   RATE_LIMIT_NOW?: number;
 };
@@ -16,7 +15,7 @@ type DurablePolicy = {
 
 type NativePolicy = {
   backend: "native";
-  binding: "CARD_RL" | "READ_RL" | "ROSTER_READ_RL";
+  binding: "CARD_RL" | "READ_RL";
 };
 
 export type RateLimitPolicy = DurablePolicy | NativePolicy;
@@ -24,8 +23,8 @@ export type RateLimitPolicy = DurablePolicy | NativePolicy;
 export const REGISTER = {
   backend: "durable", namespace: "register", limit: 5, windowMs: 60_000,
 } as const satisfies DurablePolicy;
-export const ROSTER_WRITE = {
-  backend: "durable", namespace: "roster-write", limit: 10, windowMs: 60_000,
+export const ADMIN_WRITE = {
+  backend: "durable", namespace: "admin-write", limit: 10, windowMs: 60_000,
 } as const satisfies DurablePolicy;
 export const AUDIT_READ = {
   backend: "durable", namespace: "audit-read", limit: 120, windowMs: 60_000,
@@ -35,9 +34,6 @@ export const AUDIT_WRITE = {
 } as const satisfies DurablePolicy;
 export const NATIVE_CARD = { backend: "native", binding: "CARD_RL" } as const satisfies NativePolicy;
 export const NATIVE_READ = { backend: "native", binding: "READ_RL" } as const satisfies NativePolicy;
-export const NATIVE_ROSTER_READ = {
-  backend: "native", binding: "ROSTER_READ_RL",
-} as const satisfies NativePolicy;
 
 const DURABLE_SHARDS = 64;
 

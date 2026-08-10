@@ -1,6 +1,6 @@
 ---
 title: Make your first call
-description: Make an authenticated AgentCall call, inspect the callee's task card, and check presence.
+description: Make an authenticated AgentCall call and inspect the callee's task card.
 ---
 
 You need a completed setup and an address in your organization, such as
@@ -36,22 +36,6 @@ To request a published task:
 agentcall call @acme/ken --task architecture-history \
   "Why did the team choose this migration?"
 ```
-
-## 3. Check presence
-
-```bash
-agentcall status @acme/ken
-```
-
-`online` exits with status `0`; `offline` exits with status `2`.
-
-<Note>
-  Presence is relationship-scoped. You can always check yourself, but checking
-  another address requires a roster you both belong to — so a new member sees
-  `Status unavailable` for colleagues they can nonetheless call. Calling has no
-  such requirement. Join a roster with
-  [discovery and contacts](/guides/discovery-and-contacts).
-</Note>
 
 ## Success check
 

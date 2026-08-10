@@ -7,8 +7,8 @@ import { callerEntry, type Policy } from "./policy.js";
 // grantable level there is no amount to set, only whether the line answers at
 // all, so `clearance`/`clearance-reset`/`clearance-default` are gone and
 // `block`/`unblock` are the whole per-caller surface. `access-default` remains
-// because closing a line by default — answer only named callers and attested
-// rosters — is a real posture the binary model can still express.
+// because closing a line by default — answer only named callers — is a real
+// posture the binary model can still express.
 export type Verb = "block" | "unblock" | "access-default";
 
 // Pure policy mutations behind the flat CLI verbs. Each returns a NEW
@@ -38,24 +38,17 @@ export function execVerb(
         k, v.access === undefined ? {} : { access: v.access },
       ]),
     ),
-    groups: Object.fromEntries(
-      Object.entries(policy.groups).map(([k, v]) => [
-        k, { roster_id: v.roster_id, ...(v.access === undefined ? {} : { access: v.access }) },
-      ]),
-    ),
     ...(policy.tests === undefined ? {} : {
       tests: policy.tests.map((test) => ({
         caller: test.caller,
-        groups: [...test.groups],
         expect_access: test.expect_access,
       })),
     }),
   });
 
   // Report what the caller actually RESOLVES to, not what was just written: the
-  // line default and any attested roster take part, and a named block beats
-  // both. An owner reading this otherwise believes an edit took effect that
-  // something else is overriding.
+  // the line default takes part. An owner reading this otherwise believes an
+  // edit took effect that the default is overriding.
   const resolvedLine = (next: Policy, handle: string): string => {
     const resolved = accessFor(next, handle);
     return resolved === "blocked"
@@ -83,7 +76,7 @@ export function execVerb(
       return {
         policy: next,
         lines: next.default_access === "blocked"
-          ? ["Only named callers and attested rosters are answered."]
+          ? ["Only named callers are answered."]
           : ["Anyone registered is answered."],
       };
     }

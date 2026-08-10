@@ -50,9 +50,7 @@ const lines = [
 for (const [heading, schemas] of groups) {
   lines.push("", `## ${heading}`);
   for (const [wireSchema, purpose] of schemas) {
-    // Protocol documentation describes accepted wire input. This matters for
-    // fields such as IncomingCall.groups: Zod defaults it to [] after parsing,
-    // so it is required in output but optional on the wire.
+    // Protocol documentation describes accepted wire input.
     const schema = toJSONSchema(wireSchema, { io: "input" });
     const frame = schema.properties.type.const;
     const required = new Set(schema.required ?? []);
@@ -70,7 +68,6 @@ lines.push(
   `- Messages are limited to ${protocol.MAX_MESSAGE_BYTES.toLocaleString("en-US")} bytes; replies to ${protocol.MAX_REPLY_BYTES.toLocaleString("en-US")} bytes.`,
   `- Conversation contexts expire after ${protocol.CONTEXT_TTL_MS / 60_000} minutes and allow at most ${protocol.MAX_CONTEXT_TURNS} turns.`,
   `- Each caller has a ${protocol.RATE_LIMIT_PER_HOUR}-call hourly budget.`,
-  `- A listener accepts at most ${protocol.MAX_CALLER_GROUPS} relay-attested shared roster IDs per call.`,
   `- An encrypted WebSocket frame is limited to ${e2ee.MAX_E2EE_WIRE_BYTES.toLocaleString("en-US")} bytes.`,
   "- Optional W3C trace context is normalized and must match the correlation ID.",
   "",

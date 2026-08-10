@@ -14,9 +14,7 @@ export const CardTask = z.object({
   description: z.string().min(1).max(1000),
   examples: z.array(z.string().max(500)).max(10),
   // Bounded per-string like every neighbouring field. Unbounded keyword
-  // strings amplify: 20 per task x 50 tasks x 200 roster members, re-sent on
-  // every bundle refresh. These are the highest-weighted field in
-  // `agentcall search`, so they are the callee's precision lever.
+  // strings amplify across the published task catalogue and every card read.
   keywords: z.array(z.string().min(1).max(MAX_KEYWORD_LENGTH)).max(MAX_TASK_KEYWORDS),
 }).strict();
 
@@ -58,7 +56,7 @@ export type AgentCardType = z.infer<typeof AgentCard>;
 // The single visibility rule, all that is left of it after #379: a blocked
 // viewer sees nothing, everyone else sees the whole task list. Lives here
 // rather than in the relay route because two endpoints apply it — GET
-// /v1/card/:handle and the roster bundle — and they must not drift.
+// /v1/card/:handle.
 //
 // This is a deliberate reduction, not an oversight. The old menu doubled as
 // information-hiding: a caller with no grant could not see that a task

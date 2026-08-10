@@ -5,7 +5,7 @@ import { BASE64URL_RE } from "./signing.js";
 import {
   CallAccepted, CallCancelled, CallNotCancelled, CallRejected, CallStarted, CallStatus,
   CancelCall, CorrelationId, CONTEXT_ID_RE, MAX_DETAIL_LENGTH, MAX_MESSAGE_BYTES,
-  HANDLE_RE, MAX_CALLER_GROUPS, MAX_OFFERED_TASKS, MAX_REPLY_BYTES,
+  HANDLE_RE, MAX_OFFERED_TASKS, MAX_REPLY_BYTES,
   normalizeTraceContext, PeerFailureCode, RELAY_CALL_TIMEOUT_MS, RelayCallError, TASK_ID_RE,
 } from "./protocol.js";
 
@@ -131,7 +131,6 @@ export const EncryptedIncomingCall = z.preprocess(normalizeTraceContext, z.objec
   envelope: RequestEnvelope,
   correlation_id: CorrelationId,
   traceparent: z.string().optional(),
-  groups: z.array(z.string().regex(/^[A-Za-z0-9_-]{16,64}$/)).max(MAX_CALLER_GROUPS).default([]),
 }).strict());
 
 export const EncryptedCallOutcome = z.object({

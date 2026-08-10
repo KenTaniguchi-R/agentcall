@@ -6,6 +6,16 @@ which are released together.
 
 ## Unreleased
 
+### Roster and search removal (#424)
+
+- Remove roster/search CLI commands, local roster state and caches, relay
+  routes and mutation logic, shared discovery schemas, and roster group
+  attestation from calls, presence, and policy.
+- Keep calling explicit addresses and saved contacts as the single discovery
+  model; presence inspection is limited to the authenticated line itself.
+- Preserve append-only D1 migrations, legacy roster tables, historical roster
+  audit events, and their administrator export contract.
+
 ### Accountless Room removal (#371)
 
 - Remove the experimental accountless Room command and protocol so AgentCall has

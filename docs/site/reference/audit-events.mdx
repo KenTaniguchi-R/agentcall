@@ -3,7 +3,7 @@ title: Audit event catalog
 description: Durable tenant audit evidence, availability, export lag, and completeness boundaries.
 ---
 
-This catalog is generated from `packages/shared/src/audit-catalog.ts`. A repository test compares it with every durable event literal emitted by the relay, so an event cannot be added or removed silently.
+This catalog is generated from `packages/shared/src/audit-catalog.ts`. It includes current relay events and retained historical roster events. A repository test compares current event literals with the active catalog subset, while migration assertions protect the historical entries.
 
 The availability date is when the event contract entered the repository migration history. A particular self-hosted deployment may lag until it applies that migration.
 
@@ -36,7 +36,7 @@ The availability date is when the event contract entered the repository migratio
 
 ## Collection and export lag
 
-Organization-invite and roster events are inserted in the same awaited D1 batch as their successful security mutation. Once the relay returns that mutation's success response, those events are committed and eligible for a newly started audit export.
+Current organization-invite events are inserted in the same awaited D1 batch as their successful security mutation. Historical roster events used the same contract while roster administration existed; no current relay route creates new roster events. Once the relay returns a current mutation's success response, its event is committed and eligible for a newly started audit export.
 
 Call events cross the Durable Object/D1 boundary through an idempotent transactional outbox. The call-state update and outbox intent commit atomically in the callee's Durable Object; the relay awaits a D1 delivery attempt before publishing the transition to the caller. If D1 is unavailable, call truth still progresses and the durable intent retries by alarm. Consequently, call evidence is normally export-eligible before the caller observes the transition, but the contract during D1 failure is eventual delivery rather than a wall-clock maximum.
 
@@ -79,6 +79,6 @@ The catalog is exhaustive for the two currently exported durable ledgers. Call e
 
 Sampled traces, metrics, Workers logs, and the identity-unlinked `agentcall_status_reads` Analytics Engine dataset are observability, not a complete audit ledger. They cannot prove that an individual action occurred or did not occur and are not merged into this export.
 
-Current retention is also asymmetric: `org_events` keeps the newest 10,000 rows per organization, while `roster_events` has no time-based deletion path. The roster audit budget gates member-driven mutation churn; it is not a row-count retention ceiling. The event-window and legal-hold control plane is implemented, but subject erasure, continuous export, and time-based deletion are not.
+Current retention is also asymmetric: `org_events` keeps the newest 10,000 rows per organization, while the retained historical `roster_events` ledger has no time-based deletion path and receives no new events from current routes. Its former audit budget is historical schema state, not an active product limit. The event-window and legal-hold control plane is implemented, but subject erasure, continuous export, and time-based deletion are not.
 
 For export invocation and options, see the [CLI reference](/reference/cli#audit).

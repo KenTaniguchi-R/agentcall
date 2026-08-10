@@ -14,12 +14,6 @@
 // only per-caller control is whether it answers at all. See
 // docs/superpowers/specs/2026-08-07-open-default-design.md.
 import { z } from "zod";
-import { ROSTER_ID_RE } from "@benree/agentcall-shared";
-
-// Exported so policy.ts's assertions constrain group names identically. Two
-// copies of this pattern would drift into a file that parses but whose
-// assertions cannot name half its groups.
-export const GROUP_NAME_RE = /^[a-z0-9][a-z0-9-]{0,63}$/;
 
 /** What the line does with a call. There is no third state. */
 export const ACCESS = ["allowed", "blocked"] as const;
@@ -34,16 +28,10 @@ const CallerAccessSchema = z.object({
   access: AccessSchema.optional(),
 }).strict();
 
-const GroupAccessSchema = z.object({
-  roster_id: z.string().regex(ROSTER_ID_RE),
-  access: AccessSchema.optional(),
-}).strict();
-
 export const AccessPolicySchema = z.object({
   description: z.string().max(500).default(""),
   default_access: AccessSchema.default(DEFAULT_ACCESS),
   callers: z.record(z.string(), CallerAccessSchema).default({}),
-  groups: z.record(z.string().regex(GROUP_NAME_RE), GroupAccessSchema).default({}),
 }).strict();
 
 export type AccessPolicy = z.infer<typeof AccessPolicySchema>;
@@ -64,28 +52,14 @@ function ownEntry<T>(record: Record<string, T>, key: string): T | undefined {
  * message reaches any prompt — the CaMeL invariant `policy.ts` records. The
  * message cannot influence access.
  *
- * `attestedGroups` are roster ids the relay vouched for. A caller-supplied claim
- * must never reach this parameter.
- *
- * **Blocked wins.** An explicit per-caller block is the strongest rule, then a
- * block on any attested group, then any explicit allow, then the default. Group
- * membership can open a line the default closes, but can never resurrect a
- * caller the owner named and blocked — that ordering is what makes "block this
- * person" mean what it says regardless of what they belong to.
+ * An explicit per-caller rule wins; otherwise the line default applies.
  */
 export function accessFor(
   policy: AccessPolicy,
   from: string,
-  attestedGroups: readonly string[] = [],
 ): Access {
   const entry = ownEntry(policy.callers, from);
   if (entry?.access) return entry.access;
 
-  const attested = new Set(attestedGroups);
-  const groups = Object.values(policy.groups).filter((g) => attested.has(g.roster_id));
-  if (groups.some((g) => g.access === "blocked")) return "blocked";
-  if (groups.some((g) => g.access === "allowed")) return "allowed";
-
   return policy.default_access;
 }
-

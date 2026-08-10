@@ -6,8 +6,6 @@ import { register as registerCall } from "./commands/call.js";
 import { register as registerRotate } from "./commands/rotate.js";
 import { register as registerLineCore } from "./commands/line-core.js";
 import { register as registerLineAdmin } from "./commands/line-admin.js";
-import { register as registerRosterCore } from "./commands/roster-core.js";
-import { register as registerRosterAdmin } from "./commands/roster-admin.js";
 import { register as registerAudit } from "./commands/audit.js";
 import { register as registerUninstall } from "./commands/uninstall.js";
 import { register as registerContacts } from "./commands/contacts.js";
@@ -24,7 +22,6 @@ import { register as registerListen } from "./commands/listen.js";
 import { register as registerTask } from "./commands/task.js";
 import { register as registerGrants } from "./commands/grants.js";
 import { registerCard, registerLint } from "./commands/card.js";
-import { register as registerSearch } from "./commands/search.js";
 export function createProgram(): Command {
 const program = new Command();
 program.name("agentcall").description("Call other people's coding agents").version("0.4.0");
@@ -41,7 +38,6 @@ registerLint(program);
 registerPolicy(program);
 registerCard(program);
 registerContacts(program);
-const roster = program.command("roster").description("join and manage discovery rosters for `agentcall search`");
 function lineFor(line: string | undefined): LineContext | undefined {
   try {
     return resolveLine(getMachinePaths(), { line });
@@ -51,9 +47,6 @@ function lineFor(line: string | undefined): LineContext | undefined {
     return undefined;
   }
 }
-registerRosterCore(roster, lineFor);
-registerRosterAdmin(roster, lineFor);
-registerSearch(program, lineFor);
 registerTask(program);
 registerGrants(program);
 const line = program.command("line").description("manage the addresses (lines) this machine answers on and calls from");

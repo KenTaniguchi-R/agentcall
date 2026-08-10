@@ -5,7 +5,7 @@ import {
 } from "@benree/agentcall-shared";
 import { constantTimeEqual, generateToken, sha256Hex } from "./auth.js";
 import { orgAuditStatement, orgAuditTrimStatement, type OrgAuditActor } from "./events.js";
-import { checkLimit, REGISTER, ROSTER_WRITE } from "./ratelimit/index.js";
+import { ADMIN_WRITE, checkLimit, REGISTER } from "./ratelimit/index.js";
 import { deploymentOrgAllows } from "./tenant.js";
 import { jsonBody, rateLimit, requireAdmin, type RelayAppEnv } from "./middleware.js";
 
@@ -111,7 +111,7 @@ export function mountInvites(app: Hono<RelayAppEnv>): void {
     );
   });
 
-  app.post("/v1/invites/list", rateLimit(ROSTER_WRITE, "identity", "invite-list:"), requireAdmin, async (c) => {
+  app.post("/v1/invites/list", rateLimit(ADMIN_WRITE, "identity", "invite-list:"), requireAdmin, async (c) => {
     const identity = c.var.identity;
     const { results } = await c.env.DB.prepare(
       "SELECT token_hash, description, created_by, created_at, expires_at, used_at, used_by, revoked_at, org_role " +
@@ -122,7 +122,7 @@ export function mountInvites(app: Hono<RelayAppEnv>): void {
     return c.json({ invites: (results ?? []).map(publicInvite) });
   });
 
-  app.post("/v1/invites/:id/revoke", rateLimit(ROSTER_WRITE, "identity", "invite-revoke:"), requireAdmin, async (c) => {
+  app.post("/v1/invites/:id/revoke", rateLimit(ADMIN_WRITE, "identity", "invite-revoke:"), requireAdmin, async (c) => {
     const identity = c.var.identity;
     const id = c.req.param("id");
     if (!ORG_INVITE_ID_RE.test(id)) return c.json({ error: "invalid invite id" }, 400);
