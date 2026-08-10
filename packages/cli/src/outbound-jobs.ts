@@ -106,3 +106,14 @@ export async function acknowledgeOutboundJob(
 export function findOutboundJob(paths: Paths, address: string, taskId: string): OutboundJob | undefined {
   return loadOutboundJobs(paths).find((job) => job.address === address && job.task_id === taskId);
 }
+
+export async function forgetOutboundJob(
+  paths: Paths, messageId: string, lockOptions: FileLockOptions = {},
+): Promise<void> {
+  prepareStore(paths);
+  await withFileLock(paths.outboundJobsFile, "outbound job store", async () => {
+    const jobs = loadOutboundJobs(paths);
+    const retained = jobs.filter((job) => job.message_id !== messageId);
+    if (retained.length !== jobs.length) save(paths, retained);
+  }, lockOptions);
+}

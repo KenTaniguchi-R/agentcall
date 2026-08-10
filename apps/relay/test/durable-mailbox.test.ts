@@ -7,12 +7,12 @@ import {
 
 const ORIGIN = "https://relay.test";
 
-async function enableMailbox(handle: string, token: string): Promise<void> {
+async function enableMailbox(handle: string, token: string, blocked: string[] = []): Promise<void> {
   const response = await SELF.fetch(`${ORIGIN}/v1/card`, {
     method: "PUT",
     headers: { "content-type": "application/json", ...wsAuth(handle, token) },
     body: JSON.stringify({
-      description: "durable callee", agent_kind: "claude", tasks: [], blocked: [],
+      description: "durable callee", agent_kind: "claude", tasks: [], blocked,
       offline_delivery: { enabled: true },
     }),
   });
@@ -105,6 +105,62 @@ describe("durable mailbox", () => {
       status: { state: "TASK_STATE_CANCELED" },
       metadata: { "agentcall.dev/terminalReason": "canceled" },
     });
+  });
+
+  it("invalidates an unstarted lease when the caller cancels", async () => {
+    const calleeToken = await registerHandle("leased-cancel-callee");
+    const callerToken = await registerHandle("leased-cancel-caller");
+    await enableMailbox("leased-cancel-callee", calleeToken);
+    const caller = await openWs(
+      "/v1/ws?role=call&to=leased-cancel-callee", wsAuth("leased-cancel-caller", callerToken),
+    );
+    caller.send(JSON.stringify(encryptedCallRequest("leased-cancel-caller", "leased-cancel-callee", {
+      message_id: "d".repeat(32), delivery_mode: "durable",
+    })));
+    const receipt = E2EERelayToCallerFrame.parse(await nextFrame(caller));
+    if (receipt.type !== "call_queued") throw new Error("expected durable queue receipt");
+    const listener = await openWs(
+      "/v1/ws?role=listen&capability=durable-mailbox-v1&listener_session_id=dddddddd-dddd-4ddd-8ddd-dddddddddddd",
+      wsAuth("leased-cancel-callee", calleeToken),
+    );
+    const incoming = await nextFrame(listener);
+    expect(incoming).toMatchObject({ call_id: receipt.call_id, lease_id: expect.any(String) });
+
+    const response = await SELF.fetch(
+      `${ORIGIN}/v1/a2a/leased-cancel-callee/tasks/${receipt.call_id}:cancel`,
+      { method: "POST", headers: { ...wsAuth("leased-cancel-caller", callerToken), "content-type": "application/a2a+json" }, body: "{}" },
+    );
+    expect(A2ATask.parse(await response.json())).toMatchObject({
+      status: { state: "TASK_STATE_CANCELED" },
+    });
+    listener.send(JSON.stringify({
+      type: "call_started", call_id: receipt.call_id, lease_id: incoming.lease_id,
+    }));
+    const task = await SELF.fetch(`${ORIGIN}/v1/a2a/leased-cancel-callee/tasks/${receipt.call_id}`, {
+      headers: wsAuth("leased-cancel-caller", callerToken),
+    });
+    expect(A2ATask.parse(await task.json())).toMatchObject({
+      status: { state: "TASK_STATE_CANCELED" },
+    });
+  });
+
+  it("does not admit blocked callers into the offline mailbox", async () => {
+    const calleeToken = await registerHandle("blocked-callee");
+    const callerToken = await registerHandle("blocked-caller");
+    await enableMailbox("blocked-callee", calleeToken, ["blocked-caller"]);
+    const caller = await openWs(
+      "/v1/ws?role=call&to=blocked-callee", wsAuth("blocked-caller", callerToken),
+    );
+    caller.send(JSON.stringify(encryptedCallRequest("blocked-caller", "blocked-callee", {
+      message_id: "e".repeat(32), delivery_mode: "durable",
+    })));
+    expect(E2EERelayToCallerFrame.parse(await nextFrame(caller))).toMatchObject({
+      type: "call_error", code: "offline",
+    });
+    const tasks = await SELF.fetch(`${ORIGIN}/v1/a2a/blocked-callee/tasks`, {
+      headers: wsAuth("blocked-caller", callerToken),
+    });
+    expect(A2AListTasksResponse.parse(await tasks.json()).totalSize).toBe(0);
   });
 
   it("expires queued ciphertext into a visible tombstone", async () => {
@@ -247,6 +303,86 @@ describe("durable mailbox", () => {
     expect(result.artifacts?.[0]?.parts[0]).toMatchObject({
       mediaType: "application/vnd.agentcall.hpke+json",
       raw: expect.any(String),
+    });
+  });
+
+  it("fails started work on the execution deadline", async () => {
+    const calleeToken = await registerHandle("started-timeout-callee");
+    const callerToken = await registerHandle("started-timeout-caller");
+    await enableMailbox("started-timeout-callee", calleeToken);
+    const caller = await openWs(
+      "/v1/ws?role=call&to=started-timeout-callee", wsAuth("started-timeout-caller", callerToken),
+    );
+    caller.send(JSON.stringify(encryptedCallRequest("started-timeout-caller", "started-timeout-callee", {
+      message_id: "f".repeat(32), delivery_mode: "durable",
+    })));
+    const receipt = E2EERelayToCallerFrame.parse(await nextFrame(caller));
+    if (receipt.type !== "call_queued") throw new Error("expected durable queue receipt");
+    const listener = await openWs(
+      "/v1/ws?role=listen&capability=durable-mailbox-v1&listener_session_id=ffffffff-ffff-4fff-8fff-ffffffffffff&test_execution_timeout_ms=20",
+      wsAuth("started-timeout-callee", calleeToken),
+    );
+    const incoming = await nextFrame(listener);
+    listener.send(JSON.stringify({
+      type: "call_started", call_id: receipt.call_id, lease_id: incoming.lease_id,
+    }));
+    await expect.poll(async () => {
+      const response = await SELF.fetch(`${ORIGIN}/v1/a2a/started-timeout-callee/tasks/${receipt.call_id}`, {
+        headers: wsAuth("started-timeout-caller", callerToken),
+      });
+      return response.json();
+    }).toMatchObject({
+      status: { state: "TASK_STATE_FAILED" },
+      metadata: { "agentcall.dev/terminalReason": "failed" },
+    });
+  });
+
+  it("rebinds started work to a reconnecting listener for journal recovery", async () => {
+    const calleeToken = await registerHandle("started-recovery-callee");
+    const callerToken = await registerHandle("started-recovery-caller");
+    await enableMailbox("started-recovery-callee", calleeToken);
+    const caller = await openWs(
+      "/v1/ws?role=call&to=started-recovery-callee", wsAuth("started-recovery-caller", callerToken),
+    );
+    caller.send(JSON.stringify(encryptedCallRequest("started-recovery-caller", "started-recovery-callee", {
+      message_id: "1".repeat(32), delivery_mode: "durable",
+    })));
+    const receipt = E2EERelayToCallerFrame.parse(await nextFrame(caller));
+    if (receipt.type !== "call_queued") throw new Error("expected durable queue receipt");
+    const first = await openWs(
+      "/v1/ws?role=listen&capability=durable-mailbox-v1&listener_session_id=11111111-1111-4111-8111-111111111110",
+      wsAuth("started-recovery-callee", calleeToken),
+    );
+    const original = await nextFrame(first);
+    first.send(JSON.stringify({
+      type: "call_started", call_id: receipt.call_id, lease_id: original.lease_id,
+    }));
+    first.close();
+
+    const recoveredListener = await openWs(
+      "/v1/ws?role=listen&capability=durable-mailbox-v1&listener_session_id=11111111-1111-4111-8111-111111111112",
+      wsAuth("started-recovery-callee", calleeToken),
+    );
+    const recovered = await nextFrame(recoveredListener);
+    expect(recovered).toMatchObject({
+      call_id: receipt.call_id, message_id: "1".repeat(32), lease_id: expect.any(String),
+    });
+    expect(recovered.lease_id).not.toBe(original.lease_id);
+    recoveredListener.send(JSON.stringify({
+      ...encryptedCallOutcome(
+        receipt.call_id, "started-recovery-callee", "started-recovery-caller", "failed",
+      ),
+      terminal_reason: "indeterminate_execution",
+      lease_id: recovered.lease_id,
+    }));
+    await expect.poll(async () => {
+      const response = await SELF.fetch(`${ORIGIN}/v1/a2a/started-recovery-callee/tasks/${receipt.call_id}`, {
+        headers: wsAuth("started-recovery-caller", callerToken),
+      });
+      return response.json();
+    }).toMatchObject({
+      status: { state: "TASK_STATE_FAILED" },
+      metadata: { "agentcall.dev/terminalReason": "indeterminate_execution" },
     });
   });
 

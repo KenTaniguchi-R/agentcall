@@ -143,6 +143,7 @@ export const CallQueued = z.object({
 }).strict().refine((value) => value.expires_at > value.submitted_at, {
   message: "queued call must expire after submission",
 });
+export type CallQueuedType = z.infer<typeof CallQueued>;
 export const RelayCallError = z.object({
   type: z.literal("call_error"),
   origin: z.literal("relay"),

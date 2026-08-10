@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import {
-  acknowledgeOutboundJob, findOutboundJob, loadOutboundJobs, rememberOutboundJob,
+  acknowledgeOutboundJob, findOutboundJob, forgetOutboundJob, loadOutboundJobs, rememberOutboundJob,
 } from "../src/outbound-jobs.js";
 import { getPaths } from "../src/paths.js";
 import { tempDir } from "./helpers.js";
@@ -41,5 +41,18 @@ describe("outbound durable jobs", () => {
     expect(findOutboundJob(paths, "@acme/bob", "task-1")).toMatchObject({
       message_id: frame.message_id, task_id: "task-1", state: "queued",
     });
+  });
+
+  it("removes a durable-capable submission that completed synchronously", async () => {
+    const root = tempDir("agentcall-outbound-jobs-complete-");
+    const paths = getPaths(root, root);
+    await rememberOutboundJob(paths, {
+      message_id: frame.message_id, relay: "https://relay.test", address: "@acme/bob", frame,
+      request_id: "6".repeat(32), request_transcript_hash: "5".repeat(64),
+      recipient_identity_pub: "identity-public-key", sender_epoch: 2,
+      created_at: 1_000, expires_at: 2_000,
+    });
+    await forgetOutboundJob(paths, frame.message_id);
+    expect(loadOutboundJobs(paths)).toEqual([]);
   });
 });

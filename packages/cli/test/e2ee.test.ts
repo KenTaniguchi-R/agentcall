@@ -67,7 +67,7 @@ describe("E2EE HPKE envelopes", () => {
     expect(JSON.stringify(envelope)).not.toContain("private reply");
     const binding = {
       request_id: original.request_id,
-      message_id: original.message_id,
+      message_id: original.message_id!,
       request_transcript_hash: payload.request_transcript_hash,
     };
     await expect(openE2EEResponse(
@@ -106,7 +106,7 @@ describe("E2EE HPKE envelopes", () => {
     await expect(openE2EEResponse(
       responseEnvelope, alice.encryption_pkcs8, bob.identity_pub, expected(maximumResponse),
       {
-        request_id: maximumResponse.request_id, message_id: maximumResponse.message_id,
+        request_id: maximumResponse.request_id, message_id: maximumResponse.message_id!,
         request_transcript_hash: maximumResponse.request_transcript_hash,
       }, NOW,
     )).resolves.toEqual(maximumResponse);

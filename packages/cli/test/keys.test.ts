@@ -246,7 +246,7 @@ describe("key storage", () => {
     });
   });
 
-  it("refuses a rapid ninth live epoch instead of evicting a decryptable key", async () => {
+  it("evicts an unreferenced retained epoch on a rapid ninth rotation", async () => {
     const paths = linePaths(home);
     let keys = await generateIdentityKeys(paths);
     for (let epoch = 1; epoch < 8; epoch += 1) {
@@ -254,7 +254,38 @@ describe("key storage", () => {
       keys = await rotateEncryptionKey(paths);
     }
     keys = markPublished(paths, keys, "8");
-    await expect(rotateEncryptionKey(paths)).rejects.toThrow(/eight.*live encryption-key epochs/i);
+    expect((await rotateEncryptionKey(paths)).epoch).toBe(9);
+    expect(() => loadEncryptionKeysForEpoch(paths, 1)).toThrow(/not available/i);
+  });
+
+  it("refuses to evict an epoch referenced by a live durable task and reports the task count", async () => {
+    const paths = linePaths(home);
+    let keys = await generateIdentityKeys(paths);
+    for (let epoch = 1; epoch < 8; epoch += 1) {
+      keys = markPublished(paths, keys, epoch.toString(16));
+      keys = await rotateEncryptionKey(paths);
+    }
+    keys = markPublished(paths, keys, "8");
+    const now = Date.now();
+    writeFileSync(paths.outboundJobsFile, JSON.stringify({
+      v: 1,
+      jobs: [{
+        message_id: "9".repeat(32), relay: "https://relay.test", address: "@acme/bob",
+        frame: {
+          type: "call_request",
+          envelope: {
+            v: 1, direction: "request", relay_origin: "relay.test", from: "@acme/alice",
+            to: "@acme/bob", key_id: "a".repeat(32), epoch: 1, enc: "A", ct: "B",
+          },
+          message_id: "9".repeat(32), delivery_mode: "durable", correlation_id: "f".repeat(32),
+        },
+        request_id: "1".repeat(32), request_transcript_hash: "2".repeat(64),
+        recipient_identity_pub: "pub", sender_epoch: 1,
+        created_at: now, expires_at: now + 60_000, state: "queued", task_id: "task-1",
+        submitted_at: now,
+      }],
+    }), { mode: 0o600 });
+    await expect(rotateEncryptionKey(paths)).rejects.toThrow(/1 live mailbox task.*epoch 1/i);
     expect(loadKeys(paths).epoch).toBe(8);
   });
 

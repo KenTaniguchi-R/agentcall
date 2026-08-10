@@ -29,6 +29,7 @@ export const A2APart = z.union([A2ATextPart, A2ARawPart]);
 export const AgentCallTerminalReason = z.enum([
   "completed", "failed", "canceled", "expired", "delivery_failed", "revoked", "indeterminate_execution",
 ]);
+export type AgentCallTerminalReasonType = z.infer<typeof AgentCallTerminalReason>;
 export const AgentCallTaskMetadata = z.object({
   "agentcall.dev/terminalReason": AgentCallTerminalReason,
 }).strict();

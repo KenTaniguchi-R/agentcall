@@ -7,6 +7,7 @@ import {
   type A2AListTasksResponseType,
   type A2ATaskStateType,
   type A2ATaskType,
+  type AgentCallTerminalReasonType,
   type CallStatusType,
   type HpkeEnvelopeType,
 } from "@benree/agentcall-shared";
@@ -40,8 +41,9 @@ export type PersistedTask = {
     attempt: number;
   };
   execute_by?: number;
+  execution_deadline?: number;
   purge_at?: number;
-  terminal_reason?: "completed" | "failed" | "canceled" | "expired" | "delivery_failed" | "revoked" | "indeterminate_execution";
+  terminal_reason?: AgentCallTerminalReasonType;
   ciphertext_bytes?: number;
   quota_released?: boolean;
 };

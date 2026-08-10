@@ -78,7 +78,7 @@ function frames(ws: WsSocket, n: number): Promise<any[]> {
               key_id: await keyIdFor(callerKeys.encryption_pub), epoch: callerKeys.epoch,
             },
             {
-              message_id: request.message_id,
+              message_id: request.message_id!,
               request_id: request.request_id,
               request_transcript_hash: await transcriptHash(requestTranscript(request)),
               ...(request.delivery_mode ? { delivery_mode: request.delivery_mode } : {}),

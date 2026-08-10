@@ -4,7 +4,7 @@ import { formatAddress,
   CORRELATION_ID_RE, E2EECallerFrame, E2EERelayToCallerFrame, MAILBOX_TTL_MS, MAX_E2EE_WIRE_BYTES,
   RELAY_CALL_TIMEOUT_MS, keyIdFor,
   normalizeTraceparent, requestTranscript, safeParseFrame, sanitizeDetail, transcriptHash,
-  type CallStatusType, type E2EERequestPayloadType, type ErrorCodeType,
+  type CallQueuedType, type CallStatusType, type E2EERequestPayloadType, type ErrorCodeType,
 } from "@benree/agentcall-shared";
 import { ApiError, assertValidHandle, fetchCard, fetchKeys } from "./api.js";
 import { openE2EEResponse, sealE2EERequest } from "./e2ee.js";
@@ -12,7 +12,7 @@ import { loadKeys } from "./keys.js";
 import { verifyAndPinPeer } from "./known-peers.js";
 import type { Paths } from "./paths.js";
 import { relayHostOf } from "./config.js";
-import { acknowledgeOutboundJob, rememberOutboundJob } from "./outbound-jobs.js";
+import { acknowledgeOutboundJob, forgetOutboundJob, rememberOutboundJob } from "./outbound-jobs.js";
 
 export class CallError extends Error {
   constructor(
@@ -76,15 +76,7 @@ export interface CallReply {
   task?: string;
 }
 
-export interface CallQueuedReply {
-  type: "call_queued";
-  call_id: string;
-  message_id: string;
-  correlation_id: string;
-  address: string;
-  submitted_at: number;
-  expires_at: number;
-}
+export type CallQueuedReply = CallQueuedType & { address: string };
 
 export type CallResult = CallReply | CallQueuedReply;
 
@@ -179,7 +171,7 @@ export async function callAgent(opts: CallOpts): Promise<CallResult> {
     epoch: recipientBundle.encryption.record.epoch,
   });
   const requestBinding = {
-    message_id: request.message_id,
+    message_id: messageId,
     request_id: request.request_id,
     request_transcript_hash: await transcriptHash(requestTranscript(request)),
     ...(request.delivery_mode ? { delivery_mode: request.delivery_mode } : {}),
@@ -295,6 +287,12 @@ export async function callAgent(opts: CallOpts): Promise<CallResult> {
           const authenticatedTerminal = outcome.kind === "reply" ? "completed" : "failed";
           if (frame.terminal !== authenticatedTerminal) {
             throw new Error("Encrypted peer outcome does not match its relay-visible terminal state.");
+          }
+          if (mailboxEnabled) {
+            try { await forgetOutboundJob(opts.paths, messageId); }
+            catch (error) {
+              console.error(`Warning: could not remove completed outbound job: ${String(error)}`);
+            }
           }
           if (outcome.kind === "reply") {
             finish(() => resolve({

@@ -207,6 +207,7 @@ app.get("/v1/ws", async (c) => {
   let target: string;
   let targetAgentId: string;
   let mailboxEnabled = false;
+  let callerBlocked = false;
   if (role === "listen") {
     target = handle;
     targetAgentId = identity.agentId;
@@ -230,6 +231,7 @@ app.get("/v1/ws", async (c) => {
     ).bind(org, targetAgentId).first<{ card_json: string }>();
     const targetCard = cardRow ? parseStoredCard(cardRow.card_json, org, target) : null;
     mailboxEnabled = targetCard?.offline_delivery.enabled === true;
+    callerBlocked = targetCard?.blocked.includes(handle) === true;
   } else {
     return c.json({ error: "bad role" }, 400);
   }
@@ -240,6 +242,7 @@ app.get("/v1/ws", async (c) => {
   const doUrl = new URL("https://do/ws");
   doUrl.searchParams.set("role", role);
   doUrl.searchParams.set("test_timeout_ms", c.req.query("test_timeout_ms") ?? "");
+  doUrl.searchParams.set("test_execution_timeout_ms", c.req.query("test_execution_timeout_ms") ?? "");
   if (role === "listen") {
     const capability = c.req.query("capability");
     const listenerSessionId = c.req.query("listener_session_id");
@@ -254,6 +257,7 @@ app.get("/v1/ws", async (c) => {
   fwd.headers.set("X-Verified-Agent-Id", identity.agentId);
   fwd.headers.set("X-Verified-Target-Agent-Id", targetAgentId);
   fwd.headers.set("X-Verified-Mailbox-Enabled", mailboxEnabled ? "true" : "false");
+  fwd.headers.set("X-Verified-Caller-Blocked", callerBlocked ? "true" : "false");
   fwd.headers.set("X-Verified-Org", org);
   fwd.headers.set("X-Verified-Target", target);
   fwd.headers.set("X-Verified-Credential-Generation", String(identity.recoveryGeneration));

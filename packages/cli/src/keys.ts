@@ -12,6 +12,7 @@ import {
   toBase64Url,
 } from "@benree/agentcall-shared";
 import { assertPrivateFile, writeJsonAtomic } from "./json-store.js";
+import { loadOutboundJobs } from "./outbound-jobs.js";
 import type { Paths } from "./paths.js";
 
 const HASH = /^[0-9a-f]{32}$/;
@@ -397,13 +398,21 @@ export async function rotateEncryptionKey(
   const base = loadKeys(paths);
   const liveRetained = listRetainedEpochs(paths).filter((key) => Date.now() < key.retained_until);
   if (liveRetained.length + 1 >= MAX_LIVE_ENCRYPTION_EPOCHS) {
-    const earliestRelease = Math.min(...liveRetained.map((key) => key.retained_until));
-    throw new Error(
-      "Eight live encryption-key epochs are already retained for durable delivery. " +
-      `${liveRetained.length} retained epoch(s) still protect live mailbox ciphertext; ` +
-      `the earliest releases at ${new Date(earliestRelease).toISOString()}. ` +
-      "Wait for that mailbox decryption window to expire before rotating again.",
-    );
+    const oldest = liveRetained.reduce((candidate, key) =>
+      key.epoch < candidate.epoch ? key : candidate);
+    const now = Date.now();
+    const blockingTasks = loadOutboundJobs(paths).filter(
+      (job) => job.expires_at > now && job.sender_epoch === oldest.epoch,
+    ).length;
+    if (blockingTasks > 0) {
+      throw new Error(
+        "Eight live encryption-key epochs are already retained for durable delivery. " +
+        `${blockingTasks} live mailbox task(s) still require epoch ${oldest.epoch}; ` +
+        `it releases no later than ${new Date(oldest.retained_until).toISOString()}. ` +
+        "Wait for those tasks to finish or expire before rotating again.",
+      );
+    }
+    unlinkSync(retainedEpochFile(paths, oldest.epoch));
   }
   if (!base.published_encryption_transcript_hash) {
     throw new Error(

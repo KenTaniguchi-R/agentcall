@@ -48,15 +48,22 @@ describe("E2EE envelope schemas and transcripts", () => {
     }
   });
 
-  it("requires one idempotency id in both the signed request and relay-visible frame", () => {
+  it("requires one idempotency id for durable delivery but accepts legacy sync frames", () => {
     const requestEnvelope = {
       v: 1 as const, direction: "request" as const, relay_origin: request.relay_origin,
       from: request.from, to: request.to, key_id: request.recipient_encryption_key_id,
       epoch: request.recipient_epoch, enc: "A", ct: "B",
     };
-    expect(E2EERequestPayload.safeParse({ ...request, message_id: undefined }).success).toBe(false);
+    expect(E2EERequestPayload.safeParse({ ...request, message_id: undefined }).success).toBe(true);
+    expect(E2EERequestPayload.safeParse({
+      ...request, message_id: undefined, delivery_mode: "durable",
+    }).success).toBe(false);
     expect(E2EECallerFrame.safeParse({
       type: "call_request", envelope: requestEnvelope, correlation_id: "4".repeat(32),
+    }).success).toBe(true);
+    expect(E2EECallerFrame.safeParse({
+      type: "call_request", envelope: requestEnvelope, correlation_id: "4".repeat(32),
+      delivery_mode: "durable",
     }).success).toBe(false);
     expect(E2EECallerFrame.parse({
       type: "call_request", envelope: requestEnvelope, message_id: request.message_id,
@@ -128,12 +135,16 @@ describe("E2EE envelope schemas and transcripts", () => {
   it("binds optional request fields without ambiguous concatenation", () => {
     const transcript = requestTranscript(request);
     expect(toHex(transcript)).toBe(
-      "01000000146167656e7463616c6c2f726571756573742f7631020000000000000001010000000772657175657374010000001361636d652e6167656e7463616c6c2e74657374010000000b4061636d652f616c69636501000000094061636d652f626f62010000002039393939393939393939393939393939393939393939393939393939393939390100000020313131313131313131313131313131313131313131313131313131313131313101000000203232323232323232323232323232323232323232323232323232323232323232010000002033333333333333333333333333333333333333333333333333333333333333330200000000000000020200000000000000640200000000000000c8010000000361736b03010000000568656c6c6f",
+      "01000000146167656e7463616c6c2f726571756573742f7631020000000000000001010000000772657175657374010000001361636d652e6167656e7463616c6c2e74657374010000000b4061636d652f616c69636501000000094061636d652f626f620100000020313131313131313131313131313131313131313131313131313131313131313101000000203232323232323232323232323232323232323232323232323232323232323232010000002033333333333333333333333333333333333333333333333333333333333333330200000000000000020200000000000000640200000000000000c8010000000361736b03010000000568656c6c6f",
     );
     expect(requestTranscript({ ...request, task: undefined, context_id: undefined })).not.toEqual(transcript);
     expect(requestTranscript({ ...request, message: "hello!" })).not.toEqual(transcript);
-    expect(requestTranscript({ ...request, message_id: "8".repeat(32) })).not.toEqual(transcript);
-    expect(requestTranscript({ ...request, delivery_mode: "durable" })).not.toEqual(transcript);
+    expect(requestTranscript({ ...request, message_id: "8".repeat(32) })).toEqual(transcript);
+    const durableTranscript = requestTranscript({ ...request, delivery_mode: "durable" });
+    expect(durableTranscript).not.toEqual(transcript);
+    expect(requestTranscript({
+      ...request, delivery_mode: "durable", message_id: "8".repeat(32),
+    })).not.toEqual(durableTranscript);
     expect(requestTranscript({ ...request, request_id: "4".repeat(32) })).not.toEqual(transcript);
   });
 
@@ -148,11 +159,15 @@ describe("E2EE envelope schemas and transcripts", () => {
       outcome: { kind: "failure", code: "task_unknown", offered: ["ask", "review"] },
     };
     expect(toHex(responseTranscript(response))).toBe(
-      "01000000156167656e7463616c6c2f726573706f6e73652f76310200000000000000010100000008726573706f6e7365010000001361636d652e6167656e7463616c6c2e7465737401000000094061636d652f626f62010000000b4061636d652f616c696365010000002039393939393939393939393939393939393939393939393939393939393939390100000020313131313131313131313131313131313131313131313131313131313131313101000000203535353535353535353535353535353535353535353535353535353535353535010000002036363636363636363636363636363636363636363636363636363636363636360200000000000000020200000000000000640200000000000000c801000000406533303931333439646130373231373936393564623639373866316263383263303132366562623865303763613334663235643364336261353065313139376501000000076661696c757265010000000c7461736b5f756e6b6e6f776e03020000000000000002010000000361736b0100000006726576696577",
+      "01000000156167656e7463616c6c2f726573706f6e73652f76310200000000000000010100000008726573706f6e7365010000001361636d652e6167656e7463616c6c2e7465737401000000094061636d652f626f62010000000b4061636d652f616c6963650100000020313131313131313131313131313131313131313131313131313131313131313101000000203535353535353535353535353535353535353535353535353535353535353535010000002036363636363636363636363636363636363636363636363636363636363636360200000000000000020200000000000000640200000000000000c801000000406335656337396632346230336431316438343065343536383832366564363965306363633734656633623332373831316430313831326164323061396461623401000000076661696c757265010000000c7461736b5f756e6b6e6f776e03020000000000000002010000000361736b0100000006726576696577",
     );
     expect(responseTranscript({ ...response, request_transcript_hash: "7".repeat(64) })).not.toEqual(responseTranscript(response));
-    expect(responseTranscript({ ...response, message_id: "8".repeat(32) })).not.toEqual(responseTranscript(response));
-    expect(responseTranscript({ ...response, delivery_mode: "durable" })).not.toEqual(responseTranscript(response));
+    expect(responseTranscript({ ...response, message_id: "8".repeat(32) })).toEqual(responseTranscript(response));
+    const durableTranscript = responseTranscript({ ...response, delivery_mode: "durable" });
+    expect(durableTranscript).not.toEqual(responseTranscript(response));
+    expect(responseTranscript({
+      ...response, delivery_mode: "durable", message_id: "8".repeat(32),
+    })).not.toEqual(durableTranscript);
     expect(responseTranscript({
       ...response,
       outcome: { kind: "failure", code: "task_unknown", offered: ["review", "ask"] },

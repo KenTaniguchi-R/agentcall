@@ -36,12 +36,12 @@ describe("durable job result", () => {
     };
     const hash = await transcriptHash(requestTranscript(request));
     await rememberOutboundJob(paths, {
-      message_id: request.message_id, relay: "https://relay.test", address: "@acme/bob", frame,
+      message_id: request.message_id!, relay: "https://relay.test", address: "@acme/bob", frame,
       request_id: request.request_id, request_transcript_hash: hash,
       recipient_identity_pub: callee.identity_pub, sender_epoch: caller.epoch,
       created_at: now, expires_at: request.expires_at,
     });
-    await acknowledgeOutboundJob(paths, request.message_id, {
+    await acknowledgeOutboundJob(paths, request.message_id!, {
       task_id: "task-1", submitted_at: now, expires_at: request.expires_at,
     });
     const response: E2EEResponsePayloadType = {
