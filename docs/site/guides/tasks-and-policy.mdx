@@ -32,14 +32,11 @@ a startup error and not a silent no-op.
 ## 2. Validate before publishing
 
 ```bash
-agentcall lint
-agentcall policy
-agentcall card
+agentcall doctor
 ```
 
-`lint` checks task manifests, effective policy assertions, and the rendered
-card. The other commands make the effective access rules and working directories
-visible for human review.
+`doctor` is the single read-only view of task validity, effective policy,
+working scope, and card drift. Add `--json` for the same structured result.
 
 ## 3. Decide who is answered
 
@@ -63,8 +60,13 @@ agentcall access --default blocked
 `secret` is not grantable. It means "never leaves this machine", so no caller
 and no caller can reach it.
 
-Policy verbs republish the card automatically. `agentcall card push` republishes
-after a direct policy-file edit.
+Policy verbs republish the card automatically. After a direct policy-file edit,
+review the change and publish explicitly:
+
+```bash
+agentcall doctor
+agentcall admin card publish
+```
 
 ## Add policy assertions
 
@@ -102,8 +104,7 @@ back to the last-looking configuration.
 
 ## Success check
 
-`agentcall lint` exits successfully and `agentcall card` shows the intended
-tasks, the default access, and each named caller's resolved access—nothing
-more.
+`agentcall doctor` exits successfully, shows the intended tasks, default access,
+each named caller's resolved access, and a current card publication.
 
 Source of truth: [README task and policy behavior](https://github.com/KenTaniguchi-R/agentcall#usage).

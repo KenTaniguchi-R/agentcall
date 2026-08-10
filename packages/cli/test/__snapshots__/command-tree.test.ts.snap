@@ -188,22 +188,50 @@ exports[`CLI command tree > pins command paths, aliases, descriptions, and optio
       "commands": [
         {
           "alias": undefined,
-          "commands": [],
-          "description": "publish the identity and current encryption key already stored on disk",
-          "name": "publish",
+          "commands": [
+            {
+              "alias": undefined,
+              "commands": [],
+              "description": "publish the current local card to the relay",
+              "name": "publish",
+              "options": [],
+            },
+          ],
+          "description": "administer this installation's published card",
+          "name": "card",
+          "options": [],
+        },
+        {
+          "alias": undefined,
+          "commands": [
+            {
+              "alias": undefined,
+              "commands": [],
+              "description": "publish the identity and current encryption key already stored on disk",
+              "name": "publish",
+              "options": [],
+            },
+          ],
+          "description": "administer this installation's published keys",
+          "name": "keys",
           "options": [],
         },
       ],
-      "description": "manage this installation's end-to-end encryption keys",
-      "name": "keys",
+      "description": "explicit remote publication operations",
+      "name": "admin",
       "options": [],
     },
     {
       "alias": undefined,
       "commands": [],
-      "description": "verify this install can answer calls: binary, auth, agent spawn, listener, relay self-call",
+      "description": "read-only diagnostics for tasks, policy, publication, recovery, listener, and runtime health",
       "name": "doctor",
-      "options": [],
+      "options": [
+        {
+          "description": "emit the structured diagnostic report as JSON",
+          "flags": "--json",
+        },
+      ],
     },
     {
       "alias": undefined,
@@ -224,27 +252,6 @@ exports[`CLI command tree > pins command paths, aliases, descriptions, and optio
           "flags": "--json",
         },
       ],
-    },
-    {
-      "alias": undefined,
-      "commands": [],
-      "description": "validate tasks, effective policy assertions, and the published card",
-      "name": "lint",
-      "options": [],
-    },
-    {
-      "alias": undefined,
-      "commands": [],
-      "description": "show the effective caller-access policy, tasks, and read scope",
-      "name": "policy",
-      "options": [],
-    },
-    {
-      "alias": undefined,
-      "commands": [],
-      "description": "show your own card with problems, or publish it (push)",
-      "name": "card",
-      "options": [],
     },
     {
       "alias": undefined,

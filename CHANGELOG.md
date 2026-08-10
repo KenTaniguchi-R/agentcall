@@ -6,6 +6,18 @@ which are released together.
 
 ## Unreleased
 
+### Single self-diagnostics interface (#429)
+
+- Make `agentcall doctor` the only self-diagnostics surface, with matching
+  human and JSON reports for task validity, effective policy, card drift, key
+  publication, recovery, listener state, and runtime health.
+- Keep plain `doctor` read-only and remove its relay self-call. It never fixes,
+  publishes, or rewrites installation state.
+- Remove top-level `lint`, `policy`, `card`, and `keys publish` without aliases.
+  Move explicit remote publication to `agentcall admin card publish` and
+  `agentcall admin keys publish`; retain policy mutations, trust reset, token
+  rotation, and recovery commands.
+
 ### Unified peer inspection (#428)
 
 - Add `agentcall inspect <contact-or-address>` as the single read-only view of

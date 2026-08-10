@@ -25,7 +25,7 @@ async function runPolicyVerb(verb: Verb, a: string, b?: string): Promise<void> {
       await publishCard(ctx.config, ctx.paths);
       console.log("Card updated.");
     } catch (e) {
-      console.error(`Warning: policy saved locally, but the card push failed (${String(e)}). Run \`agentcall card push\` later.`);
+      console.error(`Warning: policy saved locally, but the card publication failed (${String(e)}). Run \`agentcall admin card publish\` later.`);
     }
   } catch (e) {
     fail(e);

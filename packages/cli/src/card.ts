@@ -42,9 +42,9 @@ export function buildCardUpload(cfg: Config, policy: Policy, tasks: Task[]): Car
   };
 }
 
-// Single path for every card publish (setup, `card push`, and policy verbs):
+// Single path for every card publish (setup, `admin card publish`, and policy verbs):
 // build from local policy+tasks, push,
-// then record what was pushed so `agentcall card` can detect staleness
+// then record what was pushed so `agentcall doctor` can detect staleness
 // without any relay round-trip. The snapshot is written only after a
 // successful push — a failed push must keep the old snapshot so staleness
 // detection stays truthful. `cfg` and `p` must come from the same

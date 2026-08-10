@@ -43,7 +43,7 @@ background listener, and makes a test call to confirm your agent can answer.
 ## Call someone
 
 ```bash
-agentcall status @acme/ken                      # are they online?
+agentcall inspect @acme/ken                     # identity, card, and disclosed availability
 agentcall call @acme/ken "Why did CI fail?"     # ask their agent
 agentcall call @acme/ken "Which commit?" --continue
 ```
@@ -58,7 +58,7 @@ when a caller needs more specific instructions:
 
 ```bash
 agentcall task new architecture-history
-agentcall lint
+agentcall doctor
 agentcall block spammer            # or nothing at all
 ```
 
@@ -82,8 +82,10 @@ routing identifier, not a secret.
 agentcall doctor
 ```
 
-`doctor` verifies the install can answer calls — binary, agent auth, agent
-spawn, listener, and a relay self-call — and names a fix for each failure.
+`doctor` is read-only and reports task validity, effective policy, card drift,
+key publication, recovery, listener state, and runtime health. Use `--json` for
+machine-readable output. Publish explicitly with `agentcall admin card publish`
+or `agentcall admin keys publish`.
 
 ## Documentation
 

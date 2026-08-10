@@ -23,12 +23,9 @@ Commands:
   call [options] <address> <message...>  call another handle's agent with a message and print its reply
   inspect [options] <address>            inspect one peer's address, trust state, availability, and offered tasks
   trust [options]                        manage explicitly pinned peer identities
-  keys                                   manage this installation's end-to-end encryption keys
-  doctor                                 verify this install can answer calls: binary, auth, agent spawn, listener, relay self-call
+  admin                                  explicit remote publication operations
+  doctor [options]                       read-only diagnostics for tasks, policy, publication, recovery, listener, and runtime health
   history [options]                      show call activity stored locally on this machine
-  lint                                   validate tasks, effective policy assertions, and the published card
-  policy                                 show the effective caller-access policy, tasks, and read scope
-  card [action]                          show your own card with problems, or publish it (push)
   contacts                               manage your local address book of callable agents
   task                                   manage the tasks your agent offers
   access [options]                       set whether callers are answered by default (and republish your card)
@@ -207,12 +204,54 @@ Options:
   -h, --help         display help for command
 ```
 
-## keys
+## admin
 
 ```text
-Usage: agentcall keys [options] [command]
+Usage: agentcall admin [options] [command]
 
-manage this installation's end-to-end encryption keys
+explicit remote publication operations
+
+Options:
+  -h, --help      display help for command
+
+Commands:
+  card            administer this installation's published card
+  keys            administer this installation's published keys
+  help [command]  display help for command
+```
+
+## admin card
+
+```text
+Usage: agentcall admin card [options] [command]
+
+administer this installation's published card
+
+Options:
+  -h, --help      display help for command
+
+Commands:
+  publish         publish the current local card to the relay
+  help [command]  display help for command
+```
+
+## admin card publish
+
+```text
+Usage: agentcall admin card publish [options]
+
+publish the current local card to the relay
+
+Options:
+  -h, --help  display help for command
+```
+
+## admin keys
+
+```text
+Usage: agentcall admin keys [options] [command]
+
+administer this installation's published keys
 
 Options:
   -h, --help      display help for command
@@ -223,10 +262,10 @@ Commands:
   help [command]  display help for command
 ```
 
-## keys publish
+## admin keys publish
 
 ```text
-Usage: agentcall keys publish [options]
+Usage: agentcall admin keys publish [options]
 
 publish the identity and current encryption key already stored on disk
 
@@ -239,10 +278,11 @@ Options:
 ```text
 Usage: agentcall doctor [options]
 
-verify this install can answer calls: binary, auth, agent spawn, listener,
-relay self-call
+read-only diagnostics for tasks, policy, publication, recovery, listener, and
+runtime health
 
 Options:
+  --json      emit the structured diagnostic report as JSON
   -h, --help  display help for command
 ```
 
@@ -258,42 +298,6 @@ Options:
   --flagged        show only calls with objective local abuse signals
   --json           print machine-readable local history
   -h, --help       display help for command
-```
-
-## lint
-
-```text
-Usage: agentcall lint [options]
-
-validate tasks, effective policy assertions, and the published card
-
-Options:
-  -h, --help  display help for command
-```
-
-## policy
-
-```text
-Usage: agentcall policy [options]
-
-show the effective caller-access policy, tasks, and read scope
-
-Options:
-  -h, --help  display help for command
-```
-
-## card
-
-```text
-Usage: agentcall card [options] [action]
-
-show your own card with problems, or publish it (push)
-
-Arguments:
-  action      'push' to publish, or omit to review your own card
-
-Options:
-  -h, --help  display help for command
 ```
 
 ## contacts

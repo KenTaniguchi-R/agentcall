@@ -2,7 +2,6 @@ import { authOf, fetchKeys, getRecoveryStatus, getStatus } from "./api.js";
 import { existsSync, lstatSync, readFileSync, realpathSync } from "node:fs";
 import { execFileSync } from "node:child_process";
 import { encryptionKeyTranscript, importIdentityPublicKey, keyIdFor, verifyTranscript } from "@benree/agentcall-shared";
-import { callAgent } from "./call-client.js";
 import { configAddress, loadConfig, relayUrl, type Config } from "./config.js";
 import { loadScope, workdirFor } from "./scope.js";
 import {
@@ -13,8 +12,12 @@ import type { Paths } from "./paths.js";
 import { loadKeys } from "./keys.js";
 import { assertPrivateFile } from "./json-store.js";
 import { checkKnownPeersStore } from "./known-peers.js";
+import { buildCardUpload } from "./card.js";
+import { accessFor } from "./access.js";
+import { loadPolicy } from "./policy.js";
+import { loadTasks } from "./tasks.js";
 import {
-  checkGuard, checkRelaySelfCall, formatCheck, short, verifyAgent,
+  checkGuard, formatCheck, short, verifyAgent,
   type GuardBinaryProbeFn, type GuardProbeFn,
   type VerifyCheck, type VerifyFns,
 } from "./verify.js";
@@ -25,16 +28,49 @@ interface DoctorDeps {
   verifyFns?: VerifyFns;
   getStatusFn?: typeof getStatus;
   getRecoveryStatusFn?: typeof getRecoveryStatus;
-  callFn?: typeof callAgent;
   platform?: NodeJS.Platform;
   inspectListenerServiceFn?: (paths: Paths) => ListenerServiceStatus;
-  log?: (line: string) => void;
   guardFn?: GuardProbeFn;
   guardBinaryFn?: GuardBinaryProbeFn;
   keyHealthFn?: (cfg: Config, paths: Paths) => Promise<VerifyCheck[]>;
   pkgFn?: () => CliPackageManifest;
   selfPathFn?: () => string;
   whichFn?: (bin: string) => string[];
+}
+
+export type DiagnosticStatus = "pass" | "warning" | "fail";
+
+export interface DiagnosticCheck {
+  name: string;
+  status: DiagnosticStatus;
+  detail?: string;
+  hint?: string;
+}
+
+export interface SelfDiagnostics {
+  tasks: Array<{
+    id: string;
+    name: string;
+    description: string;
+    threadable: boolean;
+    timeout_s?: number;
+  }>;
+  policy: {
+    description: string;
+    default_access: string;
+    callers: Array<{ caller: string; access: string }>;
+    assertions_passed: number;
+  };
+  card: {
+    status: "current" | "never-published" | "stale" | "unreadable" | "unavailable";
+  };
+}
+
+export interface DoctorReport {
+  ok: boolean;
+  checks: DiagnosticCheck[];
+  notes: string[];
+  self?: SelfDiagnostics;
 }
 
 interface CliPackageManifest {
@@ -193,10 +229,10 @@ export async function checkKeyHealth(
     checks.push({
       name: "published identity keys", ok: matches,
       detail: matches ? `relay matches local epoch ${local.epoch}` : "relay records do not match the persisted local keys",
-      hint: matches ? undefined : "run `agentcall keys publish`",
+      hint: matches ? undefined : "run `agentcall admin keys publish`",
     });
   } catch (error) {
-    checks.push({ name: "published identity keys", ok: false, detail: short(error), hint: "run `agentcall keys publish`" });
+    checks.push({ name: "published identity keys", ok: false, detail: short(error), hint: "run `agentcall admin keys publish`" });
   }
   return checks;
 }
@@ -223,20 +259,149 @@ export async function checkRecoveryHealth(
   }
 }
 
+function diagnosticCheck(check: VerifyCheck): DiagnosticCheck {
+  return {
+    name: check.name,
+    status: check.ok ? check.warn ? "warning" : "pass" : "fail",
+    ...(check.detail === undefined ? {} : { detail: check.detail }),
+    ...(check.hint === undefined ? {} : { hint: check.hint }),
+  };
+}
+
+function finishReport(
+  checks: DiagnosticCheck[], notes: string[], self?: SelfDiagnostics,
+): DoctorReport {
+  return {
+    ok: checks.every((check) => check.status !== "fail"),
+    checks,
+    notes,
+    ...(self === undefined ? {} : { self }),
+  };
+}
+
+export function diagnoseSelfConfiguration(
+  cfg: Config & { agent_kind: NonNullable<Config["agent_kind"]> }, paths: Paths,
+): { checks: VerifyCheck[]; self: SelfDiagnostics } {
+  const taskProblems: string[] = [];
+  const tasks = loadTasks(paths, (message) => taskProblems.push(message.replace(/^agentcall: /, "")));
+  const taskSummary = tasks.map(({ id, name, description, threadable, timeout_s }) => ({
+    id, name, description, threadable, ...(timeout_s === undefined ? {} : { timeout_s }),
+  }));
+  const checks: VerifyCheck[] = [{
+    name: "task validity",
+    ok: taskProblems.length === 0,
+    detail: taskProblems.length === 0
+      ? `${tasks.length} task(s) load successfully`
+      : taskProblems.join("; "),
+    hint: taskProblems.length === 0 ? undefined : `repair the invalid manifests under ${paths.tasksDir}`,
+  }];
+
+  let policy;
+  try {
+    policy = loadPolicy(paths);
+  } catch (error) {
+    checks.push({
+      name: "effective policy", ok: false, detail: short(error),
+      hint: `repair ${paths.policyFile}; policy mutation commands remain available for recovery`,
+    });
+    checks.push({
+      name: "card drift", ok: true, warn: true,
+      detail: "unavailable while the effective policy is invalid",
+      hint: "repair the policy, then run `agentcall doctor` again",
+    });
+    return {
+      checks,
+      self: {
+        tasks: taskSummary,
+        policy: { description: "", default_access: "unavailable", callers: [], assertions_passed: 0 },
+        card: { status: "unavailable" },
+      },
+    };
+  }
+
+  const callers = Object.keys(policy.callers).sort((a, b) => a.localeCompare(b)).map((caller) => ({
+    caller,
+    access: accessFor(policy, caller),
+  }));
+  checks.push({
+    name: "effective policy", ok: true,
+    detail: `default ${policy.default_access}; ${callers.length} named caller(s); ${policy.tests?.length ?? 0} assertion(s) passed`,
+  });
+
+  let cardStatus: SelfDiagnostics["card"]["status"];
+  const expected = buildCardUpload(cfg, policy, tasks);
+  if (!existsSync(paths.cardSnapshotFile)) {
+    cardStatus = "never-published";
+  } else {
+    try {
+      const snapshot: unknown = JSON.parse(readFileSync(paths.cardSnapshotFile, "utf8"));
+      cardStatus = JSON.stringify(snapshot) === JSON.stringify(expected) ? "current" : "stale";
+    } catch {
+      cardStatus = "unreadable";
+    }
+  }
+  checks.push({
+    name: "card drift", ok: true, warn: cardStatus !== "current",
+    detail: cardStatus,
+    hint: cardStatus === "current" ? undefined : "run `agentcall admin card publish` after reviewing this report",
+  });
+
+  if (cfg.agent_kind === "codex") {
+    checks.push({
+      name: "Codex runtime isolation", ok: true, warn: true,
+      detail: "Codex has no per-tool restriction or read guard; read-only sandboxing does not prevent reads or execution",
+      hint: "use Claude when outbound data must be bounded",
+    });
+  }
+
+  return {
+    checks,
+    self: {
+      tasks: taskSummary,
+      policy: {
+        description: policy.description,
+        default_access: policy.default_access,
+        callers,
+        assertions_passed: policy.tests?.length ?? 0,
+      },
+      card: { status: cardStatus },
+    },
+  };
+}
+
+export function renderDoctorHuman(report: DoctorReport): string {
+  const lines = report.checks.map((check) => formatCheck({
+    name: check.name,
+    ok: check.status !== "fail",
+    warn: check.status === "warning",
+    detail: check.detail,
+    hint: check.hint,
+  }));
+  lines.push(...report.notes);
+  if (report.self) {
+    lines.push("", `Tasks (${report.self.tasks.length})`);
+    for (const task of report.self.tasks) lines.push(`  ${task.id} — ${task.name}`);
+    lines.push("", "Effective policy");
+    lines.push(`  Default access: ${report.self.policy.default_access}`);
+    lines.push(`  Assertions passed: ${report.self.policy.assertions_passed}`);
+    for (const caller of report.self.policy.callers) lines.push(`  ${caller.caller}: ${caller.access}`);
+    lines.push("", `Card publication: ${report.self.card.status}`);
+  }
+  return lines.join("\n");
+}
+
 // Verifies that this installation can answer calls. Ladder semantics (see the
 // design spec): static checks are informational and never block the agent
-// checks, EXCEPT a missing/corrupt config (nothing to verify) and
-// caller-only (nothing to verify, and that's fine — contributes no
-// failure). The relay-status result gates only the relay self-call; the
-// verifyAgent ladder stops itself at its first failure. Returns the process
-// exit code: 0 iff no check printed as ✗ — a `!` warning is a check that
-// could not be proven, not one that failed, and does not turn the run red.
-export async function runDoctor(deps: DoctorDeps): Promise<number> {
-  const log = deps.log ?? console.log;
-  const checks: VerifyCheck[] = [];
+// checks, EXCEPT a missing/corrupt config (nothing to verify) and caller-only
+// (nothing to verify, and that's fine — contributes no failure). The
+// verifyAgent ladder stops itself at its first failure. The report is healthy
+// iff no check has `fail` status; warnings do not turn the run red.
+export async function diagnoseInstallation(deps: DoctorDeps): Promise<DoctorReport> {
+  const checks: DiagnosticCheck[] = [];
+  const notes: string[] = [];
+  let self: SelfDiagnostics | undefined;
   const report = (c: VerifyCheck) => {
-    checks.push(c);
-    log(formatCheck(c));
+    checks.push(diagnosticCheck(c));
   };
 
   report(checkCliInstall(deps));
@@ -284,7 +449,7 @@ export async function runDoctor(deps: DoctorDeps): Promise<number> {
     report({ name: "config", ok: true, detail: `${cfg.handle} -> ${relayUrl(cfg)}` });
   } catch (error) {
     report({ name: "config", ok: false, detail: short(error), hint: "run `agentcall setup` first or follow the migration guidance" });
-    return checks.every((c) => c.ok) ? 0 : 1;
+    return finishReport(checks, notes);
   }
 
   {
@@ -295,9 +460,13 @@ export async function runDoctor(deps: DoctorDeps): Promise<number> {
     for (const keyCheck of await (deps.keyHealthFn ?? checkKeyHealth)(cfg, paths)) report(keyCheck);
 
     if (!cfg.agent_kind) {
-      log("caller-only — no agent to verify. You can still call others.");
-      return checks.every((check) => check.ok) ? 0 : 1;
+      notes.push("caller-only — no agent to verify. You can still call others.");
+      return finishReport(checks, notes);
     }
+
+    const local = diagnoseSelfConfiguration(cfg as Config & { agent_kind: NonNullable<Config["agent_kind"]> }, paths);
+    for (const check of local.checks) report(check);
+    self = local.self;
 
     // #372 deleted `workdir` from config.json; the spawn directory is derived
     // from the scope instead. That derivation deliberately SKIPS a
@@ -394,12 +563,8 @@ export async function runDoctor(deps: DoctorDeps): Promise<number> {
       report(await checkGuard(deps.guardFn, deps.guardBinaryFn));
     }
 
-    if (agentOk && online) {
-      report(await checkRelaySelfCall(cfg, paths, deps.callFn));
-    } else if (agentOk) {
-      log("skipping relay self-call (agent offline).");
-    }
+    if (agentOk && !online) notes.push("runtime probe passed, but the listener is offline.");
   }
 
-  return checks.every((c) => c.ok) ? 0 : 1;
+  return finishReport(checks, notes, self);
 }

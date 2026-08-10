@@ -21,7 +21,7 @@ export function register(program: Command): void {
       try {
         const file = scaffoldTask(ctx.paths, id);
         console.log(`Created ${file}\nEdit it, then:`);
-        console.log("  agentcall card                      # check it validates");
+        console.log("  agentcall doctor                    # validate it locally");
         console.log("  agentcall offer " + id + "    # offer to everyone, or:");
         console.log("  agentcall allow <handle> " + id);
       } catch (e) {

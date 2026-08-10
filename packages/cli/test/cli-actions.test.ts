@@ -808,55 +808,6 @@ describe.sequential("CLI command actions", () => {
     expect(out.stderr).not.toContain("Checkpoint org=");
   });
 
-  it("exposes policy assertion failures through agentcall lint", async () => {
-    const testHome = home();
-    const paths = getPaths(testHome, testHome);
-    saveConfig(paths, { org: "acme", handle: "ken", token: "tok", relay: "https://relay.test", agent_kind: "claude" });
-    mkdirSync(join(testHome, ".agentcall"), { recursive: true });
-    writeFileSync(paths.policyFile, JSON.stringify({
-      tests: [{ caller: "mia", expect_access: "blocked" }],
-    }));
-
-    const out = await runCommand(testHome, ["lint"]);
-
-    expect(out.code).toBe(1);
-    expect(out.stdout).toMatch(/assertion 1.*expected blocked.*got allowed/i);
-  });
-
-  it("renders the effective policy as a per-caller access report", async () => {
-    const testHome = home();
-    const paths = getPaths(testHome, testHome);
-    saveConfig(paths, {
-      org: "acme", handle: "ken", token: "tok", relay: "https://relay.test", agent_kind: "claude",
-    });
-    mkdirSync(join(paths.tasksDir, "deploy"), { recursive: true });
-    writeFileSync(join(paths.tasksDir, "deploy", "SKILL.md"), [
-      "---",
-      "name: Deploy production",
-      "description: Build and deploy the service.",
-      "---",
-      "Deploy carefully.",
-    ].join("\n"));
-    writeFileSync(paths.policyFile, JSON.stringify({
-      default_access: "allowed", callers: {
-        alice: { access: "allowed" },
-        "blocked-bot": { access: "blocked" },
-      },
-    }));
-
-    const out = await runCommand(testHome, ["policy"]);
-
-    expect(out.code).toBe(0);
-    expect(out.stderr).toBe("");
-    expect(out.stdout).toContain("Effective access policy");
-    expect(out.stdout).toMatch(new RegExp(`Tasks — every caller who is not blocked[\\s\\S]*ask — Ask a question[\\s\\S]*Working directory: ${paths.shareDir}`));
-    expect(out.stdout).toMatch(/deploy — Deploy production[\s\S]*inspect files — answers are read-only/);
-    // The exec warning is gone with the capability that caused it (#372).
-    expect(out.stdout).not.toContain("WARNING: exec");
-    expect(out.stdout).toMatch(/Named caller rule: alice \(overrides the base rule\)[\s\S]*ANSWERED — calls from this audience are admitted/);
-    expect(out.stdout).toMatch(/Named caller rule: blocked-bot \(overrides the base rule\)[\s\S]*BLOCKED — no call is answered at all/);
-  });
-
   it("rejects a CLI policy edit that would break an assertion and preserves the file", async () => {
     const testHome = home();
     const paths = getPaths(testHome, testHome);

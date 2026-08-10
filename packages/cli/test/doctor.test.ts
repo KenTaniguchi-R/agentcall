@@ -2,7 +2,11 @@ import { chmodSync, mkdirSync, symlinkSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 import { saveConfig } from "../src/config.js";
-import { checkCredentialStorage, runDoctor } from "../src/doctor.js";
+import {
+  checkCredentialStorage,
+  diagnoseInstallation,
+  renderDoctorHuman,
+} from "../src/doctor.js";
 import { getPaths } from "../src/paths.js";
 import { defaultScope } from "../src/scope.js";
 import { tempDir } from "./helpers.js";
@@ -19,7 +23,6 @@ const baseDeps = {
   getStatusFn: async () => ({ online: true }),
   getRecoveryStatusFn: async () => ({ issued: true, generation: 2, recovery_public_id: "agr_aaaaaaaaaaaaaaaa" }),
   verifyFns: { resolveBin: () => "/fake/bin/claude", runFn: async () => ({ text: "OK" }), execFn: () => {} },
-  callFn: async () => ({ type: "call_reply", call_id: "c1", text: "hi", task: "ask" }) as never,
   guardFn: async () => ({ output: "blocked", home: tempDir("agentcall-guard-") }),
   guardBinaryFn: async () => true,
   keyHealthFn: async () => [],
@@ -52,34 +55,45 @@ describe("credential storage", () => {
   });
 });
 
-describe("runDoctor", () => {
+describe("diagnoseInstallation", () => {
   it("reports an unconfigured installation", async () => {
-    const output: string[] = [];
     const paths = getPaths(tempDir("agentcall-doctor-empty-"));
-    expect(await runDoctor({ ...baseDeps, paths, log: (line) => output.push(line) })).toBe(1);
-    expect(output.join("\n")).toMatch(/config.*setup/i);
+    const report = await diagnoseInstallation({ ...baseDeps, paths });
+    expect(report.ok).toBe(false);
+    expect(renderDoctorHuman(report)).toMatch(/config.*setup/i);
   });
 
   it("accepts a healthy caller-only installation without agent probes", async () => {
-    const output: string[] = [];
     const paths = configured(false);
-    expect(await runDoctor({ ...baseDeps, paths, log: (line) => output.push(line) })).toBe(0);
-    expect(output.join("\n")).toMatch(/caller-only/i);
+    const report = await diagnoseInstallation({ ...baseDeps, paths });
+    expect(report.ok).toBe(true);
+    expect(report.notes.join("\n")).toMatch(/caller-only/i);
   });
 
-  it("runs the callable installation ladder once", async () => {
-    const output: string[] = [];
+  it("returns one structured report for tasks, effective policy, card drift, and runtime health", async () => {
     const paths = configured(true);
-    expect(await runDoctor({ ...baseDeps, paths, log: (line) => output.push(line) })).toBe(0);
-    expect(output.join("\n")).toMatch(/relay status.*online/i);
-    expect(output.join("\n")).not.toMatch(/line claude/);
+    const report = await diagnoseInstallation({ ...baseDeps, paths });
+    expect(report.ok).toBe(true);
+    expect(report.self).toMatchObject({
+      tasks: [{ id: "ask", name: "Ask a question" }],
+      policy: { default_access: "allowed", callers: [], assertions_passed: 0 },
+      card: { status: "never-published" },
+    });
+    expect(report.checks).toEqual(expect.arrayContaining([
+      expect.objectContaining({ name: "task validity", status: "pass" }),
+      expect.objectContaining({ name: "effective policy", status: "pass" }),
+      expect.objectContaining({ name: "card drift", status: "warning" }),
+      expect.objectContaining({ name: "relay status", status: "pass", detail: "online" }),
+    ]));
+    expect(renderDoctorHuman(report)).toMatch(/Effective policy.*allowed/is);
+    expect(JSON.parse(JSON.stringify(report))).toEqual(report);
   });
 
   it("refuses legacy multi-line state", async () => {
     const paths = getPaths(tempDir("agentcall-doctor-legacy-"));
     mkdirSync(`${paths.dir}/lines/claude`, { recursive: true });
-    const output: string[] = [];
-    expect(await runDoctor({ ...baseDeps, paths, log: (line) => output.push(line) })).toBe(1);
-    expect(output.join("\n")).toMatch(/legacy multi-line.*migration/i);
+    const report = await diagnoseInstallation({ ...baseDeps, paths });
+    expect(report.ok).toBe(false);
+    expect(renderDoctorHuman(report)).toMatch(/legacy multi-line.*migration/i);
   });
 });
