@@ -14,7 +14,7 @@ type WorkflowStep = { name?: string; env?: Record<string, unknown>; run?: string
 
 function publishStep(source: string): WorkflowStep {
   const parsed = parse(source) as { jobs?: { publish?: { steps?: WorkflowStep[] } } };
-  const step = parsed.jobs?.publish?.steps?.find((candidate) => candidate.name === "Publish with keyless provenance");
+  const step = parsed.jobs?.publish?.steps?.find((candidate) => candidate.name === "Publish with trusted publishing");
   if (!step) throw new Error("publish step not found");
   return step;
 }
@@ -101,15 +101,14 @@ describe("npm release workflow", () => {
     ]);
   });
 
-  it("publishes release tags through OIDC provenance without an npm token", () => {
+  it("publishes release tags through OIDC without an npm token or private-repository provenance", () => {
     expect(workflow).toContain("types: [published]");
     expect(workflow).toContain("git merge-base --is-ancestor HEAD origin/main");
     expect(workflow).toContain("environment: npm");
     expect(workflow).toContain("id-token: write");
     expect(workflow).toContain("NPM_DIST_TAG: ${{ github.event.release.prerelease && 'next' || 'latest' }}");
-    expect(workflow).toContain(
-      "npm publish \"$tarball\" --provenance --access public --tag \"$NPM_DIST_TAG\"",
-    );
+    expect(workflow).toContain("npm publish \"$tarball\" --access public --tag \"$NPM_DIST_TAG\"");
+    expect(workflow).not.toContain("--provenance");
     expect(workflow).not.toMatch(/secrets\..*npm|NODE_AUTH_TOKEN:\s*\$\{\{/i);
   });
 
