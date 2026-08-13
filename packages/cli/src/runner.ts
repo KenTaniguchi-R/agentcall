@@ -311,6 +311,8 @@ export function buildSpawnSpec(options: SpawnOptions): SpawnSpec {
   // the codex-side analogue of claude's --allowedTools, and the only thing
   // confining its writes. Always read-only now. Note it does
   // NOT confine reads: `codex exec --sandbox read-only` still reads ~/.ssh.
+  // Both spawn branches apply it as `-c sandbox_mode`, never as `--sandbox`;
+  // the difference matters and is explained on the fresh-spawn branch below.
   const sandbox = "read-only";
   // --ignore-user-config does not remove Codex's bundled authenticated apps,
   // web search, or image generation. Disable every bundled remote surface on
@@ -356,8 +358,16 @@ export function buildSpawnSpec(options: SpawnOptions): SpawnSpec {
     // an allowlist that `mcp__*` names never match. Codex's bundled apps remain
     // loaded even with this flag, so codexRemoteBoundary removes them explicitly.
     // The prompt stays last: codex takes the final positional as the prompt.
-    args: ["exec", "--ignore-user-config", "--sandbox", sandbox, "--cd", workdir,
-      "--skip-git-repo-check", "--json", ...codexRemoteBoundary, prompt],
+    // The sandbox rides `-c sandbox_mode` here rather than `--sandbox`, matching
+    // the resume branch above. The two are not interchangeable: probed against
+    // codex-cli 0.146.0, `--sandbox read-only` makes a named permissions profile
+    // inert — a read the profile denies comes back at exit 0 — while the config
+    // form leaves it enforced. Nothing today supplies such a profile, so this
+    // changes no behaviour; it means a future one is not silently discarded by
+    // the branch that serves every cold call. See #398.
+    args: ["exec", "--ignore-user-config", "--cd", workdir,
+      "--skip-git-repo-check", "--json", ...codexRemoteBoundary,
+      "-c", `sandbox_mode="${sandbox}"`, prompt],
     cwd: workdir,
     env: {
       ...childEnv, ...correlationEnv, AGENTCALL_CALL_ID: callId, AGENTCALL_LINE: lineName,
