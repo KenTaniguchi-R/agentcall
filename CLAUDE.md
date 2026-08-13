@@ -156,8 +156,22 @@ runs the `verify` job's six steps *and* every invariants check.
 
 ```bash
 pnpm verify                    # = scripts/ci-local.sh fast (the pre-push default)
+pnpm -r build                  # packaged packs the working tree — see below
 scripts/ci-local.sh packaged   # packed-cli-consumer job on Node 20/22/24 — slow, run before a release
 ```
+
+**`packaged` does not build first, and the failure if you forget is misleading.**
+It packs `packages/cli` straight from the working tree, so in a clean clone the
+tarball ships `bin/` with no `dist/` and all three Node legs die with
+`ERR_MODULE_NOT_FOUND: Cannot find module '.../dist/cli-entry.js'` — which points
+at the packed artifact and reads like a packaging bug rather than a missing step.
+Run `pnpm -r build` first, or use `scripts/ci-local.sh all`, which runs `verify`
+(and therefore the build) ahead of it.
+
+CI cannot hit this: `packed-cli-consumer` declares `needs: verify` and downloads
+the `packed-cli` artifact that job built, rather than packing anything itself. So
+the trap exists only locally — on the one path this file recommends for a
+pre-release check.
 
 Running `pnpm -r build && pnpm -r typecheck && pnpm -r test` by hand is a *weaker*
 check than `pnpm verify`: it skips `pnpm lint`, `docs:check`, the wrangler bundle,
