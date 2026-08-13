@@ -5,6 +5,8 @@ dist/
 *.log
 .dev.vars
 apps/relay/wrangler.self-host.jsonc
+# Derived per run by scripts/relay-dev.mjs (#413). Never commit it.
+apps/relay/wrangler.dev.generated.jsonc
 .DS_Store
 .pnpm-store/
 

@@ -92,7 +92,37 @@ cd packages/cli && pnpm test    # vitest, mocked ws/fs — no live agent spawn
 ```
 
 `apps/relay && pnpm dev` runs the Worker locally against `wrangler dev` for manual
-testing (WS auth, register, status).
+testing (WS auth, register, status). It goes through `scripts/relay-dev.mjs`
+rather than calling `wrangler dev` directly — see below.
+
+### `pnpm dev` derives its config, and calling `wrangler dev` yourself will not work
+
+`wrangler dev` simulates the configured route by **rewriting the request URL to
+it**. Measured against wrangler 4.118.0: a request to `127.0.0.1:8799` and a
+request carrying `Host: relay.acme.example` both arrived at the Worker as
+`http://agent-call.app/…`. `index.ts` derives the relay's identity from that URL
+(`new URL(c.req.url).hostname`) and stamps it into `X-Verified-Relay-Origin`;
+`do.ts` rejects any caller frame whose envelope disagrees. The client computes
+its side honestly from the address it dialled, so locally the two can never
+agree and **every call fails `protocol_error` on its first frame** — before the
+listener spawns, before the guard runs, before any reply. That is #413, and it
+cost a cross-machine debugging session to find, because the symptom looks like a
+protocol bug rather than a config one.
+
+So `pnpm dev` writes `wrangler.dev.generated.jsonc` — `wrangler.jsonc` with the
+`routes` entry removed — and runs against that. With no route to simulate,
+wrangler leaves the URL alone. The file is gitignored and rewritten every run;
+do not edit or commit it.
+
+A named environment (`"env": { "dev": { "routes": [] } }`) looks like a tidier
+one-file fix and is not: wrangler does not inherit `vars`, `durable_objects`,
+`d1_databases`, `analytics_engine_datasets` or `ratelimits` into a named
+environment. Measured, the Worker came up with `ASSETS` as its only binding.
+
+Deployed relays are unaffected — Cloudflare does not rewrite the URL, so the
+Worker sees the host the client actually reached. This is a development-only
+defect with a development-only fix, and self-hosting a *deployed* relay was
+never broken by it.
 
 ### `apps/relay && pnpm dev` needs local D1 migrations applied first
 
