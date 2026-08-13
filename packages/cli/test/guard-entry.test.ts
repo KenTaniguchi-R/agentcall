@@ -99,7 +99,7 @@ describe("guard-entry as a real process", () => {
     expect(r.stdout).toBe("");
     const tools = readFileSync(logPath(home, "tools.log"), "utf8").trim();
     expect(JSON.parse(tools)).toMatchObject({
-      type: "tool_call", call_id: "call-abc", correlation_id: "a".repeat(32), allowed: true,
+      type: "tool_call", call_id: "call-abc", correlation_id: "a".repeat(32), allowed_by_guard: true,
     });
     expect(statSync(join(home, ".agentcall")).mode & 0o777).toBe(0o700);
     // Per-line now: the log lives under lines/<name>/, not flat in .agentcall.

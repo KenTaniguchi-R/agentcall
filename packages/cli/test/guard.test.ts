@@ -546,7 +546,7 @@ describe("runGuard", () => {
     expect(out.stdout).toBe("");
     expect(h.calls()).toHaveLength(0);
     expect(h.tools()).toEqual([
-      { ts: "2026-07-31T00:00:00.000Z", type: "tool_call", call_id: "call-123", tool: "Read", allowed: true },
+      { ts: "2026-07-31T00:00:00.000Z", type: "tool_call", call_id: "call-123", tool: "Read", allowed_by_guard: true },
     ]);
   });
 
@@ -558,7 +558,7 @@ describe("runGuard", () => {
     expect(decision.hookSpecificOutput.permissionDecision).toBe("deny");
     expect(decision.hookSpecificOutput.permissionDecisionReason).toBe(DENY_REASON);
     expect(h.calls()[0]).toMatchObject({ type: "tool_denied", call_id: "call-123", tool: "Read" });
-    expect(h.tools()[0]).toMatchObject({ type: "tool_call", allowed: false });
+    expect(h.tools()[0]).toMatchObject({ type: "tool_call", allowed_by_guard: false });
   });
 
   it("never leaks the resolved path to the caller", () => {
@@ -576,7 +576,22 @@ describe("runGuard", () => {
     expect(out.exitCode).toBe(0);
     expect(out.stdout).toBe("");
     expect(h.calls()[0]).toMatchObject({ type: "tool_flagged", tool: "Bash" });
-    expect(h.tools()[0]).toMatchObject({ allowed: true });
+    expect(h.tools()[0]).toMatchObject({ allowed_by_guard: true });
+  });
+
+  it("names the tools.log field for what it is: this guard's verdict, not the outcome", () => {
+    // #415. The field used to be `allowed`, which reads as an outcome. It is
+    // not one for any tool the allowlist refuses downstream — and Bash is
+    // exactly that tool, since the guard deliberately records-and-allows it
+    // while CLAUDE_READ_ONLY_TOOLS keeps it from ever running. An auditor
+    // reading `allowed: true` on three Bash lines would conclude a caller ran
+    // three shell commands on the owner's machine, which is the opposite of
+    // what happened.
+    const h = harness();
+    runGuard(payload("Bash", { command: "echo hi" }), h.deps);
+    const row = h.tools()[0];
+    expect(row).toHaveProperty("allowed_by_guard");
+    expect(row).not.toHaveProperty("allowed");
   });
 
   it("fails closed on unparseable input", () => {

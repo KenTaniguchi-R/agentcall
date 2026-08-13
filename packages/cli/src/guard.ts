@@ -303,13 +303,17 @@ export function runGuard(raw: string, deps: GuardDeps): GuardOutput {
     const write = (file: string, obj: Record<string, unknown>) =>
       deps.appendLine(file, JSON.stringify({ ts, ...obj }));
 
-    // PreToolUse fires on what the model ATTEMPTED. In enforce mode this
-    // function's own verdict is the outcome, so `allowed` is a fact. In
-    // observe mode it is not: the tool proceeds regardless of the verdict, and
-    // may still be stopped downstream by codex's sandbox. Recording `allowed`
-    // there would assert an outcome this hook never sees.
+    // PreToolUse fires on what the model ATTEMPTED, so this records an
+    // intention and one layer's answer to it — never an outcome. The field is
+    // named `allowed_by_guard` because this hook is not the last word: a tool
+    // this guard allows may still be refused downstream by the allowlist in
+    // CLAUDE_READ_ONLY_TOOLS, and Bash is precisely that case — the guard
+    // deliberately records-and-allows it (string matching is too weak to be a
+    // boundary) while the envelope keeps it from ever running. The field used
+    // to be `allowed`, which read as an outcome and made three blocked Bash
+    // attempts look like three shell commands the caller ran. See #415.
     write(deps.line.toolsLog,
-      { type: "tool_call", call_id: deps.callId, ...correlation, tool: input.tool_name, allowed: verdict.allow });
+      { type: "tool_call", call_id: deps.callId, ...correlation, tool: input.tool_name, allowed_by_guard: verdict.allow });
 
     const noteworthy = verdict.allow ? verdict.flag : verdict;
     if (noteworthy) {
