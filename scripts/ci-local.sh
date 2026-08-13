@@ -452,7 +452,7 @@ run_packaged() {
       continue
     fi
     if consumer_leg "$major" "$bin" "$packages" >"$TMP/node$major.log" 2>&1; then
-      ok "Node $major ($("$bin/node" -v)) — install, --version, --help, doctor, status"
+      ok "Node $major ($("$bin/node" -v)) — install, --version, --help, doctor, inspect"
     else
       fail "Node $major ($("$bin/node" -v))"
       tail -30 "$TMP/node$major.log" | sed 's/^/    /'
@@ -479,16 +479,16 @@ consumer_leg() {
   "$cli" --version || return 1
   "$cli" --help || return 1
 
-  # doctor and status must both refuse an unconfigured install.
+  # doctor and inspect must both refuse an unconfigured install.
   if "$cli" doctor >"$out-doctor" 2>&1; then
     echo "doctor unexpectedly reported a clean, unconfigured install as healthy"; return 1
   fi
-  grep -F "No agentcall config found" "$out-doctor" || return 1
+  grep -F "No agentcall installation found" "$out-doctor" || return 1
 
-  if "$cli" status @acme/nobody >"$out-status" 2>&1; then
-    echo "status unexpectedly succeeded without a configured identity"; return 1
+  if "$cli" inspect @acme/nobody >"$out-inspect" 2>&1; then
+    echo "inspect unexpectedly succeeded without a configured identity"; return 1
   fi
-  grep -F "No agentcall config found" "$out-status" || return 1
+  grep -F "No agentcall installation found" "$out-inspect" || return 1
 }
 
 # ---------------------------------------------------------------------------

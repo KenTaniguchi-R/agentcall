@@ -1,6 +1,6 @@
 import type { Command } from "commander";
-import { getMachinePaths } from "../paths.js";
-import { resolveLine } from "../line-context.js";
+import { getPaths } from "../paths.js";
+import { loadInstallation } from "../config.js";
 import { scaffoldTask } from "../tasks.js";
 import { fail } from "../errors.js";
 
@@ -10,11 +10,10 @@ export function register(program: Command): void {
     .command("new")
     .description("scaffold a new task (does not publish it)")
     .argument("<id>", "task id: lowercase kebab-case, becomes the directory name")
-    .option("--line <name>", "line to use (defaults to the primary line)")
-    .action((id: string, o: { line?: string }) => {
+    .action((id: string) => {
       let ctx;
       try {
-        ctx = resolveLine(getMachinePaths(), { line: o.line });
+        ctx = loadInstallation(getPaths());
       } catch (e) {
         fail(e);
         return;
@@ -22,7 +21,7 @@ export function register(program: Command): void {
       try {
         const file = scaffoldTask(ctx.paths, id);
         console.log(`Created ${file}\nEdit it, then:`);
-        console.log("  agentcall card                      # check it validates");
+        console.log("  agentcall doctor                    # validate it locally");
         console.log("  agentcall offer " + id + "    # offer to everyone, or:");
         console.log("  agentcall allow <handle> " + id);
       } catch (e) {

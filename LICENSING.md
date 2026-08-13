@@ -45,7 +45,7 @@ If `LICENSE.md` at that commit is the FSL, that version is yours under Apache-2.
 
 ## Versions released before this change
 
-`@benree/agentcall` and `@benree/agentcall-shared` at **v0.4.0 and earlier**
+`@benree/agentcall` and `@benree/agentcall-shared` at **v0.5.0 and earlier**
 were published to npm under the MIT license. That grant is irrevocable and
 still applies to those versions. Relicensing is not retroactive and we are not
 pretending otherwise — if MIT terms matter to you, those releases remain

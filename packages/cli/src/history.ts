@@ -152,8 +152,7 @@ interface LocalHistory {
   truncatedFiles: string[];
 }
 
-// Structural, not `LinePaths`: this only ever reads the two logs, and both are
-// per-line. Kept narrow so a caller cannot hand it a mismatched pair.
+// Structural, not `Paths`: this only ever reads the two installation logs.
 export function loadLocalHistory(
   paths: { callsLog: string; toolsLog: string },
   limit: number,

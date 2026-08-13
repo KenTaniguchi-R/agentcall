@@ -19,7 +19,7 @@ export interface PromptWorkdir {
 //
 // The fence is only as good as the caller's inability to write it, so the
 // message is defanged here rather than at the call site: this function owns the
-// reserved syntax, and a second caller of it (a Room path, a replay tool) would
+// reserved syntax, and a second caller of it (for example, a replay tool) would
 // otherwise have to remember to defang separately. See defang.ts.
 //
 // The directory sentence is behavior-shaping too, and #372 changed what it can
@@ -36,7 +36,7 @@ export interface PromptWorkdir {
 //
 // It deliberately does NOT claim the reply is checked, because it is not. The
 // only thing that happens to an answer is redactOutbound (listener.ts), which
-// replaces credential-SHAPED strings and this line's own relay token. Nothing
+// replaces credential-SHAPED strings and this installation's relay token. Nothing
 // compares the answer against the caller's clearance. An earlier revision of
 // this sentence said otherwise, which repeated the exact mistake it had just
 // fixed: the confinement claim it replaced was also false.

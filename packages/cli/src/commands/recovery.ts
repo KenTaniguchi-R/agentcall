@@ -8,10 +8,9 @@ import {
   type RecoveryIssueResponseType, type RecoveryRedeemRequestType, type RecoveryReceiptType,
 } from "@benree/agentcall-shared";
 import { authOf, getRecoveryStatus, issueRecovery, redeemRecovery } from "../api.js";
-import { normalizeRelay, type LineConfig } from "../config.js";
+import { loadConfig, normalizeRelay, type Config } from "../config.js";
 import { removeFileDurable, writeJsonDurable } from "../json-store.js";
-import { loadLineConfig } from "../lines.js";
-import type { LinePaths } from "../paths.js";
+import type { Paths } from "../paths.js";
 import { ask as ttyAsk, createPrompter } from "../tty.js";
 import { withFileLock } from "../file-lock.js";
 
@@ -26,7 +25,7 @@ const PendingRecovery = z.object({
 type PendingRecoveryType = z.infer<typeof PendingRecovery>;
 
 type RecoveryTarget = {
-  name: string; paths: LinePaths; config?: LineConfig;
+  paths: Paths; config?: Config;
   org?: string; handle?: string; relay?: string; generation?: number; resume?: boolean;
 };
 
@@ -87,17 +86,17 @@ function identity(target: RecoveryTarget): { org: string; handle: string; relay:
     (target.handle !== undefined && target.handle !== target.config.handle) ||
     (target.relay !== undefined && normalizeRelay(target.relay) !== normalizeRelay(target.config.relay))
   )) {
-    throw new Error(`Line "${target.name}" belongs to ${target.config.handle} in ${target.config.org}; refusing a different recovery target.`);
+    throw new Error(`This installation belongs to ${target.config.handle} in ${target.config.org}; refusing a different recovery target.`);
   }
   const org = target.org ?? target.config?.org;
   const handle = target.handle ?? target.config?.handle;
   const relay = target.relay ?? target.config?.relay;
-  if (!org || !handle || !relay) throw new Error("Recovery requires --org, --handle, and --relay when the line config is missing.");
+  if (!org || !handle || !relay) throw new Error("Recovery requires --org, --handle, and --relay when config is missing.");
   return { org, handle, relay: normalizeRelay(relay) };
 }
 
-function readPending(paths: LinePaths): PendingRecoveryType {
-  if (!existsSync(paths.recoveryPendingFile)) throw new Error("No pending recovery operation exists for this line.");
+function readPending(paths: Paths): PendingRecoveryType {
+  if (!existsSync(paths.recoveryPendingFile)) throw new Error("No pending recovery operation exists for this installation.");
   const stat = lstatSync(paths.recoveryPendingFile);
   if (!stat.isFile() || stat.isSymbolicLink()) throw new Error("The pending recovery file must be a regular file, not a symlink.");
   try {
@@ -110,7 +109,7 @@ function readPending(paths: LinePaths): PendingRecoveryType {
 export async function runRecoveryIssue(
   target: RecoveryTarget, deps: RecoveryIssueDeps = {},
 ): Promise<{ generation: number }> {
-  if (!target.config) throw new Error("Recovery proof issue/reissue requires a working line credential.");
+  if (!target.config) throw new Error("Recovery proof issue/reissue requires a working installation credential.");
   const relay = normalizeRelay(target.config.relay);
   const auth = authOf(target.config);
   const current = await (deps.status ?? getRecoveryStatus)(relay, auth);
@@ -129,7 +128,7 @@ export async function runRecoveryIssue(
     relay, auth, request,
   );
   (deps.log ?? console.log)(
-    `Recovery generation ${result.generation} issued for line "${target.name}". ` +
+    `Recovery generation ${result.generation} issued. ` +
       `Record generation ${result.generation} with proof ID ${result.recovery_public_id}.`,
   );
   return { generation: result.generation };
@@ -175,7 +174,7 @@ async function runRecoveryRedeemLocked(target: RecoveryTarget, deps: RecoveryRed
       target.config.org !== pending.org || target.config.handle !== pending.handle ||
       normalizeRelay(target.config.relay) !== normalizeRelay(pending.relay)
     )) {
-      throw new Error(`Line "${target.name}" belongs to ${target.config.handle} in ${target.config.org}; refusing to resume a different recovery target.`);
+      throw new Error(`This installation belongs to ${target.config.handle} in ${target.config.org}; refusing to resume a different recovery target.`);
     }
     currentProof = (await ask("Current (predecessor) recovery proof: ")).trim();
     const successorProof = (await ask("Successor recovery proof retained from the interrupted operation: ")).trim();
@@ -184,7 +183,7 @@ async function runRecoveryRedeemLocked(target: RecoveryTarget, deps: RecoveryRed
     }
   } else {
     if (existsSync(target.paths.recoveryPendingFile)) {
-      throw new Error(`A pending recovery already exists for line "${target.name}"; rerun with --resume.`);
+      throw new Error("A pending recovery already exists; rerun with --resume.");
     }
     const created = makePending(target, randomSecret);
     (deps.displaySecret ?? displayOnControllingTty)(created.successor);
@@ -212,14 +211,14 @@ async function runRecoveryRedeemLocked(target: RecoveryTarget, deps: RecoveryRed
     existing.org !== pending.org || existing.handle !== pending.handle ||
     normalizeRelay(existing.relay) !== normalizeRelay(pending.relay)
   )) {
-    throw new Error(`Line "${target.name}" belongs to ${existing.handle} in ${existing.org}; refusing to overwrite it.`);
+    throw new Error(`This installation belongs to ${existing.handle} in ${existing.org}; refusing to overwrite it.`);
   }
   // #346: when there is no existing config to spread, agent_kind has no local
   // source at all — but the relay has known it since registration and never
   // changes it, so the receipt is the only place a genuinely lost line can
   // recover it from. Without this, a callable line that loses its config.json
   // silently comes back caller-only, and `agentcall listen` refuses to start.
-  const next: LineConfig = existing
+  const next: Config = existing
     ? { ...existing, org: pending.org, handle: pending.handle, relay: pending.relay, token: pending.candidate_token }
     : {
       org: pending.org, handle: pending.handle, relay: pending.relay, token: pending.candidate_token,
@@ -232,22 +231,19 @@ async function runRecoveryRedeemLocked(target: RecoveryTarget, deps: RecoveryRed
       `${receipt.recovery_generation}). ${receipt.eviction_confirmed ? "The recovered identity's current Durable Object applied its session-eviction tombstone." : "Current identity session eviction is pending; reconnect is already blocked."} ` +
       "The predecessor proof may now be removed from the out-of-band backup. " +
       (next.agent_kind
-        ? `This line is callable (agent: ${next.agent_kind}).`
-        : "This line is caller-only — it cannot answer calls."),
+        ? `This installation is callable (agent: ${next.agent_kind}).`
+        : "This installation is caller-only — it cannot answer calls."),
   );
 }
 
 export async function runRecoveryRedeem(target: RecoveryTarget, deps: RecoveryRedeemDeps = {}): Promise<void> {
-  // Creating the directory reserves a missing line against `line add`, whose
-  // exclusive mkdir is its own cross-process claim. Existing credential
-  // writers use this same config sidecar lock.
   mkdirSync(target.paths.dir, { recursive: true, mode: 0o700 });
   const dir = lstatSync(target.paths.dir);
   if (!dir.isDirectory() || dir.isSymbolicLink()) {
-    throw new Error(`Line "${target.name}" directory must be a real directory, not a symlink.`);
+    throw new Error(`AgentCall state at ${target.paths.dir} must be a real directory, not a symlink.`);
   }
-  return withFileLock(target.paths.configFile, "line credential", async () => {
-    const config = existsSync(target.paths.configFile) ? loadLineConfig(target.paths) : undefined;
+  return withFileLock(target.paths.configFile, "installation credential", async () => {
+    const config = existsSync(target.paths.configFile) ? loadConfig(target.paths) : undefined;
     return runRecoveryRedeemLocked({ ...target, config }, deps);
   });
 }

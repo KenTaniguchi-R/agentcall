@@ -3,12 +3,12 @@ import { join } from "node:path";
 import { XMLValidator } from "fast-xml-parser";
 import { describe, expect, it } from "vitest";
 import { plistContent, installLaunchAgent, isLaunchAgentInstalled, launchAgentFile, LAUNCH_LABEL, uninstallLaunchAgent } from "../src/launchd.js";
-import { getMachinePaths } from "../src/paths.js";
+import { getPaths } from "../src/paths.js";
 import { tempDir } from "./helpers.js";
 
 describe("plistContent", () => {
   it("renders a valid-looking plist", () => {
-    const m = getMachinePaths("/Users/ken", "/Users/ken");
+    const m = getPaths("/Users/ken", "/Users/ken");
     const xml = plistContent("/usr/local/bin/node", "/g/agentcall/dist/index.js", m);
     expect(xml).toContain("<key>Label</key>");
     expect(xml).toContain("tech.benree.agentcall.listener");
@@ -21,7 +21,7 @@ describe("plistContent", () => {
   });
 
   it("escapes filesystem paths as XML element content", () => {
-    const p = getMachinePaths("/Users/Ken & Lee <admin>", "/Users/Ken & Lee <admin>");
+    const p = getPaths("/Users/Ken & Lee <admin>", "/Users/Ken & Lee <admin>");
     const xml = plistContent(
       "/opt/Node & Co/bin/node",
       "/Applications/Agent <Call>/dist/index.js",
@@ -37,7 +37,7 @@ describe("plistContent", () => {
   });
 
   it("rejects path characters that XML 1.0 cannot represent", () => {
-    const p = getMachinePaths("/Users/ken", "/Users/ken");
+    const p = getPaths("/Users/ken", "/Users/ken");
 
     expect(() => plistContent("/opt/node\u0001bin/node", "/agentcall/dist/index.js", p))
       .toThrow(/XML 1\.0 cannot represent/);
@@ -46,7 +46,7 @@ describe("plistContent", () => {
 
 describe("plistContent PATH", () => {
   it("prepends extraPathDirs and the node bin's dir, ahead of the base dirs, deduped", () => {
-    const m = getMachinePaths("/Users/ken", "/Users/ken");
+    const m = getPaths("/Users/ken", "/Users/ken");
     const xml = plistContent("/Users/x/.local/bin/node", "/g/agentcall/dist/index.js", m, [
       "/Users/x/.local/bin",
     ]);
@@ -58,7 +58,7 @@ describe("plistContent PATH", () => {
   });
 
   it("always includes the node binary's directory, even without extraPathDirs", () => {
-    const m = getMachinePaths("/Users/ken", "/Users/ken");
+    const m = getPaths("/Users/ken", "/Users/ken");
     const xml = plistContent("/opt/local/bin/node", "/g/agentcall/dist/index.js", m);
     const match = xml.match(/<key>PATH<\/key><string>([^<]+)<\/string>/);
     expect(match![1]!.split(":")).toEqual([
@@ -70,7 +70,7 @@ describe("plistContent PATH", () => {
 describe("install/uninstall", () => {
   it("writes plist and calls launchctl bootstrap", () => {
     const home = tempDir("agentcall-ld-");
-    const m = getMachinePaths(home, home);
+    const m = getPaths(home, home);
     const calls: string[][] = [];
     installLaunchAgent(m, (cmd) => { calls.push(cmd); });
     expect(existsSync(launchAgentFile(m))).toBe(true);
@@ -80,7 +80,7 @@ describe("install/uninstall", () => {
   });
   it("forwards extraPathDirs into the written plist", () => {
     const home = tempDir("agentcall-ld-");
-    const m = getMachinePaths(home, home);
+    const m = getPaths(home, home);
     installLaunchAgent(m, () => {}, ["/Users/x/.local/bin"]);
     const xml = readFileSync(launchAgentFile(m), "utf8");
     expect(xml).toContain("<string>/Users/x/.local/bin:");
@@ -90,7 +90,7 @@ describe("install/uninstall", () => {
   // "Input/output error" and setup dies — install must retry briefly.
   it("retries bootstrap while launchd finishes tearing down the old instance", () => {
     const home = tempDir("agentcall-ld-");
-    const m = getMachinePaths(home, home);
+    const m = getPaths(home, home);
     let bootstraps = 0;
     installLaunchAgent(
       m,
@@ -105,7 +105,7 @@ describe("install/uninstall", () => {
 
   it("gives up with an error after repeated bootstrap failures", () => {
     const home = tempDir("agentcall-ld-");
-    const m = getMachinePaths(home, home);
+    const m = getPaths(home, home);
     expect(() =>
       installLaunchAgent(
         m,
@@ -120,7 +120,7 @@ describe("install/uninstall", () => {
 
   it("uninstall removes the plist", () => {
     const home = tempDir("agentcall-ld-");
-    const m = getMachinePaths(home, home);
+    const m = getPaths(home, home);
     mkdirSync(join(m.userHome, "Library", "LaunchAgents"), { recursive: true });
     writeFileSync(launchAgentFile(m), "x");
     uninstallLaunchAgent(m, () => {});
@@ -135,7 +135,7 @@ describe("install/uninstall", () => {
 describe("isLaunchAgentInstalled", () => {
   it("reports false before install and true once the plist exists", () => {
     const home = tempDir("agentcall-ld-");
-    const m = getMachinePaths(home, home);
+    const m = getPaths(home, home);
     expect(isLaunchAgentInstalled(m)).toBe(false);
     mkdirSync(join(m.userHome, "Library", "LaunchAgents"), { recursive: true });
     writeFileSync(launchAgentFile(m), "x");
@@ -143,34 +143,34 @@ describe("isLaunchAgentInstalled", () => {
   });
 
   it("derives the plist path from home and the launchd label", () => {
-    expect(launchAgentFile(getMachinePaths("/tmp/fakehome", "/tmp/fakehome")))
+    expect(launchAgentFile(getPaths("/tmp/fakehome", "/tmp/fakehome")))
       .toBe(`/tmp/fakehome/Library/LaunchAgents/${LAUNCH_LABEL}.plist`);
   });
 });
 
 describe("plist uses the real home, not the state root", () => {
   it("sets HOME to userHome so the spawned agent finds its credentials", () => {
-    const m = getMachinePaths("/tmp/state", "/Users/real");
+    const m = getPaths("/tmp/state", "/Users/real");
     const xml = plistContent("/usr/bin/node", "/pkg/dist/index.js", m);
     expect(xml).toContain("<key>HOME</key><string>/Users/real</string>");
     expect(xml).not.toContain("<string>/tmp/state</string>");
   });
 
   it("writes the plist under userHome's LaunchAgents", () => {
-    const m = getMachinePaths("/tmp/state", "/Users/real");
+    const m = getPaths("/tmp/state", "/Users/real");
     expect(launchAgentFile(m)).toBe(
       "/Users/real/Library/LaunchAgents/tech.benree.agentcall.listener.plist",
     );
   });
 
   it("logs to the machine-scoped listener log", () => {
-    const m = getMachinePaths("/tmp/state", "/Users/real");
+    const m = getPaths("/tmp/state", "/Users/real");
     expect(plistContent("/usr/bin/node", "/pkg/dist/index.js", m))
       .toContain("<key>StandardOutPath</key><string>/tmp/state/.agentcall/listener.log</string>");
   });
 
   it("runs `listen` with no line argument — one process serves every line", () => {
-    const m = getMachinePaths("/tmp/state", "/Users/real");
+    const m = getPaths("/tmp/state", "/Users/real");
     const xml = plistContent("/usr/bin/node", "/pkg/dist/index.js", m);
     expect(xml).toContain("<string>listen</string>");
     expect(xml).not.toContain("--line");

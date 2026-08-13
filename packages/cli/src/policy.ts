@@ -9,11 +9,9 @@
 import { readFileSync } from "node:fs";
 import { z } from "zod";
 import { HANDLE_RE, MAX_CARD_BLOCKED_CALLERS } from "@benree/agentcall-shared";
-import {
-  AccessPolicySchema, GROUP_NAME_RE, AccessSchema, accessFor,
-} from "./access.js";
+import { AccessPolicySchema, AccessSchema, accessFor } from "./access.js";
 import { writeJsonAtomic } from "./json-store.js";
-import type { LinePaths } from "./paths.js";
+import type { Paths } from "./paths.js";
 import type { Task } from "./tasks.js";
 
 const MAX_POLICY_ASSERTIONS = 100;
@@ -27,7 +25,6 @@ const MAX_POLICY_ASSERTIONS = 100;
 // AccessSchema: no clearance grants it, so no assertion can expect it.
 const PolicyAssertionSchema = z.object({
   caller: z.string().regex(HANDLE_RE),
-  groups: z.array(z.string().regex(GROUP_NAME_RE)).max(20).default([]),
   expect_access: AccessSchema,
 }).strict();
 type PolicyAssertion = z.infer<typeof PolicyAssertionSchema>;
@@ -41,7 +38,7 @@ const PolicySchema = AccessPolicySchema.extend({
 export type Policy = z.infer<typeof PolicySchema>;
 
 export const DEFAULT_POLICY: Policy = {
-  description: "", default_access: "allowed", callers: {}, groups: {},
+  description: "", default_access: "allowed", callers: {}, offline_delivery: { enabled: false },
 };
 
 // Missing file -> safe default (fresh install). Malformed file -> THROW:
@@ -63,7 +60,7 @@ function readOptionalJson<T>(file: string, label: string, schema: z.ZodType<T>):
   }
 }
 
-export function loadUserPolicy(p: LinePaths): Policy {
+export function loadUserPolicy(p: Paths): Policy {
   return readOptionalJson(p.policyFile, "user policy", PolicySchema) ?? DEFAULT_POLICY;
 }
 
@@ -80,7 +77,7 @@ function validateEffectivePolicy(policy: Policy): Policy {
 // Enforcement and publication use the effective policy. A missing managed
 // file is intentionally silent; any other read or parse failure is fatal so an
 // administrator restriction can never disappear through fallback.
-export function loadPolicy(p: LinePaths): Policy {
+export function loadPolicy(p: Paths): Policy {
   return validatePolicy(p, loadUserPolicy(p));
 }
 
@@ -95,7 +92,7 @@ export function loadPolicy(p: LinePaths): Policy {
 // path they could only find by reading this source. An enterprise control with
 // no tooling is one nobody can use. Restore it from git history alongside a
 // command that writes it, not on its own.
-export function validatePolicy(p: LinePaths, user: Policy): Policy {
+export function validatePolicy(p: Paths, user: Policy): Policy {
   const effective = validateEffectivePolicy(user);
   validatePolicyAssertions(effective, user.tests ?? [], "user policy");
   return effective;
@@ -103,7 +100,7 @@ export function validatePolicy(p: LinePaths, user: Policy): Policy {
 
 // Writes the exact shape PolicySchema parses, so hand-edits and the CLI
 // verbs (verbs.ts) interoperate on the same file.
-export function savePolicy(p: LinePaths, policy: Policy): void {
+export function savePolicy(p: Paths, policy: Policy): void {
   writeJsonAtomic(p.policyFile, policy);
 }
 
@@ -124,14 +121,7 @@ function validatePolicyAssertions(
   effective: Policy, assertions: readonly PolicyAssertion[], source: "user policy",
 ): void {
   for (const [index, assertion] of assertions.entries()) {
-    const unknownGroups = assertion.groups.filter((name) => !Object.hasOwn(effective.groups, name));
-    if (unknownGroups.length > 0) {
-      throw new Error(
-        `${source} assertion ${index + 1} for "${assertion.caller}" references unknown groups: ${unknownGroups.join(", ")}`,
-      );
-    }
-    const attestedGroups = assertion.groups.map((name) => effective.groups[name]!.roster_id);
-    const actual = accessFor(effective, assertion.caller, attestedGroups);
+    const actual = accessFor(effective, assertion.caller);
     if (actual === assertion.expect_access) continue;
     throw new Error(
       `${source} assertion ${index + 1} for "${assertion.caller}" failed: ` +
@@ -154,12 +144,12 @@ export type TaskResolution =
 // CONTAIN is decided afterwards, by accessFor against the sensitivity of
 // whatever the task actually read — one question where there used to be two.
 export function resolveTask(
-  policy: Policy, tasks: Task[], from: string, requested?: string, attestedGroups: readonly string[] = [],
+  policy: Policy, tasks: Task[], from: string, requested?: string,
 ): TaskResolution {
   // Blocked is the one rule clearance cannot express as a level: it beats every
-  // grant, including an attested group's, and it refuses before any task is
+  // task grant and refuses before any task is
   // named so a blocked caller learns nothing about what exists.
-  if (accessFor(policy, from, attestedGroups) === "blocked") {
+  if (accessFor(policy, from) === "blocked") {
     return { ok: false, code: "blocked", offered: [] };
   }
   if (requested !== undefined) {

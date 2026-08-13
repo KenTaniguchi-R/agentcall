@@ -14,7 +14,7 @@ type WorkflowStep = { name?: string; env?: Record<string, unknown>; run?: string
 
 function publishStep(source: string): WorkflowStep {
   const parsed = parse(source) as { jobs?: { publish?: { steps?: WorkflowStep[] } } };
-  const step = parsed.jobs?.publish?.steps?.find((candidate) => candidate.name === "Publish with keyless provenance");
+  const step = parsed.jobs?.publish?.steps?.find((candidate) => candidate.name === "Publish with trusted publishing");
   if (!step) throw new Error("publish step not found");
   return step;
 }
@@ -61,10 +61,11 @@ describe("npm release workflow", () => {
     expect(manifest.os).toEqual(["darwin", "linux"]);
   });
 
-  it("tests the packed CLI and doctor at the declared Node version floor", () => {
+  it("tests the packed CLI, doctor, and peer inspection at the declared Node version floor", () => {
     expect(ciWorkflow).toContain("node: [20, 22, 24]");
     expect(ciWorkflow).toContain('"$agentcall_bin" doctor');
-    expect(ciWorkflow).toContain('grep -F "No agentcall config found" "$RUNNER_TEMP/doctor-output"');
+    expect(ciWorkflow).toContain('grep -F "No agentcall installation found" "$RUNNER_TEMP/doctor-output"');
+    expect(ciWorkflow).toContain('"$agentcall_bin" inspect @acme/nobody');
   });
 
   it("installs the packed CLI on macOS and Linux", () => {
@@ -100,15 +101,14 @@ describe("npm release workflow", () => {
     ]);
   });
 
-  it("publishes release tags through OIDC provenance without an npm token", () => {
+  it("publishes release tags through OIDC without an npm token or private-repository provenance", () => {
     expect(workflow).toContain("types: [published]");
     expect(workflow).toContain("git merge-base --is-ancestor HEAD origin/main");
     expect(workflow).toContain("environment: npm");
     expect(workflow).toContain("id-token: write");
     expect(workflow).toContain("NPM_DIST_TAG: ${{ github.event.release.prerelease && 'next' || 'latest' }}");
-    expect(workflow).toContain(
-      "npm publish \"$tarball\" --provenance --access public --tag \"$NPM_DIST_TAG\"",
-    );
+    expect(workflow).toContain("npm publish \"$tarball\" --access public --tag \"$NPM_DIST_TAG\"");
+    expect(workflow).not.toContain("--provenance");
     expect(workflow).not.toMatch(/secrets\..*npm|NODE_AUTH_TOKEN:\s*\$\{\{/i);
   });
 
@@ -129,6 +129,12 @@ describe("npm release workflow", () => {
     expect(publish).toContain("id-token: write");
     expect(publish).toContain("contents: read");
     expect(publish).not.toContain("contents: write");
+  });
+
+  it("identifies the release repository without requiring a checkout in the attach job", () => {
+    const attach = workflow.slice(workflow.indexOf("  attach:"));
+    expect(attach).toContain("GH_REPO: ${{ github.repository }}");
+    expect(attach).not.toContain("actions/checkout@");
   });
 
   it("builds an SBOM and publishes the shared dependency before the CLI", () => {

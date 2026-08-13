@@ -1,8 +1,7 @@
 import { dirname, isAbsolute, join, sep } from "node:path";
 import { fileURLToPath } from "node:url";
-import { lineTaskDirs } from "./line-task-dirs.js";
-import { canonical, expandHome, fold, isAncestorOf, isInside } from "./path-canon.js";
-import { getMachinePaths, type LinePaths } from "./paths.js";
+import { canonical, expandHome, isAncestorOf, isInside } from "./path-canon.js";
+import { getPaths, type Paths } from "./paths.js";
 import { deniedBasename, deniedRoots, isReadable, type Scope } from "./scope.js";
 
 export type GuardInput = {
@@ -32,9 +31,8 @@ export const FAIL_CLOSED_REASON =
   "The answering agent's policy guard could not evaluate this action.";
 
 // The home-relative denied paths live in scope.ts, alongside the roots, so one
-// list answers "may this be read". AgentCall/<line>/tasks has no fixed
-// home-relative form and is passed in per call — see runGuard's
-// extraSecretRoots.
+// list answers "may this be read". The authored tasks directory is added as
+// an explicit secret root by runGuard.
 
 // This module compiles to <package root>/dist/guard.js, one directory below
 // the installed package root — true both for a global npm install and for a
@@ -50,7 +48,7 @@ const DEFAULT_PACKAGE_ROOT = dirname(dirname(fileURLToPath(import.meta.url)));
 // an argument shape this function cannot inspect. `LS` was missed exactly that
 // way in an earlier draft and fell through to allow.
 const EXACT_TARGET: Record<string, string> = {
-  Read: "file_path", Write: "file_path", Edit: "file_path", NotebookEdit: "notebook_path",
+  Read: "file_path",
 };
 // Tools whose `path` argument names a root that is then searched or listed.
 // `Glob` joins them below: its root is implicit, but it is checked the same way.
@@ -86,11 +84,11 @@ export interface DecideContext {
    *  while the real ~/.ssh stood open. */
   userHome: string;
   realpath: (p: string) => string;
-  /** What this line may read: roots plus the denylist. */
+  /** What the answering installation may read: roots plus the denylist. */
   scope: Scope;
   guardRoot?: string;
   /** Paths that are `secret` for this run regardless of the map — the guard's
-   *  own package root and every line's tasks directory. */
+   *  own package root and the installation's tasks directory. */
   extraSecretRoots?: string[];
 }
 
@@ -124,28 +122,29 @@ export function decide(input: GuardInput, ctx: DecideContext): GuardVerdict {
     denied.find((d) => isInside(root, d) || isAncestorOf(root, d));
   const targetInsideSecret = (target: string) => denied.find((d) => isInside(target, d));
 
-  if (tool === "Bash") {
-    const command = typeof args.command === "string" ? args.command : "";
-    const hit = denied.find((d) =>
-      fold(command).includes(fold(d)) || fold(command).includes(fold(d.replace(userHome, "~"))));
-    // Record and allow: string matching is too weak to be a boundary and too
-    // eager to be harmless. That reasoning still holds — a command string
-    // cannot be inspected for what it will read.
-    //
-    // What did NOT hold is the assumption this comment used to carry: that the
-    // consequence was limited to an `exec`-granted task. It is not. `Bash` is
-    // NOT gated by `--allowedTools` (measured 2026-08-07, with and without a
-    // PreToolUse hook), so it is reachable on every call, and every denied path
-    // is readable through it. Demonstrated: `~/.zshrc` classifies DENIED and a
-    // caller got its exact line count.
-    //
-    // So the denylist bounds Read/Grep/Glob/LS and not the one tool that can do
-    // everything those four can. Tracked in #419; the README and both guides
-    // now say so rather than claiming a boundary that is not here.
-    return hit ? { allow: true, flag: { rule: "bash-references-denied-path", detail: hit } } : { allow: true };
+  // Remote services are the delegated capability; local mutation is not.
+  // Enforce this in the hook as well as the Claude allowlist so a CLI
+  // permission-mode change cannot silently turn an answered call into shell or
+  // filesystem write access.
+  if (["Bash", "Write", "Edit", "NotebookEdit"].includes(tool)) {
+    return { allow: false, rule: "local-mutation-disabled", detail: tool };
   }
 
   if (NO_PATH_SURFACE.has(tool)) return { allow: true };
+
+  // ToolSearch only selects and loads the schema of an already-present tool;
+  // it does not execute that tool or touch the filesystem itself. The selected
+  // tool arrives as a separate PreToolUse event and is evaluated below on its
+  // own merits. Keep this named rather than widening NO_PATH_SURFACE so a new,
+  // unknown tool continues to fail closed.
+  if (tool === "ToolSearch") return { allow: true };
+
+  // MCP calls have no filesystem-shaped argument for this guard to inspect.
+  // The runner separately pre-approves only server names derived from the
+  // owner's own Claude configuration; dontAsk rejects every other server
+  // before execution. Match the complete Claude MCP tool shape here rather
+  // than a loose prefix so a look-alike remains on the fail-closed path.
+  if (/^mcp__[A-Za-z0-9_-]+__[A-Za-z0-9_-]+$/.test(tool)) return { allow: true };
 
   // Skills are dispatched by NAME, and under #412 there is no per-name label to
   // check: a skill's own files sit under a root (or under the ~/.claude/skills
@@ -233,13 +232,13 @@ export function decide(input: GuardInput, ctx: DecideContext): GuardVerdict {
 }
 
 export interface GuardDeps {
-  line: LinePaths;
+  paths: Paths;
   callId: string;
   correlationId?: string;
   now: () => string;
   realpath: (p: string) => string;
   appendLine: (file: string, line: string) => void;
-  /** What this line may read: roots plus the denylist. */
+  /** What the answering installation may read: roots plus the denylist. */
   scope: Scope;
 }
 
@@ -260,7 +259,7 @@ export function runGuard(raw: string, deps: GuardDeps): GuardOutput {
     input = {
       tool_name: parsed.tool_name,
       tool_input: (parsed.tool_input ?? {}) as Record<string, unknown>,
-      cwd: typeof parsed.cwd === "string" ? parsed.cwd : deps.line.machine.userHome,
+      cwd: typeof parsed.cwd === "string" ? parsed.cwd : deps.paths.userHome,
     };
   } catch {
     // Exit 2 blocks bluntly. The guard never allows because it failed to decide.
@@ -273,23 +272,10 @@ export function runGuard(raw: string, deps: GuardDeps): GuardOutput {
   // read-only home would silently turn the guard off. Fail closed instead.
   try {
     // Task frontmatter declares which sources a task may read, so it is as
-    // sensitive as policy.json. Under the per-line layout these live at
-    // ~/AgentCall/<line>/tasks, which no fixed home-relative rule can match —
-    // enumerate them instead. Every line's, not just this one's: one line's
-    // agent must not rewrite another line's tasks either. lineTaskDirs, not
-    // listLines: this runs on every tool call, and listLines readFileSync's
-    // and zod-parses every line's config.json just to build a LineSummary
-    // this call only ever wants the tasksDir out of.
-    //
-    // Enumerated from a machine rooted at userHome — NOT deps.line.machine as
-    // given: deps.line.machine.linesDir sits under stateRoot, the exact
-    // AGENTCALL_HOME-redirectable value defect (a) exists to keep out of
-    // decide(). Passing deps.line.machine through unchanged would enumerate
-    // an empty (or nonexistent) redirected state dir, silently deny nothing,
-    // and leave the real machine's per-line task directories wide open —
-    // defect (a) fixed for .ssh and quietly reopened for tasks.
-    const userHome = deps.line.machine.userHome;
-    const taskRoots = lineTaskDirs(getMachinePaths(userHome, userHome));
+    // sensitive as policy.json. Authored tasks always live under the real
+    // user home, even when AGENTCALL_HOME redirects runtime state for a probe.
+    const userHome = deps.paths.userHome;
+    const taskRoots = [getPaths(deps.paths.stateRoot, userHome).tasksDir];
     const verdict = decide(input, {
       userHome,
       realpath: deps.realpath,
@@ -305,19 +291,22 @@ export function runGuard(raw: string, deps: GuardDeps): GuardOutput {
 
     // PreToolUse fires on what the model ATTEMPTED, so this records an
     // intention and one layer's answer to it — never an outcome. The field is
-    // named `allowed_by_guard` because this hook is not the last word: a tool
-    // this guard allows may still be refused downstream by the allowlist in
-    // CLAUDE_READ_ONLY_TOOLS, and Bash is precisely that case — the guard
-    // deliberately records-and-allows it (string matching is too weak to be a
-    // boundary) while the envelope keeps it from ever running. The field used
-    // to be `allowed`, which read as an outcome and made three blocked Bash
-    // attempts look like three shell commands the caller ran. See #415.
-    write(deps.line.toolsLog,
+    // named `allowed_by_guard` rather than `allowed` because this hook is not
+    // the last word: a tool it permits can still be refused downstream by the
+    // CLAUDE_READ_ONLY_TOOLS envelope, and only the envelope's verdict is an
+    // outcome.
+    //
+    // The case that motivated the rename no longer occurs: Bash was once
+    // recorded-and-allowed here and blocked by the envelope, so the log claimed
+    // shell commands ran that never did. Bash is denied outright now and the two
+    // layers agree. The old name was still wrong for the general case, and it
+    // is a public surface as of publication. See #415.
+    write(deps.paths.toolsLog,
       { type: "tool_call", call_id: deps.callId, ...correlation, tool: input.tool_name, allowed_by_guard: verdict.allow });
 
     const noteworthy = verdict.allow ? verdict.flag : verdict;
     if (noteworthy) {
-      write(deps.line.callsLog, {
+      write(deps.paths.callsLog, {
         // Three distinct names, because they are three distinct claims:
         // denied = we stopped it; flagged = we let it through and noticed.
         type: verdict.allow ? "tool_flagged" : "tool_denied",

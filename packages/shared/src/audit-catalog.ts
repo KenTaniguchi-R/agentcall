@@ -50,4 +50,3 @@ export const AUDIT_EVENT_CATALOG = [
 
 type CatalogEntry = (typeof AUDIT_EVENT_CATALOG)[number];
 export type OrgAuditEvent = Extract<CatalogEntry, { ledger: "org" }>["event"];
-export type RosterAuditEvent = Extract<CatalogEntry, { ledger: "roster" }>["event"];

@@ -12,7 +12,7 @@ what it finds may reach each caller.
 agentcall task new architecture-history
 ```
 
-Edit `~/AgentCall/<line>/tasks/architecture-history/SKILL.md`:
+Edit `~/AgentCall/tasks/architecture-history/SKILL.md`:
 
 ```yaml
 ---
@@ -32,14 +32,11 @@ a startup error and not a silent no-op.
 ## 2. Validate before publishing
 
 ```bash
-agentcall lint
-agentcall policy
-agentcall card
+agentcall doctor
 ```
 
-`lint` checks task manifests, effective policy assertions, and the rendered
-card. The other commands make the effective access rules and working directories
-visible for human review.
+`doctor` is the single read-only view of task validity, effective policy,
+working scope, and card drift. Add `--json` for the same structured result.
 
 ## 3. Decide who is answered
 
@@ -61,19 +58,35 @@ Who gets answered is a separate, yes/no question. **Everyone answered sees the
 same thing** — the organization is the boundary, not a per-caller level.
 
 ```bash
-# Deny a caller completely — beats the default and every roster rule
+# Deny a caller completely — beats the default
 agentcall block spammer
 agentcall unblock spammer
 
-# Answer only named callers and attested rosters
+# Answer only named callers
 agentcall access --default blocked
 ```
 
-`secret` is not grantable. It means "never leaves this machine", so no caller
-and no roster can reach it.
+Offline delivery is a separate owner opt-in and defaults to disabled:
 
-Policy verbs republish the card automatically. `agentcall card push` republishes
-after a direct policy-file edit.
+```bash
+agentcall access --offline enabled
+agentcall access --offline disabled
+```
+
+Enabling it republishes the installation card with `durable-mailbox-v1`.
+Disabling it stops new durable admissions; queued work is revalidated before
+lease and becomes terminal `revoked` if delivery remains disabled.
+
+`secret` is not grantable. It means "never leaves this machine", so no caller
+and no caller can reach it.
+
+Policy verbs republish the card automatically. After a direct policy-file edit,
+review the change and publish explicitly:
+
+```bash
+agentcall doctor
+agentcall admin card publish
+```
 
 ## Add policy assertions
 
@@ -88,20 +101,14 @@ leaves:
     "ken": { "access": "allowed" },
     "stranger": { "access": "blocked" }
   },
-  "groups": {
-    "eng": { "roster_id": "<relay-issued roster id>", "access": "allowed" }
-  },
   "tests": [
     { "caller": "ken", "expect_access": "allowed" },
-    { "caller": "stranger", "expect_access": "blocked" },
-    { "caller": "someone-else", "groups": ["eng"], "expect_access": "allowed" }
+    { "caller": "stranger", "expect_access": "blocked" }
   ]
 }
 ```
 
-A named caller wins over every roster, in both directions. Between two attested
-rosters that disagree, **blocked wins** — the cautious direction when the
-question is whether to answer at all.
+A named caller rule overrides the installation default.
 
 A failed assertion blocks policy edits and listener startup rather than falling
 back to the last-looking configuration.
@@ -110,15 +117,15 @@ back to the last-looking configuration.
   `scope.json` names a root the agent may read under, and a denylist that holds
   regardless. **A path you never thought about is readable** — the default root
   is `$HOME`, so anything a subdirectory later acquires is in scope too.
-  **On a Codex line none of this is enforced.** There is no read guard there at
+  **With Codex none of this is enforced.** There is no read guard there at
   all, so nothing stops a denied read, and nothing inspects the answer.
   Review the [security model](/security/overview) before widening a root.
 </Warning>
 
 ## Success check
 
-`agentcall lint` exits successfully and `agentcall card` shows the intended
-tasks, the default access, and each named caller's resolved access—nothing
-more.
+`agentcall doctor` exits successfully, shows the intended tasks, default access,
+each named caller's resolved access, mailbox capability, key-ring and execution
+journal health, and a current card publication.
 
 Source of truth: [README task and policy behavior](https://github.com/KenTaniguchi-R/agentcall#usage).

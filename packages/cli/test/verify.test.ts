@@ -1,22 +1,19 @@
 import { existsSync, mkdirSync, writeFileSync } from "node:fs";
-import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { describe, expect, it } from "vitest";
 import { tempDir } from "./helpers.js";
 import { runGuard } from "../src/guard.js";
-import { getLinePaths, getMachinePaths } from "../src/paths.js";
+import { getPaths } from "../src/paths.js";
 import { ScopeSchema } from "../src/scope.js";
 import { AgentRunError, type AgentKind } from "../src/runner.js";
 import {
   checkAgentBinary,
   checkCodexAuth,
   checkGuard,
-  checkRelaySelfCall,
   checkAgentSpawn,
   classifyAgentFailure,
   formatCheck,
   guardDenied,
-  GUARD_PROBE_LINE,
   HINTS,
   VERIFY_PROMPT,
   VERIFY_TIMEOUT_MS,
@@ -141,7 +138,7 @@ describe("checkCodexAuth", () => {
   });
 });
 
-const fakeWorkdir = getLinePaths(getMachinePaths("/tmp/agentcall-verify-test-home"), "line").shareDir;
+const fakeWorkdir = getPaths("/tmp/agentcall-verify-test-home").shareDir;
 
 // checkAgentSpawn now builds its own SpawnSpec (to apply the AGENTCALL_HOME
 // override below), which moved a real binary-on-PATH lookup above the runFn
@@ -179,7 +176,7 @@ describe("checkAgentSpawn", () => {
   });
 
   // Regression for the doctor-probe orphan-line bug: this spawn runs under
-  // GUARD_PROBE_LINE ("doctor-probe"), a synthetic name with no real line
+  // "doctor-probe" ("doctor-probe"), a synthetic name with no real line
   // behind it — same as the two guard probes in this file, which each
   // mkdtemp their own AGENTCALL_HOME for exactly this reason (see
   // defaultGuardProbe/defaultGuardBinaryProbe below). checkAgentSpawn never
@@ -199,7 +196,7 @@ describe("checkAgentSpawn", () => {
   // doesn't have). Before the fix, checkAgentSpawn passed no specOverride at
   // all (runFn's 5th argument was `undefined`), so this fails against the
   // current code — there is no spec to inspect.
-  it("spawns under a throwaway AGENTCALL_HOME so a real ~/.agentcall/lines/doctor-probe is never created", async () => {
+  it("spawns under a throwaway AGENTCALL_HOME so verification never touches the real installation", async () => {
     const seenSpecs: Array<{ env?: NodeJS.ProcessEnv } | undefined> = [];
     await checkAgentSpawn("claude", fakeWorkdir, async ({ specOverride }) => {
       seenSpecs.push(specOverride);
@@ -210,9 +207,7 @@ describe("checkAgentSpawn", () => {
     expect(spec).toBeDefined();
     expect(spec!.env?.AGENTCALL_HOME).toBeTruthy();
     expect(spec!.env?.AGENTCALL_HOME).not.toBe(process.env.AGENTCALL_HOME);
-    // The line name the spawn's guard is wired up under must still be
-    // GUARD_PROBE_LINE, unaffected by the AGENTCALL_HOME redirection.
-    expect(spec!.env?.AGENTCALL_LINE).toBe(GUARD_PROBE_LINE);
+    expect(spec!.env?.AGENTCALL_LINE).toBeUndefined();
   });
 
   // Regression for the CI breakage the AGENTCALL_HOME fix above introduced:
@@ -312,41 +307,13 @@ describe("verifyAgent", () => {
   });
 });
 
-describe("checkRelaySelfCall", () => {
-  const cfg = { org: "acme", handle: "ken", token: "tok", agent_kind: "claude" as const, relay: "https://relay.example" };
-  const paths = getLinePaths(getMachinePaths(tmpdir(), tmpdir()), "claude");
-
-  it("calls the agent's own address through the relay and passes on a reply", async () => {
-    const seen: Array<{ org: string; from: string; to: string; relay: string; token: string; message: string; timeoutMs?: number }> = [];
-    const c = await checkRelaySelfCall(cfg, paths, async (opts) => {
-      seen.push({ org: opts.org, from: opts.from, to: opts.to, relay: opts.relay, token: opts.token, message: opts.message, timeoutMs: opts.timeoutMs });
-      return { type: "call_reply", call_id: "c1", text: "hi", task: "ask" } as never;
-    });
-    expect(c).toMatchObject({ name: "relay self-call", ok: true });
-    expect(seen).toEqual([
-      {
-        from: "ken", to: "ken", relay: "https://relay.example", org: "acme", token: "tok",
-        message: "agentcall doctor self-test: reply briefly", timeoutMs: VERIFY_TIMEOUT_MS + 30_000,
-      },
-    ]);
-  });
-
-  it("fails with a launchd-environment hint when the call errors", async () => {
-    const c = await checkRelaySelfCall(cfg, paths, async () => {
-      throw new Error("The remote agent hit an error while answering.");
-    });
-    expect(c.ok).toBe(false);
-    expect(c.hint).toContain("listener");
-  });
-});
-
 // A temp home whose calls.log already contains a denial, as a real guard run
 // would have left behind. Per-line layout: checkGuard's default probes run
-// under GUARD_PROBE_LINE (verify.ts), so deniedInLog reads
-// .agentcall/lines/<GUARD_PROBE_LINE>/calls.log, not the flat legacy path.
+// under "doctor-probe" (verify.ts), so deniedInLog reads
+// .agentcall/lines/<"doctor-probe">/calls.log, not the flat legacy path.
 function homeWithDenial(): string {
   const home = tempDir("guardcheck-");
-  const callsLog = getLinePaths(getMachinePaths(home), GUARD_PROBE_LINE).callsLog;
+  const callsLog = getPaths(home).callsLog;
   mkdirSync(dirname(callsLog), { recursive: true });
   writeFileSync(callsLog,
     JSON.stringify({ ts: "2026-07-31T00:00:00.000Z", type: "tool_denied", tool: "Read" }) + "\n");
@@ -358,11 +325,11 @@ function homeWithDenial(): string {
 // a literal here would keep passing after the shape changed.
 function realDenialStdout(): string {
   const home = tempDir("guardout-");
-  const line = getLinePaths(getMachinePaths(home, home), "probe-line");
+  const line = getPaths(home, home);
   return runGuard(
     JSON.stringify({ tool_name: "Read", tool_input: { file_path: join(home, ".env") }, cwd: home }),
     {
-      line, callId: "probe", now: () => "2026-08-01T00:00:00.000Z", realpath: (p) => p, appendLine: () => {},
+      paths: line, callId: "probe", now: () => "2026-08-01T00:00:00.000Z", realpath: (p) => p, appendLine: () => {},
       // No roots: every path is outside scope, so the .env probe below denies
       // on the root check as well as on its basename. Either route emits the
       // same stdout shape, which is the only thing this helper cares about.

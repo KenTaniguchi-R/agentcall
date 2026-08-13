@@ -44,7 +44,7 @@ fixes are not backported.
 - Cross-organization reachability of any kind. The organization is the outermost
   boundary AgentCall routes within, and a path across it is the most serious
   class of bug in this system.
-- Handle or address takeover, invite forgery, roster join-key misuse.
+- Handle or address takeover, invite forgery, identity confusion between installs.
 - Flaws in the end-to-end encryption: key confusion, downgrade, replay,
   ciphertext or plaintext reaching the relay.
 - Credential material reaching a place it should not — relay logs, audit

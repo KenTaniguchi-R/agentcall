@@ -40,9 +40,6 @@ Three standing constraints that aren't any single issue's property:
   disable it**. The A2A track (#9, #11, #101, #179) is where this creeps back
   in: A2A is an *in-organization* protocol surface here. See the
   [federation non-goal](./docs/superpowers/specs/2026-08-02-cross-organization-federation-non-goal.md).
-  The separately approved accountless Room capability path (#259) is not a
-  durable identity or cross-organization route: it has no Team, organization,
-  handle, address, federation, or durable reachability and expires within 30 minutes.
 - **Public or enterprise deployment is blocked on #1–#8 (the C track).** A
   passing TCK says nothing about safe prompt execution. (#10 was part of this
   gate until the federation non-goal closed it — in-organization callers are

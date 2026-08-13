@@ -36,4 +36,23 @@ describe("A2A task schemas", () => {
     expect(A2ACancelTaskRequest.safeParse({ metadata: "not-an-object" }).success).toBe(false);
     expect(A2ACancelTaskRequest.safeParse({ unexpected: true }).success).toBe(false);
   });
+
+  it("carries encrypted outcomes as raw artifacts and exposes strict terminal reasons", () => {
+    const encrypted = A2ATask.parse({
+      id: "task-2",
+      status: { state: "TASK_STATE_FAILED", timestamp: "2026-08-03T00:00:00.000Z" },
+      metadata: { "agentcall.dev/terminalReason": "expired" },
+      artifacts: [{
+        artifactId: "task-2:result",
+        parts: [{ raw: "eyJjdCI6IkIifQ==", mediaType: "application/vnd.agentcall.hpke+json" }],
+      }],
+    });
+    expect(encrypted.metadata).toEqual({ "agentcall.dev/terminalReason": "expired" });
+    expect(encrypted.artifacts?.[0]?.parts[0]).toEqual({
+      raw: "eyJjdCI6IkIifQ==", mediaType: "application/vnd.agentcall.hpke+json",
+    });
+    expect(A2ATask.safeParse({
+      ...encrypted, metadata: { "agentcall.dev/terminalReason": "invented" },
+    }).success).toBe(false);
+  });
 });

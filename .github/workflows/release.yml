@@ -110,7 +110,7 @@ jobs:
             echo "npm $minimum or newer is required for trusted publishing; found $npm_version."
             exit 1
           }
-      - name: Publish with keyless provenance
+      - name: Publish with trusted publishing
         env:
           RELEASE_TAG: ${{ github.event.release.tag_name }}
           NPM_DIST_TAG: ${{ github.event.release.prerelease && 'next' || 'latest' }}
@@ -147,7 +147,10 @@ jobs:
               echo "$package_name@$version is already published with the identical tarball."
               return
             fi
-            npm publish "$tarball" --provenance --access public --tag "$NPM_DIST_TAG"
+            # npm provenance attestations require a public source repository.
+            # This repository is private; authentication still uses OIDC trusted
+            # publishing, with no long-lived registry token.
+            npm publish "$tarball" --access public --tag "$NPM_DIST_TAG"
           }
 
           publish_one @benree/agentcall-shared \
@@ -168,5 +171,6 @@ jobs:
       - name: Attach tarballs, SBOM, and checksums
         env:
           GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
           RELEASE_TAG: ${{ github.event.release.tag_name }}
         run: gh release upload "$RELEASE_TAG" "$RUNNER_TEMP"/agentcall-release/* --clobber

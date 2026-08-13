@@ -23,7 +23,7 @@ describe("cloud data map", () => {
   it("names every non-D1 persisted relay surface", () => {
     for (const surface of [
       "`call:*`", "`audit:*`", "`rl:*`", "`hits`", "`agentcall_status_reads`",
-      "`HANDLE_DO`", "`RATE_LIMITER_DO`", "`CARD_RL`", "`READ_RL`", "`ROSTER_READ_RL`",
+      "`HANDLE_DO`", "`RATE_LIMITER_DO`", "`CARD_RL`", "`READ_RL`",
     ]) {
       expect(dataMap).toContain(surface);
     }

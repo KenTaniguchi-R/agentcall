@@ -1,12 +1,12 @@
 import type { Command } from "commander";
 import { sanitizeTerminalOutput, stringifyTerminalSafeJson } from "@benree/agentcall-shared";
 import { callAgent, callStatusMessage, CallError } from "../call-client.js";
-import { getMachinePaths } from "../paths.js";
+import { getPaths } from "../paths.js";
 import { relayUrl } from "../config.js";
 import { resolveAddress } from "../contacts.js";
-import { pickOutboundLine } from "../outbound.js";
+import { outboundInstallation } from "../outbound.js";
 import { forgetOutbound, matchOutbound, loadOutbound, rememberOutbound } from "../contexts-out.js";
-import type { LineContext } from "../line-context.js";
+import type { Installation } from "../config.js";
 import { fail } from "../errors.js";
 
 export function register(program: Command): void {
@@ -16,24 +16,23 @@ export function register(program: Command): void {
     .argument("<address>", "contact name or @org/handle to call")
     .argument("<message...>", "message to send")
     .option("--json", "print the full reply envelope instead of just the text")
-    .option("--task <id>", "task from the callee's card to perform (see: agentcall card <address>)")
-    .option("--as <line>", "line to call from (defaults to the primary line on the destination's relay)")
+    .option("--task <id>", "task from the callee's card to perform (see: agentcall inspect <address>)")
     .option("--continue", "continue the open conversation with this address (add --task when several are open)")
     .option("--context <id>", "continue a specific conversation by id")
-    .action(async (address: string, messageParts: string[], o: { json?: boolean; task?: string; as?: string; continue?: boolean; context?: string }) => {
+    .action(async (address: string, messageParts: string[], o: { json?: boolean; task?: string; continue?: boolean; context?: string }) => {
       if (process.env.AGENTCALL_CALL_ID !== undefined) {
         fail("Nested agentcall calls are disabled until relay-attested chains and secret-isolated per-run credentials exist.");
         return;
       }
-      const machine = getMachinePaths();
+      const machine = getPaths();
       const firstPass = resolveAddress(machine, address);
       if (!firstPass.ok) {
         fail(firstPass.error);
         return;
       }
-      let ctx: LineContext;
+      let ctx: Installation;
       try {
-        ctx = pickOutboundLine(machine, firstPass.org, { as: o.as });
+        ctx = outboundInstallation(machine, firstPass.org);
       } catch (e) {
         fail(e);
         return;
@@ -86,6 +85,21 @@ export function register(program: Command): void {
             console.error(callStatusMessage(s));
           },
         });
+        if (reply.type === "call_queued") {
+          const queued = {
+            state: "queued",
+            task_id: reply.call_id,
+            address: reply.address,
+            submitted_at: new Date(reply.submitted_at).toISOString(),
+            expires_at: new Date(reply.expires_at).toISOString(),
+          };
+          if (o.json) console.log(stringifyTerminalSafeJson(queued));
+          else {
+            console.log(`Queued task ${reply.call_id}; expires ${queued.expires_at}.`);
+            console.log(`Retrieve it with: agentcall jobs get ${reply.address} ${reply.call_id}`);
+          }
+          return;
+        }
         if (reply.context_id && reply.task) {
           rememberOutbound(ctx.paths, { relay: relayUrl(cfg), from: cfg.handle, to: parsed.handle, task: reply.task, context_id: reply.context_id, at: Date.now() });
           console.error("conversation open — add --continue to follow up");

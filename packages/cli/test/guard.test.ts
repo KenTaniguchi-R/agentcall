@@ -2,7 +2,7 @@ import { mkdirSync } from "node:fs";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 import { decide, DENY_REASON, runGuard, type DecideContext, type GuardDeps, type GuardInput } from "../src/guard.js";
-import { getLinePaths, getMachinePaths } from "../src/paths.js";
+import { getPaths } from "../src/paths.js";
 import { ScopeSchema } from "../src/scope.js";
 import { tempDir } from "./helpers.js";
 
@@ -104,15 +104,19 @@ describe("decide — labelling bounds what a root can reach", () => {
       guardRoot: "/opt/agentcall",
     });
 
-  it("allows file tools inside the labelled root", () => {
+  it("allows file reads inside the labelled root", () => {
     expect(bounded("Read", { file_path: `${ROOT}/src/index.ts` }).allow).toBe(true);
-    expect(bounded("Write", { file_path: `${ROOT}/notes/new.md` }).allow).toBe(true);
+  });
+
+  it("denies local mutation tools even inside a readable root", () => {
+    expect(bounded("Write", { file_path: `${ROOT}/notes/new.md` }).allow).toBe(false);
+    expect(bounded("Edit", { file_path: `${ROOT}/src/index.ts` }).allow).toBe(false);
+    expect(bounded("NotebookEdit", { notebook_path: `${ROOT}/analysis.ipynb` }).allow).toBe(false);
+    expect(bounded("Bash", { command: "touch notes/new.md" }).allow).toBe(false);
   });
 
   it("denies exact file targets in an unlabelled sibling", () => {
     expect(bounded("Read", { file_path: "/Users/owner/code/payroll/secrets.ts" }))
-      .toMatchObject({ allow: false, rule: "source-is-secret" });
-    expect(bounded("Edit", { file_path: "../payroll/secrets.ts" }))
       .toMatchObject({ allow: false, rule: "source-is-secret" });
   });
 
@@ -136,8 +140,8 @@ describe("decide — labelling bounds what a root can reach", () => {
     }).allow).toBe(true);
   });
 
-  it("still records but allows Bash because exec is an explicit residual", () => {
-    expect(bounded("Bash", { command: "cat /Users/owner/code/payroll/secrets.ts" }).allow).toBe(true);
+  it("denies Bash even when the command only names a readable path", () => {
+    expect(bounded("Bash", { command: `cat ${ROOT}/src/index.ts` }).allow).toBe(false);
   });
 });
 
@@ -296,9 +300,9 @@ describe("decide — the guard protects its own installed code", () => {
     expect(v.allow).toBe(false);
   });
 
-  it("still allows writes outside the guard root with the same override in place", () => {
+  it("denies writes outside the guard root too", () => {
     const v = decide(call("Write", { file_path: "/Users/owner/proj/src/index.ts" }), ctx({ guardRoot: GUARD_ROOT }));
-    expect(v.allow).toBe(true);
+    expect(v.allow).toBe(false);
   });
 
   it("denies a Grep rooted at the guard's package root", () => {
@@ -379,9 +383,9 @@ describe("per-line task directories are denied", () => {
     expect(verdict.allow).toBe(false);
   });
 
-  it("still allows the line's own share directory", () => {
+  it("still allows reads from the line's own share directory", () => {
     const verdict = decide(
-      { tool_name: "Write", tool_input: { file_path: "/Users/real/AgentCall/codex/public/notes.md" }, cwd: "/tmp/work" },
+      { tool_name: "Read", tool_input: { file_path: "/Users/real/AgentCall/codex/public/notes.md" }, cwd: "/tmp/work" },
       {
         userHome: "/Users/real", realpath: id, guardRoot: "/pkg",
         scope: scopeFor("/Users/real", ["/Users/real/AgentCall"]),
@@ -414,10 +418,9 @@ describe("decide — a denied directory that is itself a symlink", () => {
     expect(v.allow).toBe(false);
   });
 
-  it("keeps flagging a Bash command that names the symlink — the lexical form survives", () => {
+  it("denies a Bash command that names the symlink", () => {
     const v = decide(call("Bash", { command: "cat ~/.aws/credentials" }), ctx({ realpath }));
-    expect(v.allow).toBe(true);
-    expect(v.allow === true && v.flag?.rule).toBeTruthy();
+    expect(v).toMatchObject({ allow: false, rule: "local-mutation-disabled" });
   });
 });
 
@@ -434,17 +437,15 @@ describe("decide — writes to a path that does not exist yet", () => {
   });
 });
 
-describe("decide — Bash records but does not deny", () => {
-  it("flags a command referencing a denied path, and still allows it", () => {
+describe("decide — Bash is disabled for answered calls", () => {
+  it("denies a command referencing a denied path", () => {
     const v = decide(call("Bash", { command: "cat ~/.ssh/id_rsa" }), ctx());
-    expect(v.allow).toBe(true);
-    expect(v.allow === true && v.flag?.rule).toBeTruthy();
+    expect(v).toMatchObject({ allow: false, rule: "local-mutation-disabled" });
   });
 
-  it("does not flag ordinary work", () => {
+  it("also denies an ordinary command", () => {
     const v = decide(call("Bash", { command: "npm test" }), ctx());
-    expect(v.allow).toBe(true);
-    expect(v.allow === true && v.flag).toBeUndefined();
+    expect(v).toMatchObject({ allow: false, rule: "local-mutation-disabled" });
   });
 });
 
@@ -469,6 +470,17 @@ describe("decide — unknown shapes fail closed", () => {
   it("allows a tool with no filesystem surface", () => {
     expect(decide(call("WebSearch", { query: "typescript" }), ctx()).allow).toBe(true);
     expect(decide(call("WebFetch", { url: "https://example.com" }), ctx()).allow).toBe(true);
+  });
+
+  it("allows ToolSearch to load an authenticated tool's deferred schema", () => {
+    expect(decide(call("ToolSearch", { query: "select:mcp__calendar__list_events" }), ctx()))
+      .toEqual({ allow: true });
+  });
+
+  it("allows an MCP tool after its schema has been selected", () => {
+    expect(decide(call("mcp__claude_ai_Google_Calendar__list_events", {
+      calendar_id: "primary",
+    }), ctx())).toEqual({ allow: true });
   });
 
   it("DENIES a tool it has never been taught", () => {
@@ -519,9 +531,9 @@ function harness() {
   const logLines: Array<{ file: string; line: string }> = [];
   // userHome === stateRoot here, matching this file's old flat-HOME tests:
   // the security root the existing assertions below rely on is HOME.
-  const linePaths = getLinePaths(getMachinePaths(HOME, HOME), "test-line");
+  const linePaths = getPaths(HOME, HOME);
   const deps: GuardDeps = {
-    line: linePaths,
+    paths: linePaths,
     callId: "call-123",
     now: () => "2026-07-31T00:00:00.000Z",
     realpath: id,
@@ -570,25 +582,29 @@ describe("runGuard", () => {
     expect(JSON.stringify(h.calls()[0])).toContain("id_rsa");
   });
 
-  it("records a flagged Bash command without denying it", () => {
+  it("denies and records a Bash command", () => {
     const h = harness();
     const out = runGuard(payload("Bash", { command: "cat /Users/owner/.ssh/id_rsa" }), h.deps);
     expect(out.exitCode).toBe(0);
-    expect(out.stdout).toBe("");
-    expect(h.calls()[0]).toMatchObject({ type: "tool_flagged", tool: "Bash" });
-    expect(h.tools()[0]).toMatchObject({ allowed_by_guard: true });
+    expect(JSON.parse(out.stdout).hookSpecificOutput.permissionDecision).toBe("deny");
+    expect(h.calls()[0]).toMatchObject({ type: "tool_denied", tool: "Bash" });
+    expect(h.tools()[0]).toMatchObject({ allowed_by_guard: false });
   });
 
   it("names the tools.log field for what it is: this guard's verdict, not the outcome", () => {
-    // #415. The field used to be `allowed`, which reads as an outcome. It is
-    // not one for any tool the allowlist refuses downstream — and Bash is
-    // exactly that tool, since the guard deliberately records-and-allows it
-    // while CLAUDE_READ_ONLY_TOOLS keeps it from ever running. An auditor
-    // reading `allowed: true` on three Bash lines would conclude a caller ran
-    // three shell commands on the owner's machine, which is the opposite of
-    // what happened.
+    // #415. The field used to be `allowed`, which reads as an outcome. This
+    // hook is not the last word — it sees PreToolUse, and a tool it permits can
+    // still be refused downstream by the CLAUDE_READ_ONLY_TOOLS envelope, so
+    // only the envelope's own verdict is ever an outcome.
+    //
+    // The specific case that motivated the rename is gone: Bash used to be
+    // recorded-and-allowed here and blocked by the envelope, which logged
+    // `allowed: true` for shell commands that never ran. The invert-the-default
+    // refactor made the guard deny Bash outright, so the two layers now agree
+    // about it. The name is still wrong for the general case, and it becomes a
+    // public surface the moment this repository is published.
     const h = harness();
-    runGuard(payload("Bash", { command: "echo hi" }), h.deps);
+    runGuard(payload("Read", { file_path: "/Users/owner/proj/a.ts" }), h.deps);
     const row = h.tools()[0];
     expect(row).toHaveProperty("allowed_by_guard");
     expect(row).not.toHaveProperty("allowed");
@@ -649,22 +665,7 @@ describe("runGuard", () => {
 });
 
 
-// End-to-end through the real filesystem, unlike harness()'s synthetic HOME:
-// runGuard's own extraDeniedRoots computation (lineTaskDirs) reads
-// deps.line.machine.linesDir off disk, so these are the only tests that
-// exercise that enumeration rather than a hand-passed array.
-// Unlike harness()'s synthetic HOME, these use real mkdtempSync directories,
-// so lineTaskDirs' readdirSync actually runs — this is the only describe
-// block that exercises the on-disk enumeration itself, rather than a
-// hand-passed extraDeniedRoots array. Critically, stateRoot and userHome are
-// two DIFFERENT real directories in every test here, simulating a redirected
-// AGENTCALL_HOME: the acting line's own on-disk state lives under stateRoot,
-// exactly as it would with AGENTCALL_HOME set, while the lines being
-// enumerated for denial live under userHome, the real machine home. A version
-// of runGuard that enumerated deps.line.machine directly (stateRoot-rooted)
-// would find nothing here and silently ALLOW every write below — that is
-// exactly the regression this block exists to catch.
-describe("runGuard — enumerates every line's tasksDir from the real home, not a redirected state root", () => {
+describe("runGuard — protects installation tasks under the real home", () => {
   function splitHomes() {
     return {
       stateRoot: tempDir("agentcall-guard-state-"),
@@ -673,49 +674,39 @@ describe("runGuard — enumerates every line's tasksDir from the real home, not 
   }
 
   function actingDeps(stateRoot: string, userHome: string): GuardDeps {
-    const acting = getLinePaths(getMachinePaths(stateRoot, userHome), "acting");
+    const acting = getPaths(stateRoot, userHome);
     return {
-      line: acting, callId: "call-1", now: () => "2026-08-01T00:00:00.000Z",
+      paths: acting, callId: "call-1", now: () => "2026-08-01T00:00:00.000Z",
       realpath: (p) => p, appendLine: () => {},
-      // Both AgentCall roots are labelled: the acting line's shareDir sits under
-      // the redirected stateRoot, while the obsolete flat task path sits under
-      // the real userHome. The tasks directories inside them stay secret via
-      // extraSecretRoots, which is the distinction these tests exist to pin.
+      // The authored tree remains under the real home when runtime state is redirected.
       scope: scopeFor(userHome, [join(stateRoot, "AgentCall"), join(userHome, "AgentCall")]),
     };
   }
 
-  it("denies another line's tasks directory under the real home, including a line with no config.json", () => {
+  it("denies the installation tasks directory without requiring config.json", () => {
     const { stateRoot, userHome } = splitHomes();
-    // The REAL machine — rooted at userHome for both fields — is what
-    // lineTaskDirs must enumerate from, not deps.line.machine (which sits
-    // under the redirected stateRoot below and has no lines under it at all).
-    const realMachine = getMachinePaths(userHome, userHome);
-    const other = getLinePaths(realMachine, "other-line");
-    // Never finished setup — no config.json — and per lineTaskDirs' contract
-    // that must not exempt its tasksDir from being denied.
-    mkdirSync(other.dir, { recursive: true });
+    const realMachine = getPaths(userHome, userHome);
+    mkdirSync(realMachine.dir, { recursive: true });
 
     const out = runGuard(
-      payload("Write", { file_path: join(other.tasksDir, "ask", "SKILL.md") }),
+      payload("Write", { file_path: join(realMachine.tasksDir, "ask", "SKILL.md") }),
       actingDeps(stateRoot, userHome),
     );
     const decision = JSON.parse(out.stdout);
     expect(decision.hookSpecificOutput.permissionDecision).toBe("deny");
   });
 
-  it("does not treat the obsolete flat task path as a policy directory", () => {
+  it("denies the single installation task path", () => {
     const { stateRoot, userHome } = splitHomes();
     const legacyTask = join(userHome, "AgentCall", "tasks", "ask", "SKILL.md");
-    const out = runGuard(payload("Write", { file_path: legacyTask }), actingDeps(stateRoot, userHome));
-    expect(out.stdout).toBe("");
-    expect(out.exitCode).toBe(0);
+    const out = runGuard(payload("Read", { file_path: legacyTask }), actingDeps(stateRoot, userHome));
+    expect(JSON.parse(out.stdout).hookSpecificOutput.permissionDecision).toBe("deny");
   });
 
-  it("still allows writing to the acting line's own share directory", () => {
+  it("still allows reading from the installation's own share directory", () => {
     const { stateRoot, userHome } = splitHomes();
     const deps = actingDeps(stateRoot, userHome);
-    const out = runGuard(payload("Write", { file_path: join(deps.line.shareDir, "notes.md") }), deps);
+    const out = runGuard(payload("Read", { file_path: join(deps.paths.shareDir, "notes.md") }), deps);
     expect(out.stdout).toBe("");
     expect(out.exitCode).toBe(0);
   });

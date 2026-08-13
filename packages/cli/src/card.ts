@@ -4,8 +4,8 @@ import { authOf, pushCard } from "./api.js";
 import { relayUrl } from "./config.js";
 import { loadPolicy } from "./policy.js";
 import { loadTasks } from "./tasks.js";
-import type { LineConfig } from "./config.js";
-import type { LinePaths } from "./paths.js";
+import type { Config } from "./config.js";
+import type { Paths } from "./paths.js";
 import type { Policy } from "./policy.js";
 import type { Task } from "./tasks.js";
 
@@ -24,7 +24,7 @@ import type { Task } from "./tasks.js";
 //
 // `blocked` survives for the same reason it survives in policy.ts: it is the
 // one rule clearance cannot express as a level.
-export function buildCardUpload(cfg: LineConfig, policy: Policy, tasks: Task[]): CardUploadType {
+export function buildCardUpload(cfg: Config, policy: Policy, tasks: Task[]): CardUploadType {
   // A card only exists for a callee. Caller-only handles (no agent_kind, a
   // config shape added by caller-only setup) have nothing to advertise —
   // every call site already guards on agent_kind, so reaching here without
@@ -39,19 +39,19 @@ export function buildCardUpload(cfg: LineConfig, policy: Policy, tasks: Task[]):
     tasks: tasks.map(({ id, name, description, examples, keywords }) =>
       ({ id, name, description, examples, keywords })),
     blocked: Object.entries(policy.callers).filter(([, e]) => e.access === "blocked").map(([caller]) => caller),
+    offline_delivery: policy.offline_delivery,
   };
 }
 
-// Single path for every card publish (setup, `card push`, policy verbs, and
-// multi-line `agentcall line add`): build from local policy+tasks, push,
-// then record what was pushed so `agentcall card` can detect staleness
+// Single path for every card publish (setup, `admin card publish`, and policy verbs):
+// build from local policy+tasks, push,
+// then record what was pushed so `agentcall doctor` can detect staleness
 // without any relay round-trip. The snapshot is written only after a
 // successful push — a failed push must keep the old snapshot so staleness
 // detection stays truthful. `cfg` and `p` must come from the same
-// `LineContext` — pairing one line's config with another's paths would
-// publish a card built from the wrong policy/tasks under the wrong handle.
+// The config and paths belong to the same installation identity.
 export async function publishCard(
-  cfg: LineConfig, p: LinePaths, push: typeof pushCard = pushCard,
+  cfg: Config, p: Paths, push: typeof pushCard = pushCard,
 ): Promise<CardUploadType> {
   const upload = buildCardUpload(cfg, loadPolicy(p), loadTasks(p));
   await push(relayUrl(cfg), authOf(cfg), upload);

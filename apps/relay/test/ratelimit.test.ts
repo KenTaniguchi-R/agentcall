@@ -1,7 +1,7 @@
 import { env } from "cloudflare:test";
 import { describe, expect, it } from "vitest";
 import {
-  checkLimit, NATIVE_CARD, NATIVE_READ, NATIVE_ROSTER_READ, REGISTER,
+  checkLimit, NATIVE_CARD, NATIVE_READ, REGISTER,
 } from "../src/ratelimit/index.js";
 
 async function durableCheck(
@@ -45,7 +45,7 @@ describe("RateLimiterDO", () => {
 describe("checkLimit", () => {
   it("loads every native rate-limit binding from wrangler.jsonc", async () => {
     const key = crypto.randomUUID();
-    for (const policy of [NATIVE_CARD, NATIVE_READ, NATIVE_ROSTER_READ]) {
+    for (const policy of [NATIVE_CARD, NATIVE_READ]) {
       expect(await checkLimit(env, key, policy)).toBe(true);
     }
   });
@@ -65,11 +65,10 @@ describe("checkLimit", () => {
       return { success: true };
     } } as RateLimit;
     const nativeEnv = {
-      ...env, CARD_RL: native, READ_RL: native, ROSTER_READ_RL: native,
+      ...env, CARD_RL: native, READ_RL: native,
     };
     expect(await checkLimit(nativeEnv, "card", NATIVE_CARD)).toBe(true);
     expect(await checkLimit(nativeEnv, "read", NATIVE_READ)).toBe(true);
-    expect(await checkLimit(nativeEnv, "roster-read", NATIVE_ROSTER_READ)).toBe(true);
-    expect(calls).toEqual(["card", "read", "roster-read"]);
+    expect(calls).toEqual(["card", "read"]);
   });
 });

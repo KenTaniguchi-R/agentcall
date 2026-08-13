@@ -6,14 +6,14 @@
 // handler for the sequencing: envelope opened and peer verified BEFORE
 // policy resolution; policy resolved BEFORE any agent spawn.
 import type { E2EEOutcomeType, E2EEResponsePayloadType, E2EERequestPayloadType } from "@benree/agentcall-shared";
-import { formatAddress, keyIdFor } from "@benree/agentcall-shared";
+import { formatAddress, HpkeEnvelope, keyIdFor } from "@benree/agentcall-shared";
 import { relayHostOf } from "./config.js";
 import { openE2EERequest, sealE2EEResponse } from "./e2ee.js";
 import { authOf, fetchKeys } from "./api.js";
 import { verifyAndPinPeer, type KnownPeer } from "./known-peers.js";
-import { loadKeys, type StoredKeys } from "./keys.js";
+import { loadEncryptionKeysForEpoch, loadKeys, type StoredKeys } from "./keys.js";
 import { reserveReplay } from "./replay-store.js";
-import type { LinePaths, MachinePaths } from "./paths.js";
+import type { Paths } from "./paths.js";
 import { loadPolicy, resolveTask, type Policy, type TaskResolution } from "./policy.js";
 import { loadScope, type Scope } from "./scope.js";
 import { loadTasks, type Task } from "./tasks.js";
@@ -26,7 +26,7 @@ import {
 // a cancel targets a call that (if pending) never opened an envelope at all.
 // ---------------------------------------------------------------------------
 
-interface CancelCallFrame { call_id: string }
+interface CancelCallFrame { call_id: string; lease_id?: string }
 interface CancelHandle { cancel(callId: string): "pending" | "running" | "unknown" }
 
 export function handleCancel(
@@ -38,15 +38,21 @@ export function handleCancel(
   // call_cancelled once runAgent settles, which happens on the child's
   // exit event.
   if (outcome === "pending") {
-    send({ type: "call_cancelled", call_id: frame.call_id, phase: "pending" });
+    send({
+      type: "call_cancelled", call_id: frame.call_id, phase: "pending",
+      ...(frame.lease_id === undefined ? {} : { lease_id: frame.lease_id }),
+    });
   } else if (outcome === "unknown") {
-    send({ type: "call_not_cancelled", call_id: frame.call_id, reason: "unknown" });
+    send({
+      type: "call_not_cancelled", call_id: frame.call_id, reason: "unknown",
+      ...(frame.lease_id === undefined ? {} : { lease_id: frame.lease_id }),
+    });
   }
 }
 
 // ---------------------------------------------------------------------------
 // Stage 4: open the inbound E2EE envelope — fetch the caller's published
-// keys, verify/pin them against the local trust store, load this line's own
+// keys, verify/pin them against the local trust store, load this installation's
 // keys, open (decrypt + verify) the envelope, and reserve the request id
 // against replay. All four must succeed before anything else runs.
 // ---------------------------------------------------------------------------
@@ -71,13 +77,14 @@ interface OpenEnvelopeIo {
   fetchKeys: typeof fetchKeys;
   verifyAndPinPeer: typeof verifyAndPinPeer;
   loadKeys: typeof loadKeys;
+  loadKeysForEpoch?: typeof loadEncryptionKeysForEpoch;
   reserveReplay: typeof reserveReplay;
 }
 
 export async function openInboundEnvelope(
   input: {
     relay: string; org: string; handle: string; token: string;
-    machine: MachinePaths; paths: LinePaths; from: string; envelope: unknown;
+    paths: Paths; from: string; envelope: unknown; reserveReplay?: boolean;
   },
   io: OpenEnvelopeIo,
 ): Promise<OpenEnvelopeResult> {
@@ -88,8 +95,11 @@ export async function openInboundEnvelope(
     const callerBundle = await io.fetchKeys(
       input.relay, authOf(input), input.from,
     );
-    const callerPeer = await io.verifyAndPinPeer(input.machine, fromAddress, callerBundle);
-    const localKeys = io.loadKeys(input.paths);
+    const callerPeer = await io.verifyAndPinPeer(input.paths, fromAddress, callerBundle);
+    const envelopeHeader = HpkeEnvelope.parse(input.envelope);
+    const localKeys = io.loadKeysForEpoch
+      ? io.loadKeysForEpoch(input.paths, envelopeHeader.epoch)
+      : io.loadKeys(input.paths);
     const request = await openE2EERequest(
       input.envelope, localKeys.encryption_pkcs8, callerPeer.identity_pub,
       {
@@ -97,11 +107,13 @@ export async function openInboundEnvelope(
         key_id: await keyIdFor(localKeys.encryption_pub), epoch: localKeys.epoch,
       },
     );
-    await io.reserveReplay(input.machine, {
-      sender_fingerprint: callerPeer.fingerprint,
-      request_id: request.request_id,
-      expires_at: request.expires_at,
-    });
+    if (input.reserveReplay !== false) {
+      await io.reserveReplay(input.paths, {
+        sender_fingerprint: callerPeer.fingerprint,
+        request_id: request.request_id,
+        expires_at: request.expires_at,
+      });
+    }
     return {
       ok: true,
       envelope: { request, callerBundle, callerPeer, localKeys, relayOrigin, fromAddress, toAddress },
@@ -128,12 +140,13 @@ interface OutcomeSenderInput {
   localKeys: StoredKeys;
   callerBundle: CallerKeyBundle;
   send: (obj: unknown) => void;
+  leaseId?: string;
 }
 
 export function makeOutcomeSender(
   input: OutcomeSenderInput, seal: typeof sealE2EEResponse,
-): (outcome: E2EEOutcomeType) => Promise<string | undefined> {
-  return async (outcome) => {
+): (outcome: E2EEOutcomeType, terminalReason?: "completed" | "failed" | "canceled" | "expired" | "delivery_failed" | "revoked" | "indeterminate_execution") => Promise<string | undefined> {
+  return async (outcome, terminalReason) => {
     try {
       const issuedAt = Date.now();
       const payload: E2EEResponsePayloadType = {
@@ -142,6 +155,8 @@ export function makeOutcomeSender(
         relay_origin: input.relayOrigin,
         from: input.toAddress,
         to: input.fromAddress,
+        message_id: input.request.message_id,
+        ...(input.request.delivery_mode ? { delivery_mode: input.request.delivery_mode } : {}),
         request_id: input.request.request_id,
         sender_identity_key_id: await keyIdFor(input.localKeys.identity_pub),
         recipient_encryption_key_id: input.callerBundle.encryption.record.key_id,
@@ -158,7 +173,9 @@ export function makeOutcomeSender(
       });
       input.send({
         type: "call_outcome", call_id: input.callId,
+        ...(input.leaseId ? { lease_id: input.leaseId } : {}),
         terminal: outcome.kind === "reply" ? "completed" : "failed",
+        ...(terminalReason ? { terminal_reason: terminalReason } : {}),
         envelope,
       });
       return undefined;
@@ -192,7 +209,7 @@ type AdmissionDecision =
   | { ok: false; code: "blocked" | "task_unknown"; offered: string[] };
 
 export function resolveAdmission(
-  input: { paths: LinePaths; from: string; requestedTask?: string; groups: readonly string[] },
+  input: { paths: Paths; from: string; requestedTask?: string },
 ): AdmissionDecision {
   let policy: Policy;
   let scope: Scope;
@@ -208,7 +225,7 @@ export function resolveAdmission(
     // into one clean call_failed carrying the parse error, which is the same
     // treatment a corrupt policy.json already gets.
     scope = loadScope(input.paths);
-    resolution = resolveTask(policy, loadTasks(input.paths), input.from, input.requestedTask, input.groups);
+    resolution = resolveTask(policy, loadTasks(input.paths), input.from, input.requestedTask);
   } catch (error) {
     return { ok: false, code: "policy_error", error };
   }
@@ -238,7 +255,7 @@ type BindingDecision =
 
 export function admitBinding(
   input: {
-    paths: LinePaths; from: string; taskId: string; contextId: string | undefined;
+    paths: Paths; from: string; taskId: string; contextId: string | undefined;
     threadable: boolean; agentKind: "claude" | "codex"; codexCanThread: boolean;
     workdirDir: string; now?: number;
   },

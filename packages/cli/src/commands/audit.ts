@@ -1,13 +1,13 @@
 import type { AuditCheckpointType } from "@benree/agentcall-shared";
 import { authOf, fetchAuditExportPage } from "../api.js";
 import { relayUrl } from "../config.js";
-import type { LineContext } from "../line-context.js";
+import type { Installation } from "../config.js";
 import { AUDIT_CSV_COLUMNS, auditCsvRow, parseAuditFilter, parseAuditTime } from "./audit-export.js";
 import { fail } from "../errors.js";
 
-type LineFor = (line: string | undefined) => LineContext | undefined;
+type InstallationFor = () => Installation | undefined;
 
-export function register(program: { command(name: string): any }, lineFor: LineFor): void {
+export function register(program: { command(name: string): any }, installationFor: InstallationFor): void {
   program
     .command("audit")
     .description("export organization audit evidence")
@@ -20,12 +20,11 @@ export function register(program: { command(name: string): any }, lineFor: LineF
     .option("--ip <address>", "include events whose source IP exactly matches")
     .option("--format <format>", "output format: ndjson or csv", "ndjson")
     .option("--page-size <count>", "events fetched per relay page, from 1 to 500", "100")
-    .option("--line <name>", "line whose organization to export (defaults to the primary line)")
     .action(async (o: {
       after?: string; before?: string; actor?: string; event?: string; ip?: string;
-      format: string; pageSize: string; line?: string;
+      format: string; pageSize: string;
     }) => {
-      const ctx = lineFor(o.line);
+      const ctx = installationFor();
       if (!ctx) return;
       const cfg = ctx.config;
       try {

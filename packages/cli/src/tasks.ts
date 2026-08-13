@@ -3,7 +3,7 @@ import { join } from "node:path";
 import { z } from "zod";
 import { parse as parseYaml } from "yaml";
 import { MAX_KEYWORD_LENGTH, MAX_TASK_KEYWORDS, TASK_ID_RE } from "@benree/agentcall-shared";
-import type { LinePaths } from "./paths.js";
+import type { Paths } from "./paths.js";
 
 // The capability envelope is gone (#372). A call answers a question; the reply
 // is the only sink, so there is no write/exec/fetch grant to model. What a task
@@ -27,7 +27,7 @@ export const SkillFrontmatter = z.object({
   description: z.string().min(1).max(1000),
   examples: z.array(z.string().max(500)).max(10).default([]),
   // Mirrors CardTask.keywords in packages/shared exactly. The two must not
-  // drift: this is the authoring side of the field the search ranker weights
+// drift: this is the authoring side of the card metadata callers inspect
   // highest.
   keywords: z.array(z.string().min(1).max(MAX_KEYWORD_LENGTH)).max(MAX_TASK_KEYWORDS).default([]),
   timeout_s: z.number().int().positive().max(300).optional(),
@@ -68,11 +68,11 @@ export const ASK_TASK: Task = {
   skill: "",
 };
 
-// Reads ~/AgentCall/<line>/tasks/<id>/SKILL.md (YAML frontmatter + body).
+// Reads ~/AgentCall/tasks/<id>/SKILL.md (YAML frontmatter + body).
 // Invalid or duplicate entries are skipped with a warning rather than
 // failing the whole listener: one broken manifest must not take every other
 // task offline.
-export function loadTasks(p: LinePaths, warn: (msg: string) => void = console.error): Task[] {
+export function loadTasks(p: Paths, warn: (msg: string) => void = console.error): Task[] {
   const tasks: Task[] = [ASK_TASK];
   if (!existsSync(p.tasksDir)) return tasks;
   for (const entry of readdirSync(p.tasksDir, { withFileTypes: true })) {
@@ -130,7 +130,7 @@ description: TODO — one line callers will see on your card
 # threadable: true       # allow --continue follow-ups; defaults true
 # examples:
 #   - An example message a caller might send
-# keywords:              # search terms; weighted highest by \`agentcall search\`
+# keywords:              # terms published on the task card
 #   - auth
 #   - migration
 ---
@@ -140,11 +140,11 @@ Describe how your agent should perform it. This text is given to the
 agent verbatim when a caller invokes the task.
 `;
 
-// Creates ~/AgentCall/<line>/tasks/<id>/SKILL.md from the template and
+// Creates ~/AgentCall/tasks/<id>/SKILL.md from the template and
 // returns the file path. Never overwrites; never touches policy — a
 // scaffolded task is invisible to callers until the owner runs
 // `agentcall offer <id>` or `agentcall allow <handle> <id>` (create ≠ publish).
-export function scaffoldTask(p: LinePaths, id: string): string {
+export function scaffoldTask(p: Paths, id: string): string {
   if (!TASK_ID_RE.test(id)) {
     throw new Error(`"${id}" is not a valid task id: lowercase letters, digits, and hyphens, starting with a letter or digit.`);
   }
