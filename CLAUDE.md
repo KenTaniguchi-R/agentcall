@@ -50,6 +50,18 @@ Three standing constraints that aren't any single issue's property:
 - **Some issues collide in `apps/relay`.** #16 touches Durable Object addressing, which
   the A2A track is actively changing. Coordinate — and use one worktree per session, per
   [CONTRIBUTING.md](./CONTRIBUTING.md#one-worktree-per-session).
+- **This repository is published.** Everything you write here is public. Two
+  consequences that are easy to forget mid-task: never paste a credential, a
+  customer name, or a production identifier that grants authority into a file or
+  a commit message; and **no product feature may move to the private
+  `agentcall-cloud` repository.** That repo holds deployment authority, business
+  research, and commercial decisions only — if a capability would be missing from
+  a self-hosted relay because its code lives there, that is a bug in the split.
+  Security fixes in particular are never hosted-only. See
+  [LICENSING.md](./LICENSING.md) for which license covers which path
+  (`packages/shared` is MIT, the rest is FSL-1.1-ALv2) and
+  [SECURITY.md](./SECURITY.md) for why an unfixed vulnerability must not be
+  described in a public issue.
 
 Before designing work in `area:enterprise`, `area:security`, or `area:a2a`, read
 the living [reference implementation index](./docs/research/reference-implementations.md).

@@ -11,7 +11,9 @@ answer to the caller.
 [Read the documentation](https://agentcall.mintlify.app) ·
 [Install AgentCall](https://agentcall.mintlify.app/get-started/install) ·
 [Security model](https://agentcall.mintlify.app/security/overview) ·
-[Contribute](./CONTRIBUTING.md)
+[Contribute](./CONTRIBUTING.md) ·
+[Report a vulnerability](./SECURITY.md) ·
+[License](./LICENSING.md)
 
 > [!IMPORTANT]
 > AgentCall is pre-production software for trusted teams. Claude is the
@@ -31,6 +33,37 @@ answer to the caller.
 AgentCall is not an autonomous-agent marketplace, an offline message queue, or
 an OS-level sandbox. The person receiving a call controls the agent, task,
 working directory, and capabilities used to answer it.
+
+## Source, hosting, and license
+
+The whole product is in this repository — the relay, the CLI, the protocol, and
+every security control. There is no paid edition, no `ee/` directory, and no
+feature that only the hosted service can perform.
+
+| | In this repository | What the hosted relay at `agent-call.app` adds |
+| --- | --- | --- |
+| Routing, addresses, rosters, discovery | ✅ | — |
+| End-to-end encryption and key handling | ✅ | — |
+| The tool guard, task policy, outbound redaction | ✅ | — |
+| Audit records and organization export | ✅ | — |
+| Cloudflare deployment config we deploy with | ✅ | — |
+| Someone else operating it | — | We run it, keep it up, and answer for it |
+| A shared namespace | — | `@your-org/you` in a namespace other organizations also use |
+
+To run your own instead, start from
+[`apps/relay/wrangler.self-host.example.jsonc`](./apps/relay/wrangler.self-host.example.jsonc)
+and the [managed deployment guide](https://agentcall.mintlify.app/administration/managed-deployment).
+A self-hosted relay is not a degraded build; it is this code with your account
+id in it.
+
+**License.** `packages/shared` — the wire protocol — is MIT, so anyone can write
+a client, a relay, or an A2A bridge that speaks it. Everything else is the
+[Functional Source License](https://fsl.software/), which grants every freedom
+you would expect except one: you may not sell a hosted service that substitutes
+for AgentCall. Each version converts to Apache-2.0 two years after release. This
+is [Fair Source](https://fair.io/), not OSI open source, and we would rather say
+so plainly than blur it — the reasoning, the exact boundary, and the treatment
+of the earlier MIT releases are in [LICENSING.md](./LICENSING.md).
 
 ## Install
 
@@ -321,6 +354,14 @@ and schema definitions rather than hand-copied text.
 
 ```bash
 pnpm install
+pnpm verify          # lint, build, docs, typecheck, test, bundle, invariants
+```
+
+`pnpm verify` is the gate and the only definition of done. Running the steps
+individually is a weaker check — it skips lint, the documentation check, the
+wrangler bundle, and every invariant:
+
+```bash
 pnpm -r build
 pnpm -r typecheck
 pnpm -r test
@@ -332,15 +373,19 @@ The monorepo contains:
 
 ```text
 apps/relay/          Cloudflare Worker, Durable Objects, and D1
-packages/shared/     Protocol schemas and shared types
+packages/shared/     Protocol schemas and shared types (MIT)
 packages/cli/        The @benree/agentcall CLI and listener
-docs/site/            Git-backed Mintlify documentation
+docs/site/           Git-backed Mintlify documentation
+docs/research/       Dated technical research notes
+docs/superpowers/    Historical design records — why, not what
 ```
 
-Read [CLAUDE.md](./CLAUDE.md) for architecture and development conventions.
-Before taking an issue, follow the claim and worktree protocol in
-[CONTRIBUTING.md](./CONTRIBUTING.md). Open work is tracked in
-[GitHub Issues](https://github.com/KenTaniguchi-R/agentcall/issues).
+Read [CLAUDE.md](./CLAUDE.md) for architecture and development conventions, and
+[CONTRIBUTING.md](./CONTRIBUTING.md) before opening a pull request. Open work is
+tracked in [GitHub Issues](https://github.com/KenTaniguchi-R/agentcall/issues) —
+there is no roadmap file. Conduct expectations are in
+[CODE_OF_CONDUCT.md](./CODE_OF_CONDUCT.md); vulnerabilities go through
+[SECURITY.md](./SECURITY.md), never a public issue or pull request.
 
 See the living [data-residency map](./docs/security/data-residency.md) and
 [employee transparency statement](./docs/security/employee-transparency.md)

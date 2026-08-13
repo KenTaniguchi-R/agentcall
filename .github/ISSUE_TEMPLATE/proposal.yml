@@ -1,0 +1,65 @@
+name: Proposal
+description: Propose a change, a capability, or a decision to reconsider.
+body:
+  - type: markdown
+    attributes:
+      value: >-
+        Issues are the status board here — see
+        [CONTRIBUTING.md](https://github.com/KenTaniguchi-R/agentcall/blob/main/CONTRIBUTING.md).
+        Before writing, check that this is not one of the three standing
+        constraints in
+        [CLAUDE.md](https://github.com/KenTaniguchi-R/agentcall/blob/main/CLAUDE.md):
+        cross-organization routing is a permanent non-goal, public and
+        enterprise deployment is gated, and some issues collide in `apps/relay`.
+  - type: textarea
+    id: problem
+    attributes:
+      label: The problem
+      description: >-
+        What does not work today, for whom, and what does it cost them. Not the
+        solution yet.
+    validations:
+      required: true
+  - type: textarea
+    id: proposal
+    attributes:
+      label: What you propose
+      description: >-
+        Including what you would not do. A proposal that names its own limits is
+        much easier to accept.
+    validations:
+      required: true
+  - type: textarea
+    id: evidence
+    attributes:
+      label: Evidence
+      description: >-
+        This repository's issue style is evidence-first: quote the source, link
+        the file and line, cite the spec. "It would be nice if" is a fine
+        motivation and a weak argument.
+    validations:
+      required: true
+  - type: dropdown
+    id: area
+    attributes:
+      label: Area
+      options:
+        - security
+        - a2a
+        - deployment
+        - enterprise
+        - availability
+        - positioning
+        - product
+        - debt
+        - not sure
+    validations:
+      required: true
+  - type: checkboxes
+    id: boundary
+    attributes:
+      label: Boundary check
+      options:
+        - label: >-
+            This does not require routing a call outside a single organization.
+          required: true

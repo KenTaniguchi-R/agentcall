@@ -1,0 +1,11 @@
+blank_issues_enabled: true
+contact_links:
+  - name: Report a security vulnerability
+    url: https://github.com/KenTaniguchi-R/agentcall/security/advisories/new
+    about: >-
+      Private channel to the maintainers. Never report a vulnerability in a
+      public issue. Read SECURITY.md first — several things that look like
+      findings are documented properties of the design.
+  - name: Documentation
+    url: https://agentcall.mintlify.app
+    about: Install, setup, tasks and policy, security model, CLI reference.
