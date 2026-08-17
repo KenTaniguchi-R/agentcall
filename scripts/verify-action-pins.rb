@@ -20,8 +20,13 @@ visit = lambda do |value, file, path|
   end
 end
 
+# `safe_load_file` needs Psych 3.3 (Ruby 3.0). The self-hosted runner has an
+# older stock Ruby and failed here with `undefined method 'safe_load_file'`,
+# which reads like a pinning violation rather than a missing method. Reading the
+# file ourselves works on every Ruby that ships `safe_load` with keyword
+# arguments, which is 2.6 onward.
 Dir.glob(".github/workflows/*.{yml,yaml}").sort.each do |file|
-  visit.call(YAML.safe_load_file(file, aliases: false), file, [])
+  visit.call(YAML.safe_load(File.read(file), aliases: false), file, [])
 end
 
 unless failures.empty?
