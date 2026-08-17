@@ -49,6 +49,14 @@ kept as written.
 |---|---|
 | [loop-engineering-verification-gates](./2026-08-05-loop-engineering-verification-gates.md) | Why the verification gate is shaped the way it is. |
 | [lessons-from-composio](./2026-07-31-lessons-from-composio.md) | How a shipping Claude Code plugin does this, and what is worth copying. |
+| [buy-vs-build-third-party-landscape](./2026-08-02-buy-vs-build-third-party-landscape.md) | Which parts of the gap does someone else already sell — and do we pass a security review? |
+
+`buy-vs-build` is the only note here that reads the code, and it is scoped by
+[reference-implementations](./reference-implementations.md): it deliberately covers
+only what that index does not already assign to a precedent. Read the index first,
+otherwise its recommendations look broader than they are. Its first version was
+researched against a stale branch and asserted gaps `main` had already closed; the
+correction and the rule that followed are recorded in its §5 rather than edited away.
 
 ## Source discipline
 
@@ -65,10 +73,11 @@ operates the hosted service, not in this one. They are business research about
 buyers and competitors; they say nothing about how AgentCall works, and
 publishing them would mostly be publishing someone else's competitive analysis.
 
-A few dated records in `docs/superpowers/specs/` link to those notes by relative
-path. Those links do not resolve here. The records are kept exactly as written
-rather than edited after the fact, so the dangling link is left visible instead
-of being quietly rewritten:
+A few dated records in `docs/superpowers/specs/` and `docs/research/` link to those
+notes by relative path — `buy-vs-build-third-party-landscape` extends
+`cotal-enterprise-installability` and cites it throughout. Those links do not resolve
+here. The records are kept exactly as written rather than edited after the fact, so
+the dangling link is left visible instead of being quietly rewritten:
 
 - `2026-07-31-demand-validation.md`
 - `2026-07-31-market-outlook.md`
