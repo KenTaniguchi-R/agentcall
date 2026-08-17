@@ -49,11 +49,38 @@ function actionReferences(value: unknown): string[] {
 }
 
 describe("npm release workflow", () => {
-  it("keeps billable verification workflows manual-only while automatic runs are paused", () => {
-    for (const source of [ciWorkflow, invariantsWorkflow]) {
-      expect(source).toMatch(/^on:\n  workflow_dispatch:\s*$/m);
-      expect(source).not.toMatch(/^  (?:pull_request|push):/m);
+  // Was "keep these workflows manual-only". That held while every job ran on a
+  // GitHub-hosted runner and hosted billing was unavailable. Now `verify` and
+  // the invariants check run on a self-hosted runner, which costs nothing, so
+  // blanket manual-only would keep the gate switched off for no reason.
+  //
+  // What still has to hold is narrower: a job on a *hosted* runner must not be
+  // reachable from an automatic trigger, or every push fails on the billing
+  // block and CI reads red for a reason unrelated to the change.
+  it("never lets an automatic trigger reach a job on a billable hosted runner", () => {
+    const hostedRunner = /runs-on: (?!\[self-hosted)/;
+
+    for (const [name, source] of [["ci", ciWorkflow], ["invariants", invariantsWorkflow]] as const) {
+      const automatic = /^  (?:pull_request|push):/m.test(source);
+      if (!automatic) continue;
+
+      // Job blocks are two-space keys under `jobs:`; split on them so each
+      // job's runs-on and its `if:` guard are read together.
+      const jobs = source.split(/\n(?=  [a-z][a-z0-9-]*:\n)/).filter((block) => /runs-on:/.test(block));
+      const ungated = jobs
+        .filter((block) => hostedRunner.test(block))
+        .filter((block) => !/if: github\.event_name == 'workflow_dispatch'/.test(block))
+        .map((block) => block.trimStart().split(":")[0]);
+
+      expect(ungated, `${name}.yml runs hosted jobs on an automatic trigger`).toEqual([]);
     }
+  });
+
+  it("runs the gate itself on the self-hosted runner, so a push is actually checked", () => {
+    // The point of the move: `verify` is what decides whether a change ships,
+    // and it has to run without hosted minutes.
+    expect(ciWorkflow).toMatch(/verify:\n {4}runs-on: \[self-hosted, macOS, ARM64\]/);
+    expect(invariantsWorkflow).toMatch(/check:\n {4}runs-on: \[self-hosted, macOS, ARM64\]/);
   });
 
   it("publishes the CLI for both supported listener platforms", () => {

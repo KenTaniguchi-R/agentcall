@@ -1,12 +1,12 @@
 name: CI
 
-# Automatic runs are temporarily paused while GitHub Actions billing is
-# unavailable. Keep the workflow runnable by hand so the CI definition remains
-# easy to verify and restore. `scripts/ci-local.sh fast` is the local mirror of
-# the `verify` job and runs from a pre-push hook in the meantime; keep the two
-# in step, because a local gate that has drifted reports green for a rule this
-# workflow would fail.
+# `scripts/ci-local.sh fast` is the local mirror of the `verify` job and runs
+# from a pre-push hook; keep the two in step, because a local gate that has
+# drifted reports green for a rule this workflow would fail.
 on:
+  push:
+    branches: [main]
+  pull_request:
   workflow_dispatch:
 
 # A new manual run for the same ref supersedes the run in flight.
@@ -16,7 +16,7 @@ concurrency:
 
 jobs:
   verify:
-    runs-on: ubuntu-latest
+    runs-on: [self-hosted, macOS, ARM64]
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
 
@@ -72,6 +72,8 @@ jobs:
 
   packed-cli-consumer:
     needs: verify
+    # Hosted runner: manual-only while GitHub Actions billing is unavailable.
+    if: github.event_name == 'workflow_dispatch'
     runs-on: ${{ matrix.os }}
     strategy:
       fail-fast: false
@@ -114,6 +116,8 @@ jobs:
   # whose startup surface this job probes.
   windows-compat:
     needs: verify
+    # Hosted runner: manual-only while GitHub Actions billing is unavailable.
+    if: github.event_name == 'workflow_dispatch'
     runs-on: windows-2025
     strategy:
       fail-fast: false

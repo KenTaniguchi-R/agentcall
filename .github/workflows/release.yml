@@ -14,7 +14,7 @@ concurrency:
 
 jobs:
   build:
-    runs-on: ubuntu-latest
+    runs-on: [self-hosted, macOS, ARM64]
     permissions:
       contents: read
     steps:
@@ -83,7 +83,7 @@ jobs:
 
   publish:
     needs: build
-    runs-on: ubuntu-latest
+    runs-on: [self-hosted, macOS, ARM64]
     environment: npm
     permissions:
       contents: read
@@ -160,7 +160,7 @@ jobs:
 
   attach:
     needs: publish
-    runs-on: ubuntu-latest
+    runs-on: [self-hosted, macOS, ARM64]
     permissions:
       contents: write
     steps:
