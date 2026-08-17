@@ -222,6 +222,21 @@ describe("callAgent", () => {
     }]);
   });
 
+  it("finishes decrypting a terminal outcome when the relay closes immediately after sending it", async () => {
+    let fx!: Awaited<ReturnType<typeof fixture>>;
+    const relay = await fakeRelay((ws) => ws.on("message", async (raw) => {
+      if (String(raw) === "ping") return;
+      const outcome = await fx.outcomeFrame(JSON.parse(String(raw)), {
+        kind: "reply", text: "delivered before close",
+      });
+      ws.send(JSON.stringify(outcome));
+      ws.close(1000, "done");
+    }));
+    fx = await fixture(relay);
+
+    await expect(callAgent(fx.opts)).resolves.toMatchObject({ text: "delivered before close" });
+  });
+
   it("carries task and trace context only in their intended visibility zones", async () => {
     const correlationId = "a".repeat(32);
     const traceparent = `00-${correlationId}-${"b".repeat(16)}-01`;

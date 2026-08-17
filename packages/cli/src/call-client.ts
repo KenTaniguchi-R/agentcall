@@ -210,6 +210,7 @@ export async function callAgent(opts: CallOpts): Promise<CallResult> {
       maxPayload: MAX_E2EE_WIRE_BYTES,
     });
     let settled = false;
+    let terminalFrameInFlight = false;
     let pingTimer: ReturnType<typeof setInterval> | undefined;
     const finish = (fn: () => void) => {
       if (!settled) {
@@ -278,6 +279,11 @@ export async function callAgent(opts: CallOpts): Promise<CallResult> {
         }));
       }
       else if (frame.type === "call_outcome") {
+        // The relay closes immediately after sending the terminal frame. The
+        // message callback is async (HPKE verification/decryption), while the
+        // close event is synchronous, so without this guard close can reject
+        // the call before a valid outcome finishes authenticating.
+        terminalFrameInFlight = true;
         try {
           const response = await openE2EEResponse(
             frame.envelope, senderKeys.encryption_pkcs8, recipientPeer.identity_pub,
@@ -328,6 +334,9 @@ export async function callAgent(opts: CallOpts): Promise<CallResult> {
         )));
       }
     });
-    ws.on("close", () => finish(() => reject(new CallError("Connection closed before a reply arrived.", "connection_failed"))));
+    ws.on("close", () => {
+      if (terminalFrameInFlight) return;
+      finish(() => reject(new CallError("Connection closed before a reply arrived.", "connection_failed")));
+    });
   });
 }
