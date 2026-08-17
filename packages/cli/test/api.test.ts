@@ -119,6 +119,40 @@ describe("api client", () => {
       message: expect.stringMatching(/did not respond/),
     });
   });
+  it("retries one idempotent GET when an idle keep-alive socket was closed", async () => {
+    const staleSocket = Object.assign(new TypeError("fetch failed"), {
+      cause: { code: "UND_ERR_SOCKET" },
+    });
+    const fetchMock = vi.fn()
+      .mockRejectedValueOnce(staleSocket)
+      .mockResolvedValueOnce(new Response(JSON.stringify({ online: true }), {
+        status: 200, headers: { "content-type": "application/json" },
+      }));
+    vi.stubGlobal("fetch", fetchMock);
+    try {
+      await expect(getStatus("https://relay.test", "ken", {
+        org: "acme", handle: "me", token: "tok",
+      })).resolves.toEqual({ online: true });
+      expect(fetchMock).toHaveBeenCalledTimes(2);
+    } finally {
+      vi.unstubAllGlobals();
+    }
+  });
+  it("does not retry a mutation when its socket closes", async () => {
+    const staleSocket = Object.assign(new TypeError("fetch failed"), {
+      cause: { code: "UND_ERR_SOCKET" },
+    });
+    const fetchMock = vi.fn().mockRejectedValue(staleSocket);
+    vi.stubGlobal("fetch", fetchMock);
+    try {
+      await expect(registerHandle(
+        "https://relay.test", "valid-invite", "ken", "claude",
+      )).rejects.toMatchObject({ code: "network" });
+      expect(fetchMock).toHaveBeenCalledTimes(1);
+    } finally {
+      vi.unstubAllGlobals();
+    }
+  });
   it("gets status and maps a non-enumerating 404 without claiming the target is unknown", async () => {
     const relay = await serve(200, { online: true });
     expect(await getStatus(relay, "ken", { org: "acme", handle: "me", token: "tok" })).toEqual({ online: true });
