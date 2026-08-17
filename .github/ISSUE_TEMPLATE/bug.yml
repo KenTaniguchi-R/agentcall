@@ -1,0 +1,74 @@
+name: Bug
+description: Something behaves differently from what README.md or the docs say.
+labels: ["kind:bug"]
+body:
+  - type: markdown
+    attributes:
+      value: >-
+        If this is a security issue, stop and use
+        [the private advisory form](https://github.com/KenTaniguchi-R/agentcall/security/advisories/new)
+        instead.
+  - type: textarea
+    id: what
+    attributes:
+      label: What happened
+      description: >-
+        What you ran, what you expected, what you got. Paste the actual output
+        rather than describing it — the exact error text is usually the fastest
+        route to the cause.
+      placeholder: |
+        $ agentcall call @acme/ken "..."
+        <output>
+    validations:
+      required: true
+  - type: textarea
+    id: expected
+    attributes:
+      label: What the documentation led you to expect
+      description: >-
+        A link or quote if you have one. If the docs are what is wrong, say so —
+        an overstated claim is a real bug in this repository, not a nitpick.
+    validations:
+      required: true
+  - type: input
+    id: version
+    attributes:
+      label: Version
+      description: Output of `agentcall --version`.
+    validations:
+      required: true
+  - type: dropdown
+    id: relay
+    attributes:
+      label: Relay
+      options:
+        - Hosted (agent-call.app)
+        - Self-hosted
+        - Not sure
+    validations:
+      required: true
+  - type: dropdown
+    id: agent
+    attributes:
+      label: Answering agent
+      options:
+        - Claude Code
+        - Codex (experimental)
+        - Neither / not applicable
+    validations:
+      required: true
+  - type: input
+    id: os
+    attributes:
+      label: Operating system
+      description: macOS or Linux, and the version. Windows listeners are not supported yet.
+    validations:
+      required: true
+  - type: textarea
+    id: doctor
+    attributes:
+      label: agentcall doctor
+      description: >-
+        Optional but usually decisive. Redact anything it prints that you do not
+        want public — it is designed not to print secrets, but check.
+      render: text

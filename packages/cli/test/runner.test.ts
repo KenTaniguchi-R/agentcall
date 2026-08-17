@@ -187,8 +187,8 @@ describe("buildSpawnSpec", () => {
     // No guard hook: Codex gets none as of 2026-08-07, so the whole arg list is
     // pinned here rather than filtered.
     expect(s.args).toEqual([
-      "exec", "--sandbox", "read-only", "--cd", WORKDIR,
-      "--skip-git-repo-check", "--json", "PROMPT",
+      "exec", "--cd", WORKDIR,
+      "--skip-git-repo-check", "--json", "-c", `sandbox_mode="read-only"`, "PROMPT",
     ]);
     expect(s.cwd).toBe(WORKDIR);
   });
@@ -584,10 +584,26 @@ describe("read-only spawn spec", () => {
     expect(s.args).toContain("dontAsk");
   });
 
-  it("codex always gets --sandbox read-only", () => {
-    const s = spawnSpec("codex", "PROMPT", WORKDIR, () => "/abs/codex");
-    const idx = s.args.indexOf("--sandbox");
-    expect(s.args[idx + 1]).toBe("read-only");
+  it("codex always gets the read-only sandbox, through the same mechanism on both branches", () => {
+    // The flag form and the config form are NOT interchangeable. Probed against
+    // codex-cli 0.146.0: `--sandbox read-only` makes a named permissions profile
+    // inert (the denied read returned content at exit 0), while
+    // `-c sandbox_mode="read-only"` composes with it (still denied). See #398 and
+    // docs/research/2026-08-06-codex-enforcement-surface.md.
+    //
+    // The fresh-spawn branch is the one that serves a cold call, so a difference
+    // between the two branches voids the profile exactly where it matters most.
+    // Pin both to the config form so they cannot drift apart again.
+    const fresh = spawnSpec("codex", "PROMPT", WORKDIR, () => "/abs/codex");
+    expect(fresh.args).toContain('sandbox_mode="read-only"');
+    expect(fresh.args).not.toContain("--sandbox");
+
+    const resumed = buildSpawnSpec({
+      kind: "codex", prompt: "PROMPT", workdir: WORKDIR, resolveBin: () => "/abs/codex",
+      callId: "c1", resume: "sess-abc",
+    });
+    expect(resumed.args).toContain('sandbox_mode="read-only"');
+    expect(resumed.args).not.toContain("--sandbox");
   });
 
   it("codex loads the owner's MCP, skills, apps, and web configuration", () => {
@@ -595,7 +611,7 @@ describe("read-only spawn spec", () => {
     expect(s.args).not.toContain("--ignore-user-config");
     expect(s.args).not.toContain("--disable");
     expect(s.args).not.toContain(`web_search="disabled"`);
-    expect(s.args[s.args.indexOf("--sandbox") + 1]).toBe("read-only");
+    expect(s.args).toContain('sandbox_mode="read-only"');
   });
 
 });

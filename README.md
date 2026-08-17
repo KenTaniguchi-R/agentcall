@@ -11,7 +11,9 @@ answer to the caller.
 [Read the documentation](https://agentcall.mintlify.app) ·
 [Install AgentCall](https://agentcall.mintlify.app/get-started/install) ·
 [Security model](https://agentcall.mintlify.app/security/overview) ·
-[Contribute](./CONTRIBUTING.md)
+[Contribute](./CONTRIBUTING.md) ·
+[Report a vulnerability](./SECURITY.md) ·
+[License](./LICENSING.md)
 
 > [!IMPORTANT]
 > AgentCall is pre-production software for trusted teams. Claude is the
@@ -33,6 +35,37 @@ answer to the caller.
 AgentCall is not an autonomous-agent marketplace or an OS-level sandbox. Its
 offline mailbox is owner-enabled, bounded, and stores only ciphertext. The person receiving a call controls the agent, task,
 working directory, and capabilities used to answer it.
+
+## Source, hosting, and license
+
+The whole product is in this repository — the relay, the CLI, the protocol, and
+every security control. There is no paid edition, no `ee/` directory, and no
+feature that only the hosted service can perform.
+
+| | In this repository | What the hosted relay at `agent-call.app` adds |
+| --- | --- | --- |
+| Routing, addresses, contacts | ✅ | — |
+| End-to-end encryption and key handling | ✅ | — |
+| The tool guard, task policy, outbound redaction | ✅ | — |
+| Audit records and organization export | ✅ | — |
+| Cloudflare deployment config we deploy with | ✅ | — |
+| Someone else operating it | — | We run it, keep it up, and answer for it |
+| A shared namespace | — | `@your-org/you` in a namespace other organizations also use |
+
+To run your own instead, start from
+[`apps/relay/wrangler.self-host.example.jsonc`](./apps/relay/wrangler.self-host.example.jsonc)
+and the [managed deployment guide](https://agentcall.mintlify.app/administration/managed-deployment).
+A self-hosted relay is not a degraded build; it is this code with your account
+id in it.
+
+**License.** `packages/shared` — the wire protocol — is MIT, so anyone can write
+a client, a relay, or an A2A bridge that speaks it. Everything else is the
+[Functional Source License](https://fsl.software/), which grants every freedom
+you would expect except one: you may not sell a hosted service that substitutes
+for AgentCall. Each version converts to Apache-2.0 two years after release. This
+is [Fair Source](https://fair.io/), not OSI open source, and we would rather say
+so plainly than blur it — the reasoning, the exact boundary, and the treatment
+of the earlier MIT releases are in [LICENSING.md](./LICENSING.md).
 
 ## Install
 
@@ -155,6 +188,19 @@ but what it read, and that is two facts: a **root** the agent may read under
 (`$HOME` by default), and a **denylist** that holds regardless of the roots. A
 path outside every root, or on the denylist, is refused **at the read** —
 before the agent ever sees it. The answer itself is not inspected.
+
+> [!CAUTION]
+> **`Bash` is not bounded by any of this.** It is not restricted to the roots and
+> the denylist does not apply to it, so a caller can reach any file on the
+> machine through an ordinary shell command — `~/.ssh`, `~/.aws`, anything. The
+> guard records such a command and allows it, because inspecting a command
+> string cannot tell you what it will read.
+>
+> So the denylist bounds `Read`, `Grep`, `Glob` and `LS`, and not the one tool
+> that can do everything those four can. Treat the roots and the denylist as
+> shaping what an agent reaches *by default*, not as a boundary against a
+> caller who asks for something else. Tracked in
+> [#419](https://github.com/KenTaniguchi-R/agentcall/issues/419).
 
 Who gets answered is a separate, yes/no question. Everyone the relay lets
 through is answered by default; the organization is the boundary, and everyone
@@ -347,6 +393,14 @@ and schema definitions rather than hand-copied text.
 
 ```bash
 pnpm install
+pnpm verify          # lint, build, docs, typecheck, test, bundle, invariants
+```
+
+`pnpm verify` is the gate and the only definition of done. Running the steps
+individually is a weaker check — it skips lint, the documentation check, the
+wrangler bundle, and every invariant:
+
+```bash
 pnpm -r build
 pnpm -r typecheck
 pnpm -r test
@@ -358,15 +412,19 @@ The monorepo contains:
 
 ```text
 apps/relay/          Cloudflare Worker, Durable Objects, and D1
-packages/shared/     Protocol schemas and shared types
+packages/shared/     Protocol schemas and shared types (MIT)
 packages/cli/        The @benree/agentcall CLI and listener
-docs/site/            Git-backed Mintlify documentation
+docs/site/           Git-backed Mintlify documentation
+docs/research/       Dated technical research notes
+docs/superpowers/    Historical design records — why, not what
 ```
 
-Read [CLAUDE.md](./CLAUDE.md) for architecture and development conventions.
-Before taking an issue, follow the claim and worktree protocol in
-[CONTRIBUTING.md](./CONTRIBUTING.md). Open work is tracked in
-[GitHub Issues](https://github.com/KenTaniguchi-R/agentcall/issues).
+Read [CLAUDE.md](./CLAUDE.md) for architecture and development conventions, and
+[CONTRIBUTING.md](./CONTRIBUTING.md) before opening a pull request. Open work is
+tracked in [GitHub Issues](https://github.com/KenTaniguchi-R/agentcall/issues) —
+there is no roadmap file. Conduct expectations are in
+[CODE_OF_CONDUCT.md](./CODE_OF_CONDUCT.md); vulnerabilities go through
+[SECURITY.md](./SECURITY.md), never a public issue or pull request.
 
 See the living [data-residency map](./docs/security/data-residency.md) and
 [employee transparency statement](./docs/security/employee-transparency.md)

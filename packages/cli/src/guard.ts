@@ -289,13 +289,20 @@ export function runGuard(raw: string, deps: GuardDeps): GuardOutput {
     const write = (file: string, obj: Record<string, unknown>) =>
       deps.appendLine(file, JSON.stringify({ ts, ...obj }));
 
-    // PreToolUse fires on what the model ATTEMPTED. In enforce mode this
-    // function's own verdict is the outcome, so `allowed` is a fact. In
-    // observe mode it is not: the tool proceeds regardless of the verdict, and
-    // may still be stopped downstream by codex's sandbox. Recording `allowed`
-    // there would assert an outcome this hook never sees.
+    // PreToolUse fires on what the model ATTEMPTED, so this records an
+    // intention and one layer's answer to it — never an outcome. The field is
+    // named `allowed_by_guard` rather than `allowed` because this hook is not
+    // the last word: a tool it permits can still be refused downstream by the
+    // CLAUDE_READ_ONLY_TOOLS envelope, and only the envelope's verdict is an
+    // outcome.
+    //
+    // The case that motivated the rename no longer occurs: Bash was once
+    // recorded-and-allowed here and blocked by the envelope, so the log claimed
+    // shell commands ran that never did. Bash is denied outright now and the two
+    // layers agree. The old name was still wrong for the general case, and it
+    // is a public surface as of publication. See #415.
     write(deps.paths.toolsLog,
-      { type: "tool_call", call_id: deps.callId, ...correlation, tool: input.tool_name, allowed: verdict.allow });
+      { type: "tool_call", call_id: deps.callId, ...correlation, tool: input.tool_name, allowed_by_guard: verdict.allow });
 
     const noteworthy = verdict.allow ? verdict.flag : verdict;
     if (noteworthy) {

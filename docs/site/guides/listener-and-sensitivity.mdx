@@ -69,9 +69,15 @@ with `agentcall access --default blocked`; see
 
 ## The read is the boundary
 
-The directory is orientation, not enforcement. **One** thing bounds an answer:
-reading a denied path, or anything outside every root, is **refused at the tool call**, before the agent ever
-sees the content.
+The directory is orientation, not enforcement. For `Read`, `Grep`, `Glob` and
+`LS`, reading a denied path — or anything outside every root — is **refused at
+the tool call**, before the agent sees the content.
+
+**`Bash` is the exception, and it is a large one.** A shell command is not
+checked against the roots or the denylist: the guard records it and allows it,
+because a command string cannot be inspected for what it will read. `cat`,
+`grep` and `wc` reach anything on the machine. Tracked in
+[#419](https://github.com/KenTaniguchi-R/agentcall/issues/419).
 
 The answer itself is **not** inspected. Credential-shaped strings and this
 installation's relay token are redacted from it, and nothing else looks at it. If

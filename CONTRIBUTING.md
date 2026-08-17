@@ -2,7 +2,59 @@
 
 How work gets picked up here. [CLAUDE.md](./CLAUDE.md) is the dev guide —
 layout, tests, TDD. [README.md](./README.md) is the authority on current
-behavior. This file covers only how two people avoid doing the same work twice.
+behavior.
+
+**Security issues do not go through this file.** Read
+[SECURITY.md](./SECURITY.md) — a public pull request is a public disclosure, and
+several things that look like findings are documented properties of the design.
+
+## Start here if you do not have write access
+
+Fork, branch, and open a pull request. You do not need permission first and you
+do not need to claim anything for a small fix — a typo, a broken link, a
+documentation claim that overstates what the code does. Those are welcome as-is.
+
+For anything larger, **open or comment on an issue before you write the code.**
+Not as a formality: this repository has three standing constraints that quietly
+invalidate whole categories of otherwise good work, and it is much cheaper to
+hear about them before the diff than after.
+
+- **Cross-organization routing is a permanent non-goal**, not a missing feature.
+  A patch that adds a federation flag will be closed regardless of quality. See
+  the [federation non-goal](./docs/superpowers/specs/2026-08-02-cross-organization-federation-non-goal.md).
+- **Public and enterprise deployment is gated** on the C track (#1–#8).
+- Issues labelled `status:gated` are blocked on a stated precondition and
+  `status:deferred` means a decision was made not to do it. Reopen the decision
+  before writing the code.
+
+Then:
+
+```bash
+pnpm install
+pnpm verify          # must pass before you push — this is the whole gate
+git commit -s        # the -s is required, see below
+```
+
+`pnpm verify` is not advisory. It is the only definition of done in this
+repository, it runs everything CI would run, and a maintainer will ask for it
+before reading the diff.
+
+The rest of this file — claiming, worktrees, labels — describes how people with
+write access avoid colliding. Read it if you are one; skip it if you are not.
+
+## Developer Certificate of Origin
+
+Every commit needs a `Signed-off-by:` line. `git commit -s` adds it.
+
+It certifies the [DCO](https://developercertificate.org/): that you wrote the
+patch, or that you have the right to submit it under the license of the files
+you touched. It is one line, not a contract, and **there is no CLA** — you keep
+your copyright, we never ask you to sign it over, and we therefore cannot
+relicense your work into something proprietary later.
+
+Inbound equals outbound. `packages/shared` is MIT; everything else is
+FSL-1.1-ALv2 and converts to Apache-2.0 two years after each release. Full map
+in [LICENSING.md](./LICENSING.md).
 
 ## Claiming work
 
@@ -96,7 +148,10 @@ trampling the same *files* — you need both.
 
 Automatic GitHub Actions runs are paused while billing is unavailable, so
 nothing enforces the build, the tests, or any invariant on the way to `main`
-except a local hook. Set it up once per clone:
+except a local hook. (Standard runners are free for public repositories, so this
+constraint lifts when the repository goes public — until someone has confirmed a
+green run on `main` and updated this paragraph, assume it still holds.) Set it up
+once per clone:
 
 ```bash
 git config core.hooksPath "$(git rev-parse --show-toplevel)/scripts/hooks"

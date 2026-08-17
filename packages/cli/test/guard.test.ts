@@ -558,7 +558,7 @@ describe("runGuard", () => {
     expect(out.stdout).toBe("");
     expect(h.calls()).toHaveLength(0);
     expect(h.tools()).toEqual([
-      { ts: "2026-07-31T00:00:00.000Z", type: "tool_call", call_id: "call-123", tool: "Read", allowed: true },
+      { ts: "2026-07-31T00:00:00.000Z", type: "tool_call", call_id: "call-123", tool: "Read", allowed_by_guard: true },
     ]);
   });
 
@@ -570,7 +570,7 @@ describe("runGuard", () => {
     expect(decision.hookSpecificOutput.permissionDecision).toBe("deny");
     expect(decision.hookSpecificOutput.permissionDecisionReason).toBe(DENY_REASON);
     expect(h.calls()[0]).toMatchObject({ type: "tool_denied", call_id: "call-123", tool: "Read" });
-    expect(h.tools()[0]).toMatchObject({ type: "tool_call", allowed: false });
+    expect(h.tools()[0]).toMatchObject({ type: "tool_call", allowed_by_guard: false });
   });
 
   it("never leaks the resolved path to the caller", () => {
@@ -588,7 +588,26 @@ describe("runGuard", () => {
     expect(out.exitCode).toBe(0);
     expect(JSON.parse(out.stdout).hookSpecificOutput.permissionDecision).toBe("deny");
     expect(h.calls()[0]).toMatchObject({ type: "tool_denied", tool: "Bash" });
-    expect(h.tools()[0]).toMatchObject({ allowed: false });
+    expect(h.tools()[0]).toMatchObject({ allowed_by_guard: false });
+  });
+
+  it("names the tools.log field for what it is: this guard's verdict, not the outcome", () => {
+    // #415. The field used to be `allowed`, which reads as an outcome. This
+    // hook is not the last word — it sees PreToolUse, and a tool it permits can
+    // still be refused downstream by the CLAUDE_READ_ONLY_TOOLS envelope, so
+    // only the envelope's own verdict is ever an outcome.
+    //
+    // The specific case that motivated the rename is gone: Bash used to be
+    // recorded-and-allowed here and blocked by the envelope, which logged
+    // `allowed: true` for shell commands that never ran. The invert-the-default
+    // refactor made the guard deny Bash outright, so the two layers now agree
+    // about it. The name is still wrong for the general case, and it becomes a
+    // public surface the moment this repository is published.
+    const h = harness();
+    runGuard(payload("Read", { file_path: "/Users/owner/proj/a.ts" }), h.deps);
+    const row = h.tools()[0];
+    expect(row).toHaveProperty("allowed_by_guard");
+    expect(row).not.toHaveProperty("allowed");
   });
 
   it("fails closed on unparseable input", () => {

@@ -1,6 +1,14 @@
 {
+  // The configuration the hosted relay at agent-call.app actually deploys with.
+  // It is public and complete on purpose: a self-hoster can read exactly what we
+  // run, and there is only ever one copy of the bindings to keep in step.
+  //
+  // What is deliberately absent is `account_id` — `wrangler deploy` takes it
+  // from CLOUDFLARE_ACCOUNT_ID in the deploy environment. The Cloudflare API
+  // token that grants any actual authority has never been in this repository
+  // and never will be. To deploy your own relay instead, start from
+  // wrangler.self-host.example.jsonc.
   "name": "agentcall-relay",
-  "account_id": "3dcd1e12b47fa566e1420769be5c10f8",
   "main": "src/index.ts",
   "compatibility_date": "2026-06-01",
   // Keep the public product site and relay API on one stable origin. Matching
@@ -16,6 +24,10 @@
   // skipping the custom-domain route below.
   "workers_dev": false,
   "vars": { "DEPLOYMENT_MODE": "hosted" },
+  // The database id is an opaque account-scoped identifier, not a credential:
+  // it grants nothing without an API token for the same account, and it cannot
+  // be reached from another account. It stays here so this file remains the one
+  // description of the hosted deployment rather than half of one.
   "d1_databases": [{
     "binding": "DB",
     "database_name": "agentcall",

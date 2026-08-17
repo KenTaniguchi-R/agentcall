@@ -352,9 +352,13 @@ describe.sequential("CLI command actions", () => {
         tool: "Bash", rule: "credential-read", detail: "blocked",
       }),
     ].join("\n") + "\n");
+    // Deliberately mixed: `allowed` is the pre-#415 spelling and `allowed_by_guard`
+    // is the current one. A real tools.log that spans the rename contains both,
+    // because nothing rewrites an append-only file on the owner's disk — so the
+    // count below has to come out the same either way.
     writeFileSync(paths.toolsLog, [
       JSON.stringify({ ts: "2026-08-02T20:00:00.005Z", type: "tool_call", call_id: "call-1", tool: "Read", allowed: true }),
-      JSON.stringify({ ts: "2026-08-02T20:00:00.010Z", type: "tool_call", call_id: "call-1", tool: "Bash", allowed: false }),
+      JSON.stringify({ ts: "2026-08-02T20:00:00.010Z", type: "tool_call", call_id: "call-1", tool: "Bash", allowed_by_guard: false }),
     ].join("\n") + "\n");
 
     const out = await runCommand(testHome, ["history"]);
