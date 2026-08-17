@@ -3,12 +3,12 @@ name: Invariants
 # The rules in CLAUDE.md that nothing currently enforces. Deterministic checks
 # only -- no model, no secrets, no network. Runs read-only: findings surface as
 # GitHub annotations on the PR, which need no write permission.
-# Automatic runs are temporarily paused while GitHub Actions billing is
-# unavailable. Keep the workflow runnable by hand so the checks remain easy to
-# verify and restore. `scripts/ci-local.sh fast` ports every check below and
-# runs from a pre-push hook in the meantime; a check added here must be added
-# there too.
+# `scripts/ci-local.sh fast` ports every check below and runs from a pre-push
+# hook; a check added here must be added there too.
 on:
+  push:
+    branches: [main]
+  pull_request:
   workflow_dispatch:
 
 permissions:
@@ -20,7 +20,7 @@ concurrency:
 
 jobs:
   check:
-    runs-on: ubuntu-latest
+    runs-on: [self-hosted, macOS, ARM64]
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
         with:
