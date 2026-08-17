@@ -94,7 +94,7 @@ const defaultSleep: SleepFn = () => {
 export function installLaunchAgent(
   m: Paths, execCmd: ExecCmd = defaultExec, extraPathDirs: string[] = [], sleep: SleepFn = defaultSleep,
 ): void {
-  const cliScript = fileURLToPath(new URL("../dist/index.js", import.meta.url));
+  const cliScript = fileURLToPath(new URL("../dist/cli-entry.js", import.meta.url));
   const plistFile = launchAgentFile(m);
   mkdirSync(dirname(plistFile), { recursive: true });
   writeFileSync(plistFile, plistContent(process.execPath, cliScript, m, extraPathDirs));

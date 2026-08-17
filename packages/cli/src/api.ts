@@ -70,14 +70,33 @@ export function assertValidHandle(handle: string): void {
 // looks identical to a hang from the user's side.
 const RELAY_TIMEOUT_MS = 10_000;
 
+function isClosedIdleSocket(error: unknown): boolean {
+  if (!(error instanceof TypeError)) return false;
+  const cause = (error as TypeError & { cause?: unknown }).cause;
+  return typeof cause === "object" && cause !== null &&
+    "code" in cause && (cause as { code?: unknown }).code === "UND_ERR_SOCKET";
+}
+
 async function relayFetch(relay: string, path: string, init: RequestInit, timeoutMs: number): Promise<Response> {
+  const fetchOnce = () => fetch(`${relay}${path}`, {
+    ...init, signal: AbortSignal.timeout(timeoutMs),
+  });
   try {
-    return await fetch(`${relay}${path}`, { ...init, signal: AbortSignal.timeout(timeoutMs) });
+    return await fetchOnce();
   } catch (e) {
-    if ((e as Error)?.name === "TimeoutError") {
+    let failure = e;
+    const method = init.method?.toUpperCase() ?? "GET";
+    if (method === "GET" && init.body === undefined && isClosedIdleSocket(failure)) {
+      try {
+        return await fetchOnce();
+      } catch (retryError) {
+        failure = retryError;
+      }
+    }
+    if ((failure as Error)?.name === "TimeoutError") {
       throw new ApiError(`Relay ${relay} did not respond within ${timeoutMs / 1000}s.`, "network");
     }
-    throw new ApiError(`Cannot reach relay ${relay}: ${String(e)}`, "network");
+    throw new ApiError(`Cannot reach relay ${relay}: ${String(failure)}`, "network");
   }
 }
 

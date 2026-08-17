@@ -1,0 +1,28 @@
+%% AgentCall security path, based on apps/relay/src/{middleware,tenant,auth,index,a2a,do}.ts
+flowchart LR
+    A[Calling agent / CLI\nBearer token + org + handle] --> B[Relay Worker\n/v1/* middleware]
+    B --> C{Public capability route?}
+    C -- no --> D[requestOrg\nHosted/self-hosted tenant check]
+    D --> E[authenticatedHandle\nSHA-256 hash + constant-time compare]
+    E --> F[Identity\norg + stable agentId + role + recovery generation]
+    C -- yes --> G[Route-specific credential\ninvite / room capability / recovery]
+    F --> H{Authorized operation?}
+    G --> H
+    H -- no --> I[401/403/404\nfail closed; avoid enumeration]
+    H -- yes --> J[Resolve target handle\nwithin same org]
+    J --> K[Durable Object\nname = org:target agentId]
+    K --> L[Internal attestation headers\nverified identity, target, groups, generation]
+    L --> M[WebSocket admission\ncredential floor + listener/caller role]
+    M --> N[E2EE frames\nvalidated, size/rate limited, relayed opaque]
+    N --> O[Target agent listener\nlocal policy + decrypt/verify]
+    O --> N
+    N --> P[Audit + durable task state\nsubmit/accept/complete/fail/cancel/timeout]
+
+    classDef boundary fill:#ffe7ba,stroke:#a85d00,color:#3b2500;
+    classDef auth fill:#d9f2e6,stroke:#18794e,color:#063b20;
+    classDef data fill:#dbeafe,stroke:#2563eb,color:#102a56;
+    classDef deny fill:#fee2e2,stroke:#b91c1c,color:#450a0a;
+    class A,B,C,D,E,F,G,H,J,K,L,M,O boundary;
+    class E,F,G,H,L,M auth;
+    class N,P data;
+    class I deny;

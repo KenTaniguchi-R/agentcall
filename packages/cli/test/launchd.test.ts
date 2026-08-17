@@ -76,7 +76,10 @@ describe("install/uninstall", () => {
     expect(existsSync(launchAgentFile(m))).toBe(true);
     expect(calls.some((c) => c[1] === "bootout")).toBe(true);
     expect(calls.some((c) => c[1] === "bootstrap")).toBe(true);
-    expect(readFileSync(launchAgentFile(m), "utf8")).toContain("agentcall");
+    const plist = readFileSync(launchAgentFile(m), "utf8");
+    expect(plist).toContain("agentcall");
+    expect(plist).toContain("/dist/cli-entry.js</string>");
+    expect(plist).not.toContain("/dist/index.js</string>");
   });
   it("forwards extraPathDirs into the written plist", () => {
     const home = tempDir("agentcall-ld-");
