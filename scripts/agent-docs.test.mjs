@@ -97,6 +97,38 @@ for (const file of AGENT_FACING) {
   });
 }
 
+test("the plugin ships the same skill the repository root documents", () => {
+  // A plugin loads skills from skills/<name>/SKILL.md, so the file has to exist
+  // twice. Two copies drift, and the copy that drifts is the one nobody reads
+  // during review — so the gate compares them rather than trusting discipline.
+  assert.equal(
+    read("skills/agentcall/SKILL.md"),
+    read("SKILL.md"),
+    "skills/agentcall/SKILL.md has drifted from SKILL.md — copy it across",
+  );
+});
+
+test("the plugin manifests declare the version the CLI actually ships", () => {
+  const cli = JSON.parse(read("packages/cli/package.json")).version;
+  const plugin = JSON.parse(read(".claude-plugin/plugin.json"));
+  const marketplace = JSON.parse(read(".claude-plugin/marketplace.json"));
+
+  assert.equal(plugin.version, cli, ".claude-plugin/plugin.json version is stale");
+  assert.equal(marketplace.metadata.version, cli, "marketplace metadata version is stale");
+  assert.equal(marketplace.plugins[0].version, cli, "marketplace plugin version is stale");
+  // A marketplace entry whose source does not resolve installs nothing.
+  assert.equal(marketplace.plugins[0].source, "./");
+  assert.equal(marketplace.plugins[0].name, plugin.name);
+});
+
+test("SKILL.md tells an agent what to do when the CLI is absent", () => {
+  // Installing the plugin delivers instructions, not the binary. Without this
+  // the skill's first act is to run a command that does not exist.
+  const text = read("SKILL.md");
+  assert.match(text, /command -v agentcall/);
+  assert.match(text, /npm i -g @benree\/agentcall/);
+});
+
 test("SKILL.md carries the frontmatter a skill loader needs", () => {
   const text = read("SKILL.md");
   const frontmatter = text.match(/^---\n([\s\S]+?)\n---\n/);

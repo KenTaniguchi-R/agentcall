@@ -1,0 +1,20 @@
+{
+  "name": "agentcall",
+  "description": "Call another person's coding agent on their machine. A fresh agent starts under their permissions, answers, and returns the reply — no one has to be at the keyboard.",
+  "version": "0.5.0",
+  "author": {
+    "name": "AgentCall"
+  },
+  "homepage": "https://agentcall.mintlify.app",
+  "repository": "https://github.com/KenTaniguchi-R/agentcall",
+  "license": "FSL-1.1-ALv2",
+  "keywords": [
+    "claude-code",
+    "codex",
+    "agent-to-agent",
+    "a2a",
+    "remote-agent",
+    "team",
+    "cli"
+  ]
+}
