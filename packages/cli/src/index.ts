@@ -1,3 +1,5 @@
+import { readFileSync } from "node:fs";
+import { fileURLToPath } from "node:url";
 import { Command, CommanderError } from "commander";
 import { getPaths } from "./paths.js";
 import { loadInstallation, type Installation } from "./config.js";
@@ -18,9 +20,19 @@ import { register as registerListen } from "./commands/listen.js";
 import { register as registerTask } from "./commands/task.js";
 import { register as registerGrants } from "./commands/grants.js";
 import { register as registerJobs } from "./commands/jobs.js";
+// `--version` used to be a source literal, which drifted: 0.4.0 stayed in this
+// file while the published package moved on, so the CLI reported a version
+// whose command surface it no longer had (#354). Read the one value npm
+// actually publishes instead. `../package.json` resolves the same from `src`
+// and from `dist`, because both sit one level under the package root.
+function cliVersion(): string {
+  const manifest = fileURLToPath(new URL("../package.json", import.meta.url));
+  return JSON.parse(readFileSync(manifest, "utf8")).version as string;
+}
+
 export function createProgram(): Command {
 const program = new Command();
-program.name("agentcall").description("Call other people's coding agents").version("0.5.0");
+program.name("agentcall").description("Call other people's coding agents").version(cliVersion());
 registerSetup(program);
 registerInvite(program, installationFor);
 registerAudit(program, installationFor);

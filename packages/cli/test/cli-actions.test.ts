@@ -1084,7 +1084,13 @@ describe.sequential("CLI command actions", () => {
 
 describe("published CLI entry", () => {
   it("runs the built bin shim", () => {
+    // Reads the manifest rather than a literal. A hardcoded version here is a
+    // hand-edit every release, and the release it gets forgotten on is the one
+    // that ships a CLI reporting the previous version (#354).
+    const published = JSON.parse(
+      readFileSync(join(process.cwd(), "package.json"), "utf8"),
+    ).version as string;
     const bin = join(process.cwd(), "bin", "agentcall.js");
-    expect(execFileSync(bin, ["--version"], { encoding: "utf8" }).trim()).toBe("0.5.0");
+    expect(execFileSync(bin, ["--version"], { encoding: "utf8" }).trim()).toBe(published);
   });
 });

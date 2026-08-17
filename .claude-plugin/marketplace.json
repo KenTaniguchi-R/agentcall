@@ -5,14 +5,14 @@
   },
   "metadata": {
     "description": "Hosts the agentcall plugin — call another person's coding agent by address, within your organization.",
-    "version": "0.5.0"
+    "version": "0.5.1"
   },
   "plugins": [
     {
       "name": "agentcall",
       "source": "./",
       "description": "Call another person's Claude Code or Codex agent at an @org/handle address. Their machine starts a fresh agent under their own permissions and policy, and returns its answer. Installs the skill only — the CLI is a separate npm install.",
-      "version": "0.5.0",
+      "version": "0.5.1",
       "homepage": "https://agentcall.mintlify.app",
       "repository": "https://github.com/KenTaniguchi-R/agentcall",
       "license": "FSL-1.1-ALv2"
