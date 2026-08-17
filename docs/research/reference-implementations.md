@@ -27,6 +27,7 @@ Use references by problem shape, not by technology stack:
 | [EnterpriseReady](https://www.enterpriseready.io/) | [Audit log guide](https://www.enterpriseready.io/features/audit-log/) and category teardowns | Procurement requirements as concrete product behavior; audit after successful mutation; RBAC and evidence before SSO/SCIM breadth | #15, #17, #18, #99, #102 |
 | [RFC 6121 / XMPP IM](https://datatracker.ietf.org/doc/html/rfc6121), [RFC 6120 / XMPP Core](https://datatracker.ietf.org/doc/html/rfc6120), and [ejabberd](https://github.com/processone/ejabberd) | RFC 6121 roster subscription and presence states; RFC 6120 `node@domain/resource` addressing | A roster as directional consent, not just a member list; separately addressable concurrent sessions for one identity | #44, #48, #116 |
 | [SPIFFE federation](https://spiffe.io/docs/latest/spiffe-specs/spiffe_federation/) | Trust domains, bundle endpoints, and endpoint-profile rules | Each namespace authority owns a trust domain and publishes verification material; bind each public-key bundle to its domain and never verify against a cross-domain key pool | #12, #101, #120 |
+| [agmsg](https://github.com/fujibee/agmsg) | `ARCHITECTURE.md` for the three-axis driver model, and `server/spec/v1.md` for the normative HTTP contract | A runtime-agnostic driver seam so a new agent vendor is not a wire-contract change; a normative protocol document separate from the reference implementation; permanent idempotency tombstones that outlive the message they dedupe | #443, #444, #445, #446 |
 
 ### Headscale and Tailscale: enrollment credentials
 
@@ -158,6 +159,41 @@ Applied in AgentCall:
 
 - [Agent identity compatibility decision](../superpowers/specs/2026-08-02-agent-identity-compatibility.md)
 - [Signed Agent Cards](../superpowers/specs/2026-08-02-signed-agent-card-design.md)
+
+### agmsg: runtime extensibility and protocol rigor
+
+agmsg is the nearest peer implementation and the only reference here that is also
+a competitor. Read it for two boundaries, and reject a third.
+
+**The driver seam.** Its three axes — storage, agent, delivery — each carry one
+active driver behind a fixed protocol, and the axes are independent. The agent
+axis abstracts exactly what `packages/cli/src/runner.ts` branches on inline:
+hook formats, settings-file locations, spawn arguments, and per-runtime
+capability probes. That seam is why a new vendor is a driver there and a change
+to `AGENT_KINDS` in `packages/shared/src/protocol.ts` here. Copy the seam and
+the dependency-check contract; do not copy the bash implementation or the
+plugin directory layout, which is reserved and unimplemented in their v1.
+
+**The normative document.** `server/spec/v1.md` is the contract; the `server/`
+package is explicitly a non-normative reference implementation, and clients are
+pinned to the document rather than to the implementation. Its idempotency rule
+is the reusable invariant: a dedupe tombstone is permanent metadata that
+outlives the message body, an identical replay returns the original outcome,
+and a differing replay conflicts forever rather than for a window. Its
+sequence allocation is worth reading for the reasoning even though AgentCall
+needs no total order — a locked per-team counter, chosen over a database
+sequence because sequences are non-transactional and can expose an order that
+does not match commit visibility.
+
+**Reject the trust model.** Their reference server has no authentication:
+"reaching the server is the permission," with the network boundary standing in
+for authorization and `age-v1` protecting envelope contents from the server.
+That is coherent for a self-hosted box on a controlled network and is not
+transferable to a hosted multi-tenant relay. Nothing in their delivery,
+admission, or team-registration path should be read as a precedent for
+AgentCall's inbound boundary.
+
+Source last checked at tag `v1.2.0` on 2026-08-17.
 
 ### XMPP, Matrix, NATS, and SPIFFE: federation
 
