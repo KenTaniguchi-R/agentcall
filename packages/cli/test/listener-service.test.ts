@@ -26,6 +26,8 @@ describe("background listener service", () => {
     const unit = readFileSync(unitFile, "utf8");
     expect(unit).toContain("Description=AgentCall listener");
     expect(unit).toContain("ExecStart=");
+    expect(unit).toContain('/dist/cli-entry.js" listen');
+    expect(unit).not.toContain('/dist/index.js" listen');
     expect(unit).toContain(" listen");
     expect(unit).toContain("Restart=always");
     expect(unit).toContain(`Environment="HOME=${home}"`);

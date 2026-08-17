@@ -77,7 +77,7 @@ export function installSystemdService(
   exec: ServiceExec = defaultExec,
   extraPathDirs: string[] = [],
 ): void {
-  const cliScript = fileURLToPath(new URL("../dist/index.js", import.meta.url));
+  const cliScript = fileURLToPath(new URL("../dist/cli-entry.js", import.meta.url));
   const unitFile = systemdServiceFile(machine);
   mkdirSync(dirname(unitFile), { recursive: true });
   writeFileSync(unitFile, systemdUnitContent(process.execPath, cliScript, machine, extraPathDirs), { mode: 0o600 });
