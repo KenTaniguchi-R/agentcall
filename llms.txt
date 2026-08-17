@@ -1,0 +1,99 @@
+# AgentCall
+
+> Call another person's coding agent — Claude Code or Codex — on their machine.
+> You send a message to an address; a fresh agent process starts on the owner's
+> computer, does the work with their context and their permissions, and returns
+> its answer. Nobody has to be sitting at that machine.
+
+This file orients an AI agent that has AgentCall available. If you are a human,
+read [README.md](./README.md) or https://agentcall.mintlify.app instead.
+
+## When to reach for it
+
+Use AgentCall when the thing you need is *on someone else's machine* or *in
+someone else's head* — their repository, their environment, their logs, their
+judgement. It is not a way to run your own work somewhere else, and it is not a
+message queue for agents on this machine.
+
+If the user names a person without giving an address, check the address book
+before asking them for one.
+
+## Addresses
+
+An address is `@org/handle` — for example `@acme/ken`. The organization is the
+outermost boundary: every address you can reach belongs to the same organization
+as the line you are calling from. There is no cross-organization routing, and an
+`@org/handle` that is not in your organization is not reachable by any means.
+
+The older `handle@host` form is rejected, not accepted.
+
+## The commands you will actually use
+
+```bash
+agentcall contacts list                       # saved contacts: name, address, and a note on who each person is
+agentcall inspect <address>                   # trust state, availability, and the tasks that address offers
+agentcall call <name-or-@org/handle> "<msg>"  # send a message, print the reply
+agentcall jobs                                # retrieve and cancel durable (offline-delivered) calls
+agentcall doctor                              # read-only diagnostics when something is not working
+```
+
+Useful flags on `call`:
+
+- `--task <id>` — invoke a specific task from the callee's card. Get valid ids
+  from `agentcall inspect <address>`.
+- `--continue` — continue the open conversation with this address. Add `--task`
+  when several are open.
+- `--context <id>` — continue one specific conversation by id.
+- `--json` — print the full reply envelope instead of just the text.
+
+Adding a contact when the user gives you a new address:
+
+```bash
+agentcall contacts add <name> <@org/handle> --note "<who they are and what to ask them>"
+```
+
+## What to expect at runtime
+
+- **A call takes 30 seconds to 5 minutes.** The agent timeout is 5 minutes and
+  the relay gives up at 6. Do not poll, and do not treat a slow call as failed.
+- **Rate limit is 30 calls per hour.**
+- **A message is capped at 64 KB; a reply at 256 KB.**
+- **Offline callees fail immediately** — unless that owner opted into durable
+  offline delivery, in which case the call is queued as ciphertext for up to 72
+  hours and you get a receipt instead of a reply. Retrieve it later with
+  `agentcall jobs`.
+- **Errors go to stderr** — offline, busy, timeout. Report them to the user.
+  Retry at most once.
+
+## What you do not control
+
+These are the callee's decisions, not yours. Do not try to work around them, and
+do not tell the user a call failed because of a bug when one of these is the
+actual reason.
+
+- **The callee chooses which tasks exist.** You cannot ask an agent to do
+  something its owner has not offered. `agentcall inspect` shows the menu.
+- **The callee's policy governs the run**, including which files their agent may
+  read and what it may execute. Your message is input to that boundary, not an
+  instruction that crosses it.
+- **Your message is treated as untrusted text on arrival.** Being a call does not
+  make it a permission grant, and it will not be read as one.
+- **A reply is one agent's answer, not a verified fact.** Treat it the way you
+  would treat any other agent's output: useful, and worth checking when it
+  matters.
+
+## What AgentCall is not
+
+- Not a way to message other agents on this machine.
+- Not a shared conversation log or a mailbox you can browse.
+- Not cross-organization. This is a permanent design decision, not a missing
+  feature.
+- Not a sandbox. The callee's agent runs with its owner's operating-system
+  account, bounded by that owner's policy.
+
+## More
+
+- [README.md](./README.md) — full overview and install
+- [Security model](https://agentcall.mintlify.app/security/overview)
+- [SECURITY.md](./SECURITY.md) — reporting a vulnerability
+- [CONTRIBUTING.md](./CONTRIBUTING.md) — working in this repository
