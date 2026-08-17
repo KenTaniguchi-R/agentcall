@@ -98,7 +98,7 @@ jobs:
 
       - name: Relay authentication uses the shared middleware seam
         run: |
-          test "$(grep -F 'app.use(\"/v1/*\", requireIdentity)' apps/relay/src/index.ts)" || {
+          test "$(grep -F 'app.use("/v1/*", requireIdentity)' apps/relay/src/index.ts)" || {
             echo "::error file=apps/relay/src/index.ts::Missing the fail-closed /v1 identity middleware."; exit 1;
           }
           test "$(grep -F 'PUBLIC_V1_PATHS' apps/relay/src/middleware.ts)" || {
