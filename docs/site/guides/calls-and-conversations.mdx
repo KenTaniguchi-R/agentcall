@@ -21,6 +21,31 @@ Human-readable replies preserve tabs and line breaks while neutralizing terminal
 control and bidirectional-formatting characters. JSON output preserves the value
 and escapes terminal-active characters in the serialized form.
 
+## Retrieve an offline job
+
+If the owner enabled durable delivery and the listener is offline or already
+has older queued work, `call` exits 0 with a task ID instead of waiting:
+
+```text
+Queued task <task-id>; expires 2026-08-12T20:00:00.000Z.
+Retrieve it with: agentcall jobs get @acme/ken <task-id>
+```
+
+The caller saves the sealed request and response binding before sending. A
+later process can list, retrieve, authenticate, and decrypt the result locally:
+
+```bash
+agentcall jobs list @acme/ken
+agentcall jobs get @acme/ken <task-id>
+agentcall jobs get @acme/ken <task-id> --wait 60 --json
+agentcall jobs cancel @acme/ken <task-id>
+```
+
+`--wait` accepts 0–300 seconds. Request/result ciphertext is retained for at
+most 72 hours. `expired`, `delivery_failed`, `revoked`, and
+`indeterminate_execution` are terminal reasons; an expiry remains queryable as
+metadata for another 24 hours.
+
 ## Continue a conversation
 
 When a reply opens a context, the CLI prints a note on standard error:
@@ -56,7 +81,7 @@ explicitly accept the added prompt-history risk with `threadable: true`.
 | Code | Meaning | First action |
 | --- | --- | --- |
 | `unknown_handle` | The destination is unavailable or not visible | Confirm the address without using presence as an enumeration oracle |
-| `offline` | No listener is connected | Ask the owner to run `agentcall doctor` |
+| `offline` | No listener is connected and durable delivery is not enabled | Ask the owner to run `agentcall doctor`, or to opt in if queued work is appropriate |
 | `busy` | The callee is already running a call | Retry later |
 | `timeout` | The call exceeded its deadline | Narrow the request and retry |
 | `agent_error` | The answering process failed | Ask the owner to inspect local history/logs |

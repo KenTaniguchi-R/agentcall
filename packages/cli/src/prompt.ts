@@ -1,6 +1,16 @@
-import type { Workdir } from "./config.js";
 import { defangInbound } from "./defang.js";
 import type { Task } from "./tasks.js";
+
+/**
+ * Where the agent runs and what it may read — both derived from the sensitivity
+ * map at THIS caller's clearance (sensitivity.ts's `workdirFor` and
+ * `readableSources`), so `dir` is always `readable[0]` whenever the map named
+ * anything this caller may see.
+ */
+export interface PromptWorkdir {
+  dir: string;
+  readable: string[];
+}
 
 // The task section is behavior-shaping only — enforcement lives in the spawn
 // envelope (runner.ts), which is fixed before this prompt is built. SKILL.md
@@ -9,17 +19,34 @@ import type { Task } from "./tasks.js";
 //
 // The fence is only as good as the caller's inability to write it, so the
 // message is defanged here rather than at the call site: this function owns the
-// reserved syntax, and a second caller of it (a Room path, a replay tool) would
+// reserved syntax, and a second caller of it (for example, a replay tool) would
 // otherwise have to remember to defang separately. See defang.ts.
 //
-// The workdir sentence is behavior-shaping too. It used to be backed by an OS
-// sandbox that made it true regardless of what the model decided; with that
-// gone, an agent holding the `read` cap can read outside its working
-// directory if it chooses to. It's kept for the default share folder because
-// stating the intent still steers behavior, and dropped when the owner has
-// deliberately pointed the agent at a real project (see config.ts's Workdir).
+// The directory sentence is behavior-shaping too, and #372 changed what it can
+// honestly say. It used to read "Do not access anything outside it", which was
+// backed first by an OS sandbox and then by AGENTCALL_ALLOWED_ROOT. Both are
+// gone, and the claim became worse than merely untrue: the boundary is now the
+// sensitivity map, so telling the agent to stay in one directory discouraged it
+// from reading sources it is explicitly permitted to read.
+//
+// It now states what is actually true — the labelled sources this caller is
+// cleared for. Every path listed is at or below the caller's clearance by
+// construction (readableSources filters on exactly that), so naming them here
+// cannot disclose anything the answer could not already contain.
+//
+// It deliberately does NOT claim the reply is checked, because it is not. The
+// only thing that happens to an answer is redactOutbound (listener.ts), which
+// replaces credential-SHAPED strings and this installation's relay token. Nothing
+// compares the answer against the caller's clearance. An earlier revision of
+// this sentence said otherwise, which repeated the exact mistake it had just
+// fixed: the confinement claim it replaced was also false.
+//
+// Overstating a guardrail is worse than stating none. The model relaxes in
+// proportion to what it believes is catching it, so the honest version — the
+// read boundary is real, the reply boundary is you — is also the one that
+// produces more careful behaviour.
 export function buildPrompt(
-  handle: string, from: string, message: string, task?: Task, workdir?: Workdir,
+  handle: string, from: string, message: string, task?: Task, workdir?: PromptWorkdir,
   threaded: boolean = false,
 ): string {
   const taskSection =
@@ -28,9 +55,16 @@ export function buildPrompt(
         `The owner's instructions for this task follow between the markers.\n` +
         `<<TASK-INSTRUCTIONS>>\n${task.skill}\n<<END-TASK-INSTRUCTIONS>>\n`
       : "";
+  // No readable source is the fresh-install case: the map named nothing this
+  // caller may see. Say so plainly rather than listing an empty set, because
+  // "you may read: " reads as a bug and invites the model to guess.
   const dirSection = workdir
-    ? `Your working directory is ${workdir.dir}.` +
-      (workdir.confined ? " Do not access anything outside it." : "") + " "
+    ? `Your working directory is ${workdir.dir}. ` +
+      (workdir.readable.length > 0
+        ? `You may read files under: ${workdir.readable.join(", ")}. `
+        : `No source has been labelled for this caller, so you cannot read anything outside that directory. `) +
+      `Everything else is refused when you try to read it. Your answer itself is not checked, ` +
+      `so include only what this caller may see. `
     : "";
 
   // "one-shot" is false on a resumed turn and the model acts on it. The

@@ -1,41 +1,40 @@
-import { readFileSync } from "node:fs";
 import WebSocket, { type RawData } from "ws";
+import { randomUUID } from "node:crypto";
 import {
   AGENT_TIMEOUT_MS, E2EERelayToListenerFrame, MAX_E2EE_WIRE_BYTES,
   requestTranscript, safeParseFrame, transcriptHash,
 } from "@benree/agentcall-shared";
 import { fetchKeys } from "./api.js";
-import { clearanceFor, loadClearancePolicy } from "./clearance.js";
-import { resolveLineWorkdir, type CallableLineConfig } from "./config.js";
-import type { LinePaths } from "./paths.js";
+import { readableRoots, workdirFor } from "./scope.js";
+import { type CallableConfig } from "./config.js";
+import type { Paths } from "./paths.js";
 import { buildPrompt } from "./prompt.js";
 import { redactOutbound } from "./redact.js";
 import {
-  AgentRunError, codexThreadingEnabled, codexToolTelemetryEnabled,
-  CODEX_THREADING_VERIFIED_VERSION, isResumeFailure, runAgent,
+  AgentRunError, codexThreadingEnabled,
+  CODEX_THREADING_VERIFIED_VERSION, isResumeFailure, discoverMcpServers, runAgent,
 } from "./runner.js";
 import { mintContextId, pruneContexts, saveContexts, upsertContext } from "./contexts.js";
 import { SerialQueue } from "./queue.js";
 import { loadPolicy } from "./policy.js";
 import { appendPrivateLogLine } from "./audit-log.js";
-import {
-  getTelemetry, shutdownTelemetry, telemetrySafely, type AgentCallTelemetry,
-} from "./telemetry.js";
 import { sealE2EEResponse } from "./e2ee.js";
-import { loadKeys } from "./keys.js";
+import { loadEncryptionKeysForEpoch, loadKeys } from "./keys.js";
 import { verifyAndPinPeer } from "./known-peers.js";
 import { reserveReplay } from "./replay-store.js";
+import {
+  claimExecution, executionEnvelopeDigest, markExecutionStarted, markExecutionTerminal,
+} from "./execution-journal.js";
 import { signalForInboundStatus } from "./abuse-signals.js";
-import { createToolEventSpool, type ToolEventSpool } from "./tool-telemetry-spool.js";
 import {
   admitBinding, handleCancel, makeOutcomeSender, openInboundEnvelope, resolveAdmission,
 } from "./listener-stages.js";
 
 export interface ListenerDeps {
   relay: string;
-  paths: LinePaths;
+  paths: Paths;
   /** Called on every (re)connect — a rotated token takes effect without a restart. */
-  loadConfig: () => CallableLineConfig;
+  loadConfig: () => CallableConfig;
   run?: typeof runAgent;
   saveContexts?: typeof saveContexts;
   maxPending?: number;
@@ -49,20 +48,15 @@ export interface ListenerDeps {
     opts: { headers: Record<string, string>; perMessageDeflate: false; maxPayload: number },
   ) => WebSocket;
   codexThreadingEnabled?: () => boolean;
-  codexToolTelemetryEnabled?: () => boolean;
-  telemetry?: AgentCallTelemetry;
-  createToolEventSpool?: (
-    callId: string, privateStateDir?: string, now?: () => number,
-  ) => ToolEventSpool | undefined;
   fetchKeys?: typeof fetchKeys;
   verifyAndPinPeer?: typeof verifyAndPinPeer;
   loadKeys?: typeof loadKeys;
+  loadKeysForEpoch?: typeof loadEncryptionKeysForEpoch;
   reserveReplay?: typeof reserveReplay;
   sealE2EEResponse?: typeof sealE2EEResponse;
-}
-
-export function runtimeToolTelemetryEnabled(runtime: "claude" | "codex", codexVerified: boolean): boolean {
-  return runtime !== "codex" || codexVerified;
+  claimExecution?: typeof claimExecution;
+  markExecutionStarted?: typeof markExecutionStarted;
+  markExecutionTerminal?: typeof markExecutionTerminal;
 }
 
 function rawWireBytes(raw: RawData): number {
@@ -78,21 +72,21 @@ export function startListener(deps: ListenerDeps): { stop(): Promise<void> } {
     opts: { headers: Record<string, string>; perMessageDeflate: false; maxPayload: number },
   ) => new WebSocket(url, opts));
   const persistContexts = deps.saveContexts ?? saveContexts;
-  const telemetry = deps.telemetry ?? getTelemetry(process.env, {
-    healthFile: deps.paths.machine.telemetryHealthFile,
-  });
   const fetchPeerKeys = deps.fetchKeys ?? fetchKeys;
   const verifyPeer = deps.verifyAndPinPeer ?? verifyAndPinPeer;
   const loadLocalKeys = deps.loadKeys ?? loadKeys;
+  const loadLocalKeysForEpoch = deps.loadKeysForEpoch ?? (
+    deps.loadKeys ? undefined : loadEncryptionKeysForEpoch
+  );
   const reserveRequest = deps.reserveReplay ?? reserveReplay;
   const sealResponse = deps.sealE2EEResponse ?? sealE2EEResponse;
+  const claimDurableExecution = deps.claimExecution ?? claimExecution;
+  const markDurableExecutionStarted = deps.markExecutionStarted ?? markExecutionStarted;
+  const markDurableExecutionTerminal = deps.markExecutionTerminal ?? markExecutionTerminal;
   // Validate before opening the socket. Hot edits are still loaded per call
   // below, but a listener must never advertise availability when its initial
   // effective policy (user layer + the machine's managed ceiling) is malformed
-  // or contradicts an assertion. Throwing here is contained to this one line:
-  // startAllListeners catches per-line startup failures so the other lines'
-  // sockets survive (listenAll.ts). The workdir gets the same up-front check,
-  // but per-connect rather than here — see connect() below.
+  // or contradicts an assertion. Fail before advertising availability.
   loadPolicy(deps.paths);
 
   const queue = new SerialQueue(deps.maxPending ?? 0);
@@ -107,26 +101,16 @@ export function startListener(deps: ListenerDeps): { stop(): Promise<void> } {
   const codexCanThread = startupKind === "codex"
     ? (deps.codexThreadingEnabled ?? codexThreadingEnabled)()
     : false;
-  const startupCodexCanReportTools = startupKind === "codex"
-    ? (deps.codexToolTelemetryEnabled ?? codexToolTelemetryEnabled)()
-    : false;
   if (startupKind === "codex" && !codexCanThread) {
     console.error(
       `Warning: Codex conversation threading is disabled because this codex-cli release has not passed ` +
         `the resume sandbox probe (last verified: ${CODEX_THREADING_VERIFIED_VERSION}).`,
     );
   }
-  if (startupKind === "codex" && telemetry && !startupCodexCanReportTools) {
-    console.error(
-      `Warning: Codex tool telemetry is disabled because no codex-cli release has passed ` +
-        `the default-path lifecycle probe.`,
-    );
-  }
   let stopped = false;
   let attempt = 0;
   let ws: WebSocket | undefined;
   let pingTimer: ReturnType<typeof setInterval> | undefined;
-  const activeToolSpools = new Set<ToolEventSpool>();
 
   const audit = (entry: Record<string, unknown>) => {
     try {
@@ -147,38 +131,31 @@ export function startListener(deps: ListenerDeps): { stop(): Promise<void> } {
     }
   };
 
-  // Config (and therefore workdir) is re-read on every (re)connect, not just
-  // once at startup: a rotated token (`agentcall rotate`) or an edited
-  // workdir then takes effect on the next reconnect instead of needing the
-  // whole multi-line process restarted. A bad workdir/config still stops the
+  // Config is re-read on every (re)connect, not just once at startup: a
+  // rotated token (`agentcall rotate`) then takes effect on the next reconnect
+  // instead of needing the listener restarted. A bad config
+  // still stops the
   // FIRST connect() (called synchronously below, not through
   // scheduleReconnect) with a thrown error — same "fail loudly at start"
-  // contract `agentcall listen` had before lines existed. A config that goes
+  // contract `agentcall listen` provides. A config that goes
   // bad LATER, discovered on a scheduled reconnect, must NOT throw all the
-  // way out: this one process holds every line's socket, and an uncaught
-  // throw from inside a bare `setTimeout` callback would crash all of them,
-  // not just the line whose config broke — see scheduleReconnect below,
-  // which is what catches that case.
+  // way out: an uncaught throw from inside a bare `setTimeout` callback would
+  // terminate the listener process, so scheduleReconnect catches it below.
   const connect = () => {
     if (stopped) return;
     const config = deps.loadConfig();
-    const runtimeCanReportTools = runtimeToolTelemetryEnabled(
-      config.agent_kind,
-      startupKind === "codex"
-        ? startupCodexCanReportTools
-        : (deps.codexToolTelemetryEnabled ?? codexToolTelemetryEnabled)(),
-    );
-    const workdir = resolveLineWorkdir(config, deps.paths);
     // `deps.relay`, not `config.relay`: the relay host is fixed at
     // `startListener()` entry (set by `startAllListeners` from the config it
-    // read at process startup), so unlike the token/handle/workdir above,
+    // read at process startup), so unlike the token/handle above,
     // a changed relay host in config.json does NOT take effect on
     // reconnect — only a full listener restart picks up a new relay. This is
     // spec-faithful, not an oversight: `ListenerDeps.relay` was never
     // re-derived from `loadConfig()`'s return value, only its other fields
     // were. Deliberate partial reload, documented here so it doesn't read as
     // a bug to the next person tracing a relay-host change that didn't take.
-    const url = deps.relay.replace(/^http/, "ws") + "/v1/ws?role=listen";
+    const listenerSessionId = randomUUID();
+    const url = deps.relay.replace(/^http/, "ws") +
+      `/v1/ws?role=listen&capability=durable-mailbox-v1&listener_session_id=${listenerSessionId}`;
     ws = newSocket(url, {
       headers: {
         Authorization: `Bearer ${config.token}`,
@@ -209,28 +186,28 @@ export function startListener(deps: ListenerDeps): { stop(): Promise<void> } {
         return;
       }
 
-      const inboundSpan = telemetrySafely(() => telemetry?.startInbound(frame));
-      let admissionOutcome = "agent_error";
       try {
-      const {
-        call_id, correlation_id, from, groups,
-      } = frame;
+      const { call_id, correlation_id, from } = frame;
       const correlation = { correlation_id };
       const started = Date.now();
 
       const opened = await openInboundEnvelope(
         {
           relay: deps.relay, org: config.org, handle: config.handle, token: config.token,
-          machine: deps.paths.machine, paths: deps.paths, from, envelope: frame.envelope,
+          paths: deps.paths, from, envelope: frame.envelope,
+          reserveReplay: frame.delivery_mode !== "durable",
         },
         {
           fetchKeys: fetchPeerKeys, verifyAndPinPeer: verifyPeer,
-          loadKeys: loadLocalKeys, reserveReplay: reserveRequest,
+          loadKeys: loadLocalKeys, loadKeysForEpoch: loadLocalKeysForEpoch,
+          reserveReplay: reserveRequest,
         },
       );
       if (!opened.ok) {
-        admissionOutcome = "protocol_error";
-        send({ type: "call_rejected", call_id, code: "protocol_error" });
+        send({
+          type: "call_rejected", call_id, code: "protocol_error",
+          ...(frame.lease_id ? { lease_id: frame.lease_id } : {}),
+        });
         audit({
           call_id, ...correlation, from, status: "protocol_error", duration_ms: Date.now() - started,
           error: String(opened.error).slice(0, 2_000),
@@ -241,33 +218,84 @@ export function startListener(deps: ListenerDeps): { stop(): Promise<void> } {
         request, callerBundle, localKeys, relayOrigin, fromAddress, toAddress,
       } = opened.envelope;
 
+      if (
+        (frame.message_id !== undefined && frame.message_id !== request.message_id) ||
+        (frame.delivery_mode === "durable" && request.delivery_mode !== "durable")
+      ) {
+        send({
+          type: "call_rejected", call_id, code: "protocol_error",
+          ...(frame.lease_id ? { lease_id: frame.lease_id } : {}),
+        });
+        return;
+      }
+
       const { message, task: requestedTask, context_id } = request;
       const requestHash = await transcriptHash(requestTranscript(request));
-      const trySendOutcome = makeOutcomeSender(
-        { callId: call_id, relayOrigin, fromAddress, toAddress, request, requestHash, localKeys, callerBundle, send },
+      const durableDigest = frame.delivery_mode === "durable"
+        ? executionEnvelopeDigest(frame.envelope)
+        : undefined;
+      const sendOutcome = makeOutcomeSender(
+        {
+          callId: call_id, relayOrigin, fromAddress, toAddress, request, requestHash,
+          localKeys, callerBundle, send, leaseId: frame.lease_id,
+        },
         sealResponse,
       );
+      const trySendOutcome: typeof sendOutcome = async (outcome, terminalReason) => {
+        const error = await sendOutcome(outcome, terminalReason);
+        if (!error && durableDigest) {
+          await markDurableExecutionTerminal(deps.paths, call_id, durableDigest);
+        }
+        return error;
+      };
 
-      // Resolve caller -> task -> envelope BEFORE the message is placed in any
-      // prompt (see policy.ts). Refusals never enqueue and never spawn: no
-      // tokens are burned by blocked callers or menu probing.
+      if (durableDigest) {
+        const claim = await claimDurableExecution(deps.paths, call_id, durableDigest);
+        if (claim.decision === "conflict") {
+          send({ type: "call_rejected", call_id, code: "protocol_error", lease_id: frame.lease_id });
+          return;
+        }
+        if (claim.decision === "indeterminate" || claim.decision === "terminal") {
+          await sendOutcome(
+            { kind: "failure", code: "agent_error", detail: "Execution status is indeterminate after listener recovery." },
+            "indeterminate_execution",
+          );
+          return;
+        }
+      }
 
-      const admission = resolveAdmission({
-        paths: deps.paths, from, requestedTask, groups, workdir, agentKind: config.agent_kind,
-      });
+      // Resolve caller -> task BEFORE the message is placed in any prompt (see
+      // policy.ts). Refusals never enqueue and never spawn: no tokens are
+      // burned by blocked callers or task probing.
+
+      const admission = resolveAdmission({ paths: deps.paths, from, requestedTask });
       if (!admission.ok) {
         if (admission.code === "policy_error") {
-          admissionOutcome = "policy_error";
           const outcomeDeliveryError = await trySendOutcome({ kind: "failure", code: "agent_error", detail: "A local policy error prevented this call from completing." });
           audit({ call_id, ...correlation, from, message: message.slice(0, 500), status: "policy_error", duration_ms: 0, error: String(admission.error).slice(0, 2000), outcome_delivery_error: outcomeDeliveryError });
           return;
         }
-        admissionOutcome = admission.code;
         const outcomeDeliveryError = await trySendOutcome({ kind: "failure", code: admission.code, offered: admission.offered });
         audit({ call_id, ...correlation, from, message: message.slice(0, 500), task: requestedTask, status: admission.code, duration_ms: 0, outcome_delivery_error: outcomeDeliveryError });
         return;
       }
-      const { task, taskWorkdir } = admission;
+      const { task, scope } = admission;
+
+      // Clearance, then the directory it implies. Deliberately AFTER
+      // resolveAdmission and from the objects it returned: a corrupt
+      // policy.json or scope.json has a failure path there
+      // (policy_error -> call_failed), and loading either earlier would throw
+      // first and report corruption as a rejection.
+      //
+      // Access is resolved by resolveAdmission, which refuses a blocked caller
+      // before this point. Nothing further is derived from it: with one grantable
+      // level there is no per-caller narrowing left to do, so the workdir and
+      // the readable list are the same for every caller the line answers.
+      // #372 deleted line and task `workdir`. Where the agent runs is now the
+      // richest labelled source THIS caller is cleared for, so a public caller
+      // is never spawned inside internal content they could only be refused
+      // on. shareDir is the fallback when the map names nothing they may see.
+      const workdirDir = workdirFor(scope, deps.paths.shareDir, deps.paths.userHome);
 
       // Task resolution above ran on the verified `from` and local files only
       // (see policy.ts's CaMeL invariant). context_id is caller-controlled, so
@@ -277,10 +305,14 @@ export function startListener(deps: ListenerDeps): { stop(): Promise<void> } {
       const admitted = admitBinding({
         paths: deps.paths, from, taskId: task.id, contextId: context_id,
         threadable: task.threadable, agentKind: config.agent_kind, codexCanThread,
-        workdirDir: taskWorkdir.dir,
+        // Still pinned on the binding, and a stronger check than before: the
+        // directory is now derived from clearance, so a caller whose clearance
+        // changed since the binding was minted no longer matches it and the
+        // resume is refused. That is the same reasoning admitBinding already
+        // applies to threadable and the codex gate.
+        workdirDir,
       });
       if (!admitted.ok) {
-        admissionOutcome = "context_unknown";
         const outcomeDeliveryError = await trySendOutcome({ kind: "failure", code: "context_unknown" });
         audit({ call_id, ...correlation, from, message: message.slice(0, 500), task: task.id,
                 status: "context_unknown", duration_ms: 0, outcome_delivery_error: outcomeDeliveryError });
@@ -302,68 +334,37 @@ export function startListener(deps: ListenerDeps): { stop(): Promise<void> } {
         // See "Deliberately NOT in this plan" in
         // docs/superpowers/plans/2026-08-01-a2a-listener-protocol.md before
         // raising maxPending.
-        send({ type: "call_accepted", call_id });
-        send({ type: "call_started", call_id });
-        const invocationSpan = telemetrySafely(() => inboundSpan?.startInvocation({
-          task: task.id,
-          runtime: config.agent_kind,
-          callId: call_id,
-          correlationId: correlation_id,
-          contextId: binding?.context_id,
-        }));
-        const toolSpool = telemetrySafely(() => invocationSpan && runtimeCanReportTools
-          ? (deps.createToolEventSpool ?? createToolEventSpool)(call_id, deps.paths.dir)
-          : undefined);
-        if (toolSpool) activeToolSpools.add(toolSpool);
-        let invocationFinished = false;
-        const finishInvocation = (
-          outcome: "success" | "timeout" | "canceled" | "agent_error",
-          contextId?: string,
-        ) => {
-          if (invocationFinished) return;
-          invocationFinished = true;
-          const resolvedContextId = contextId ?? binding?.context_id;
-          if (toolSpool) activeToolSpools.delete(toolSpool);
-          for (const lifecycle of toolSpool?.collect() ?? []) {
-            telemetrySafely(() => invocationSpan?.recordTool({
-              ...lifecycle,
-              ...(resolvedContextId ? { contextId: resolvedContextId } : {}),
-            }));
+        send({ type: "call_accepted", call_id, ...(frame.lease_id ? { lease_id: frame.lease_id } : {}) });
+        if (durableDigest) {
+          try {
+            await markDurableExecutionStarted(deps.paths, call_id, durableDigest);
+          } catch (error) {
+            await trySendOutcome({ kind: "failure", code: "agent_error", detail: "The local execution journal could not record process start." }, "delivery_failed");
+            audit({ call_id, ...correlation, from, status: "journal_error", duration_ms: Date.now() - started, error: String(error).slice(0, 2_000) });
+            return;
           }
-          telemetrySafely(() => invocationSpan?.end(outcome, contextId));
-        };
+        }
+        send({ type: "call_started", call_id, ...(frame.lease_id ? { lease_id: frame.lease_id } : {}) });
         try {
-          // Resolved from the same relay-verified identity as the task, and on
-          // the same side of the CaMeL line: the caller's message must not be
-          // able to influence what the answering agent may reach.
-          //
-          // Deliberately AFTER resolveAdmission, not before. A corrupt
-          // policy.json has an existing failure path there (policy_error ->
-          // call_failed/agent_error); loading it earlier would throw first and
-          // report the same corruption as a rejection instead.
-          const clearance = clearanceFor(
-            loadClearancePolicy(deps.paths.policyFile, (f) => readFileSync(f, "utf8")),
-            from,
-            groups,
-          );
           const out = await run({
             kind: config.agent_kind,
-            prompt: buildPrompt(config.handle, from, message, task, taskWorkdir, binding !== undefined),
-            workdir: taskWorkdir.dir,
+            prompt: buildPrompt(config.handle, from, message, task, {
+              dir: workdirDir, readable: readableRoots(scope, deps.paths.userHome),
+            }, binding !== undefined),
+            workdir: workdirDir,
             timeoutMs,
             callId: call_id,
             signal,
             // The line this call came in on — the PreToolUse guard needs it to
             // know which line's calls.log and task dirs it's policing, and
             // fails closed without it.
-            lineName: deps.paths.name,
             resume: binding?.agent_session_id,
             correlationId: correlation_id,
-            toolTelemetryFile: toolSpool?.file,
-            // A blocked caller never reaches here (resolveAdmission refuses
-            // first), so "blocked" would be unreachable — but narrowing it to
-            // the least-revealing clearance is the safe way to say so.
-            clearance: clearance === "blocked" ? "public" : clearance,
+            // Enumerated from the owner's own config, not configured per line:
+            // `mcp__*` is not expressible in an allowlist, so every server the
+            // owner already installed is named explicitly or is unreachable.
+            mcpServers: discoverMcpServers(deps.paths.userHome),
+            // Already narrowed above, where the workdir was derived from it.
           });
 
           // Mint on a fresh threadable call; roll the existing binding forward
@@ -389,7 +390,7 @@ export function startListener(deps: ListenerDeps): { stop(): Promise<void> } {
               caller: from,
               task: task.id,
               agent_kind: config.agent_kind,
-              workdir: taskWorkdir.dir,
+              workdir: workdirDir,
               turns: (binding?.turns ?? 0) + 1,
               created_at: binding?.created_at ?? now,
               last_used_at: now,
@@ -420,7 +421,6 @@ export function startListener(deps: ListenerDeps): { stop(): Promise<void> } {
             kind: "reply", text: reply, context_id: contextId, task: task.id,
           });
           if (outcomeDeliveryError) {
-            finishInvocation("agent_error", contextId);
             audit({
               call_id, ...correlation, from, message: message.slice(0, 500), task: task.id,
               status: "outcome_delivery_error", duration_ms: Date.now() - started,
@@ -430,7 +430,6 @@ export function startListener(deps: ListenerDeps): { stop(): Promise<void> } {
             });
             return;
           }
-          finishInvocation("success", contextId);
           audit({
             call_id, ...correlation, from, message: message.slice(0, 500), reply: reply.slice(0, 500),
             task: task.id, status: "ok",
@@ -440,11 +439,13 @@ export function startListener(deps: ListenerDeps): { stop(): Promise<void> } {
           });
         } catch (e) {
           const code = e instanceof AgentRunError ? e.code : "agent_error";
-          finishInvocation(code);
           // runAgent settles from the child's exit handler, so reaching here
           // with "canceled" means the process group is actually gone.
           if (code === "canceled") {
-            send({ type: "call_cancelled", call_id, phase: "running" });
+            send({
+              type: "call_cancelled", call_id, phase: "running",
+              ...(frame.lease_id ? { lease_id: frame.lease_id } : {}),
+            });
             audit({ call_id, ...correlation, from, message: message.slice(0, 500), task: task.id, status: "canceled", duration_ms: Date.now() - started });
             return;
           }
@@ -493,7 +494,6 @@ export function startListener(deps: ListenerDeps): { stop(): Promise<void> } {
           });
         }
       });
-      admissionOutcome = accepted ? "accepted" : "busy";
       if (!accepted) {
         const outcomeDeliveryError = await trySendOutcome({ kind: "failure", code: "busy" });
         audit({ call_id, ...correlation, from, message: message.slice(0, 500), task: task.id, status: "busy", duration_ms: 0, outcome_delivery_error: outcomeDeliveryError });
@@ -502,14 +502,15 @@ export function startListener(deps: ListenerDeps): { stop(): Promise<void> } {
         // EventEmitter does not observe a rejected async message callback.
         // Contain unexpected key-store/sealing failures here so one malformed
         // or expired call cannot become an unhandled process rejection.
-        admissionOutcome = "protocol_error";
-        send({ type: "call_rejected", call_id: frame.call_id, code: "protocol_error" });
+        send({
+          type: "call_rejected", call_id: frame.call_id, code: "protocol_error",
+          ...(frame.lease_id ? { lease_id: frame.lease_id } : {}),
+        });
         console.error(
           `Listener could not finish encrypted call ${frame.call_id}: ` +
           `${error instanceof Error ? error.message : String(error)}`,
         );
       } finally {
-        telemetrySafely(() => inboundSpan?.endAdmission(admissionOutcome));
       }
     });
     const scheduleReconnect = () => {
@@ -519,13 +520,11 @@ export function startListener(deps: ListenerDeps): { stop(): Promise<void> } {
         try {
           connect();
         } catch (e) {
-          // loadConfig/resolveLineWorkdir threw on this reconnect attempt —
-          // corrupt config.json, a workdir deleted out from under a running
+          // loadConfig threw on this reconnect attempt — a
+          // corrupt config.json, or the file deleted out from under a running
           // listener, etc. See the comment above connect(): this must not
-          // propagate, or one line's bad config takes down every other
-          // line's socket in this same process — an unhandled throw here is
-          // a multi-line outage, not a single-line one. console.error, not a
-          // new log file: the launchd plist already routes stderr to
+          // propagate and terminate the listener. console.error, not a new
+          // log file: the launchd plist already routes stderr to
           // listenerLog, so this lands in the right place with no plumbing,
           // and it's visible in a foreground `agentcall listen` too. Named by
           // line, since with N lines in one process an error that doesn't
@@ -534,8 +533,8 @@ export function startListener(deps: ListenerDeps): { stop(): Promise<void> } {
           // rewriting the file underneath this read, and a line that
           // permanently drops out on one bad read would need a full process
           // restart to come back — worse than a noisy retry loop. `doctor`
-          // and `line list` are what surface a line stuck offline.
-          console.error(`agentcall: line "${deps.paths.name}" reconnect failed, retrying: ${String(e)}`);
+          // and `doctor` surface an installation stuck offline.
+          console.error(`agentcall: listener reconnect failed, retrying: ${String(e)}`);
           scheduleReconnect();
         }
       }, backoff(attempt++)).unref?.();
@@ -550,10 +549,7 @@ export function startListener(deps: ListenerDeps): { stop(): Promise<void> } {
       stopped = true;
       if (pingTimer) clearInterval(pingTimer);
       try { ws?.close(); } catch { /* fine */ }
-      for (const spool of activeToolSpools) spool.dispose();
-      activeToolSpools.clear();
       await queue.stop();
-      await shutdownTelemetry();
     },
   };
 }

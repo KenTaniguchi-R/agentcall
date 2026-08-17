@@ -1,0 +1,98 @@
+---
+title: Listener and scope
+description: Operate the AgentCall listener on macOS, Linux, or in a container, and label which sources an answering agent may draw on.
+---
+
+## Listener modes
+
+| Platform | Normal mode | Definition | Log |
+| --- | --- | --- | --- |
+| macOS | launchd agent | `~/Library/LaunchAgents/tech.benree.agentcall.listener.plist` | `~/.agentcall/listener.log` |
+| Linux | systemd user service | `~/.config/systemd/user/agentcall-listener.service` | `~/.agentcall/listener.log` |
+| Container/other supervisor | `agentcall listen` | Owned by the supervisor | Supervisor output |
+
+On a headless Linux account, an administrator may need to enable lingering so
+the user manager survives logout. `agentcall doctor` distinguishes a missing,
+installed-but-stopped, and running native service.
+
+## What the agent may read
+
+There is no `workdir` setting. What an answering agent can draw on is decided by
+one file, `~/.agentcall/scope.json`:
+
+```json
+{
+  "roots": ["/Users/ken"],
+  "denied": ["/Users/ken/coding/acme/contracts"]
+}
+```
+
+**Anything under a root is readable unless the denylist refuses it.** `setup`
+writes one root — `$HOME` — so a new installation can answer from the owner's real
+context on day one. `denied` is for the subtrees you never want answered from;
+it is added to a built-in list you cannot override.
+
+The failure direction is worth being clear about: a path nobody thought about
+is **readable**, not refused. A denylist can never be complete, and anything
+that lands under a root later is in scope without you deciding so.
+
+The built-in denylist covers `~/.ssh`, `~/.aws`, `~/.gnupg`, keychains,
+`~/.agentcall`, `~/.codex`, `~/.claude`, the launch-agent and systemd unit
+directories, the shell startup files, and `.env`/`*.pem`-shaped names anywhere
+under a root. `~/.claude/skills` is excepted so skills keep working.
+
+Longest match wins, so a narrower rule beats a broader one regardless of the
+order they appear in the file.
+
+<Warning>
+  **Forgetting to deny something is not safe.** This is a denylist: a path you
+  never thought about is readable. The default root is `$HOME`, so everything
+  beneath it is in scope, including whatever a subdirectory acquires later.
+
+  The built-in denials hold no matter what your roots say — adding `~` or even
+  `~/.ssh` as a root does not make a credential readable. That part is not
+  overridable from this file.
+
+  Narrow the root, or add to `denied`, for anything you would not want a
+  colleague's question to reach.
+</Warning>
+
+## Where the agent starts
+
+The spawn directory is derived, not configured: it is the shortest usable root,
+or `~/AgentCall/public/` only as a fallback when none is usable. It is
+the same for every caller the installation answers.
+
+Block a caller with `agentcall block <handle>`, or close the line by default
+with `agentcall access --default blocked`; see
+[tasks and policy](/guides/tasks-and-policy).
+
+## The read is the boundary
+
+The directory is orientation, not enforcement. For `Read`, `Grep`, `Glob` and
+`LS`, reading a denied path — or anything outside every root — is **refused at
+the tool call**, before the agent sees the content.
+
+**`Bash` is the exception, and it is a large one.** A shell command is not
+checked against the roots or the denylist: the guard records it and allows it,
+because a command string cannot be inspected for what it will read. `cat`,
+`grep` and `wc` reach anything on the machine. Tracked in
+[#419](https://github.com/KenTaniguchi-R/agentcall/issues/419).
+
+The answer itself is **not** inspected. Credential-shaped strings and this
+installation's relay token are redacted from it, and nothing else looks at it. If
+the agent was permitted to read something, it is permitted to repeat it.
+
+<Warning>
+  **With Codex, none of this is enforced.** There is no read guard there at
+  all; `--sandbox read-only` stops writes but not reads; and nothing inspects
+  the answer. A Codex-backed installation can be told to read anything on this machine. Use
+  Claude for anything you need actually bounded.
+</Warning>
+
+## Success check
+
+Run `agentcall doctor` and confirm that it reports a
+healthy listener and shows the derived working directory you expect.
+
+Source of truth: [README callee behavior](https://github.com/KenTaniguchi-R/agentcall#receive-calls-safely).

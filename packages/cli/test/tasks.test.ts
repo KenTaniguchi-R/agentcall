@@ -2,20 +2,20 @@ import { mkdirSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 import { ASK_TASK, loadTasks, scaffoldTask, SkillFrontmatter, splitFrontmatter } from "../src/tasks.js";
-import { getLinePaths, getMachinePaths } from "../src/paths.js";
+import { getPaths } from "../src/paths.js";
 import { tempDir } from "./helpers.js";
 
 function tempHome() { return tempDir("agentcall-tasks-"); }
 
-// tasksDir/policyFile's exact shape (AgentCall/<line>/tasks, .agentcall/lines/<line>/policy.json)
-// is asserted once, in paths.test.ts's getLinePaths tests — this just needs a
-// LinePaths to hand to loadTasks/scaffoldTask below.
+// tasksDir/policyFile's exact shape (AgentCall/tasks, .agentcall/policy.json)
+// is asserted once, in paths.test.ts's getPaths tests — this just needs a
+// Paths to hand to loadTasks/scaffoldTask below.
 function linePaths(home: string) {
-  return getLinePaths(getMachinePaths(home, home), "line");
+  return getPaths(home, home);
 }
 
 function writeSkill(home: string, id: string, skillMd: string) {
-  const dir = join(home, "AgentCall", "line", "tasks", id);
+  const dir = join(home, "AgentCall", "tasks", id);
   mkdirSync(dir, { recursive: true });
   writeFileSync(join(dir, "SKILL.md"), skillMd);
 }
@@ -107,29 +107,30 @@ describe("loadTasks", () => {
     writeSkill(home, "intro", "---\nname: Owner introduction\ndescription: d\n---\nbody\n");
     expect(loadTasks(linePaths(home), () => {}).find((t) => t.id === "intro")!.name).toBe("Owner introduction");
   });
-  it("loads an absolute existing workdir", () => {
+  // Replaces "loads an absolute existing workdir" and "skips task workdirs that
+  // are relative, missing, or not directories". #372 deleted task `workdir`:
+  // where the agent runs is derived from the sensitivity map, so a task naming
+  // its own directory could only contradict it. The three skip cases those
+  // tests covered (relative, missing, not-a-directory) now live on the
+  // derivation instead — see workdirFor in sensitivity.test.ts.
+  //
+  // Pinned as a REJECTION rather than dropped: SkillFrontmatter is `.strict()`,
+  // so a SKILL.md still carrying `workdir:` fails to load with a named warning.
+  // Silently ignoring it would leave an author believing the task still runs
+  // somewhere it does not.
+  it("refuses a SKILL.md still carrying the deleted workdir field", () => {
     const home = tempHome();
     const project = join(home, "code", "payments");
     mkdirSync(project, { recursive: true });
     writeSkill(home, "payments", `---\ndescription: d\nworkdir: ${project}\n---\nbody\n`);
-    expect(loadTasks(linePaths(home), () => {}).find((t) => t.id === "payments")!.workdir).toBe(project);
-  });
-
-  it("skips task workdirs that are relative, missing, or not directories", () => {
-    const home = tempHome();
-    const file = join(home, "not-a-directory");
-    writeFileSync(file, "x");
-    writeSkill(home, "relative", "---\ndescription: d\nworkdir: code/api\n---\n");
-    writeSkill(home, "missing", "---\ndescription: d\nworkdir: /no/such/project\n---\n");
-    writeSkill(home, "file", `---\ndescription: d\nworkdir: ${file}\n---\n`);
     const warnings: string[] = [];
-    const ids = loadTasks(linePaths(home), (warning) => warnings.push(warning)).map((t) => t.id);
+    const ids = loadTasks(linePaths(home), (w) => warnings.push(w)).map((t) => t.id);
     expect(ids).toEqual(["ask"]);
-    expect(warnings).toHaveLength(3);
+    expect(warnings.join("\n")).toMatch(/payments.*invalid SKILL\.md frontmatter/);
   });
   it("skips missing SKILL.md, missing frontmatter, bad YAML, and schema violations — each with a warning", () => {
     const home = tempHome();
-    mkdirSync(join(home, "AgentCall", "line", "tasks", "empty-dir"), { recursive: true });
+    mkdirSync(join(home, "AgentCall", "tasks", "empty-dir"), { recursive: true });
     writeSkill(home, "no-fm", "# bare markdown, no frontmatter\n");
     writeSkill(home, "bad-yaml", "---\ndescription: [unclosed\n---\nbody\n");
     writeSkill(home, "bad-schema", "---\nname: X\n---\nbody\n"); // missing description

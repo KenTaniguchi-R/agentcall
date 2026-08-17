@@ -21,6 +21,7 @@ import { A2A_PROTOCOL_VERSION } from "./version.js";
  * depends on it.
  */
 export const AGENTCALL_POLICY_EXT = "https://agent-call.app/ext/policy/v1";
+export const AGENTCALL_MAILBOX_EXT = "https://agent-call.app/ext/durable-mailbox/v1";
 
 const TEXT_MODES = ["text/plain"];
 
@@ -87,6 +88,7 @@ export function toAgentCard(input: {
   description: string;
   tasks: CardTaskType[];
   baseUrl: string;
+  offlineDelivery?: boolean;
 }): A2AAgentCard {
   return {
     name: input.handle,
@@ -105,6 +107,12 @@ export function toAgentCard(input: {
           required: false,
           params: { handle: input.handle },
         },
+        ...(input.offlineDelivery ? [{
+          uri: AGENTCALL_MAILBOX_EXT,
+          description: "Encrypted durable delivery for temporarily offline installations.",
+          required: false,
+          params: { version: "durable-mailbox-v1" },
+        }] : []),
       ],
     },
     defaultInputModes: [...TEXT_MODES],

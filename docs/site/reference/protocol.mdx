@@ -3,7 +3,7 @@ title: Protocol frames
 description: Generated WebSocket frame shapes exchanged by callers, the relay, and listeners.
 ---
 
-This page is generated from the built Zod schemas in `packages/shared/src/protocol.ts`, `packages/shared/src/e2ee.ts`, and `packages/shared/src/room.ts`. The [repository README](https://github.com/KenTaniguchi-R/agentcall#how-a-call-works) remains the authority on current runtime behavior.
+This page is generated from the built Zod schemas in `packages/shared/src/protocol.ts` and `packages/shared/src/e2ee.ts`. The [repository README](https://github.com/KenTaniguchi-R/agentcall#how-a-call-works) remains the authority on current runtime behavior.
 
 ## Caller to relay
 
@@ -15,6 +15,8 @@ Send an encrypted call payload.
 | --- | --- | --- |
 | `type` | `call_request` | yes |
 | `envelope` | object | yes |
+| `message_id` | string | no |
+| `delivery_mode` | `sync` / `durable` | no |
 | `correlation_id` | string | yes |
 | `traceparent` | string | no |
 
@@ -39,7 +41,7 @@ Return an unauthenticated relay-operational error.
 | --- | --- | --- |
 | `type` | `call_error` | yes |
 | `origin` | `relay` | yes |
-| `code` | `unknown_handle` / `offline` / `timeout` / `canceled` / `unauthorized` / `rate_limited` / `message_too_large` / `protocol_error` | yes |
+| `code` | `unknown_handle` / `offline` / `timeout` / `canceled` / `unauthorized` / `rate_limited` / `message_too_large` / `protocol_error` / `busy` | yes |
 | `call_id` | string | no |
 | `correlation_id` | string | no |
 
@@ -52,7 +54,9 @@ Return an encrypted, authenticated peer outcome.
 | `type` | `call_outcome` | yes |
 | `call_id` | string | yes |
 | `terminal` | `completed` / `failed` | yes |
+| `terminal_reason` | `completed` / `failed` / `canceled` / `expired` / `delivery_failed` / `revoked` / `indeterminate_execution` | no |
 | `envelope` | object | yes |
+| `lease_id` | string | no |
 
 ## Relay to listener
 
@@ -66,9 +70,12 @@ Deliver an encrypted call with relay-attested routing metadata.
 | `call_id` | string | yes |
 | `from` | string | yes |
 | `envelope` | object | yes |
+| `message_id` | string | no |
+| `delivery_mode` | `sync` / `durable` | no |
+| `lease_id` | string | no |
+| `execute_by` | integer | no |
 | `correlation_id` | string | yes |
 | `traceparent` | string | no |
-| `groups` | string[] | no |
 
 ### `cancel_call`
 
@@ -78,6 +85,7 @@ Request cancellation.
 | --- | --- | --- |
 | `type` | `cancel_call` | yes |
 | `call_id` | string | yes |
+| `lease_id` | string | no |
 
 ## Listener to relay
 
@@ -89,6 +97,7 @@ Confirm ownership of queued work.
 | --- | --- | --- |
 | `type` | `call_accepted` | yes |
 | `call_id` | string | yes |
+| `lease_id` | string | no |
 
 ### `call_started`
 
@@ -98,6 +107,7 @@ Confirm the answering process started.
 | --- | --- | --- |
 | `type` | `call_started` | yes |
 | `call_id` | string | yes |
+| `lease_id` | string | no |
 
 ### `call_outcome`
 
@@ -108,7 +118,9 @@ Return an encrypted, authenticated peer outcome.
 | `type` | `call_outcome` | yes |
 | `call_id` | string | yes |
 | `terminal` | `completed` / `failed` | yes |
+| `terminal_reason` | `completed` / `failed` / `canceled` / `expired` / `delivery_failed` / `revoked` / `indeterminate_execution` | no |
 | `envelope` | object | yes |
+| `lease_id` | string | no |
 
 ### `call_rejected`
 
@@ -119,6 +131,7 @@ Reject an invalid encrypted request.
 | `type` | `call_rejected` | yes |
 | `call_id` | string | yes |
 | `code` | `protocol_error` | yes |
+| `lease_id` | string | no |
 
 ### `call_cancelled`
 
@@ -129,6 +142,7 @@ Confirm cancellation completed.
 | `type` | `call_cancelled` | yes |
 | `call_id` | string | yes |
 | `phase` | `pending` / `running` | yes |
+| `lease_id` | string | no |
 
 ### `call_not_cancelled`
 
@@ -139,203 +153,13 @@ Explain why cancellation did not complete.
 | `type` | `call_not_cancelled` | yes |
 | `call_id` | string | yes |
 | `reason` | `already_terminal` / `unknown` / `too_late` | yes |
-
-## Accountless Room HTTP protocol
-
-### Create request
-
-Create a bounded 2–6-person accountless Room.
-
-| Field | Type | Required |
-| --- | --- | --- |
-| `display_name` | string | yes |
-| `signing_public_key` | string | yes |
-| `encryption_public_key` | string | yes |
-| `agent_adapter` | string | yes |
-| `expected_participants` | `2` / `3` / `4` / `5` / `6` | yes |
-
-### Create response
-
-Return the host capability and independent single-use invitations exactly once.
-
-| Field | Type | Required |
-| --- | --- | --- |
-| `room` | object | yes |
-| `participants` | object[] | yes |
-| `participant` | object | no |
-| `credential` | string | yes |
-| `invite` | object | yes |
-
-### Join request
-
-Redeem one invitation with a participant secret and signing-key possession proof.
-
-| Field | Type | Required |
-| --- | --- | --- |
-| `display_name` | string | yes |
-| `signing_public_key` | string | yes |
-| `encryption_public_key` | string | yes |
-| `agent_adapter` | string | yes |
-| `invite` | string | yes |
-| `participant_secret` | string | yes |
-| `signing_proof` | string | yes |
-
-### Join response
-
-Return session-local membership; the capability appears only on first issuance.
-
-| Field | Type | Required |
-| --- | --- | --- |
-| `room` | object | yes |
-| `participants` | object[] | yes |
-| `participant` | object | yes |
-| `credential` | string | no |
-
-### Room action request
-
-Perform a capability-authenticated lifecycle action; only moderation actions use the optional target.
-
-| Field | Type | Required |
-| --- | --- | --- |
-| `participant_id` | string | no |
-
-### Room action response
-
-Return the current bounded Room membership view without credential hashes.
-
-| Field | Type | Required |
-| --- | --- | --- |
-| `room` | object | yes |
-| `participants` | object[] | yes |
-| `participant` | object | no |
-
-## Room participant to relay WebSocket
-
-### `room_call_submit`
-
-Submit one opaque call to an exact Room participant.
-
-| Field | Type | Required |
-| --- | --- | --- |
-| `type` | `room_call_submit` | yes |
-| `call_id` | string | yes |
-| `idempotency_key` | string | yes |
-| `to_participant_id` | string | yes |
-| `request_digest` | string | yes |
-| `encrypted_request` | string | yes |
-
-### `room_call_accepted`
-
-Confirm ownership of delivered Room work.
-
-| Field | Type | Required |
-| --- | --- | --- |
-| `type` | `room_call_accepted` | yes |
-| `call_id` | string | yes |
-
-### `room_call_started`
-
-Confirm the Room answering process started.
-
-| Field | Type | Required |
-| --- | --- | --- |
-| `type` | `room_call_started` | yes |
-| `call_id` | string | yes |
-
-### `room_call_outcome`
-
-Return an opaque terminal Room outcome.
-
-| Field | Type | Required |
-| --- | --- | --- |
-| `type` | `room_call_outcome` | yes |
-| `call_id` | string | yes |
-| `terminal` | `completed` / `failed` | yes |
-| `encrypted_outcome` | string | no |
-
-### `room_call_cancel`
-
-Cancel a previously submitted Room call.
-
-| Field | Type | Required |
-| --- | --- | --- |
-| `type` | `room_call_cancel` | yes |
-| `call_id` | string | yes |
-
-### `room_call_canceled`
-
-Confirm local cancellation completed.
-
-| Field | Type | Required |
-| --- | --- | --- |
-| `type` | `room_call_canceled` | yes |
-| `call_id` | string | yes |
-
-## Relay to Room participant WebSocket
-
-### `room_incoming_call`
-
-Deliver an opaque call with relay-attested Room membership metadata.
-
-| Field | Type | Required |
-| --- | --- | --- |
-| `type` | `room_incoming_call` | yes |
-| `room_id` | string | yes |
-| `membership_epoch` | integer | yes |
-| `from_participant_id` | string | yes |
-| `to_participant_id` | string | yes |
-| `call_id` | string | yes |
-| `request_digest` | string | yes |
-| `encrypted_request` | string | yes |
-| `expires_at` | integer | yes |
-
-### `room_call_status`
-
-Report Room call progress to its caller.
-
-| Field | Type | Required |
-| --- | --- | --- |
-| `type` | `room_call_status` | yes |
-| `call_id` | string | yes |
-| `state` | `submitted` / `accepted` / `working` | yes |
-
-### `room_call_result`
-
-Report a terminal Room result; duplicate submissions may omit erased outcome bytes.
-
-| Field | Type | Required |
-| --- | --- | --- |
-| `type` | `room_call_result` | yes |
-| `call_id` | string | yes |
-| `terminal` | `completed` / `failed` / `canceled` / `expired` | yes |
-| `encrypted_outcome` | string | no |
-| `replayed` | `true` | no |
-
-### `room_call_error`
-
-Return a bounded Room routing or lifecycle error.
-
-| Field | Type | Required |
-| --- | --- | --- |
-| `type` | `room_call_error` | yes |
-| `call_id` | string | no |
-| `code` | `protocol_error` / `busy` / `paused` / `offline` / `unknown_target` / `self_target` / `room_inactive` / `limit` / `cooldown` / `peer_left` / `room_expired` / `canceled` | yes |
-
-### `room_cancel_call`
-
-Request cancellation of exact inbound Room work.
-
-| Field | Type | Required |
-| --- | --- | --- |
-| `type` | `room_cancel_call` | yes |
-| `call_id` | string | yes |
+| `lease_id` | string | no |
 
 ## Important bounds
 
 - Messages are limited to 64,000 bytes; replies to 256,000 bytes.
 - Conversation contexts expire after 30 minutes and allow at most 10 turns.
 - Each caller has a 30-call hourly budget.
-- A listener accepts at most 50 relay-attested shared roster IDs per call.
 - An encrypted WebSocket frame is limited to 2,063,019 bytes.
 - Optional W3C trace context is normalized and must match the correlation ID.
 

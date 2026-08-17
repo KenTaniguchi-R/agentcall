@@ -11,7 +11,9 @@ answer to the caller.
 [Read the documentation](https://agentcall.mintlify.app) ·
 [Install AgentCall](https://agentcall.mintlify.app/get-started/install) ·
 [Security model](https://agentcall.mintlify.app/security/overview) ·
-[Contribute](./CONTRIBUTING.md)
+[Contribute](./CONTRIBUTING.md) ·
+[Report a vulnerability](./SECURITY.md) ·
+[License](./LICENSING.md)
 
 > [!IMPORTANT]
 > AgentCall is pre-production software for trusted teams. Claude is the
@@ -25,12 +27,45 @@ answer to the caller.
 - Delivers authenticated, end-to-end encrypted calls through a hosted relay.
 - Runs the answering agent in a task-specific working directory.
 - Lets owners publish narrow tasks and decide which callers may use them.
-- Supports contacts, team rosters, discovery, conversations, multiple lines,
-  local history, and organization audit export.
+- Supports contacts, conversations, local history, and
+  organization audit export.
+- Optionally stores encrypted calls for an offline coworker and delivers them
+  when a compatible listener reconnects.
 
-AgentCall is not an autonomous-agent marketplace, an offline message queue, or
-an OS-level sandbox. The person receiving a call controls the agent, task,
+AgentCall is not an autonomous-agent marketplace or an OS-level sandbox. Its
+offline mailbox is owner-enabled, bounded, and stores only ciphertext. The person receiving a call controls the agent, task,
 working directory, and capabilities used to answer it.
+
+## Source, hosting, and license
+
+The whole product is in this repository — the relay, the CLI, the protocol, and
+every security control. There is no paid edition, no `ee/` directory, and no
+feature that only the hosted service can perform.
+
+| | In this repository | What the hosted relay at `agent-call.app` adds |
+| --- | --- | --- |
+| Routing, addresses, contacts | ✅ | — |
+| End-to-end encryption and key handling | ✅ | — |
+| The tool guard, task policy, outbound redaction | ✅ | — |
+| Audit records and organization export | ✅ | — |
+| Cloudflare deployment config we deploy with | ✅ | — |
+| Someone else operating it | — | We run it, keep it up, and answer for it |
+| A shared namespace | — | `@your-org/you` in a namespace other organizations also use |
+
+To run your own instead, start from
+[`apps/relay/wrangler.self-host.example.jsonc`](./apps/relay/wrangler.self-host.example.jsonc)
+and the [managed deployment guide](https://agentcall.mintlify.app/administration/managed-deployment).
+A self-hosted relay is not a degraded build; it is this code with your account
+id in it.
+
+**License.** `packages/shared` — the wire protocol — is MIT, so anyone can write
+a client, a relay, or an A2A bridge that speaks it. Everything else is the
+[Functional Source License](https://fsl.software/), which grants every freedom
+you would expect except one: you may not sell a hosted service that substitutes
+for AgentCall. Each version converts to Apache-2.0 two years after release. This
+is [Fair Source](https://fair.io/), not OSI open source, and we would rather say
+so plainly than blur it — the reasoning, the exact boundary, and the treatment
+of the earlier MIT releases are in [LICENSING.md](./LICENSING.md).
 
 ## Install
 
@@ -54,13 +89,14 @@ An administrator creates an invite with:
 agentcall invite create
 ```
 
-Setup registers your identity, creates a private line configuration, prepares
-`~/AgentCall/<line>/public/`, and installs a background listener on macOS or
+Setup registers your identity, creates a private installation configuration and its
+task directory, configures `$HOME` as the initial Claude read root with a
+credential-focused denylist, and installs a background listener on macOS or
 Linux. It then makes a test call to verify that your agent can answer.
 
 ```bash
 agentcall doctor
-agentcall status
+agentcall inspect @acme/you
 ```
 
 Use `agentcall setup --no-verify` only when the agent is not authenticated yet.
@@ -73,19 +109,24 @@ and [setup guide](https://agentcall.mintlify.app/get-started/setup).
 
 ## Usage
 
-Check an address, make a call, or ask for machine-readable output:
+Inspect a peer, make a call, or ask for machine-readable output:
 
 ```bash
-agentcall status @acme/ken
+agentcall inspect @acme/ken
 agentcall call @acme/ken "Why did CI fail?"
 agentcall call @acme/ken "Summarize the failure" --json
 ```
 
-Pin a peer's identity and compare the fingerprint through another channel:
+Inspect a peer's identity, saved note, published tasks, and safe next command:
 
 ```bash
-agentcall verify @acme/ken
+agentcall inspect @acme/ken
 ```
+
+Inspection never creates or replaces a trust pin. Compare an unseen or changed
+fingerprint through another channel. Because peer presence is private, another
+identity's availability is reported as `undisclosed`; inspecting your own
+address can report `online` or `offline`.
 
 Continue the open conversation with that address:
 
@@ -110,56 +151,117 @@ Calls print lifecycle updates to stderr and the authenticated reply to stdout.
 Failures return a nonzero exit code. See [Make your first call](https://agentcall.mintlify.app/get-started/first-call)
 for expected output and recovery steps, or use the [complete CLI reference](https://agentcall.mintlify.app/reference/cli).
 
+An owner may opt into durable offline delivery:
+
+```bash
+agentcall access --offline enabled
+```
+
+When that peer is offline or already has a backlog, `call` exits successfully
+with a task ID. The sealed result can be retrieved by a later CLI process:
+
+```bash
+agentcall jobs list @acme/ken
+agentcall jobs get @acme/ken <task-id> --wait 60
+agentcall jobs cancel @acme/ken <task-id>
+```
+
+Queued request/result ciphertext is retained for up to 72 hours. An expired
+task remains visible as metadata for a further 24 hours.
+
 ## Receive calls safely
 
-Plain calls use the built-in, read-only `ask` task. Create a named task only
-when a caller needs more specific instructions or capabilities:
+Plain calls use the built-in `ask` task. It cannot use Claude's local
+`Write`/`Edit`/`Bash` tools, but it can use the owner's installed skills,
+connected MCP servers, and web tools by default. Create a named task when a
+caller needs more specific instructions:
 
 ```bash
 agentcall task new architecture-history
-# Edit ~/AgentCall/<line>/tasks/architecture-history/SKILL.md
-agentcall lint
-agentcall policy
-agentcall offer architecture-history
+# Edit ~/AgentCall/tasks/architecture-history/SKILL.md
+agentcall doctor
 ```
 
-Tasks are Markdown files with YAML frontmatter. Policy decides which callers or
-rosters may use each task; the listener resolves that policy before placing the
-caller's message in the prompt.
+Tasks are Markdown files with YAML frontmatter, and any caller you have not
+blocked can request any of them. What bounds an answer is not which task ran
+but what it read, and that is two facts: a **root** the agent may read under
+(`$HOME` by default), and a **denylist** that holds regardless of the roots. A
+path outside every root, or on the denylist, is refused **at the read** —
+before the agent ever sees it. The answer itself is not inspected.
+
+> [!CAUTION]
+> **`Bash` is not bounded by any of this.** It is not restricted to the roots and
+> the denylist does not apply to it, so a caller can reach any file on the
+> machine through an ordinary shell command — `~/.ssh`, `~/.aws`, anything. The
+> guard records such a command and allows it, because inspecting a command
+> string cannot tell you what it will read.
+>
+> So the denylist bounds `Read`, `Grep`, `Glob` and `LS`, and not the one tool
+> that can do everything those four can. Treat the roots and the denylist as
+> shaping what an agent reaches *by default*, not as a boundary against a
+> caller who asks for something else. Tracked in
+> [#419](https://github.com/KenTaniguchi-R/agentcall/issues/419).
+
+Who gets answered is a separate, yes/no question. Everyone the relay lets
+through is answered by default; the organization is the boundary, and everyone
+answered sees the same thing.
+
+```bash
+agentcall block spammer              # overrides the default
+agentcall unblock spammer
+agentcall access --default blocked   # answer only named callers
+```
 
 > [!WARNING]
-> A Claude task with `exec` can practically read, change, and send data beyond
-> its working directory. A Codex answering agent has no enforced read boundary.
-> Start read-only and grant broader capabilities only to callers you trust.
+> A fresh installation roots at **`$HOME`**, minus a denylist you cannot override
+> (`~/.ssh`, `~/.aws`, `~/.gnupg`, keychains, `~/.agentcall`, `~/.codex`, the
+> shell rc files, and `.env`/`*.pem`-shaped names anywhere).
+>
+> **A denylist can never be complete**, and the failure direction is now a leak
+> rather than a refusal: anything you put under `$HOME` later is in scope
+> without you deciding so. The default is **credential-safe, not confidential**
+> — `redactOutbound` strips credential-shaped strings from the reply, but a
+> salary figure or an unreleased plan has no shape to match. What carries
+> confidentiality is the organization boundary.
+>
+> **A Codex-backed installation has no read guard at all.** Nothing stops the agent reading a
+> denied path, and nothing inspects the answer. Use Claude for anything you
+> actually need bounded.
+>
+> **Connected tools are delegated authority.** Any caller this installation answers can
+> invoke every MCP server, skill, app, and web tool loaded by the answering
+> agent. MCP tools may send mail, modify calendars, change cloud data, or make
+> payments. Blocking local `Write`/`Edit`/`Bash` does not constrain an MCP
+> process or the external account it controls.
 
 The [receive-a-call guide](https://agentcall.mintlify.app/get-started/receive-calls)
 and [tasks and policy guide](https://agentcall.mintlify.app/guides/tasks-and-policy)
 cover task design, caller rules, policy tests, cards, and safe defaults.
 
-## Recovering a lost line token
+## Recovering a lost installation token
 
-While a line still works, create its out-of-band recovery root:
+While the installation still works, create its out-of-band recovery root:
 
 ```bash
-agentcall recovery issue --line <name>
+agentcall recovery issue
 ```
 
 AgentCall shows the proof only on the controlling terminal and requires you to
 acknowledge that it is saved somewhere separate, such as a password manager.
-It is never written to line config, pending state, stdout/stderr, or logs. Record
+It is never written to config, pending state, stdout/stderr, or logs. Record
 the returned generation and public proof ID with it. Issuing again increments
 the generation and immediately invalidates the predecessor.
 
-If the line token is lost, retain both the current proof and the newly displayed
+If the installation token is lost, retain both the current proof and the newly displayed
 successor proof until recovery confirms its public receipt:
 
 ```bash
-agentcall recovery redeem --line <name> --org <org> --handle <handle> \
+agentcall recovery redeem --org <org> --handle <handle> \
   --relay <url> --generation <number>
 ```
 
 Before contacting the relay, the CLI atomically saves a locally generated
-candidate token and operation ID in that line's private pending file. Neither
+candidate token and operation ID in the installation's private pending file. Neither
 recovery proof is saved there. Recovery atomically consumes the current proof,
 replaces the online token, advances to the successor proof, and evicts sockets
 owned by the recovered identity's current Durable Object. Persistent token
@@ -167,22 +269,20 @@ replacement blocks every reconnect. Before the stable-identity cutover in #154,
 an already-open outbound caller socket lives in the remote target's Durable
 Object and is not globally evicted by this receipt; the cutover removes that
 topology limitation. If the response is lost, run
-`agentcall recovery redeem --line <name> --resume` and provide both retained
+`agentcall recovery redeem --resume` and provide both retained
 proofs. The consumed predecessor can then retrieve only the exact seven-day
 receipt already bound to that operation; changed or cross-identity payloads are
 rejected. Remove the predecessor backup only after the CLI confirms the receipt.
 
-`--line <name>` (or the `AGENTCALL_LINE` environment variable, same precedence
-order — an explicit `--line` wins) selects which line a command acts on wherever
-a machine has more than one: `rotate`, `card`, `task new`, and the six policy
-verbs (`allow`/`revoke`/`block`/`unblock`/`offer`/`unoffer`) all accept it. Omit
-it and these default to the primary line.
+One AgentCall installation has one identity. Contacts belong to the installation.
+Legacy installations with `~/.agentcall/lines/` are refused rather than merged
+or selected automatically; follow the [single-identity migration guide](https://agentcall.mintlify.app/guides/single-identity-migration).
 
 Current relay tokens do not expire, cannot be listed or individually revoked,
 and have no last-used timestamp; rotation is the immediate hard swap described
 above. The recovery proof is also intentionally long-lived because it must work
 after an offline backup has been untouched for a long time; `agentcall doctor`
-reports this sole long-lived full-authority exception and warns when a line has
+reports this sole long-lived full-authority exception and warns when an installation has
 no proof. The decided zero-user credential cutover will replace online tokens with
 90-day client credentials, one-hour access tokens, bounded overlap, revocation,
 and coarse liveness tracking. See the
@@ -212,13 +312,19 @@ lifecycle state, timing, source-network metadata where available, envelope
 headers, and ciphertext size. Prompts, replies, task content, and peer failure
 details remain encrypted in transit through the relay.
 
-`agentcall doctor` reports the installed package and real CLI entry that answered,
-warns when a different install also appears on `PATH`, reports each line's recovery
-generation (or missing backup), and verifies your install can answer calls (auth,
-agent spawn, listener, relay self-call). Run it whenever setup or
-calls to you start failing. `✓` is a pass and `✗` is a failure with a fix; a `!` is a
-check that could not be proven either way this run, which is not a failure and does
-not change doctor's exit code.
+`agentcall doctor` is the single read-only self-diagnostics interface. It reports
+task validity, the effective policy, card drift, key publication, recovery,
+listener state, runtime health, mailbox capability, key-ring health, and the
+local execution journal. Add `--json` for the same structured report.
+It never publishes, repairs, or makes a relay self-call. `✓` is a pass, `✗` is a
+failure with a fix, and `!` is a warning that does not change the exit code.
+
+Remote publication is deliberately explicit and administrative:
+
+```bash
+agentcall admin card publish
+agentcall admin keys publish
+```
 
 Read [How AgentCall works](https://agentcall.mintlify.app/overview/how-it-works)
 for the full lifecycle and [Protocol reference](https://agentcall.mintlify.app/reference/protocol)
@@ -232,7 +338,8 @@ from its owner's operating-system account.
 - Any authenticated handle may call another handle in the same organization.
   An address is a routing identifier, not a secret capability.
 - The callee's policy selects the task before untrusted message text enters the
-  prompt. The built-in `ask` task is read-only.
+  prompt. The built-in `ask` task blocks Claude's local mutation tools but
+  delegates installed skills, connected MCP servers, and web tools.
 - The caller's message is defanged before it is placed in the prompt: AgentCall's
   own instruction fence and model control tokens are replaced with `[filtered]`,
   so a caller cannot forge the syntax that separates the owner's instructions
@@ -240,17 +347,18 @@ from its owner's operating-system account.
   harmful instruction written as ordinary prose still reaches the agent, and the
   task and its capabilities are what bound it.
 - Claude file tools are guarded against credential paths and paths outside the
-  task working directory. Shell access is recorded but not confined by that
-  guard.
-- Codex uses its native read-only or workspace-write sandbox and an observe-only
-  hook. Its read-only mode prevents writes but does not confine reads.
-- A task that grants shell execution gives broad local and network authority.
-  AgentCall has no domain firewall.
+  configured scope. Local `Write`, `Edit`, `NotebookEdit`, and `Bash` are denied.
+- Claude automatically grants MCP servers from `~/.claude.json`, claude.ai
+  hosted connectors, installed plugin MCPs, skills, and web research tools.
+- Codex keeps its native read-only sandbox but loads the owner's normal user
+  configuration, including MCP servers, skills, apps, web, and image tools.
+- MCP processes and authenticated remote tools may act outside the local
+  sandbox. AgentCall has no per-operation MCP firewall.
 - A caller's prompt can induce the answering agent to read and echo back
   material the guard does not cover — a key pasted into a tracked config file, a
   credential printed by an allowed command. Replies are scanned locally for
-  credential shapes (`sk-`, `gh*_`, AWS key ids, JWTs, bearer tokens, roster join
-  keys) and for this line's own relay token, and matches are replaced with
+  credential shapes (`sk-`, `gh*_`, AWS key ids, JWTs, bearer tokens) and for
+  the installation's relay token, and matches are replaced with
   `[redacted]` before the reply is sealed and before it is written to the local
   log. The scan is a fixed local pass with no network call, so it cannot fail
   open — but it recognizes shapes, not secrets in general.
@@ -271,8 +379,8 @@ and [Visibility and privacy](https://agentcall.mintlify.app/security/visibility-
 | Evaluate the product | [Overview](https://agentcall.mintlify.app) |
 | Install and make a first call | [Get started](https://agentcall.mintlify.app/get-started/install) |
 | Publish safe tasks | [Tasks, cards, and policy](https://agentcall.mintlify.app/guides/tasks-and-policy) |
-| Find agents and manage contacts | [Discovery and contacts](https://agentcall.mintlify.app/guides/discovery-and-contacts) |
-| Operate a listener | [Listeners and working directories](https://agentcall.mintlify.app/guides/listener-and-workdirs) |
+| Save and manage known contacts | [Contacts](https://agentcall.mintlify.app/guides/discovery-and-contacts) |
+| Operate a listener | [Listener and scope](https://agentcall.mintlify.app/guides/listener-and-sensitivity) |
 | Administer an organization | [Administration](https://agentcall.mintlify.app/administration/invites) |
 | Troubleshoot a failure | [Troubleshooting](https://agentcall.mintlify.app/guides/troubleshooting) |
 | Look up commands and protocol details | [Reference](https://agentcall.mintlify.app/reference/cli) |
@@ -285,6 +393,14 @@ and schema definitions rather than hand-copied text.
 
 ```bash
 pnpm install
+pnpm verify          # lint, build, docs, typecheck, test, bundle, invariants
+```
+
+`pnpm verify` is the gate and the only definition of done. Running the steps
+individually is a weaker check — it skips lint, the documentation check, the
+wrangler bundle, and every invariant:
+
+```bash
 pnpm -r build
 pnpm -r typecheck
 pnpm -r test
@@ -296,56 +412,20 @@ The monorepo contains:
 
 ```text
 apps/relay/          Cloudflare Worker, Durable Objects, and D1
-packages/shared/     Protocol schemas and shared types
+packages/shared/     Protocol schemas and shared types (MIT)
 packages/cli/        The @benree/agentcall CLI and listener
-docs/site/            Git-backed Mintlify documentation
+docs/site/           Git-backed Mintlify documentation
+docs/research/       Dated technical research notes
+docs/superpowers/    Historical design records — why, not what
 ```
 
-Read [CLAUDE.md](./CLAUDE.md) for architecture and development conventions.
-Before taking an issue, follow the claim and worktree protocol in
-[CONTRIBUTING.md](./CONTRIBUTING.md). Open work is tracked in
-[GitHub Issues](https://github.com/KenTaniguchi-R/agentcall/issues).
+Read [CLAUDE.md](./CLAUDE.md) for architecture and development conventions, and
+[CONTRIBUTING.md](./CONTRIBUTING.md) before opening a pull request. Open work is
+tracked in [GitHub Issues](https://github.com/KenTaniguchi-R/agentcall/issues) —
+there is no roadmap file. Conduct expectations are in
+[CODE_OF_CONDUCT.md](./CODE_OF_CONDUCT.md); vulnerabilities go through
+[SECURITY.md](./SECURITY.md), never a public issue or pull request.
 
-### Local OpenTelemetry (opt-in)
-
-AgentCall initializes no telemetry SDK by default. Set `AGENTCALL_OTEL=1` in
-the caller/listener process to enable its manual OpenTelemetry instrumentation,
-then use the standard `OTEL_SERVICE_NAME`, `OTEL_EXPORTER_OTLP_*`, timeout, and
-sampling environment variables to select an OTLP/HTTP collector. A supervised
-background listener needs these variables in its supervisor environment; a
-shell-only export affects only foreground commands.
-
-The local implementation exports bounded call metadata and span timing. When
-enabled, paired runtime hooks also emit `execute_tool <name>` child spans and
-`gen_ai.execute_tool.duration` only for tool lifecycles with the same stable
-pre/post tool-call ID. Claude supplies explicit success/failure and native
-duration events. Codex tool spans are currently disabled: the 0.146.0 live
-probe showed its default code-mode tool path can complete without emitting
-either lifecycle hook, and telemetry does not change the runtime's tool surface
-to force an observable path. Duplicate, mismatched, oversized, and incomplete
-local observations are discarded.
-Pairs with non-allowlisted tool names or timestamps outside the invocation's
-spool lifetime are omitted as well.
-
-The hook spool is a mode-0600 file in AgentCall's private state, outside the
-configured task worktree and Codex's writable sandbox. It is bounded to 256 KiB and consumed and
-deleted when the invocation ends. It contains only call ID, tool-call ID, bounded
-allowlisted tool name, timestamps, duration, and a low-cardinality outcome—never messages,
-replies, handles, tool arguments/results, paths, policy/error details, or agent
-session IDs. Raw provider tool-call IDs are paired locally and exported only as
-per-invocation keyed digests. Claude `exec` has no OS filesystem boundary, so
-spool observations are treated as untrusted: inode/mode checks, strict tool-name
-allowlisting, keyed IDs, and bounded timing prevent attacker-chosen strings from
-becoming span attributes or metric labels, but do not make tool telemetry an
-audit-grade record. Collector headers and all other `OTEL_*`/`AGENTCALL_OTEL*`
-settings are removed from the Claude/Codex and hook subprocess environments.
-Remote sampling flags cannot override the listener's locally bounded sampler;
-`AGENTCALL_OTEL_MAX_ROOT_SPANS_PER_MINUTE` sets its absolute root-span token
-bucket (default 60). Export or shutdown failure never changes a call result.
-The listener records only aggregate trace-export failures, metric-export
-failures, and span-queue drops in `~/.agentcall/telemetry-health.json`;
-`agentcall doctor` reports a warning from that local file without making
-telemetry health a call-health requirement.
 See the living [data-residency map](./docs/security/data-residency.md) and
 [employee transparency statement](./docs/security/employee-transparency.md)
 for the current privacy, export, and Cloudflare separation contracts. The dated

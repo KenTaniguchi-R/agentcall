@@ -13,15 +13,17 @@ limits are product behavior, not a roadmap promise.
 - Foreground/container-supervised listeners
 - Organization-scoped authenticated calls
 - Signed HPKE-encrypted request and outcome content
-- Caller/task policy, task cards, rosters, contacts, and multiple local lines
+- Owner-enabled durable offline delivery with local result decryption
+- Caller/task policy, task cards, contacts, and multiple local lines
 - Short multi-turn conversations
-- Local call history and tool-attempt telemetry
+- Local call history
 - Administrator invite and audit-export CLI workflows
 
 ## Important limitations
 
 - No native Windows listener installer
-- No offline delivery or store-and-forward mailbox
+- No guaranteed exactly-once network delivery; mailbox delivery is at-least-once,
+  with an endpoint journal preventing automatic duplicate process spawn
 - No cross-organization calling
 - No handle release or reclaim; removing a line does not free its handle
 - No OS-level sandbox around the answering process
@@ -33,9 +35,10 @@ limits are product behavior, not a roadmap promise.
 - The experimental customer-owned relay is not a production-ready on-premises product
 
 <Warning>
-  A task with shell execution can reach beyond its working directory. A Codex
-  answering agent has no enforced read floor. Review the [security model](/security/overview)
-  before accepting callers or granting capabilities.
+  Connected MCP servers, skills, and apps are delegated to every caller the
+  installation answers. They may change external accounts or act outside the local
+  sandbox. A Codex answering agent also has no enforced read floor. Review the
+  [security model](/security/overview) before accepting callers.
 </Warning>
 
 ## Non-goals

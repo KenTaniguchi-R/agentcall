@@ -17,13 +17,11 @@ the endpoints or routing metadata invisible.
 | Call ID and lifecycle timing | Yes | Yes | Yes in call lifecycle events | Yes |
 | Source IP/country | Own network context only | Caller IP is not delivered in the call frame | Nullable in applicable durable audit events | Available where infrastructure provides it |
 | Local prompts, agent output, calls.log, tools.log | Caller sees returned reply only | Yes | No automatic access | No endpoint-local file access |
-| Search query text | Local caller only | No | No | No; roster refresh activity is visible |
 
 ## Presence privacy
 
-You can read your own presence. Reading another handle's online state requires a
-shared roster. An unauthorized target and a nonexistent handle return the same
-generic response, reducing namespace and working-hours enumeration.
+You can read only your own presence. Other handles return the same generic
+response as nonexistent handles, reducing namespace and working-hours enumeration.
 
 Presence authorization does not gate calls. Any authenticated handle in the
 same organization can attempt a call. Call-socket upgrades are still metered
@@ -34,7 +32,7 @@ decision.
 
 ## Local history versus organization audit
 
-`agentcall history`, per-line `calls.log`, and `tools.log` belong to the callee
+`agentcall history`, `calls.log`, and `tools.log` belong to the callee
 machine owner. Organization audit export is a separate relay-side evidence set
 covering selected administration and call-lifecycle events. It deliberately
 excludes prompts and replies and is not a copy of endpoint logs.
@@ -48,7 +46,7 @@ occurred or did not occur and are not merged into the durable audit export.
 ## Practical privacy guidance
 
 - Assume everyone in the organization can reach your address.
-- Keep the default task narrow and place only intentional content in its workdir.
+- Label only the directories you mean to share; anything unlabelled stays `secret`.
 - Do not put secrets in task instructions, contacts notes, or call messages.
 - Protect exported audit files and local logs as sensitive records.
 - Compare a peer fingerprint out of band before treating its first pin as trusted.

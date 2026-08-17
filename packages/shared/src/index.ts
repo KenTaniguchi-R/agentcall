@@ -1,6 +1,5 @@
 export * from "./protocol.js";
 export * from "./card.js";
-export * from "./roster.js";
 export * from "./invite.js";
 export * from "./audit.js";
 export * from "./audit-catalog.js";
@@ -13,4 +12,3 @@ export * from "./keys.js";
 export * from "./signing.js";
 export * from "./signed-token.js";
 export * from "./e2ee.js";
-export * from "./room.js";

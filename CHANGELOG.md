@@ -4,7 +4,73 @@ All notable changes to agentcall are recorded here. Versions apply to both
 `@benree/agentcall` (the CLI) and `@benree/agentcall-shared` (protocol schemas),
 which are released together.
 
-## Unreleased
+## 0.5.0 — 2026-08-10
+
+### Answering agents inherit the owner's connected tools (#392)
+
+- Claude calls now grant installed skills, web research, user-configured MCP
+  servers, claude.ai hosted connectors, and MCP servers bundled by installed
+  plugins. Deferred MCP schemas load through `ToolSearch`.
+- Codex calls now load the owner's normal user configuration, including MCP
+  servers, skills, apps, web search, and image generation. Its native
+  read-only sandbox remains enabled, but MCP processes may act outside it.
+- Claude's local `Write`, `Edit`, `NotebookEdit`, and `Bash` tools remain out of
+  the spawn allowlist and are now also denied by the PreToolUse guard.
+- Connected tools are delegated authority: their own send, update, delete, and
+  payment operations are available to every caller the installation answers.
+
+### Single self-diagnostics interface (#429)
+
+- Make `agentcall doctor` the only self-diagnostics surface, with matching
+  human and JSON reports for task validity, effective policy, card drift, key
+  publication, recovery, listener state, and runtime health.
+- Keep plain `doctor` read-only and remove its relay self-call. It never fixes,
+  publishes, or rewrites installation state.
+- Remove top-level `lint`, `policy`, `card`, and `keys publish` without aliases.
+  Move explicit remote publication to `agentcall admin card publish` and
+  `agentcall admin keys publish`; retain policy mutations, trust reset, token
+  rotation, and recovery commands.
+
+### Unified peer inspection (#428)
+
+- Add `agentcall inspect <contact-or-address>` as the single read-only view of
+  resolved address, saved contact note, availability disclosure, identity pin
+  comparison, offered tasks, examples, and a safe next command.
+- Remove top-level `status` and `verify`, and remove peer-target `card`; retain
+  self `card`, `card push`, contacts CRUD, and explicit `trust --reset`.
+- Never create or replace a trust pin during inspection. Peer availability is
+  `undisclosed` after the self-only presence change in #424; only self
+  inspection reports `online` or `offline`.
+
+### One installation identity (#427)
+
+- Replace local multi-line selection with one identity per installation. Remove
+  `line add/list/remove/primary`, multiple listeners, `--line`, `--as`,
+  `AGENTCALL_LINE`, primary-line state, and their tests and current docs.
+- Store identity, policy, keys, contexts, recovery state, and logs directly in
+  `~/.agentcall`; keep contacts installation-scoped and authored tasks in
+  `~/AgentCall/tasks`.
+- Refuse legacy `~/.agentcall/lines/` installations instead of choosing or
+  merging identities automatically, with an explicit migration guide.
+
+### Roster and search removal (#424)
+
+- Remove roster/search CLI commands, local roster state and caches, relay
+  routes and mutation logic, shared discovery schemas, and roster group
+  attestation from calls, presence, and policy.
+- Keep calling explicit addresses and saved contacts as the single discovery
+  model; presence inspection is limited to the authenticated line itself.
+- Preserve append-only D1 migrations, legacy roster tables, historical roster
+  audit events, and their administrator export contract.
+
+### Accountless Room removal (#371)
+
+- Remove the experimental accountless Room command and protocol so AgentCall has
+  one authenticated Team call model instead of two parallel identity systems.
+- Remove Room HTTP and WebSocket routes, schemas, Durable Object bindings,
+  client runtimes, safety adapters, tests, and current documentation.
+- Remove the Room-only terminal helpers and simplify the shared call lifecycle
+  to its remaining authenticated Team principal.
 
 ### The Room membership code is reported, not asked (#369)
 

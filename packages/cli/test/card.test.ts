@@ -3,10 +3,10 @@ import { describe, expect, it } from "vitest";
 import { buildCardUpload, publishCard } from "../src/card.js";
 import { ASK_TASK, type Task } from "../src/tasks.js";
 import type { Policy } from "../src/policy.js";
-import type { LineConfig } from "../src/config.js";
+import type { Config } from "../src/config.js";
 import { tempLine } from "./helpers.js";
 
-const cfg: LineConfig = { org: "acme", handle: "ken", token: "t", agent_kind: "claude", relay: "https://r" };
+const cfg: Config = { org: "acme", handle: "ken", token: "t", agent_kind: "claude", relay: "https://r" };
 const intro: Task = {
   id: "owner-introduction", name: "Intro", description: "Introduce the owner.",
   examples: ["who is ken?"], keywords: [], threadable: true, skill: "secret steps",
@@ -19,45 +19,51 @@ const meet: Task = {
 describe("buildCardUpload", () => {
   const policy: Policy = {
     description: "Ken's agent",
-    default_offer: ["ask", "owner-introduction"],
-    callers: {
-      mia: { offer: ["+schedule-meeting"], block: false },
-      spammer: { offer: ["owner-introduction"], block: true },
+    offline_delivery: { enabled: false },
+    default_access: "allowed", callers: {
+      mia: {},
+      spammer: { access: "blocked" },
     },
-    groups: { eng: { roster_id: "g".repeat(22), offer: ["schedule-meeting"] } },
   };
 
-  it("includes card metadata but never envelopes or SKILL.md content", () => {
+  it("includes card metadata but never SKILL.md content", () => {
     const upload = buildCardUpload(cfg, policy, [ASK_TASK, intro, meet]);
-    expect(upload).toMatchObject({ description: "Ken's agent", agent_kind: "claude", default_offer: ["ask", "owner-introduction"] });
+    expect(upload).toMatchObject({ description: "Ken's agent", agent_kind: "claude" });
     const introEntry = upload.tasks.find((t) => t.id === "owner-introduction")!;
     expect(introEntry).toEqual({ id: "owner-introduction", name: "Intro", description: "Introduce the owner.", examples: ["who is ken?"], keywords: [] });
     expect(JSON.stringify(upload)).not.toContain("secret steps");
     expect(JSON.stringify(upload)).not.toContain("caps");
   });
 
-  it("maps caller grants (stripping + prefixes) and omits blocked callers", () => {
+  // Replaces "maps caller grants (stripping + prefixes) and omits blocked
+  // callers" and "drops offered/granted ids that have no task on disk". Both
+  // pinned menu projection, which #379 deleted: a card is now the whole task
+  // list, so there is no grant to map and no dangling id to drop. `blocked` is
+  // the surviving half and is checked here.
+  it("publishes every task on disk, and no per-caller menu", () => {
     const upload = buildCardUpload(cfg, policy, [ASK_TASK, intro, meet]);
-    expect(upload.grants).toEqual({ mia: ["schedule-meeting"] });
-    expect(upload.group_grants).toEqual({ ["g".repeat(22)]: ["schedule-meeting"] });
-    expect(upload.blocked).toEqual(["spammer"]);
+    expect(upload.tasks.map((t) => t.id)).toEqual(["ask", "owner-introduction", "schedule-meeting"]);
+    expect(Object.keys(upload)).toEqual([
+      "description", "agent_kind", "tasks", "blocked", "offline_delivery",
+    ]);
   });
 
-  it("drops offered/granted ids that have no task on disk", () => {
-    const stale: Policy = {
-      description: "", default_offer: ["ask", "gone"],
-      callers: { mia: { offer: ["also-gone"], block: false } }, groups: {},
-    };
-    const upload = buildCardUpload(cfg, stale, [ASK_TASK]);
-    expect(upload.default_offer).toEqual(["ask"]);
-    expect(upload.grants).toEqual({});
-    expect(upload.tasks.map((t) => t.id)).toEqual(["ask"]);
+  // The clearance table is the owner's assessment of their own callers. It
+  // must not travel with the card, where the callers it assesses could read
+  // it — only the blocked list, which they can already infer by calling.
+  it("publishes blocked callers but never the clearance table", () => {
+    const upload = buildCardUpload(cfg, policy, [ASK_TASK, intro, meet]);
+    expect(upload.blocked).toEqual(["spammer"]);
+    const serialized = JSON.stringify(upload);
+    expect(serialized).not.toContain("internal");
+    expect(serialized).not.toContain("mia");
+    expect(serialized).not.toContain("g".repeat(22));
   });
 
   it("publishes task keywords to the relay", () => {
     const upload = buildCardUpload(
       { org: "acme", handle: "ken", token: "t", agent_kind: "claude", relay: "https://r.test" },
-      { description: "d", default_offer: ["adr"], callers: {}, groups: {} },
+      { description: "d", default_access: "allowed", callers: {}, offline_delivery: { enabled: false } },
       [{ id: "adr", name: "ADR", description: "Why.", examples: [],
          keywords: ["auth", "migration"], threadable: true, skill: "" }],
     );
@@ -77,7 +83,7 @@ describe("publishCard", () => {
     let pushed: unknown;
     const upload = await publishCard(cfg, p, async (_relay, _auth, u) => { pushed = u; });
     expect(pushed).toEqual(upload);
-    expect(upload.default_offer).toEqual(["ask"]); // DEFAULT_POLICY, no tasks dir
+    expect(upload.tasks.map((t) => t.id)).toEqual(["ask"]); // DEFAULT_POLICY, no tasks dir
     const snap = JSON.parse(readFileSync(p.cardSnapshotFile, "utf8"));
     expect(snap).toEqual(upload);
   });

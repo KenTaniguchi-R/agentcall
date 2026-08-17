@@ -35,8 +35,8 @@
           "guides/tasks-and-policy",
           "guides/discovery-and-contacts",
           "guides/identity-and-keys",
-          "guides/multiple-lines",
-          "guides/listener-and-workdirs",
+          "guides/single-identity-migration",
+          "guides/listener-and-sensitivity",
           "guides/troubleshooting"
         ]
       },

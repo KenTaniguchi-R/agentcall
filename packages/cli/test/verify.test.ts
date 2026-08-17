@@ -1,49 +1,24 @@
-import { existsSync, mkdirSync, mkdtempSync, readdirSync, rmSync, writeFileSync } from "node:fs";
-import { tmpdir } from "node:os";
+import { existsSync, mkdirSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { describe, expect, it } from "vitest";
 import { tempDir } from "./helpers.js";
 import { runGuard } from "../src/guard.js";
-import { getLinePaths, getMachinePaths } from "../src/paths.js";
-import { SensitivityMapSchema, withFloor } from "../src/sensitivity.js";
+import { getPaths } from "../src/paths.js";
+import { ScopeSchema } from "../src/scope.js";
 import { AgentRunError, type AgentKind } from "../src/runner.js";
 import {
   checkAgentBinary,
   checkCodexAuth,
-  checkCodexGuard,
   checkGuard,
-  checkRelaySelfCall,
   checkAgentSpawn,
   classifyAgentFailure,
   formatCheck,
   guardDenied,
-  GUARD_PROBE_LINE,
   HINTS,
-  runCodexGuardProbe,
   VERIFY_PROMPT,
   VERIFY_TIMEOUT_MS,
   verifyAgent,
 } from "../src/verify.js";
-
-const trustedCodexHookList = JSON.stringify({
-  id: 2,
-  result: {
-    data: [{
-      cwd: "/work",
-      hooks: [{
-        key: "/<session-flags>/config.toml:pre_tool_use:0:0",
-        enabled: true,
-        trustStatus: "trusted",
-      }, {
-        key: "/<session-flags>/config.toml:post_tool_use:0:0",
-        enabled: true,
-        trustStatus: "trusted",
-      }],
-      warnings: [],
-      errors: [],
-    }],
-  },
-});
 
 describe("classifyAgentFailure", () => {
   it("maps claude auth errors to the /login hint", () => {
@@ -163,7 +138,7 @@ describe("checkCodexAuth", () => {
   });
 });
 
-const fakeWorkdir = getLinePaths(getMachinePaths("/tmp/agentcall-verify-test-home"), "line").shareDir;
+const fakeWorkdir = getPaths("/tmp/agentcall-verify-test-home").shareDir;
 
 // checkAgentSpawn now builds its own SpawnSpec (to apply the AGENTCALL_HOME
 // override below), which moved a real binary-on-PATH lookup above the runFn
@@ -180,15 +155,15 @@ describe("checkAgentSpawn", () => {
     expect(c).toMatchObject({ name: "agent run", ok: true });
   });
 
-  it("invokes runFn with the verify prompt, timeout, and the narrowest clearance", async () => {
+  it("invokes runFn with the verify prompt and timeout", async () => {
     const seen: unknown[] = [];
-    await checkAgentSpawn("claude", fakeWorkdir, async ({ kind, prompt, timeoutMs, clearance }) => {
-      seen.push(kind, prompt, timeoutMs, clearance);
+    await checkAgentSpawn("claude", fakeWorkdir, async ({ kind, prompt, timeoutMs }) => {
+      seen.push(kind, prompt, timeoutMs);
       return { text: "OK" };
     }, fakeResolveBin);
-    // "public": the doctor probe answers nobody, so it gets the clearance that
-    // reveals least rather than whatever the ask task used to carry.
-    expect(seen).toEqual(["claude", VERIFY_PROMPT, VERIFY_TIMEOUT_MS, "public"]);
+    // No clearance any more (2026-08-07): the probe answers nobody, and with
+    // one grantable level there was nothing for it to carry.
+    expect(seen).toEqual(["claude", VERIFY_PROMPT, VERIFY_TIMEOUT_MS]);
   });
 
   it("classifies an auth failure into a hint", async () => {
@@ -201,7 +176,7 @@ describe("checkAgentSpawn", () => {
   });
 
   // Regression for the doctor-probe orphan-line bug: this spawn runs under
-  // GUARD_PROBE_LINE ("doctor-probe"), a synthetic name with no real line
+  // "doctor-probe" ("doctor-probe"), a synthetic name with no real line
   // behind it — same as the two guard probes in this file, which each
   // mkdtemp their own AGENTCALL_HOME for exactly this reason (see
   // defaultGuardProbe/defaultGuardBinaryProbe below). checkAgentSpawn never
@@ -221,7 +196,7 @@ describe("checkAgentSpawn", () => {
   // doesn't have). Before the fix, checkAgentSpawn passed no specOverride at
   // all (runFn's 5th argument was `undefined`), so this fails against the
   // current code — there is no spec to inspect.
-  it("spawns under a throwaway AGENTCALL_HOME so a real ~/.agentcall/lines/doctor-probe is never created", async () => {
+  it("spawns under a throwaway AGENTCALL_HOME so verification never touches the real installation", async () => {
     const seenSpecs: Array<{ env?: NodeJS.ProcessEnv } | undefined> = [];
     await checkAgentSpawn("claude", fakeWorkdir, async ({ specOverride }) => {
       seenSpecs.push(specOverride);
@@ -232,9 +207,7 @@ describe("checkAgentSpawn", () => {
     expect(spec).toBeDefined();
     expect(spec!.env?.AGENTCALL_HOME).toBeTruthy();
     expect(spec!.env?.AGENTCALL_HOME).not.toBe(process.env.AGENTCALL_HOME);
-    // The line name the spawn's guard is wired up under must still be
-    // GUARD_PROBE_LINE, unaffected by the AGENTCALL_HOME redirection.
-    expect(spec!.env?.AGENTCALL_LINE).toBe(GUARD_PROBE_LINE);
+    expect(spec!.env?.AGENTCALL_LINE).toBeUndefined();
   });
 
   // Regression for the CI breakage the AGENTCALL_HOME fix above introduced:
@@ -284,181 +257,7 @@ describe("checkAgentSpawn", () => {
   });
 });
 
-describe("checkCodexGuard", () => {
-  it("passes only when hooks/list reports AgentCall's exact session hook enabled and trusted", async () => {
-    const calls: Array<{ args: string[]; input: string; cwd: string }> = [];
-    const check = await checkCodexGuard("/work", async (args, input, cwd) => {
-      calls.push({ args, input, cwd });
-      return trustedCodexHookList;
-    });
 
-    expect(check).toMatchObject({ name: "codex tool telemetry", ok: true });
-    expect(calls).toHaveLength(1);
-    expect(calls[0]!.args[0]).toBe("app-server");
-    expect(calls[0]!.args.some((arg) => arg.startsWith("hooks.PreToolUse="))).toBe(true);
-    expect(calls[0]!.args.some((arg) => arg.startsWith("hooks.PostToolUse="))).toBe(true);
-    expect(calls[0]!.args.some((arg) => arg.startsWith("hooks.state="))).toBe(true);
-    expect(calls[0]!.input).toContain('"method":"hooks/list"');
-    expect(calls[0]!.input).toContain('"cwds":["/work"]');
-    expect(calls[0]!.cwd).toBe("/work");
-  });
-
-  it("probes only the production PreToolUse configuration when telemetry is disabled", async () => {
-    let seenArgs: string[] = [];
-    const output = JSON.stringify({
-      id: 2,
-      result: { data: [{ cwd: "/work", hooks: [{
-        key: "/<session-flags>/config.toml:pre_tool_use:0:0",
-        enabled: true,
-        trustStatus: "trusted",
-      }] }] },
-    });
-    const check = await checkCodexGuard("/work", async (args) => {
-      seenArgs = args;
-      return output;
-    }, false);
-
-    expect(check).toMatchObject({ name: "codex session guard", ok: true });
-    expect(seenArgs.some((arg) => arg.startsWith("hooks.PreToolUse="))).toBe(true);
-    expect(seenArgs.some((arg) => arg.startsWith("hooks.PostToolUse="))).toBe(false);
-    const trust = seenArgs.find((arg) => arg.startsWith("hooks.state="));
-    expect(trust).toContain(":pre_tool_use:0:0");
-    expect(trust).not.toContain(":post_tool_use:0:0");
-  });
-
-  it("fails when managed-only policy removes the session hook", async () => {
-    const output = JSON.stringify({ id: 2, result: { data: [{ cwd: "/work", hooks: [] }] } });
-    const check = await checkCodexGuard("/work", async () => output);
-    expect(check).toMatchObject({ name: "codex tool telemetry", ok: false });
-    expect(check.detail).toContain("session hook is absent");
-    expect(check.hint).toContain("allow_managed_hooks_only");
-  });
-
-  it("fails when the trusted pre hook exists but paired post lifecycle discovery does not", async () => {
-    const output = JSON.stringify({
-      id: 2,
-      result: { data: [{ cwd: "/work", hooks: [{
-        key: "/<session-flags>/config.toml:pre_tool_use:0:0",
-        enabled: true,
-        trustStatus: "trusted",
-      }] }] },
-    });
-    const check = await checkCodexGuard("/work", async () => output);
-    expect(check).toMatchObject({ ok: false });
-    expect(check.detail).toContain("tool lifecycle hook is absent");
-  });
-
-  it("does not accept a trusted hook result for a different working directory", async () => {
-    const output = JSON.stringify({
-      id: 2,
-      result: { data: [{ cwd: "/other", hooks: [{
-        key: "/<session-flags>/config.toml:pre_tool_use:0:0",
-        enabled: true,
-        trustStatus: "trusted",
-      }] }] },
-    });
-    const check = await checkCodexGuard("/work", async () => output);
-    expect(check.ok).toBe(false);
-    expect(check.detail).toContain("session hook is absent");
-  });
-
-  it.each([
-    [{ enabled: false, trustStatus: "trusted" }, "disabled"],
-    [{ enabled: true, trustStatus: "modified" }, "modified"],
-    [{ enabled: true, trustStatus: "untrusted" }, "untrusted"],
-  ])("fails when the exact session hook is not executable: %j", async (state, detail) => {
-    const output = JSON.stringify({
-      id: 2,
-      result: { data: [{ cwd: "/work", hooks: [{
-        key: "/<session-flags>/config.toml:pre_tool_use:0:0", ...state,
-      }] }] },
-    });
-    const check = await checkCodexGuard("/work", async () => output);
-    expect(check.ok).toBe(false);
-    expect(check.detail).toContain(detail);
-  });
-
-  it("fails closed on app-server errors and malformed responses", async () => {
-    expect((await checkCodexGuard("/work", async () => "not json")).ok).toBe(false);
-    expect(await checkCodexGuard("/work", async () => { throw new Error("app-server failed"); }))
-      .toMatchObject({ ok: false, detail: "app-server failed" });
-  });
-});
-
-describe("runCodexGuardProbe", () => {
-  it("handles split JSON, kills the process group, and removes the isolated CODEX_HOME", async () => {
-    const root = mkdtempSync(join(tmpdir(), "codex-guard-transport-"));
-    const helperMarker = join(root, "helper-survived");
-    const helper = `setTimeout(() => require("node:fs").writeFileSync(${JSON.stringify(helperMarker)}, "x"), 300)`;
-    const script = [
-      `require("node:child_process").spawn(process.execPath, ["-e", ${JSON.stringify(helper)}], { stdio: "ignore" })`,
-      "const response = JSON.stringify({ id: 2, codexHome: process.env.CODEX_HOME })",
-      "process.stdout.write(response.slice(0, 7))",
-      "setTimeout(() => process.stdout.write(response.slice(7)), 10)",
-      "setInterval(() => {}, 1000)",
-    ].join(";");
-    try {
-      const output = await runCodexGuardProbe(
-        process.execPath, ["-e", script], "request\n", root,
-        { tempRoot: root, timeoutMs: 1_000, killGraceMs: 50 },
-      );
-      const response = JSON.parse(output) as { id: number; codexHome: string };
-      expect(response.id).toBe(2);
-      expect(response.codexHome.startsWith(root)).toBe(true);
-      expect(existsSync(response.codexHome)).toBe(false);
-      await new Promise((resolve) => setTimeout(resolve, 400));
-      expect(existsSync(helperMarker), "a helper escaped the app-server process group").toBe(false);
-      expect(readdirSync(root)).toEqual([]);
-    } finally {
-      rmSync(root, { recursive: true, force: true });
-    }
-  });
-
-  it("times out a non-responsive child and removes its isolated home", async () => {
-    const root = mkdtempSync(join(tmpdir(), "codex-guard-timeout-"));
-    try {
-      await expect(runCodexGuardProbe(
-        process.execPath, ["-e", "setInterval(() => {}, 1000)"], "request\n", root,
-        { tempRoot: root, timeoutMs: 50, killGraceMs: 25 },
-      )).rejects.toThrow("timed out");
-      expect(readdirSync(root)).toEqual([]);
-    } finally {
-      rmSync(root, { recursive: true, force: true });
-    }
-  });
-
-  it("bounds stdout, terminates the child, and removes its isolated home", async () => {
-    const root = mkdtempSync(join(tmpdir(), "codex-guard-overflow-"));
-    try {
-      await expect(runCodexGuardProbe(
-        process.execPath,
-        ["-e", 'process.stdout.write("x".repeat(2048)); setInterval(() => {}, 1000)'],
-        "request\n", root,
-        { tempRoot: root, maxOutputBytes: 1024, timeoutMs: 1_000, killGraceMs: 25 },
-      )).rejects.toThrow("exceeded 1024 bytes");
-      expect(readdirSync(root)).toEqual([]);
-    } finally {
-      rmSync(root, { recursive: true, force: true });
-    }
-  });
-
-  it("fails on early close or spawn error and removes each isolated home", async () => {
-    const root = mkdtempSync(join(tmpdir(), "codex-guard-errors-"));
-    try {
-      await expect(runCodexGuardProbe(
-        process.execPath, ["-e", ""], "request\n", root,
-        { tempRoot: root, timeoutMs: 1_000, killGraceMs: 25 },
-      )).rejects.toThrow("before hooks/list responded");
-      await expect(runCodexGuardProbe(
-        "/definitely/missing-agentcall-codex", [], "request\n", root,
-        { tempRoot: root, timeoutMs: 1_000, killGraceMs: 25 },
-      )).rejects.toThrow();
-      expect(readdirSync(root)).toEqual([]);
-    } finally {
-      rmSync(root, { recursive: true, force: true });
-    }
-  });
-});
 
 describe("verifyAgent", () => {
   it("runs binary -> spawn for claude and returns both checks", async () => {
@@ -508,41 +307,13 @@ describe("verifyAgent", () => {
   });
 });
 
-describe("checkRelaySelfCall", () => {
-  const cfg = { org: "acme", handle: "ken", token: "tok", agent_kind: "claude" as const, relay: "https://relay.example" };
-  const paths = getLinePaths(getMachinePaths(tmpdir(), tmpdir()), "claude");
-
-  it("calls the agent's own address through the relay and passes on a reply", async () => {
-    const seen: Array<{ org: string; from: string; to: string; relay: string; token: string; message: string; timeoutMs?: number }> = [];
-    const c = await checkRelaySelfCall(cfg, paths, async (opts) => {
-      seen.push({ org: opts.org, from: opts.from, to: opts.to, relay: opts.relay, token: opts.token, message: opts.message, timeoutMs: opts.timeoutMs });
-      return { type: "call_reply", call_id: "c1", text: "hi", task: "ask" } as never;
-    });
-    expect(c).toMatchObject({ name: "relay self-call", ok: true });
-    expect(seen).toEqual([
-      {
-        from: "ken", to: "ken", relay: "https://relay.example", org: "acme", token: "tok",
-        message: "agentcall doctor self-test: reply briefly", timeoutMs: VERIFY_TIMEOUT_MS + 30_000,
-      },
-    ]);
-  });
-
-  it("fails with a launchd-environment hint when the call errors", async () => {
-    const c = await checkRelaySelfCall(cfg, paths, async () => {
-      throw new Error("The remote agent hit an error while answering.");
-    });
-    expect(c.ok).toBe(false);
-    expect(c.hint).toContain("listener");
-  });
-});
-
 // A temp home whose calls.log already contains a denial, as a real guard run
 // would have left behind. Per-line layout: checkGuard's default probes run
-// under GUARD_PROBE_LINE (verify.ts), so deniedInLog reads
-// .agentcall/lines/<GUARD_PROBE_LINE>/calls.log, not the flat legacy path.
+// under "doctor-probe" (verify.ts), so deniedInLog reads
+// .agentcall/lines/<"doctor-probe">/calls.log, not the flat legacy path.
 function homeWithDenial(): string {
   const home = tempDir("guardcheck-");
-  const callsLog = getLinePaths(getMachinePaths(home), GUARD_PROBE_LINE).callsLog;
+  const callsLog = getPaths(home).callsLog;
   mkdirSync(dirname(callsLog), { recursive: true });
   writeFileSync(callsLog,
     JSON.stringify({ ts: "2026-07-31T00:00:00.000Z", type: "tool_denied", tool: "Read" }) + "\n");
@@ -554,15 +325,15 @@ function homeWithDenial(): string {
 // a literal here would keep passing after the shape changed.
 function realDenialStdout(): string {
   const home = tempDir("guardout-");
-  const line = getLinePaths(getMachinePaths(home, home), "probe-line");
+  const line = getPaths(home, home);
   return runGuard(
     JSON.stringify({ tool_name: "Read", tool_input: { file_path: join(home, ".env") }, cwd: home }),
     {
-      line, callId: "probe", now: () => "2026-08-01T00:00:00.000Z", realpath: (p) => p, appendLine: () => {},
-      // Empty map: every path is secret by omission, so the .env probe below
-      // denies on sensitivity as well as on its basename. Either route emits
-      // the same stdout shape, which is the only thing this helper cares about.
-      map: withFloor(SensitivityMapSchema.parse({}), home), clearance: "internal",
+      paths: line, callId: "probe", now: () => "2026-08-01T00:00:00.000Z", realpath: (p) => p, appendLine: () => {},
+      // No roots: every path is outside scope, so the .env probe below denies
+      // on the root check as well as on its basename. Either route emits the
+      // same stdout shape, which is the only thing this helper cares about.
+      scope: ScopeSchema.parse({}),
     },
   ).stdout;
 }

@@ -1,6 +1,6 @@
 ---
 title: Core concepts
-description: Understand AgentCall organizations, addresses, lines, tasks, cards, rosters, and conversations.
+description: Understand AgentCall organizations, addresses, lines, tasks, cards, contacts, and conversations.
 ---
 
 AgentCall uses a small set of terms repeatedly. Learn these before configuring
@@ -17,8 +17,8 @@ policy or operating more than one identity.
 | Callee | The line receiving a call and running an answering agent. |
 | Task | Owner-authored instructions plus a capability envelope and optional working directory. |
 | Card | The task menu a line publishes for callers. |
-| Policy | Rules that decide which callers or shared rosters may invoke each task. |
-| Roster | An opt-in discovery group whose members can find one another's published tasks. |
+| Policy | Rules that decide which named callers may invoke each task. |
+| Contact | A local name and note for an explicit AgentCall address. |
 | Context | An opaque token for a short multi-turn conversation with one callee and task. |
 
 ## Relationships that matter
@@ -26,7 +26,7 @@ policy or operating more than one identity.
 - A line belongs to one organization on one relay.
 - A machine can hold several lines, but they share the same OS account. Lines
   separate identity and policy, not filesystem trust.
-- A roster belongs to one line. Joining on one line does not join the others.
+- Contacts are machine-local conveniences; they do not grant relay access.
 - A card advertises tasks; policy still makes the final admission decision.
 - An address is a routing identifier, not a secret. Any authenticated member of
   the same organization can attempt a call.

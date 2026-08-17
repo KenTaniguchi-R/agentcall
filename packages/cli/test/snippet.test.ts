@@ -19,7 +19,7 @@ describe("appendSnippet", () => {
   it("mentions the contacts workflow", () => {
     expect(SNIPPET).toContain("agentcall contacts list");
     expect(SNIPPET).toContain("agentcall contacts add");
-    expect(SNIPPET).toContain("agentcall status");
+    expect(SNIPPET).toContain("agentcall inspect");
   });
 
   it("replaces a stale marker block in place, leaving surrounding content", () => {

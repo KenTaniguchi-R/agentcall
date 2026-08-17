@@ -1,16 +1,18 @@
 import WebSocket, { type RawData } from "ws";
 import { randomBytes } from "node:crypto";
 import { formatAddress,
-  CORRELATION_ID_RE, E2EERelayToCallerFrame, MAX_E2EE_WIRE_BYTES, RELAY_CALL_TIMEOUT_MS, keyIdFor,
+  CORRELATION_ID_RE, E2EECallerFrame, E2EERelayToCallerFrame, MAILBOX_TTL_MS, MAX_E2EE_WIRE_BYTES,
+  RELAY_CALL_TIMEOUT_MS, keyIdFor,
   normalizeTraceparent, requestTranscript, safeParseFrame, sanitizeDetail, transcriptHash,
-  type CallStatusType, type E2EERequestPayloadType, type ErrorCodeType,
+  type CallQueuedType, type CallStatusType, type E2EERequestPayloadType, type ErrorCodeType,
 } from "@benree/agentcall-shared";
-import { ApiError, assertValidHandle, fetchKeys } from "./api.js";
+import { ApiError, assertValidHandle, fetchCard, fetchKeys } from "./api.js";
 import { openE2EEResponse, sealE2EERequest } from "./e2ee.js";
 import { loadKeys } from "./keys.js";
 import { verifyAndPinPeer } from "./known-peers.js";
-import type { LinePaths } from "./paths.js";
+import type { Paths } from "./paths.js";
 import { relayHostOf } from "./config.js";
+import { acknowledgeOutboundJob, forgetOutboundJob, rememberOutboundJob } from "./outbound-jobs.js";
 
 export class CallError extends Error {
   constructor(
@@ -37,14 +39,13 @@ const HUMAN: Record<string, string> = {
   message_too_large: "Your message is too large (64KB max).",
   protocol_error: "Protocol error.",
   blocked: "This agent's owner has blocked calls from your handle.",
-  task_not_offered: "That task isn't offered to you.",
   task_unknown: "That task doesn't exist on this agent.",
   context_unknown: "That conversation is no longer available. Start a new call.",
 };
 
 export interface CallOpts {
   relay: string; org: string; from: string; token: string; to: string; message: string;
-  paths: LinePaths;
+  paths: Paths;
   contextId?: string;
   onStatus?: (state: CallStatusType["state"], frame: CallStatusType) => void;
   timeoutMs?: number;
@@ -53,19 +54,20 @@ export interface CallOpts {
   traceparent?: string;
   // Interval for the caller-side keepalive ping below; overridable for tests.
   pingIntervalMs?: number;
-  // Task id from the callee's card to perform; omitted lets the callee's
-  // policy pick a default (single offered task, or "ask").
+  // Task id from the callee's card to perform; omitted lands on the callee's
+  // built-in "ask" task.
   task?: string;
   /** Internal test seams; production always uses the real trust/key stores. */
   keyDeps?: {
     fetchKeys?: typeof fetchKeys;
+    fetchCard?: typeof fetchCard;
     verifyAndPinPeer?: typeof verifyAndPinPeer;
     loadKeys?: typeof loadKeys;
     now?: () => number;
   };
 }
 
-interface CallReply {
+export interface CallReply {
   type: "call_reply";
   call_id: string;
   correlation_id?: string;
@@ -73,6 +75,10 @@ interface CallReply {
   context_id?: string;
   task?: string;
 }
+
+export type CallQueuedReply = CallQueuedType & { address: string };
+
+export type CallResult = CallReply | CallQueuedReply;
 
 export function callStatusMessage(state: CallStatusType["state"]): string {
   if (state === "ringing") return "ringing...";
@@ -90,7 +96,7 @@ function rawWireBytes(raw: RawData): number {
     : raw.byteLength;
 }
 
-export async function callAgent(opts: CallOpts): Promise<CallReply> {
+export async function callAgent(opts: CallOpts): Promise<CallResult> {
   const correlationId = opts.correlationId && CORRELATION_ID_RE.test(opts.correlationId)
     ? opts.correlationId
     : createCorrelationId();
@@ -108,6 +114,9 @@ export async function callAgent(opts: CallOpts): Promise<CallReply> {
       undefined, undefined, correlationId, "transport",
     );
   }
+  const mailboxEnabled = await (opts.keyDeps?.fetchCard ?? fetchCard)(opts.relay, opts.to, auth)
+    .then((card) => card.offline_delivery.enabled)
+    .catch(() => false);
   // No socket opens until the recipient record is validated against the local
   // trust store. A missing, changed, stale, invalid, or expired key therefore
   // cannot cause even a partial plaintext-compatible call attempt.
@@ -133,22 +142,25 @@ export async function callAgent(opts: CallOpts): Promise<CallReply> {
     );
   }
   const recipientPeer = await (opts.keyDeps?.verifyAndPinPeer ?? verifyAndPinPeer)(
-    opts.paths.machine, toAddress, recipientBundle,
+    opts.paths, toAddress, recipientBundle,
   );
   const senderKeys = (opts.keyDeps?.loadKeys ?? loadKeys)(opts.paths);
   const issuedAt = (opts.keyDeps?.now ?? Date.now)();
+  const messageId = randomBytes(16).toString("hex");
   const request: E2EERequestPayloadType = {
     v: 1,
     direction: "request",
     relay_origin: relayOrigin,
     from: fromAddress,
     to: toAddress,
+    message_id: messageId,
+    ...(mailboxEnabled ? { delivery_mode: "durable" as const } : {}),
     request_id: randomBytes(16).toString("hex"),
     sender_identity_key_id: await keyIdFor(senderKeys.identity_pub),
     recipient_encryption_key_id: recipientBundle.encryption.record.key_id,
     recipient_epoch: recipientBundle.encryption.record.epoch,
     issued_at: issuedAt,
-    expires_at: issuedAt + RELAY_CALL_TIMEOUT_MS,
+    expires_at: issuedAt + (mailboxEnabled ? MAILBOX_TTL_MS : RELAY_CALL_TIMEOUT_MS),
     message: opts.message,
     ...(opts.contextId ? { context_id: opts.contextId } : {}),
     ...(opts.task ? { task: opts.task } : {}),
@@ -159,8 +171,10 @@ export async function callAgent(opts: CallOpts): Promise<CallReply> {
     epoch: recipientBundle.encryption.record.epoch,
   });
   const requestBinding = {
+    message_id: messageId,
     request_id: request.request_id,
     request_transcript_hash: await transcriptHash(requestTranscript(request)),
+    ...(request.delivery_mode ? { delivery_mode: request.delivery_mode } : {}),
   };
   const responseExpected = {
     relay_origin: relayOrigin,
@@ -169,6 +183,25 @@ export async function callAgent(opts: CallOpts): Promise<CallReply> {
     key_id: await keyIdFor(senderKeys.encryption_pub),
     epoch: senderKeys.epoch,
   };
+  const outboundFrame = E2EECallerFrame.parse({
+    type: "call_request", envelope, message_id: messageId,
+    ...(mailboxEnabled ? { delivery_mode: "durable" } : {}),
+    correlation_id: correlationId, traceparent,
+  });
+  if (mailboxEnabled) {
+    await rememberOutboundJob(opts.paths, {
+      message_id: messageId,
+      relay: opts.relay,
+      address: toAddress,
+      frame: outboundFrame,
+      request_id: request.request_id,
+      request_transcript_hash: requestBinding.request_transcript_hash,
+      recipient_identity_pub: recipientPeer.identity_pub,
+      sender_epoch: senderKeys.epoch,
+      created_at: issuedAt,
+      expires_at: request.expires_at,
+    });
+  }
   const wsUrl = opts.relay.replace(/^http/, "ws") + `/v1/ws?role=call&to=${encodeURIComponent(opts.to)}`;
   return new Promise((resolve, reject) => {
     const ws = new WebSocket(wsUrl, {
@@ -201,9 +234,7 @@ export async function callAgent(opts: CallOpts): Promise<CallReply> {
     });
     ws.on("error", (e) => finish(() => reject(new CallError(`Connection failed: ${e.message}`, "connection_failed"))));
     ws.on("open", () => {
-      ws.send(JSON.stringify({
-        type: "call_request", envelope, correlation_id: correlationId, traceparent,
-      }));
+      ws.send(JSON.stringify(outboundFrame));
       // Cloudflare's idle timeout can drop a long-running call (agent answers
       // can take up to AGENT_TIMEOUT_MS) if the socket goes quiet. Ping keeps
       // it alive; unref() so this timer alone never keeps the process open.
@@ -221,6 +252,31 @@ export async function callAgent(opts: CallOpts): Promise<CallReply> {
       const frame = safeParseFrame(E2EERelayToCallerFrame, String(raw));
       if (!frame) return;
       if (frame.type === "call_status") opts.onStatus?.(frame.state, frame);
+      else if (frame.type === "call_queued") {
+        if (frame.message_id !== messageId || frame.correlation_id !== correlationId) {
+          finish(() => reject(new CallError(
+            "Durable receipt does not match the submitted request.", "protocol_error",
+            undefined, frame.call_id, correlationId, "transport",
+          )));
+          return;
+        }
+        try {
+          await acknowledgeOutboundJob(opts.paths, messageId, {
+            task_id: frame.call_id,
+            submitted_at: frame.submitted_at,
+            expires_at: frame.expires_at,
+          });
+        } catch (error) {
+          finish(() => reject(new CallError(
+            `Could not persist durable receipt: ${error instanceof Error ? error.message : String(error)}`,
+            "protocol_error", undefined, frame.call_id, correlationId, "transport",
+          )));
+          return;
+        }
+        finish(() => resolve({
+          ...frame, address: toAddress,
+        }));
+      }
       else if (frame.type === "call_outcome") {
         try {
           const response = await openE2EEResponse(
@@ -231,6 +287,12 @@ export async function callAgent(opts: CallOpts): Promise<CallReply> {
           const authenticatedTerminal = outcome.kind === "reply" ? "completed" : "failed";
           if (frame.terminal !== authenticatedTerminal) {
             throw new Error("Encrypted peer outcome does not match its relay-visible terminal state.");
+          }
+          if (mailboxEnabled) {
+            try { await forgetOutboundJob(opts.paths, messageId); }
+            catch (error) {
+              console.error(`Warning: could not remove completed outbound job: ${String(error)}`);
+            }
           }
           if (outcome.kind === "reply") {
             finish(() => resolve({

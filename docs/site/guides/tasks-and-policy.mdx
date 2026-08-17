@@ -1,10 +1,10 @@
 ---
 title: Tasks and policy
-description: Publish narrow AgentCall tasks, grant them to callers or rosters, and test the effective policy.
+description: Publish narrow AgentCall tasks, set what each caller may be told, and test the effective policy.
 ---
 
-Tasks define what an answering agent is asked to do and which capabilities it
-receives. Policy defines who may invoke each task.
+Tasks define what an answering agent is asked to do. Policy defines how much of
+what it finds may reach each caller.
 
 ## 1. Scaffold a task
 
@@ -12,14 +12,12 @@ receives. Policy defines who may invoke each task.
 agentcall task new architecture-history
 ```
 
-Edit `~/AgentCall/<line>/tasks/architecture-history/SKILL.md`:
+Edit `~/AgentCall/tasks/architecture-history/SKILL.md`:
 
 ```yaml
 ---
 description: Explain why past architecture decisions were made.
 keywords: [architecture, migration, adr]
-tools: [read]
-workdir: /absolute/path/to/the/repository
 ---
 
 Use ADRs, commit history, and current code to explain the decision.
@@ -27,72 +25,107 @@ Call out uncertainty instead of inventing rationale.
 ```
 
 Only `description` is required. Optional fields are `name`, `keywords`,
-`examples`, `tools`, `timeout_s`, `workdir`, and `threadable`. The directory
-name is the task ID.
+`examples`, `timeout_s`, and `threadable`. The directory name is the
+task ID. Unrecognized keys are rejected rather than ignored, so a stale field is
+a startup error and not a silent no-op.
 
 ## 2. Validate before publishing
 
 ```bash
-agentcall lint
-agentcall policy
-agentcall card
+agentcall doctor
 ```
 
-`lint` checks task manifests, effective policy assertions, and the rendered
-card. The other commands make the final grants and working directories visible
-for human review.
+`doctor` is the single read-only view of task validity, effective policy,
+working scope, and card drift. Add `--json` for the same structured result.
 
-## 3. Grant access
+## 3. Decide who is answered
+
+Any caller you have not blocked can request any task. What bounds the answer is
+what the task read, not which task ran: a path outside every root, or on the
+denylist, is refused **at the read** — before the agent sees it. The answer
+itself is not inspected.
+
+<Warning>
+  **This does not bound `Bash`.** A caller can reach any file on the machine
+  through a shell command; the guard records it and allows it, because a command
+  string cannot be inspected for what it will read. The roots and the denylist
+  shape what the agent reaches by default — they are not a boundary against a
+  caller who asks for something else. See
+  [#419](https://github.com/KenTaniguchi-R/agentcall/issues/419).
+</Warning>
+
+Who gets answered is a separate, yes/no question. **Everyone answered sees the
+same thing** — the organization is the boundary, not a per-caller level.
 
 ```bash
-# Everyone in the organization may request it
-agentcall offer architecture-history
-
-# Only one caller gets the extra task
-agentcall allow ken architecture-history
-
-# Remove a named grant or public offer
-agentcall revoke ken architecture-history
-agentcall unoffer architecture-history
-
-# Deny a caller completely
+# Deny a caller completely — beats the default
 agentcall block spammer
+agentcall unblock spammer
+
+# Answer only named callers
+agentcall access --default blocked
 ```
 
-Policy verbs republish the card automatically. `agentcall card push` republishes
-after a direct policy-file edit.
+Offline delivery is a separate owner opt-in and defaults to disabled:
+
+```bash
+agentcall access --offline enabled
+agentcall access --offline disabled
+```
+
+Enabling it republishes the installation card with `durable-mailbox-v1`.
+Disabling it stops new durable admissions; queued work is revalidated before
+lease and becomes terminal `revoked` if delivery remains disabled.
+
+`secret` is not grantable. It means "never leaves this machine", so no caller
+and no caller can reach it.
+
+Policy verbs republish the card automatically. After a direct policy-file edit,
+review the change and publish explicitly:
+
+```bash
+agentcall doctor
+agentcall admin card publish
+```
 
 ## Add policy assertions
 
-Assertions prevent an accidental edit from silently widening access:
+Assertions prevent an accidental edit from silently widening access. Each pins
+whether one caller is answered, which is what actually governs whether anything
+leaves:
 
 ```json
 {
-  "default_offer": ["ask"],
+  "default_access": "blocked",
   "callers": {
-    "ken": { "offer": ["architecture-history"] },
-    "stranger": { "offer": [], "block": true }
+    "ken": { "access": "allowed" },
+    "stranger": { "access": "blocked" }
   },
   "tests": [
-    { "caller": "ken", "accept": ["architecture-history"], "deny": ["exec"] },
-    { "caller": "stranger", "deny": ["*"] }
+    { "caller": "ken", "expect_access": "allowed" },
+    { "caller": "stranger", "expect_access": "blocked" }
   ]
 }
 ```
+
+A named caller rule overrides the installation default.
 
 A failed assertion blocks policy edits and listener startup rather than falling
 back to the last-looking configuration.
 
 <Warning>
-  `exec` is broad local authority. Shell commands can read, change, and send
-  data outside a task working directory. Codex cannot enforce the same file-read
-  boundary as Claude. Grant `write`, `fetch`, or `exec` only after reviewing the
-  [security model](/security/overview).
+  `scope.json` names a root the agent may read under, and a denylist that holds
+  regardless. **A path you never thought about is readable** — the default root
+  is `$HOME`, so anything a subdirectory later acquires is in scope too.
+  **With Codex none of this is enforced.** There is no read guard there at
+  all, so nothing stops a denied read, and nothing inspects the answer.
+  Review the [security model](/security/overview) before widening a root.
 </Warning>
 
 ## Success check
 
-`agentcall lint` exits successfully and `agentcall card` shows the intended task,
-audience, capabilities, and working directory—nothing more.
+`agentcall doctor` exits successfully, shows the intended tasks, default access,
+each named caller's resolved access, mailbox capability, key-ring and execution
+journal health, and a current card publication.
 
 Source of truth: [README task and policy behavior](https://github.com/KenTaniguchi-R/agentcall#usage).

@@ -8,10 +8,12 @@ import {
 import { z } from "zod";
 import {
   EncryptionKeyRecord, exportPublicKey, generateEncryptionKeyPair, generateIdentityKeyPair,
+  MAILBOX_TTL_MS, RELAY_CALL_TIMEOUT_MS,
   toBase64Url,
 } from "@benree/agentcall-shared";
 import { assertPrivateFile, writeJsonAtomic } from "./json-store.js";
-import type { LinePaths } from "./paths.js";
+import { loadOutboundJobs } from "./outbound-jobs.js";
+import type { Paths } from "./paths.js";
 
 const HASH = /^[0-9a-f]{32}$/;
 
@@ -46,6 +48,19 @@ const RetiredEpochStateSchema = z.object({
   previous_encryption_transcript_hash: z.string().regex(HASH),
 }).strict();
 type RetiredEpochState = z.infer<typeof RetiredEpochStateSchema>;
+
+const RETAINED_KEY_SKEW_MS = 120_000;
+const RETAINED_KEY_TTL_MS = MAILBOX_TTL_MS + RELAY_CALL_TIMEOUT_MS + RETAINED_KEY_SKEW_MS;
+const MAX_LIVE_ENCRYPTION_EPOCHS = 8;
+const RetainedEpochKeySchema = z.object({
+  format: z.literal(1),
+  encryption_pkcs8: z.string().min(1),
+  encryption_pub: z.string().min(1),
+  epoch: z.number().int().positive(),
+  previous_encryption_transcript_hash: z.string().regex(HASH).nullable(),
+  retained_until: z.number().int().positive(),
+}).strict();
+type RetainedEpochKey = z.infer<typeof RetainedEpochKeySchema>;
 
 const EpochStateSchema = z.union([ActiveEpochStateSchema, RetiredEpochStateSchema]);
 
@@ -88,16 +103,57 @@ type KeyRotationHooks = {
   electionWaitMs?: number;
 };
 
-function epochStateFile(paths: LinePaths, epoch: number): string {
+function epochStateFile(paths: Paths, epoch: number): string {
   return `${paths.identityKeyFile}.epoch-${epoch}.state.json`;
 }
 
-function pendingPublicationFile(paths: LinePaths, epoch: number): string {
+function pendingPublicationFile(paths: Paths, epoch: number): string {
   return `${paths.identityKeyFile}.epoch-${epoch}.pending.json`;
 }
 
-function publishedEpochFile(paths: LinePaths, epoch: number): string {
+function publishedEpochFile(paths: Paths, epoch: number): string {
   return `${paths.identityKeyFile}.epoch-${epoch}.published.json`;
+}
+
+function retainedEpochFile(paths: Paths, epoch: number): string {
+  return `${paths.identityKeyFile}.epoch-${epoch}.retained.json`;
+}
+
+function listRetainedEpochs(paths: Paths): RetainedEpochKey[] {
+  const prefix = `${basename(paths.identityKeyFile)}.epoch-`;
+  const suffix = ".retained.json";
+  const retained: RetainedEpochKey[] = [];
+  for (const name of readdirSync(paths.dir)) {
+    if (!name.startsWith(prefix) || !name.endsWith(suffix)) continue;
+    const epochText = name.slice(prefix.length, -suffix.length);
+    if (!/^[1-9]\d*$/.test(epochText)) continue;
+    const file = join(paths.dir, name);
+    const parsed = RetainedEpochKeySchema.safeParse(readJson(file));
+    if (!parsed.success || parsed.data.epoch !== Number(epochText)) {
+      throw new Error(`${file} could not be read: unexpected contents.`);
+    }
+    retained.push(parsed.data);
+  }
+  return retained;
+}
+
+function retainEpoch(paths: Paths, keys: StoredKeys, now = Date.now()): void {
+  const candidate: RetainedEpochKey = {
+    format: 1,
+    encryption_pkcs8: keys.encryption_pkcs8,
+    encryption_pub: keys.encryption_pub,
+    epoch: keys.epoch,
+    previous_encryption_transcript_hash: keys.previous_encryption_transcript_hash,
+    retained_until: now + RETAINED_KEY_TTL_MS,
+  };
+  const file = retainedEpochFile(paths, keys.epoch);
+  installFirstWriterWins(file, candidate);
+  const persisted = RetainedEpochKeySchema.safeParse(readJson(file));
+  if (
+    !persisted.success || persisted.data.epoch !== candidate.epoch ||
+    persisted.data.encryption_pub !== candidate.encryption_pub ||
+    persisted.data.encryption_pkcs8 !== candidate.encryption_pkcs8
+  ) throw new Error(`Retained encryption-key epoch ${keys.epoch} is inconsistent.`);
 }
 
 function waitForElectionSlot(file: string, waitMs = 5_000): void {
@@ -176,7 +232,7 @@ function installFirstWriterWins<T>(file: string, candidate: T, waitMs = 5_000): 
   rmdirSync(lock);
 }
 
-function listEpochStates(paths: LinePaths): Array<ActiveEpochState | RetiredEpochState> {
+function listEpochStates(paths: Paths): Array<ActiveEpochState | RetiredEpochState> {
   const prefix = `${basename(paths.identityKeyFile)}.epoch-`;
   const suffix = ".state.json";
   const states: Array<ActiveEpochState | RetiredEpochState> = [];
@@ -194,7 +250,7 @@ function listEpochStates(paths: LinePaths): Array<ActiveEpochState | RetiredEpoc
   return states;
 }
 
-function loadIdentityRoot(paths: LinePaths): {
+function loadIdentityRoot(paths: Paths): {
   identity_pkcs8: string;
   identity_pub: string;
   initial?: z.infer<typeof InitialKeyFileSchema>;
@@ -224,7 +280,7 @@ function loadIdentityRoot(paths: LinePaths): {
   throw new Error(`${paths.identityKeyFile} could not be read: unexpected contents.`);
 }
 
-function loadPublishedEpoch(paths: LinePaths, current: StoredKeys): PublishedEpoch | undefined {
+function loadPublishedEpoch(paths: Paths, current: StoredKeys): PublishedEpoch | undefined {
   const file = publishedEpochFile(paths, current.epoch);
   if (!existsSync(file)) return undefined;
   const parsed = PublishedEpochSchema.safeParse(readJson(file));
@@ -238,7 +294,8 @@ function loadPublishedEpoch(paths: LinePaths, current: StoredKeys): PublishedEpo
   return parsed.data;
 }
 
-function retireEpoch(paths: LinePaths, keys: StoredKeys): void {
+function retireEpoch(paths: Paths, keys: StoredKeys): void {
+  retainEpoch(paths, keys);
   if (keys.epoch === 1) {
     const root = loadIdentityRoot(paths);
     if (!root.initial) return;
@@ -283,7 +340,7 @@ function parsePendingForCurrent(raw: unknown, current: StoredKeys): PendingEncry
 }
 
 export function loadPendingEncryptionPublication(
-  paths: LinePaths, current: StoredKeys = loadKeys(paths),
+  paths: Paths, current: StoredKeys = loadKeys(paths),
 ): PendingEncryptionPublication | undefined {
   const file = pendingPublicationFile(paths, current.epoch);
   if (!existsSync(file)) return undefined;
@@ -292,7 +349,7 @@ export function loadPendingEncryptionPublication(
 
 /** First writer elects the exact signed public record for this immutable epoch. */
 export function choosePendingEncryptionPublication(
-  paths: LinePaths, candidate: PendingEncryptionPublication,
+  paths: Paths, candidate: PendingEncryptionPublication,
 ): { keys: StoredKeys; publication?: PendingEncryptionPublication } {
   const current = loadKeys(paths);
   if (current.published_encryption_transcript_hash) return { keys: current };
@@ -308,7 +365,7 @@ async function exportPrivate(key: CryptoKey): Promise<string> {
 }
 
 /** First-time setup writes one atomic epoch-1 identity/encryption state. */
-export async function generateIdentityKeys(paths: LinePaths): Promise<StoredKeys> {
+export async function generateIdentityKeys(paths: Paths): Promise<StoredKeys> {
   if (keysExist(paths)) {
     throw new Error(
       `${paths.identityKeyFile} already exists. Refusing to overwrite it: replacing the ` +
@@ -336,9 +393,27 @@ export async function generateIdentityKeys(paths: LinePaths): Promise<StoredKeys
  * the highest active epoch is current and lower private states are scrubbed.
  */
 export async function rotateEncryptionKey(
-  paths: LinePaths, hooks: KeyRotationHooks = {},
+  paths: Paths, hooks: KeyRotationHooks = {},
 ): Promise<StoredKeys> {
   const base = loadKeys(paths);
+  const liveRetained = listRetainedEpochs(paths).filter((key) => Date.now() < key.retained_until);
+  if (liveRetained.length + 1 >= MAX_LIVE_ENCRYPTION_EPOCHS) {
+    const oldest = liveRetained.reduce((candidate, key) =>
+      key.epoch < candidate.epoch ? key : candidate);
+    const now = Date.now();
+    const blockingTasks = loadOutboundJobs(paths).filter(
+      (job) => job.expires_at > now && job.sender_epoch === oldest.epoch,
+    ).length;
+    if (blockingTasks > 0) {
+      throw new Error(
+        "Eight live encryption-key epochs are already retained for durable delivery. " +
+        `${blockingTasks} live mailbox task(s) still require epoch ${oldest.epoch}; ` +
+        `it releases no later than ${new Date(oldest.retained_until).toISOString()}. ` +
+        "Wait for those tasks to finish or expire before rotating again.",
+      );
+    }
+    unlinkSync(retainedEpochFile(paths, oldest.epoch));
+  }
   if (!base.published_encryption_transcript_hash) {
     throw new Error(
       `Encryption-key epoch ${base.epoch} has not been published successfully. ` +
@@ -375,7 +450,7 @@ export async function rotateEncryptionKey(
 
 /** Persist relay acceptance as an immutable public marker for this exact epoch. */
 export function rememberPublishedEncryptionKey(
-  paths: LinePaths, expected: StoredKeys, transcriptHash: string,
+  paths: Paths, expected: StoredKeys, transcriptHash: string,
 ): StoredKeys {
   if (!HASH.test(transcriptHash)) throw new Error("The published encryption transcript hash is malformed.");
   const root = loadIdentityRoot(paths);
@@ -402,12 +477,12 @@ export function rememberPublishedEncryptionKey(
   return loadKeys(paths);
 }
 
-export function keysExist(paths: LinePaths): boolean {
+export function keysExist(paths: Paths): boolean {
   return existsSync(paths.identityKeyFile);
 }
 
 /** Loads the highest elected private epoch and scrubs every superseded private state. */
-export function loadKeys(paths: LinePaths): StoredKeys {
+export function loadKeys(paths: Paths): StoredKeys {
   const root = loadIdentityRoot(paths);
   const states = listEpochStates(paths);
   const highestState = states.reduce((highest, state) => Math.max(highest, state.epoch), 0);
@@ -458,4 +533,37 @@ export function loadKeys(paths: LinePaths): StoredKeys {
   const published = loadPublishedEpoch(paths, current);
   if (published) current.published_encryption_transcript_hash = published.transcript_hash;
   return StoredKeysSchema.parse(current);
+}
+
+/** Selects the private encryption epoch named by an HPKE envelope. */
+export function loadEncryptionKeysForEpoch(paths: Paths, epoch: number, now = Date.now()): StoredKeys {
+  const current = loadKeys(paths);
+  if (current.epoch === epoch) return current;
+  const retained = listRetainedEpochs(paths).find((key) => key.epoch === epoch);
+  if (!retained || now >= retained.retained_until) {
+    throw new Error(`Encryption-key epoch ${epoch} is not available for decryption.`);
+  }
+  return StoredKeysSchema.parse({
+    identity_pkcs8: current.identity_pkcs8,
+    identity_pub: current.identity_pub,
+    encryption_pkcs8: retained.encryption_pkcs8,
+    encryption_pub: retained.encryption_pub,
+    epoch: retained.epoch,
+    previous_encryption_transcript_hash: retained.previous_encryption_transcript_hash,
+  });
+}
+
+export function inspectEncryptionKeyRing(paths: Paths, now = Date.now()): {
+  current_epoch: number; retained_live_epochs: number[]; earliest_release_at?: number;
+} {
+  const current = loadKeys(paths);
+  const live = listRetainedEpochs(paths)
+    .filter((key) => now < key.retained_until)
+    .sort((left, right) => left.epoch - right.epoch);
+  const earliest = live.reduce((value, key) => Math.min(value, key.retained_until), Infinity);
+  return {
+    current_epoch: current.epoch,
+    retained_live_epochs: live.map((key) => key.epoch),
+    ...(earliest === Infinity ? {} : { earliest_release_at: earliest }),
+  };
 }

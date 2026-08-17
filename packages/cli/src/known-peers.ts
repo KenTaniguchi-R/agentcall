@@ -6,7 +6,7 @@ import { ADDRESS_RE, BASE64URL_RE, FINGERPRINT_RE, RELAY_ORIGIN_RE,
 } from "@benree/agentcall-shared";
 import { assertPrivateFile, readJsonStore, writeJsonAtomic } from "./json-store.js";
 import { withFileLock } from "./file-lock.js";
-import type { MachinePaths } from "./paths.js";
+import type { Paths } from "./paths.js";
 
 export const MAX_KNOWN_PEERS = 10_000;
 
@@ -31,8 +31,13 @@ const KnownPeersSchema = z.object({ peers: z.array(KnownPeerSchema).max(MAX_KNOW
   }
 });
 export type KnownPeer = z.infer<typeof KnownPeerSchema>;
+export type PeerIdentityInspection =
+  | { state: "unseen"; served_fingerprint: string }
+  | { state: "matched"; pinned_fingerprint: string; served_fingerprint: string }
+  | { state: "changed"; pinned_fingerprint: string; served_fingerprint: string }
+  | { state: "invalid"; detail: string; pinned_fingerprint?: string; served_fingerprint?: string };
 
-export function loadKnownPeers(machine: MachinePaths): KnownPeer[] {
+export function loadKnownPeers(machine: Paths): KnownPeer[] {
   return readJsonStore(machine.knownPeersFile, KnownPeersSchema, {
     missing: () => ({ peers: [] }),
     requirePrivate: { dir: machine.dir },
@@ -42,12 +47,61 @@ export function loadKnownPeers(machine: MachinePaths): KnownPeer[] {
   }).peers;
 }
 
-function saveKnownPeers(machine: MachinePaths, peers: KnownPeer[]): void {
+/** Validate relay-served keys and compare them with local trust without writing the trust store. */
+export async function inspectPeerIdentity(
+  paths: Paths,
+  expectedAddress: string,
+  bundle: { identity: IdentityRecordType; encryption: { record: EncryptionKeyRecordType; signature: string } },
+  now = Date.now(),
+): Promise<PeerIdentityInspection> {
+  let servedFingerprint: string | undefined;
+  let existing: KnownPeer | undefined;
+  try {
+    existing = loadKnownPeers(paths).find((peer) => peer.address === expectedAddress);
+    if (bundle.identity.address !== expectedAddress || bundle.encryption.record.address !== expectedAddress) {
+      throw new Error(`The relay returned keys for a different address than ${expectedAddress}.`);
+    }
+    servedFingerprint = await fingerprint(identityTranscript(bundle.identity));
+    if (now < bundle.encryption.record.not_before || now >= bundle.encryption.record.not_after) {
+      throw new Error(`Encryption key for ${expectedAddress} is not valid at the current time.`);
+    }
+    const servedIdentityKey = await importIdentityPublicKey(bundle.identity.identity_pub);
+    if (!await verifyTranscript(
+      servedIdentityKey, encryptionKeyTranscript(bundle.encryption.record), bundle.encryption.signature,
+    )) {
+      throw new Error(`Encryption key for ${expectedAddress} is not signed by the served identity key.`);
+    }
+    if (!existing) return { state: "unseen", served_fingerprint: servedFingerprint };
+
+    const storedIdentity = {
+      v: 1 as const, relay_origin: existing.relay_origin,
+      address: existing.address, identity_pub: existing.identity_pub,
+    };
+    const recomputed = await fingerprint(identityTranscript(storedIdentity));
+    if (recomputed !== existing.fingerprint) throw new Error(`Stored fingerprint for ${expectedAddress} is corrupt.`);
+    if (existing.identity_pub !== bundle.identity.identity_pub) {
+      return { state: "changed", pinned_fingerprint: existing.fingerprint, served_fingerprint: servedFingerprint };
+    }
+    if (bundle.encryption.record.epoch < existing.highest_encryption_epoch) {
+      throw new Error(`Encryption-key rollback for ${expectedAddress}.`);
+    }
+    return { state: "matched", pinned_fingerprint: existing.fingerprint, served_fingerprint: servedFingerprint };
+  } catch (error) {
+    return {
+      state: "invalid",
+      detail: error instanceof Error ? error.message : String(error),
+      ...(existing ? { pinned_fingerprint: existing.fingerprint } : {}),
+      ...(servedFingerprint ? { served_fingerprint: servedFingerprint } : {}),
+    };
+  }
+}
+
+function saveKnownPeers(machine: Paths, peers: KnownPeer[]): void {
   writeJsonAtomic(machine.knownPeersFile, KnownPeersSchema.parse({ peers }));
   chmodSync(machine.dir, 0o700);
 }
 
-async function withStoreLock<T>(machine: MachinePaths, operation: () => Promise<T>): Promise<T> {
+async function withStoreLock<T>(machine: Paths, operation: () => Promise<T>): Promise<T> {
   // Never silently repair permissions around an existing trust root. If it
   // may have been exposed, fail closed and make the owner inspect it first.
   if (existsSync(machine.knownPeersFile)) {
@@ -60,7 +114,7 @@ async function withStoreLock<T>(machine: MachinePaths, operation: () => Promise<
 }
 
 export async function verifyAndPinPeer(
-  machine: MachinePaths,
+  machine: Paths,
   expectedAddress: string,
   bundle: { identity: IdentityRecordType; encryption: { record: EncryptionKeyRecordType; signature: string } },
   now = Date.now(),
@@ -125,7 +179,7 @@ export async function verifyAndPinPeer(
   });
 }
 
-export async function resetPeerTrust(machine: MachinePaths, address: string): Promise<KnownPeer> {
+export async function resetPeerTrust(machine: Paths, address: string): Promise<KnownPeer> {
   return withStoreLock(machine, async () => {
     const peers = loadKnownPeers(machine);
     const peer = peers.find((entry) => entry.address === address);
@@ -135,7 +189,7 @@ export async function resetPeerTrust(machine: MachinePaths, address: string): Pr
   });
 }
 
-export function checkKnownPeersStore(machine: MachinePaths): { ok: boolean; detail: string } {
+export function checkKnownPeersStore(machine: Paths): { ok: boolean; detail: string } {
   try {
     const peers = loadKnownPeers(machine);
     return { ok: true, detail: existsSync(machine.knownPeersFile) ? `${peers.length} pinned peer${peers.length === 1 ? "" : "s"}` : "not created yet" };

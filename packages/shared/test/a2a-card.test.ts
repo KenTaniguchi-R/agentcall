@@ -1,7 +1,7 @@
 import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
-import { AGENTCALL_POLICY_EXT, toAgentCard, toDirectoryCard } from "../src/index.js";
+import { AGENTCALL_MAILBOX_EXT, AGENTCALL_POLICY_EXT, toAgentCard, toDirectoryCard } from "../src/index.js";
 
 // Vendored, minimal copy of the "Agent Card" / "Agent Interface" definitions
 // from the pinned A2A TCK's specification/a2a.json (see fixtures file header
@@ -88,6 +88,17 @@ describe("toAgentCard", () => {
 
   it("carries the handle in the extension params", () => {
     expect(card().capabilities.extensions?.[0]?.params).toEqual({ handle: "ken" });
+  });
+
+  it("advertises durable mailbox support only for an opted-in installation", () => {
+    expect(card().capabilities.extensions?.map((extension) => extension.uri))
+      .not.toContain(AGENTCALL_MAILBOX_EXT);
+    const enabled = toAgentCard({
+      handle: "ken", description: "Ken's agent", tasks: TASKS,
+      baseUrl: "https://agent-call.app/ken", offlineDelivery: true,
+    });
+    expect(enabled.capabilities.extensions?.map((extension) => extension.uri))
+      .toContain(AGENTCALL_MAILBOX_EXT);
   });
 
   it("does not advertise streaming or push in this plan", () => {

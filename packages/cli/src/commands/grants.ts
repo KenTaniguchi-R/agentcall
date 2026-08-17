@@ -1,25 +1,23 @@
 import type { Command } from "commander";
-import { assertCallableLine } from "../config.js";
-import { getMachinePaths } from "../paths.js";
-import { resolveLine, type LineContext } from "../line-context.js";
-import { loadTasks } from "../tasks.js";
+import { assertCallable, loadInstallation, type Installation } from "../config.js";
+import { getPaths } from "../paths.js";
 import { execVerb, type Verb } from "../verbs.js";
 import { loadUserPolicy, savePolicy, validatePolicy } from "../policy.js";
 import { publishCard } from "../card.js";
 import { fail } from "../errors.js";
 
-async function runPolicyVerb(verb: Verb, a: string, b: string | undefined, opts: { line?: string }): Promise<void> {
-  const machine = getMachinePaths();
-  let ctx: LineContext;
+async function runPolicyVerb(verb: Verb, a: string, b?: string): Promise<void> {
+  const machine = getPaths();
+  let ctx: Installation;
   try {
-    ctx = resolveLine(machine, { line: opts.line });
-    assertCallableLine(ctx.config);
+    ctx = loadInstallation(machine);
+    assertCallable(ctx.config);
   } catch (e) {
     fail(e);
     return;
   }
   try {
-    const { policy, lines } = execVerb(loadUserPolicy(ctx.paths), loadTasks(ctx.paths), verb, a, b);
+    const { policy, lines } = execVerb(loadUserPolicy(ctx.paths), verb, a, b);
     validatePolicy(ctx.paths, policy);
     savePolicy(ctx.paths, policy);
     for (const line of lines) console.log(line);
@@ -27,7 +25,7 @@ async function runPolicyVerb(verb: Verb, a: string, b: string | undefined, opts:
       await publishCard(ctx.config, ctx.paths);
       console.log("Card updated.");
     } catch (e) {
-      console.error(`Warning: policy saved locally, but the card push failed (${String(e)}). Run \`agentcall card push\` later.`);
+      console.error(`Warning: policy saved locally, but the card publication failed (${String(e)}). Run \`agentcall admin card publish\` later.`);
     }
   } catch (e) {
     fail(e);
@@ -35,22 +33,24 @@ async function runPolicyVerb(verb: Verb, a: string, b: string | undefined, opts:
 }
 
 export function register(program: Command): void {
-  program.command("allow").description("grant a caller an extra task (and republish your card)")
-    .argument("<handle>").argument("<task-id>").option("--line <name>", "line to use (defaults to the primary line)")
-    .action((handle: string, taskId: string, o: { line?: string }) => runPolicyVerb("allow", handle, taskId, o));
-  program.command("revoke").description("remove a caller's task grant")
-    .argument("<handle>").argument("<task-id>").option("--line <name>", "line to use (defaults to the primary line)")
-    .action((handle: string, taskId: string, o: { line?: string }) => runPolicyVerb("revoke", handle, taskId, o));
+  // `clearance` is gone (2026-08-07). With one grantable level there is no
+  // amount to set — only whether the line answers — so block/unblock is the whole
+  // per-caller surface, and `access --default` is the line-wide posture.
+  program.command("access")
+    .description("set default access or durable offline delivery (and republish your card)")
+    .option("--default <access>", "allowed or blocked")
+    .option("--offline <state>", "enabled or disabled")
+    .action((o: { default?: string; offline?: string }) => {
+      if ((o.default === undefined) === (o.offline === undefined)) {
+        fail("Choose exactly one of --default or --offline.");
+        return;
+      }
+      return o.default !== undefined
+        ? runPolicyVerb("access-default", o.default)
+        : runPolicyVerb("offline-delivery", o.offline!);
+    });
   program.command("block").description("refuse all calls from a handle")
-    .argument("<handle>").option("--line <name>", "line to use (defaults to the primary line)")
-    .action((handle: string, o: { line?: string }) => runPolicyVerb("block", handle, undefined, o));
+    .argument("<handle>").action((handle: string) => runPolicyVerb("block", handle));
   program.command("unblock").description("lift a block")
-    .argument("<handle>").option("--line <name>", "line to use (defaults to the primary line)")
-    .action((handle: string, o: { line?: string }) => runPolicyVerb("unblock", handle, undefined, o));
-  program.command("offer").description("offer a task to any registered caller")
-    .argument("<task-id>").option("--line <name>", "line to use (defaults to the primary line)")
-    .action((taskId: string, o: { line?: string }) => runPolicyVerb("offer", taskId, undefined, o));
-  program.command("unoffer").description("stop offering a task publicly")
-    .argument("<task-id>").option("--line <name>", "line to use (defaults to the primary line)")
-    .action((taskId: string, o: { line?: string }) => runPolicyVerb("unoffer", taskId, undefined, o));
+    .argument("<handle>").action((handle: string) => runPolicyVerb("unblock", handle));
 }

@@ -19,3 +19,4 @@
 0019_agent_identity.sql
 0020_cards_by_identity.sql
 0021_key_records_persist_origin.sql
+0022_roster_members_by_identity.sql

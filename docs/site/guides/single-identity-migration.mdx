@@ -1,0 +1,44 @@
+---
+title: Migrate to one installation identity
+description: Explicitly select one legacy line when upgrading an installation that used multiple local identities.
+---
+
+AgentCall no longer chooses a primary line or runs several identities from one
+installation. If `~/.agentcall/lines/` exists and the root installation config
+does not, current commands stop with a migration error. They do not select,
+merge, or delete any legacy identity.
+
+## Before migrating
+
+1. Stop the AgentCall listener.
+2. Back up both `~/.agentcall` and `~/AgentCall` outside those directories.
+3. Choose exactly one legacy line to keep. Its organization, handle, relay
+   token, identity keys, recovery state, contexts, policy, and logs remain one
+   inseparable identity. Do not combine files from different lines.
+
+Contacts remain installation-scoped at `~/.agentcall/contacts.json`; keep that
+file as-is.
+
+## Move the selected identity
+
+From the chosen `~/.agentcall/lines/<name>/` directory, copy its contents into
+`~/.agentcall/`. From `~/AgentCall/<name>/`, copy `tasks/` and `public/` into
+`~/AgentCall/`. Preserve file permissions, especially private keys and tokens.
+
+Archive the old `~/.agentcall/lines/`, `~/.agentcall/person.json`, and unselected
+`~/AgentCall/<name>/` trees outside the active AgentCall directories. Do not
+leave `~/.agentcall/lines/` in place: its presence deliberately keeps the CLI
+in the migration-required state.
+
+## Verify
+
+Run:
+
+```bash
+agentcall doctor
+agentcall listen
+```
+
+If verification fails, restore the backup and check that every root file came
+from the same selected line. Re-enroll any discarded identity on a separate OS
+account or installation; AgentCall does not merge identities.

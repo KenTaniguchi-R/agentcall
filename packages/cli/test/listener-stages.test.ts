@@ -14,7 +14,7 @@ import {
 } from "@benree/agentcall-shared";
 import { generateIdentityKeys, type StoredKeys } from "../src/keys.js";
 import { sealE2EERequest } from "../src/e2ee.js";
-import { getLinePaths, getMachinePaths, type LinePaths, type MachinePaths } from "../src/paths.js";
+import { getPaths, type Paths } from "../src/paths.js";
 import { saveContexts, type ContextBinding } from "../src/contexts.js";
 import { ReplayDetectedError } from "../src/replay-store.js";
 import {
@@ -28,9 +28,8 @@ let listenerKeys: StoredKeys;
 
 beforeAll(async () => {
   cryptoRoot = mkdtempSync(join(tmpdir(), "agentcall-listener-stages-crypto-"));
-  const machine = getMachinePaths(cryptoRoot, cryptoRoot);
-  callerKeys = await generateIdentityKeys(getLinePaths(machine, "caller"));
-  listenerKeys = await generateIdentityKeys(getLinePaths(machine, "listener"));
+  callerKeys = await generateIdentityKeys(getPaths(join(cryptoRoot, "caller"), join(cryptoRoot, "caller")));
+  listenerKeys = await generateIdentityKeys(getPaths(join(cryptoRoot, "listener"), join(cryptoRoot, "listener")));
 });
 afterAll(() => rmSync(cryptoRoot, { recursive: true, force: true }));
 
@@ -38,17 +37,17 @@ afterAll(() => rmSync(cryptoRoot, { recursive: true, force: true }));
 // and listener.test.ts's own freshMachine/seededPaths; using them directly
 // here (rather than keeping a local copy) is what gives every temp dir this
 // file creates its auto-teardown.
-function freshMachine(): MachinePaths {
+function freshMachine(): Paths {
   return tempMachine("agentcall-stages-");
 }
-function seededPaths(): LinePaths {
+function seededPaths(): Paths {
   return tempLine("claude", "agentcall-stages-");
 }
-function seedPolicy(paths: LinePaths, policy: object) {
+function seedPolicy(paths: Paths, policy: object) {
   mkdirSync(paths.dir, { recursive: true });
   writeFileSync(paths.policyFile, JSON.stringify(policy));
 }
-function seedTask(paths: LinePaths, id: string, frontmatter: string[], body = "do it\n") {
+function seedTask(paths: Paths, id: string, frontmatter: string[], body = "do it\n") {
   const dir = join(paths.tasksDir, id);
   mkdirSync(dir, { recursive: true });
   writeFileSync(join(dir, "SKILL.md"), ["---", ...frontmatter, "---", body].join("\n"));
@@ -79,6 +78,7 @@ async function buildEnvelope(opts: { from: string; to: string; message: string }
   const request = {
     v: 1 as const, direction: "request" as const, relay_origin: "127.0.0.1",
     from: `@acme/${opts.from}`, to: `@acme/${opts.to}`,
+    message_id: crypto.randomUUID().replaceAll("-", ""),
     request_id: crypto.randomUUID().replaceAll("-", ""),
     sender_identity_key_id: await keyIdFor(callerKeys.identity_pub),
     recipient_encryption_key_id: await keyIdFor(listenerKeys.encryption_pub),
@@ -94,14 +94,14 @@ async function buildEnvelope(opts: { from: string; to: string; message: string }
 describe("handleCancel", () => {
   it("confirms cancellation of a pending call", () => {
     const sent: unknown[] = [];
-    handleCancel({ call_id: "c1" }, { cancel: () => "pending" }, (obj) => sent.push(obj));
-    expect(sent).toEqual([{ type: "call_cancelled", call_id: "c1", phase: "pending" }]);
+    handleCancel({ call_id: "c1", lease_id: "lease-1" }, { cancel: () => "pending" }, (obj) => sent.push(obj));
+    expect(sent).toEqual([{ type: "call_cancelled", call_id: "c1", phase: "pending", lease_id: "lease-1" }]);
   });
 
   it("reports an unknown call as not cancelled", () => {
     const sent: unknown[] = [];
-    handleCancel({ call_id: "c2" }, { cancel: () => "unknown" }, (obj) => sent.push(obj));
-    expect(sent).toEqual([{ type: "call_not_cancelled", call_id: "c2", reason: "unknown" }]);
+    handleCancel({ call_id: "c2", lease_id: "lease-2" }, { cancel: () => "unknown" }, (obj) => sent.push(obj));
+    expect(sent).toEqual([{ type: "call_not_cancelled", call_id: "c2", reason: "unknown", lease_id: "lease-2" }]);
   });
 
   // A running job is only signalled (via AbortController, inside SerialQueue
@@ -119,10 +119,10 @@ describe("openInboundEnvelope", () => {
     const { envelope } = await buildEnvelope({ from: "shusaku", to: "ken", message: "hi" });
     const bundle = await callerBundleFor("shusaku");
     const machine = freshMachine();
-    const paths = getLinePaths(machine, "claude");
+    const paths = machine;
     let reserved: unknown;
     const result = await openInboundEnvelope(
-      { relay: "http://127.0.0.1:9", org: "acme", handle: "ken", token: "tok", machine, paths, from: "shusaku", envelope },
+      { relay: "http://127.0.0.1:9", org: "acme", handle: "ken", token: "tok", paths, from: "shusaku", envelope },
       {
         fetchKeys: async () => bundle,
         verifyAndPinPeer: async (_m, address) => fakePeer(address),
@@ -142,9 +142,9 @@ describe("openInboundEnvelope", () => {
   it("fails closed when fetching the caller's keys throws, without pinning or reserving anything", async () => {
     const { envelope } = await buildEnvelope({ from: "shusaku", to: "ken", message: "hi" });
     const machine = freshMachine();
-    const paths = getLinePaths(machine, "claude");
+    const paths = machine;
     const result = await openInboundEnvelope(
-      { relay: "http://127.0.0.1:9", org: "acme", handle: "ken", token: "tok", machine, paths, from: "shusaku", envelope },
+      { relay: "http://127.0.0.1:9", org: "acme", handle: "ken", token: "tok", paths, from: "shusaku", envelope },
       {
         fetchKeys: async () => { throw new Error("relay unreachable"); },
         verifyAndPinPeer: async () => { throw new Error("must not be called"); },
@@ -161,9 +161,9 @@ describe("openInboundEnvelope", () => {
     const { envelope } = await buildEnvelope({ from: "shusaku", to: "ken", message: "hi" });
     const bundle = await callerBundleFor("shusaku");
     const machine = freshMachine();
-    const paths = getLinePaths(machine, "claude");
+    const paths = machine;
     const result = await openInboundEnvelope(
-      { relay: "http://127.0.0.1:9", org: "acme", handle: "ken", token: "tok", machine, paths, from: "shusaku", envelope },
+      { relay: "http://127.0.0.1:9", org: "acme", handle: "ken", token: "tok", paths, from: "shusaku", envelope },
       {
         fetchKeys: async () => bundle,
         verifyAndPinPeer: async (_m, address) => fakePeer(address),
@@ -176,16 +176,37 @@ describe("openInboundEnvelope", () => {
     expect(result.error).toBeInstanceOf(ReplayDetectedError);
   });
 
+  it("defers replay ownership to the durable execution journal", async () => {
+    const { envelope } = await buildEnvelope({ from: "shusaku", to: "ken", message: "hi" });
+    const bundle = await callerBundleFor("shusaku");
+    let reserved = false;
+    const paths = freshMachine();
+    const result = await openInboundEnvelope(
+      {
+        relay: "http://127.0.0.1:9", org: "acme", handle: "ken", token: "tok", paths,
+        from: "shusaku", envelope, reserveReplay: false,
+      },
+      {
+        fetchKeys: async () => bundle,
+        verifyAndPinPeer: async (_m, address) => fakePeer(address),
+        loadKeys: () => listenerKeys,
+        reserveReplay: async (_m, reservation) => { reserved = true; return reservation; },
+      },
+    );
+    expect(result.ok).toBe(true);
+    expect(reserved).toBe(false);
+  });
+
   it("fails closed when the envelope cannot be decrypted with the local keys", async () => {
     const { envelope } = await buildEnvelope({ from: "shusaku", to: "ken", message: "hi" });
     const bundle = await callerBundleFor("shusaku");
     const machine = freshMachine();
-    const paths = getLinePaths(machine, "claude");
+    const paths = machine;
     // Sealed for listenerKeys but opened with a different line's keys: the
     // envelope's key_id will not match the expected route.
-    const wrongKeys = await generateIdentityKeys(getLinePaths(machine, "wrong"));
+    const wrongKeys = await generateIdentityKeys(machine);
     const result = await openInboundEnvelope(
-      { relay: "http://127.0.0.1:9", org: "acme", handle: "ken", token: "tok", machine, paths, from: "shusaku", envelope },
+      { relay: "http://127.0.0.1:9", org: "acme", handle: "ken", token: "tok", paths, from: "shusaku", envelope },
       {
         fetchKeys: async () => bundle,
         verifyAndPinPeer: async (_m, address) => fakePeer(address),
@@ -262,49 +283,89 @@ describe("makeOutcomeSender", () => {
 });
 
 describe("resolveAdmission", () => {
-  const workdir = { dir: "/tmp/default-workdir", confined: true };
-
   it("admits the default ask task for a caller with no policy configured", () => {
     const result = resolveAdmission({
-      paths: seededPaths(), from: "shusaku", requestedTask: undefined, groups: [], workdir, agentKind: "claude",
+      paths: seededPaths(), from: "shusaku", requestedTask: undefined,
     });
     expect(result.ok).toBe(true);
     if (!result.ok) throw new Error("expected ok");
     expect(result.task.id).toBe("ask");
-    expect(result.taskWorkdir).toEqual({ dir: "/tmp/default-workdir", confined: true });
   });
 
-  it("never claims confinement for codex, even in the confined default workdir", () => {
+  // Replaces "never claims confinement for codex, even in the confined default
+  // workdir". #372 deleted `taskWorkdir` and the `confined` flag with it: the
+  // directory is no longer a boundary for either runtime, so there is nothing
+  // left to claim. What resolveAdmission owes its caller instead is the map,
+  // which is what the spawn directory is derived from.
+  it("returns the scope, which is what the workdir is derived from", () => {
+    const paths = seededPaths();
     const result = resolveAdmission({
-      paths: seededPaths(), from: "shusaku", requestedTask: undefined, groups: [], workdir, agentKind: "codex",
+      paths, from: "shusaku", requestedTask: undefined,
     });
-    expect(result.ok && result.taskWorkdir.confined).toBe(false);
+    expect(result.ok).toBe(true);
+    if (!result.ok) throw new Error("expected ok");
+    // The scope is read here, not by the caller, so every consumer sees the
+    // same roots — the denylist itself is built in and needs no merging.
+    // Whatever seededPaths wrote — the point is that resolveAdmission returns
+    // the parsed scope rather than making the caller read the file again.
+    expect(result.scope).toEqual(expect.objectContaining({ roots: expect.any(Array), denied: expect.any(Array) }));
+  });
+
+  // The scope is load-bearing for the CALL now, not only for the guard
+  // subprocess, so a corrupt one must fail the same way a corrupt policy does:
+  // one clean call_failed, rather than every tool call failing closed and the
+  // owner diagnosing it from the guard's log.
+  it("fails closed with policy_error when scope.json is corrupt", () => {
+    const paths = seededPaths();
+    mkdirSync(paths.dir, { recursive: true });
+    writeFileSync(paths.scopeFile, "{not valid json");
+    const result = resolveAdmission({
+      paths, from: "shusaku", requestedTask: undefined,
+    });
+    expect(result).toMatchObject({ ok: false, code: "policy_error" });
   });
 
   it("blocks a caller policy has denied, offering nothing", () => {
     const paths = seededPaths();
-    seedPolicy(paths, { default_offer: ["ask"], callers: { spammer: { block: true } } });
+    seedPolicy(paths, { default_access: "allowed", callers: { spammer: { access: "blocked" } } });
     const result = resolveAdmission({
-      paths, from: "spammer", requestedTask: undefined, groups: [], workdir, agentKind: "claude",
+      paths, from: "spammer", requestedTask: undefined,
     });
     expect(result).toEqual({ ok: false, code: "blocked", offered: [] });
   });
 
   it("rejects a requested task that does not exist on disk", () => {
     const result = resolveAdmission({
-      paths: seededPaths(), from: "shusaku", requestedTask: "no-such-task", groups: [], workdir, agentKind: "claude",
+      paths: seededPaths(), from: "shusaku", requestedTask: "no-such-task",
     });
     expect(result).toMatchObject({ ok: false, code: "task_unknown" });
   });
 
-  it("rejects a real task the caller was never offered", () => {
+  // Was "rejects a real task the caller was never offered". #379 deleted the
+  // menu that made that possible: any task on disk now resolves for any
+  // unblocked caller, and whether the ANSWER may reach them is decided later
+  // by clearance. Inverted rather than deleted, because silently reintroducing
+  // an admission-time task filter is exactly what this pins against.
+  it("admits a task no policy names, since a task is no longer granted", () => {
     const paths = seededPaths();
     seedTask(paths, "secret", ["description: shh"]);
-    seedPolicy(paths, { default_offer: ["ask"], callers: {} });
+    seedPolicy(paths, { default_access: "allowed", callers: {} });
     const result = resolveAdmission({
-      paths, from: "shusaku", requestedTask: "secret", groups: [], workdir, agentKind: "claude",
+      paths, from: "shusaku", requestedTask: "secret",
     });
-    expect(result).toMatchObject({ ok: false, code: "task_not_offered" });
+    expect(result).toMatchObject({ ok: true, task: { id: "secret" } });
+  });
+
+  // The policy resolveAdmission loaded is handed back so listener.ts resolves
+  // clearance from the same object. A second read of policy.json there would
+  // sit outside the policy_error path below and could disagree with admission.
+  it("returns the policy it loaded, so clearance resolves from the same table", () => {
+    const paths = seededPaths();
+    seedPolicy(paths, { default_access: "allowed", callers: {} });
+    const result = resolveAdmission({
+      paths, from: "shusaku", requestedTask: undefined,
+    });
+    expect(result.ok && result.policy.default_access).toBe("allowed");
   });
 
   it("fails closed with policy_error, not a thrown exception, when the policy file is corrupt", () => {
@@ -312,7 +373,7 @@ describe("resolveAdmission", () => {
     mkdirSync(paths.dir, { recursive: true });
     writeFileSync(paths.policyFile, "{not valid json");
     const result = resolveAdmission({
-      paths, from: "shusaku", requestedTask: undefined, groups: [], workdir, agentKind: "claude",
+      paths, from: "shusaku", requestedTask: undefined,
     });
     expect(result.ok).toBe(false);
     if (result.ok || result.code !== "policy_error") throw new Error("expected a policy_error failure");
@@ -325,7 +386,7 @@ describe("admitBinding", () => {
   // loadContexts' schema parse.
   const SEEDED_CTX = "ctx_AAAAAAAAAAAAAAAAAAAAAA";
 
-  function seedBinding(paths: LinePaths, over: Partial<ContextBinding> = {}) {
+  function seedBinding(paths: Paths, over: Partial<ContextBinding> = {}) {
     const binding: ContextBinding = {
       context_id: SEEDED_CTX, agent_session_id: "real-agent-session", caller: "shusaku", task: "ask",
       agent_kind: "claude", workdir: paths.shareDir, turns: 1, created_at: Date.now(), last_used_at: Date.now(),

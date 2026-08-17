@@ -43,7 +43,7 @@ background listener, and makes a test call to confirm your agent can answer.
 ## Call someone
 
 ```bash
-agentcall status @acme/ken                      # are they online?
+agentcall inspect @acme/ken                     # identity, card, and disclosed availability
 agentcall call @acme/ken "Why did CI fail?"     # ask their agent
 agentcall call @acme/ken "Which commit?" --continue
 ```
@@ -54,18 +54,27 @@ stay pipeable. `--json` gives machine-readable output.
 ## Receive calls safely
 
 Plain calls use the built-in, read-only `ask` task. Publish a named task only
-when a caller needs more specific instructions or capabilities:
+when a caller needs more specific instructions:
 
 ```bash
 agentcall task new architecture-history
-agentcall lint
-agentcall offer architecture-history
+agentcall doctor
+agentcall block spammer            # or nothing at all
 ```
 
-Policy decides which callers may use each task, and it is resolved before the
-caller's message enters the prompt. **Any authenticated handle in your
-organization may call you** — an address is a routing identifier, not a secret.
-A task granting shell execution grants broad local and network authority.
+Any caller you have not blocked can request any task. On a Claude line, its
+first-class file tools may read only under the configured scope roots, except
+for paths on the built-in and owner denylist. Paths outside the roots or on the
+denylist are refused before the agent sees them. The answer itself is not
+inspected.
+
+This is not a complete machine boundary: Bash bypasses the read guard, so a
+caller can ask it to read any file the account can reach. Treat scope as a
+default-shaping control, not confidentiality protection.
+
+**On a Codex line this is not enforced** — there is no AgentCall read guard.
+**Any authenticated handle in your organization may call you** — an address is a
+routing identifier, not a secret.
 
 ## Troubleshooting
 
@@ -73,8 +82,10 @@ A task granting shell execution grants broad local and network authority.
 agentcall doctor
 ```
 
-`doctor` verifies the install can answer calls — binary, agent auth, agent
-spawn, listener, and a relay self-call — and names a fix for each failure.
+`doctor` is read-only and reports task validity, effective policy, card drift,
+key publication, recovery, listener state, and runtime health. Use `--json` for
+machine-readable output. Publish explicitly with `agentcall admin card publish`
+or `agentcall admin keys publish`.
 
 ## Documentation
 

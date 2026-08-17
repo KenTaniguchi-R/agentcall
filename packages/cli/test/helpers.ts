@@ -10,7 +10,7 @@ import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterAll, onTestFinished } from "vitest";
-import { getLinePaths, getMachinePaths, type LinePaths, type MachinePaths } from "../src/paths.js";
+import { getPaths, type Paths } from "../src/paths.js";
 
 function registerCleanup(dir: string): void {
   const cleanup = () => rmSync(dir, { recursive: true, force: true });
@@ -31,15 +31,15 @@ export function tempDir(prefix: string): string {
 // Fresh ~/.agentcall-shaped tmp root, used as both stateRoot and userHome so
 // nothing in these tests can accidentally touch the real machine. Mirrors
 // `freshMachine` in listener.test.ts, plus auto-cleanup.
-export function tempMachine(prefix = "agentcall-m-"): MachinePaths {
+export function tempMachine(prefix = "agentcall-m-"): Paths {
   const root = tempDir(prefix);
-  return getMachinePaths(root, root);
+  return getPaths(root, root);
 }
 
 // No policy/task seeded — loadPolicy and loadTasks both fall back to their
-// built-in defaults (default_offer: ["ask"], the built-in "ask" task), which
-// is enough for a plain message to resolve. Mirrors `seededPaths` in
+// built-in defaults (default_the built-in "ask" task),
+// which is enough for a plain message to resolve. Mirrors `seededPaths` in
 // listener.test.ts.
-export function tempLine(name = "line", prefix = "agentcall-l-"): LinePaths {
-  return getLinePaths(tempMachine(prefix), name);
+export function tempLine(name = "line", prefix = "agentcall-l-"): Paths {
+  return tempMachine(prefix);
 }

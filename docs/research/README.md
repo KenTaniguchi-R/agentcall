@@ -2,116 +2,92 @@
 
 The [reference implementation index](./reference-implementations.md) is living,
 current design guidance for enterprise, security, and A2A work. Update it when a
-reference or its adoption changes.
+reference or its adoption changes. **Read it before designing anything in
+`area:enterprise`, `area:security`, or `area:a2a`.**
 
-The dated files below are market and competitive research for agentcall. **They
-are research notes, not decisions.** No implementation follows from them without
-a separate call.
+Everything else in this directory is a dated research note. **Notes are not
+decisions.** No implementation follows from one without a separate call, and
+where a later note revised an earlier conclusion the earlier file carries an
+inline amendment pointing forward rather than being silently edited. They are
+kept as written.
 
-Docs #1–6 date from 2026-07-31 and were produced together; read them as one body of
-work rather than six independent studies. #7 is a later addition and the first of the
-two that carry a backlog; #10 is the other. #8 records the protocol and positioning implications of MCP
-tunnels and Enterprise-Managed Authorization. #9 is the exception to the
-"not decisions" rule above — an approved decision followed it the same day, and it
-carries a forward amendment saying which of its recommendations that decision
-rejected. #10 asks the build-or-buy question the other nine leave implicit.
+## What is here
 
-## Reading order
+**Enforcement surfaces — what can actually stop a tool call, and what cannot**
 
-A qualifying sequence — is there a pain, is there a market, is the position open, what
-do we build, what can enforce it. It is deliberately **not** the order the docs were
-produced in. Later research revised earlier conclusions, so the production order
-(landscape → pivot → demand → outlook) puts an amendment *after* the doc it amends.
+| Doc | Answers |
+|---|---|
+| [claude-code-enforcement-surfaces](./2026-07-31-claude-code-enforcement-surfaces.md) | With no OS sandbox, which Claude Code surfaces can enforce policy? |
+| [codex-enforcement-surface](./2026-08-06-codex-enforcement-surface.md) | The same question for Codex, which answers it differently. |
+| [skill-and-mcp-guard-reachability](./2026-08-06-skill-and-mcp-guard-reachability.md) | Which invocation paths reach the guard at all. |
+| [guard-entry-import-cost](./2026-08-06-guard-entry-import-cost.md) | What the guard costs on every single tool call. |
+| [mcp-source-default-trust](./2026-08-06-mcp-source-default-trust.md) | Should an MCP server's output be trusted by default? |
+| [repo-seed-default-evidence](./2026-08-06-repo-seed-default-evidence.md) | What the default working-directory scope should be, on evidence. |
 
-| # | Doc | Answers |
-|---|---|---|
-| 1 | [demand-validation](./2026-07-31-demand-validation.md) | Does anyone pay for this? What blocks deals? |
-| 2 | [market-outlook](./2026-07-31-market-outlook.md) | Is this market dying or growing? What kills us, and how long do we have? |
-| 3 | [agent-coordination-landscape](./2026-07-31-agent-coordination-landscape.md) | Who else is in this market? Where is the gap? |
-| 4 | [enterprise-pivot-research](./2026-07-31-enterprise-pivot-research.md) | Who is the direct competitor, and how should the enterprise version work? |
-| 5 | [claude-code-enforcement-surfaces](./2026-07-31-claude-code-enforcement-surfaces.md) | With the OS sandbox gone, what can actually enforce policy — and what can't? |
-| 6 | [lessons-from-composio](./2026-07-31-lessons-from-composio.md) | How does a shipping Claude Code plugin do this, and what should we copy? |
-| 7 | [cotal-enterprise-installability](./2026-08-01-cotal-enterprise-installability.md) | Which tool does an enterprise actually install — and what has to be true for it to be ours? |
-| 8 | [mcp-tunnels-ema-positioning](./2026-08-02-mcp-tunnels-ema-positioning.md) | What did MCP tunnels and EMA actually ship, and where should MCP sit beside A2A? |
-| 9 | [agentcall-onboarding-comparables](./2026-08-03-agentcall-onboarding-comparables.md) | How do adjacent tools get a stranger to a first result, and where do they introduce accounts, administrators, and invitations? |
-| 10 | [buy-vs-build-third-party-landscape](./2026-08-02-buy-vs-build-third-party-landscape.md) | Which parts of that gap does someone else already sell — and do we pass a security review? |
+**Information flow — where an answer came from, and where it may go**
 
-Eight notes on the sequence:
+| Doc | Answers |
+|---|---|
+| [information-flow-control-for-agent-answers](./2026-08-06-information-flow-control-for-agent-answers.md) | Can classical IFC be applied to an agent's natural-language answer? |
+| [ifc-claims-reverification](./2026-08-06-ifc-claims-reverification.md) | Re-checking the above against primary sources. |
+| [label-creep-spike](./2026-08-06-label-creep-spike.md) | Does everything end up labelled secret in practice? |
+| [provenance-signal-reliability](./2026-08-06-provenance-signal-reliability.md) | How much weight a provenance signal can carry. |
+| [sink-side-provenance-enforcement](./2026-08-06-sink-side-provenance-enforcement.md) | Enforcing at the sink rather than the source. |
+| [derived-access-inheritance](./2026-08-06-derived-access-inheritance.md) | What a derived value inherits from its inputs. |
 
-- **#3 predates two decisions made the same day.** `agent-coordination-landscape` was
-  written before the sandbox was dropped and before Q&A-first was chosen. Its
-  *Conclusion* and *What is not working* sections recommend leading with the sandbox and
-  treat callee-pays as the live economic model; both are obsolete. It sits at #3 so that
-  #4 supersedes it immediately rather than leaving it unresolved.
-- **#5 is not an optional appendix.** It is a technical reference, but its §5 also
-  constrains #4: `ask` rules error under `claude -p`, so the draft-then-approve flow
-  recommended there cannot be built on Claude's own permission mechanism and has to live
-  in our protocol. Read it in sequence, not on demand.
-- **#6 found a gap the other five missed.** `agentcall search` — resolving *who* to ask.
-  Every other doc assumes the caller already knows the address. In a 500-person company
-  they do not, and that is the asker's half of the #2 pain in #1. Discovery is a
-  separate problem from calling, and only calling is built.
-- **#7 amends #3 and is the first doc with a backlog.** #3 scored Cotal as
-  inside-your-own-perimeter and therefore disjoint from us. The enterprise pivot makes
-  that deployment shape ours too, so #7 re-runs the comparison and turns the differences
-  into checklist items. Read it last; it depends on #1–#6 and cites them by section.
-- **#8 narrows the position after a protocol release.** MCP Tunnels makes
-  private-network reachability a substitute rather than differentiation. EMA supplies a
-  useful enterprise-authorization shape, but no non-MCP compatibility claim. The
-  companion decision keeps A2A as the public protocol and defers an MCP facade.
-- **#9 is the only doc a decision followed directly, and it was partly overruled.**
-  [#259](https://github.com/KenTaniguchi-R/agentcall/issues/259) took its two-lane
-  separation of constrained evaluation from durable administration, and shipped it as
-  Room versus Team. It rejected #9's recommended first experiment — a vendor-operated
-  demo callee — in favour of 2–6 real people who already know each other. #9 carries
-  that amendment inline; read #259 for what was decided.
-- **#7's GTM conflict is resolved.** Keep the first beachhead at non-EU,
-  non-unionized 100–500-person engineering organizations, lead with measured
-  senior-time recovery, and preserve the narrower no-retained-call-corpus/no-connected-
-  system-indexing distinction. The absolute “we do not ingest employee data” line is
-  retired. See the [GTM sequencing decision](../superpowers/specs/2026-08-03-gtm-sequencing-design.md).
-- **#10 is the only doc that reads the code, and it is scoped by
-  [reference-implementations](./reference-implementations.md).** #1–#9 study the
-  market and assume we fill the gap; #10 asks which parts of #7's gap are commodity,
-  and deliberately covers only what the reference index does not already assign to a
-  precedent. Read the index first, then #10 — otherwise its recommendations look
-  broader than they are. Its first version was researched against a stale branch and
-  asserted four gaps `main` had already closed; the correction and the rule that
-  followed are recorded in its §5 rather than edited away. Code claims cite
-  `origin/main` @ `af78a87`.
+**Protocol and cryptography**
 
-## The five findings that matter
+| Doc | Answers |
+|---|---|
+| [hpke-core-selection](./2026-08-03-hpke-core-selection.md) | Which HPKE implementation, and why that one. |
+| [hermes-a2a-implementation](./2026-08-04-hermes-a2a-implementation.md) | How a shipping A2A implementation actually structures itself. |
+| [mcp-tunnels-ema-positioning](./2026-08-02-mcp-tunnels-ema-positioning.md) | What MCP Tunnels and Enterprise-Managed Authorization shipped, and where MCP sits beside A2A here. |
 
-1. **The pain is a painkiller.** 47% of developers spend 30+ min/day answering
-   colleagues; it is managers' #2 ranked challenge. But say *"recover the 5 hrs/week
-   your architects waste explaining architecture"* — "reduce interruptions" does not
-   sell.
-2. **The market is not dying.** Every hard demand indicator is up and inference prices
-   are falling, which favours a token *consumer*.
-3. **Platform absorption is the only existential threat**, and market growth does not
-   protect against it. Roughly a 12–18 month window.
-4. **The niche is real.** Person-scoped *execution* calling is the one unoccupied band.
-   Shared-corpus Q&A, knowledge twins, and laptop-agent governance are all taken.
-5. **Viven is the direct competitor** — $35M seed, Eightfold founders, on-prem ready.
-   Live routing beats their indexing model on freshness, data residency, privacy
-   enforcement, and departure semantics. They beat us on availability and funding.
+**Engineering practice**
 
-## Two things to keep in view
+| Doc | Answers |
+|---|---|
+| [loop-engineering-verification-gates](./2026-08-05-loop-engineering-verification-gates.md) | Why the verification gate is shaped the way it is. |
+| [lessons-from-composio](./2026-07-31-lessons-from-composio.md) | How a shipping Claude Code plugin does this, and what is worth copying. |
+| [buy-vs-build-third-party-landscape](./2026-08-02-buy-vs-build-third-party-landscape.md) | Which parts of the gap does someone else already sell — and do we pass a security review? |
 
-- **Managers' #1 pain — knowledge loss on departure — is one this architecture cannot
-  solve.** The agent leaves with the person. That is the direct cost of the privacy
-  advantage; the same property produces both. Target #2.
-- **Pure Q&A is feature-shaped**, which is the most absorbable configuration. Valid as
-  a wedge, not as a destination.
+`buy-vs-build` is the only note here that reads the code, and it is scoped by
+[reference-implementations](./reference-implementations.md): it deliberately covers
+only what that index does not already assign to a precedent. Read the index first,
+otherwise its recommendations look broader than they are. Its first version was
+researched against a stale branch and asserted gaps `main` had already closed; the
+correction and the rule that followed are recorded in its §5 rather than edited away.
 
-## Conventions
+## Source discipline
 
-Confidence is tagged per finding. Load-bearing claims were verified directly against
-primary sources rather than accepted from search results. Where a figure traces only to
-SEO aggregators or report-mill vendors, it is either cut or marked directional-only —
-see the source-discipline section at the end of `market-outlook`.
+Load-bearing claims are verified directly against primary sources — specifications,
+official repositories, first-party vendor documentation — rather than accepted from
+search results. Where a figure traces only to SEO aggregators or report-mill vendors,
+it is cut or marked directional-only. Confidence is tagged per finding.
 
-Where later research revised an earlier conclusion, the earlier doc carries an inline
-amendment pointing forward rather than being silently edited. The reading order above
-puts most of those revisions before the doc they revise, but the pointers remain so the
-docs stay correct when read individually.
+## Notes that are not published here
+
+Market sizing, demand validation, competitive positioning, onboarding
+comparables, and go-to-market sequencing live in the private repository that
+operates the hosted service, not in this one. They are business research about
+buyers and competitors; they say nothing about how AgentCall works, and
+publishing them would mostly be publishing someone else's competitive analysis.
+
+A few dated records in `docs/superpowers/specs/` and `docs/research/` link to those
+notes by relative path — `buy-vs-build-third-party-landscape` extends
+`cotal-enterprise-installability` and cites it throughout. Those links do not resolve
+here. The records are kept exactly as written rather than edited after the fact, so
+the dangling link is left visible instead of being quietly rewritten:
+
+- `2026-07-31-demand-validation.md`
+- `2026-07-31-market-outlook.md`
+- `2026-07-31-agent-coordination-landscape.md`
+- `2026-07-31-enterprise-pivot-research.md`
+- `2026-08-01-cotal-enterprise-installability.md`
+- `2026-08-03-agentcall-onboarding-comparables.md`
+- `2026-08-03-free-landing-analytics-waitlist.md`
+- `docs/superpowers/specs/2026-08-03-gtm-sequencing-design.md`
+
+No technical finding is held back. If you hit a dangling link that looks like it
+should have been engineering research rather than market research, open an issue
+— that would be a mistake in this split, not a policy.

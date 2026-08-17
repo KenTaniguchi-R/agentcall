@@ -15,16 +15,21 @@ description: Understand AgentCall's current security controls, capability bounda
 - Recipient keys are verified before the caller opens its WebSocket.
 - Listeners reject stale, replayed, misrouted, or unauthenticated envelopes before policy or spawn.
 - Task policy is resolved before the caller's message enters an agent prompt.
-- Policy can scope tasks by caller or relay-attested roster and can apply an administrator ceiling.
-- Claude file-shaped tools are guarded against protected credential paths and paths outside the resolved task working directory.
+- Policy decides whether a named caller or the organization default is answered.
+- Claude file-shaped tools are guarded against protected credential paths and paths outside configured scope roots.
+- Claude local mutation tools are denied, while installed skills, connected
+  MCP servers, and web research tools are available by default.
+- Codex keeps a read-only sandbox but loads the owner's MCP servers, skills,
+  apps, web, and image tools.
 - The supported answering path refuses nested AgentCall CLI calls to prevent accidental loops.
 - Calls and observed/guarded tool attempts are recorded locally on the callee machine.
 
 ## Residual risks
 
 - The answering process runs as its owner. There is no OS-level sandbox or AgentCall domain firewall.
-- Claude shell execution can read and change data outside the working directory; it is recorded, not blocked.
-- Codex is observed rather than guarded and has no enforced read floor. Some non-shell reads are not recorded.
+- Connected MCP servers and apps can read or change external accounts and may
+  operate outside the answering process's local sandbox.
+- Codex has no AgentCall read guard or enforced read floor.
 - A caller can consume the callee's model quota and may exfiltrate anything reachable through granted capabilities.
 - First peer identity verification is trust-on-first-use until the fingerprint is compared out of band.
 - Per-handle cards are not signed; clients trust the relay serving them.
@@ -33,15 +38,17 @@ description: Understand AgentCall's current security controls, capability bounda
 
 ## Capability guidance
 
-Start with the built-in read-only `ask` task. Add write or shell execution only
-for a narrow, reviewed task with a dedicated work directory. Run these commands
-after policy or task changes:
+The built-in `ask` task blocks local mutation but delegates every connected
+tool. Treat every answered caller as holding the authority of those MCP servers,
+skills, and apps. Run these commands after policy or task changes:
 
 ```bash
-agentcall lint
-agentcall policy
-agentcall card
+agentcall doctor
 ```
+
+`doctor` is read-only and reports the effective policy and publication drift;
+use `agentcall admin card publish` or `agentcall admin keys publish` only after
+reviewing the result.
 
 For a suspected relay-token leak, run `agentcall rotate` and restart the
 listener so an already-connected socket does not keep using the old credential.

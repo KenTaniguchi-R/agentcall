@@ -2,8 +2,8 @@ import { mkdirSync } from "node:fs";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 import { decide, DENY_REASON, runGuard, type DecideContext, type GuardDeps, type GuardInput } from "../src/guard.js";
-import { getLinePaths, getMachinePaths } from "../src/paths.js";
-import { SensitivityMapSchema, withFloor } from "../src/sensitivity.js";
+import { getPaths } from "../src/paths.js";
+import { ScopeSchema } from "../src/scope.js";
 import { tempDir } from "./helpers.js";
 
 const HOME = "/Users/owner";
@@ -11,18 +11,11 @@ const CWD = "/Users/owner/AgentCall/public";
 // Identity realpath: these tests assert path logic, not symlink resolution.
 const id = (p: string) => p;
 
-// The owner has labelled the areas they work in. Everything else — including
-// the rest of $HOME — is `secret` by omission, and withFloor pins the sensitive
-// home paths so they stay secret even though ~/AgentCall's parent is not named.
-//
-// This is what replaced the old allow-everything-except-DENIED_DIRS default.
-// Assertions below that used to read "allows an ordinary project file" now
-// depend on that file sitting under a labelled root, which is the intended
-// inversion: unlabelled is secret.
-function mapFor(home: string, roots: string[] = []) {
-  return withFloor(SensitivityMapSchema.parse({
-    sources: roots.map((path) => ({ path, sensitivity: "internal" as const })),
-  }), home);
+// The owner declares the roots they work under. Anything outside every root is
+// refused, and the built-in denylist holds inside them regardless — so these
+// fixtures name roots and let scope.ts supply the denials.
+function scopeFor(_home: string, roots: string[] = []) {
+  return ScopeSchema.parse({ roots });
 }
 
 const OWNER_ROOTS = [
@@ -36,8 +29,7 @@ function ctx(over: Partial<DecideContext> = {}): DecideContext {
   return {
     userHome: HOME,
     realpath: id,
-    map: mapFor(HOME, OWNER_ROOTS),
-    clearance: "internal",
+    scope: scopeFor(HOME, OWNER_ROOTS),
     ...over,
   };
 }
@@ -101,52 +93,55 @@ describe("decide — exact-target tools", () => {
 // and therefore secret — no separate allow-list needed to keep it out.
 //
 // The rule name changes with the mechanism: `outside-allowed-root` became
-// `above-clearance`, which is what actually happened.
-describe("decide — clearance bounds what a labelled root can reach", () => {
+// `source-is-secret`, which is what actually happened.
+describe("decide — labelling bounds what a root can reach", () => {
   const ROOT = "/Users/owner/code/payments";
   const bounded = (tool: string, input: Record<string, unknown>, cwd = ROOT) =>
     decide(call(tool, input, cwd), {
       userHome: HOME,
       realpath: id,
-      map: mapFor(HOME, [ROOT]),
-      clearance: "internal",
+      scope: scopeFor(HOME, [ROOT]),
       guardRoot: "/opt/agentcall",
     });
 
-  it("allows file tools inside the labelled root", () => {
+  it("allows file reads inside the labelled root", () => {
     expect(bounded("Read", { file_path: `${ROOT}/src/index.ts` }).allow).toBe(true);
-    expect(bounded("Write", { file_path: `${ROOT}/notes/new.md` }).allow).toBe(true);
+  });
+
+  it("denies local mutation tools even inside a readable root", () => {
+    expect(bounded("Write", { file_path: `${ROOT}/notes/new.md` }).allow).toBe(false);
+    expect(bounded("Edit", { file_path: `${ROOT}/src/index.ts` }).allow).toBe(false);
+    expect(bounded("NotebookEdit", { notebook_path: `${ROOT}/analysis.ipynb` }).allow).toBe(false);
+    expect(bounded("Bash", { command: "touch notes/new.md" }).allow).toBe(false);
   });
 
   it("denies exact file targets in an unlabelled sibling", () => {
     expect(bounded("Read", { file_path: "/Users/owner/code/payroll/secrets.ts" }))
-      .toMatchObject({ allow: false, rule: "above-clearance" });
-    expect(bounded("Edit", { file_path: "../payroll/secrets.ts" }))
-      .toMatchObject({ allow: false, rule: "above-clearance" });
+      .toMatchObject({ allow: false, rule: "source-is-secret" });
   });
 
   it("denies searches and absolute glob selectors outside the labelled root", () => {
     expect(bounded("Grep", { path: "/Users/owner/code", pattern: "token" }))
-      .toMatchObject({ allow: false, rule: "above-clearance" });
+      .toMatchObject({ allow: false, rule: "source-is-secret" });
     expect(bounded("Glob", { pattern: "/Users/owner/code/payroll/**/*.ts" }))
-      .toMatchObject({ allow: false, rule: "above-clearance" });
+      .toMatchObject({ allow: false, rule: "source-is-secret" });
   });
 
-  it("denies a public-cleared caller what an internal-cleared one may read", () => {
-    // Same map, same path, different caller. This is the axis the old
-    // allow-list could not express at all: containment used to be a property
-    // of the run, not of who was asking.
-    const asPublic = decide(call("Read", { file_path: `${ROOT}/src/index.ts` }, ROOT), {
-      userHome: HOME, realpath: id, map: mapFor(HOME, [ROOT]), clearance: "public",
-    });
-    // `inside-unreachable-source`, not `above-clearance`: the path sits inside a
-    // source the owner labelled `internal`, which this caller cannot reach. The
-    // other rule is for paths that are simply unlabelled.
-    expect(asPublic).toMatchObject({ allow: false, rule: "inside-unreachable-source" });
+  it("denies a path inside a subtree the owner denied", () => {
+    // The owner declares a root and then carves a denial out of it. Under #412
+    // this is the ONLY way to withhold something inside a root — there are no
+    // labels left to mark it with.
+    const carved = ScopeSchema.parse({ roots: [ROOT], denied: [`${ROOT}/contracts`] });
+    expect(decide(call("Read", { file_path: `${ROOT}/contracts/nda.md` }, ROOT), {
+      userHome: HOME, realpath: id, scope: carved,
+    }).allow).toBe(false);
+    expect(decide(call("Read", { file_path: `${ROOT}/src/index.ts` }, ROOT), {
+      userHome: HOME, realpath: id, scope: carved,
+    }).allow).toBe(true);
   });
 
-  it("still records but allows Bash because exec is an explicit residual", () => {
-    expect(bounded("Bash", { command: "cat /Users/owner/code/payroll/secrets.ts" }).allow).toBe(true);
+  it("denies Bash even when the command only names a readable path", () => {
+    expect(bounded("Bash", { command: `cat ${ROOT}/src/index.ts` }).allow).toBe(false);
   });
 });
 
@@ -305,9 +300,9 @@ describe("decide — the guard protects its own installed code", () => {
     expect(v.allow).toBe(false);
   });
 
-  it("still allows writes outside the guard root with the same override in place", () => {
+  it("denies writes outside the guard root too", () => {
     const v = decide(call("Write", { file_path: "/Users/owner/proj/src/index.ts" }), ctx({ guardRoot: GUARD_ROOT }));
-    expect(v.allow).toBe(true);
+    expect(v.allow).toBe(false);
   });
 
   it("denies a Grep rooted at the guard's package root", () => {
@@ -344,7 +339,7 @@ describe("decide — task envelopes and launch config are protected", () => {
   it("denies writing a systemd user unit, which controls how the Linux listener is launched", () => {
     expect(decide(
       call("Write", { file_path: "/home/owner/.config/systemd/user/agentcall-listener.service" }),
-      { userHome: "/home/owner", realpath: id, map: mapFor("/home/owner"), clearance: "internal" },
+      { userHome: "/home/owner", realpath: id, scope: scopeFor("/home/owner") },
     ).allow).toBe(false);
   });
 
@@ -361,7 +356,7 @@ describe("guard security root", () => {
   it("denies the real home's .ssh, not the state root's", () => {
     const verdict = decide(
       { tool_name: "Read", tool_input: { file_path: "/Users/real/.ssh/id_rsa" }, cwd: "/tmp/work" },
-      { userHome: "/Users/real", realpath: id, map: mapFor("/Users/real", ["/Users/real"]), clearance: "internal" },
+      { userHome: "/Users/real", realpath: id, scope: scopeFor("/Users/real", ["/Users/real"]) },
     );
     expect(verdict.allow).toBe(false);
   });
@@ -369,7 +364,7 @@ describe("guard security root", () => {
   it("denies one line's config from another line's agent (.agentcall is a denied root)", () => {
     const verdict = decide(
       { tool_name: "Read", tool_input: { file_path: "/Users/real/.agentcall/lines/codex/config.json" }, cwd: "/tmp/work" },
-      { userHome: "/Users/real", realpath: id, map: mapFor("/Users/real", ["/Users/real"]), clearance: "internal" },
+      { userHome: "/Users/real", realpath: id, scope: scopeFor("/Users/real", ["/Users/real"]) },
     );
     expect(verdict.allow).toBe(false);
   });
@@ -380,20 +375,20 @@ describe("per-line task directories are denied", () => {
     const verdict = decide(
       { tool_name: "Write", tool_input: { file_path: "/Users/real/AgentCall/codex/tasks/x/SKILL.md" }, cwd: "/tmp/work" },
       {
-        userHome: "/Users/real", realpath: id, clearance: "internal", guardRoot: "/pkg",
-        map: mapFor("/Users/real", ["/Users/real/AgentCall"]),
+        userHome: "/Users/real", realpath: id, guardRoot: "/pkg",
+        scope: scopeFor("/Users/real", ["/Users/real/AgentCall"]),
         extraSecretRoots: [join("/Users/real", "AgentCall", "codex", "tasks")],
       },
     );
     expect(verdict.allow).toBe(false);
   });
 
-  it("still allows the line's own share directory", () => {
+  it("still allows reads from the line's own share directory", () => {
     const verdict = decide(
-      { tool_name: "Write", tool_input: { file_path: "/Users/real/AgentCall/codex/public/notes.md" }, cwd: "/tmp/work" },
+      { tool_name: "Read", tool_input: { file_path: "/Users/real/AgentCall/codex/public/notes.md" }, cwd: "/tmp/work" },
       {
-        userHome: "/Users/real", realpath: id, clearance: "internal", guardRoot: "/pkg",
-        map: mapFor("/Users/real", ["/Users/real/AgentCall"]),
+        userHome: "/Users/real", realpath: id, guardRoot: "/pkg",
+        scope: scopeFor("/Users/real", ["/Users/real/AgentCall"]),
         extraSecretRoots: [join("/Users/real", "AgentCall", "codex", "tasks")],
       },
     );
@@ -423,10 +418,9 @@ describe("decide — a denied directory that is itself a symlink", () => {
     expect(v.allow).toBe(false);
   });
 
-  it("keeps flagging a Bash command that names the symlink — the lexical form survives", () => {
+  it("denies a Bash command that names the symlink", () => {
     const v = decide(call("Bash", { command: "cat ~/.aws/credentials" }), ctx({ realpath }));
-    expect(v.allow).toBe(true);
-    expect(v.allow === true && v.flag?.rule).toBeTruthy();
+    expect(v).toMatchObject({ allow: false, rule: "local-mutation-disabled" });
   });
 });
 
@@ -443,17 +437,15 @@ describe("decide — writes to a path that does not exist yet", () => {
   });
 });
 
-describe("decide — Bash records but does not deny", () => {
-  it("flags a command referencing a denied path, and still allows it", () => {
+describe("decide — Bash is disabled for answered calls", () => {
+  it("denies a command referencing a denied path", () => {
     const v = decide(call("Bash", { command: "cat ~/.ssh/id_rsa" }), ctx());
-    expect(v.allow).toBe(true);
-    expect(v.allow === true && v.flag?.rule).toBeTruthy();
+    expect(v).toMatchObject({ allow: false, rule: "local-mutation-disabled" });
   });
 
-  it("does not flag ordinary work", () => {
+  it("also denies an ordinary command", () => {
     const v = decide(call("Bash", { command: "npm test" }), ctx());
-    expect(v.allow).toBe(true);
-    expect(v.allow === true && v.flag).toBeUndefined();
+    expect(v).toMatchObject({ allow: false, rule: "local-mutation-disabled" });
   });
 });
 
@@ -480,12 +472,41 @@ describe("decide — unknown shapes fail closed", () => {
     expect(decide(call("WebFetch", { url: "https://example.com" }), ctx()).allow).toBe(true);
   });
 
+  it("allows ToolSearch to load an authenticated tool's deferred schema", () => {
+    expect(decide(call("ToolSearch", { query: "select:mcp__calendar__list_events" }), ctx()))
+      .toEqual({ allow: true });
+  });
+
+  it("allows an MCP tool after its schema has been selected", () => {
+    expect(decide(call("mcp__claude_ai_Google_Calendar__list_events", {
+      calendar_id: "primary",
+    }), ctx())).toEqual({ allow: true });
+  });
+
   it("DENIES a tool it has never been taught", () => {
     // The LS failure mode: an unclassified tool has an argument shape this
     // function cannot inspect, so it must not be waved through.
+    //
+    // This fallthrough is load-bearing in a way that is easy to miss: measured
+    // 2026-08-06, `--allowedTools` does NOT gate the `Skill` tool at all, so
+    // before Skill got its own branch below this deny was the only thing
+    // stopping a caller invoking the owner's skills. Do not relax it, and do not
+    // add a new tool to NO_PATH_SURFACE just because it has no path argument.
     const v = decide(call("SomeNewTool", { path: "/Users/owner/.ssh" }), ctx());
     expect(v.allow).toBe(false);
   });
+});
+
+describe("decide — Skill", () => {
+  // Under #412 there is no per-skill label: a skill's files sit under a root
+  // (or the ~/.claude/skills exception) and its reads arrive as ordinary tool
+  // calls, checked like any other. Withholding one means denying its directory.
+  it("allows a skill invocation", () => {
+    expect(decide(call("Skill", { skill: "some-skill" }), ctx()).allow).toBe(true);
+  });
+
+
+
 
   it("denies a path-shaped tool whose argument is missing", () => {
     const v = decide(call("Read", {}), ctx());
@@ -510,15 +531,14 @@ function harness() {
   const logLines: Array<{ file: string; line: string }> = [];
   // userHome === stateRoot here, matching this file's old flat-HOME tests:
   // the security root the existing assertions below rely on is HOME.
-  const linePaths = getLinePaths(getMachinePaths(HOME, HOME), "test-line");
+  const linePaths = getPaths(HOME, HOME);
   const deps: GuardDeps = {
-    line: linePaths,
+    paths: linePaths,
     callId: "call-123",
     now: () => "2026-07-31T00:00:00.000Z",
     realpath: id,
     appendLine: (file, line) => logLines.push({ file, line }),
-    map: mapFor(HOME, OWNER_ROOTS),
-    clearance: "internal",
+    scope: scopeFor(HOME, OWNER_ROOTS),
   };
   return {
     deps, lines: logLines,
@@ -538,7 +558,7 @@ describe("runGuard", () => {
     expect(out.stdout).toBe("");
     expect(h.calls()).toHaveLength(0);
     expect(h.tools()).toEqual([
-      { ts: "2026-07-31T00:00:00.000Z", type: "tool_call", call_id: "call-123", tool: "Read", allowed: true },
+      { ts: "2026-07-31T00:00:00.000Z", type: "tool_call", call_id: "call-123", tool: "Read", allowed_by_guard: true },
     ]);
   });
 
@@ -550,7 +570,7 @@ describe("runGuard", () => {
     expect(decision.hookSpecificOutput.permissionDecision).toBe("deny");
     expect(decision.hookSpecificOutput.permissionDecisionReason).toBe(DENY_REASON);
     expect(h.calls()[0]).toMatchObject({ type: "tool_denied", call_id: "call-123", tool: "Read" });
-    expect(h.tools()[0]).toMatchObject({ type: "tool_call", allowed: false });
+    expect(h.tools()[0]).toMatchObject({ type: "tool_call", allowed_by_guard: false });
   });
 
   it("never leaks the resolved path to the caller", () => {
@@ -562,13 +582,32 @@ describe("runGuard", () => {
     expect(JSON.stringify(h.calls()[0])).toContain("id_rsa");
   });
 
-  it("records a flagged Bash command without denying it", () => {
+  it("denies and records a Bash command", () => {
     const h = harness();
     const out = runGuard(payload("Bash", { command: "cat /Users/owner/.ssh/id_rsa" }), h.deps);
     expect(out.exitCode).toBe(0);
-    expect(out.stdout).toBe("");
-    expect(h.calls()[0]).toMatchObject({ type: "tool_flagged", tool: "Bash" });
-    expect(h.tools()[0]).toMatchObject({ allowed: true });
+    expect(JSON.parse(out.stdout).hookSpecificOutput.permissionDecision).toBe("deny");
+    expect(h.calls()[0]).toMatchObject({ type: "tool_denied", tool: "Bash" });
+    expect(h.tools()[0]).toMatchObject({ allowed_by_guard: false });
+  });
+
+  it("names the tools.log field for what it is: this guard's verdict, not the outcome", () => {
+    // #415. The field used to be `allowed`, which reads as an outcome. This
+    // hook is not the last word — it sees PreToolUse, and a tool it permits can
+    // still be refused downstream by the CLAUDE_READ_ONLY_TOOLS envelope, so
+    // only the envelope's own verdict is ever an outcome.
+    //
+    // The specific case that motivated the rename is gone: Bash used to be
+    // recorded-and-allowed here and blocked by the envelope, which logged
+    // `allowed: true` for shell commands that never ran. The invert-the-default
+    // refactor made the guard deny Bash outright, so the two layers now agree
+    // about it. The name is still wrong for the general case, and it becomes a
+    // public surface the moment this repository is published.
+    const h = harness();
+    runGuard(payload("Read", { file_path: "/Users/owner/proj/a.ts" }), h.deps);
+    const row = h.tools()[0];
+    expect(row).toHaveProperty("allowed_by_guard");
+    expect(row).not.toHaveProperty("allowed");
   });
 
   it("fails closed on unparseable input", () => {
@@ -625,70 +664,8 @@ describe("runGuard", () => {
   });
 });
 
-// The codex spawn gets the same hook, but codex's own kernel-enforced
-// `deny_read` is the boundary there — not this. Observing rather than
-// enforcing keeps the guard from denying codex tools it cannot classify
-// (`apply_patch` and friends), which would break the runtime while adding
-// no security. See the design spec.
-describe("runGuard — observe mode", () => {
-  it("records a credential read without denying it", () => {
-    const h = harness();
-    const out = runGuard(payload("Read", { file_path: "/Users/owner/.ssh/id_rsa" }), h.deps, "observe");
-    expect(out.exitCode).toBe(0);
-    expect(out.stdout).toBe("");
-    expect(h.calls()[0]).toMatchObject({ type: "tool_attempt_flagged", tool: "Read" });
-  });
 
-  it("records an unclassified tool without denying it", () => {
-    const h = harness();
-    const out = runGuard(payload("apply_patch", { patch: "x" }), h.deps, "observe");
-    expect(out.exitCode).toBe(0);
-    expect(out.stdout).toBe("");
-  });
-
-  it("still writes every call to tools.log", () => {
-    const h = harness();
-    runGuard(payload("Bash", { command: "sed -n '1,200p' a.ts" }), h.deps, "observe");
-    expect(h.tools()[0]).toMatchObject({ type: "tool_call", tool: "Bash" });
-  });
-
-  // PreToolUse reports what the model ATTEMPTED, and in observe mode nothing
-  // downstream is blocked by us — so an `allowed` field would assert an
-  // outcome this hook never observes.
-  it("does not claim an allow/deny outcome it cannot observe", () => {
-    const h = harness();
-    runGuard(payload("Bash", { command: "echo hi" }), h.deps, "observe");
-    expect(h.tools()[0]).not.toHaveProperty("allowed");
-    expect(h.tools()[0]).toMatchObject({ mode: "observe" });
-  });
-
-  // Not a boundary here, so a guard failure must not cost availability.
-  it("fails open when the audit write throws", () => {
-    const h = harness();
-    const out = runGuard(payload("Read", { file_path: "/Users/owner/proj/a.ts" }), {
-      ...h.deps,
-      appendLine: () => { throw new Error("ENOSPC: no space left on device"); },
-    }, "observe");
-    expect(out.exitCode).toBe(0);
-  });
-});
-
-// End-to-end through the real filesystem, unlike harness()'s synthetic HOME:
-// runGuard's own extraDeniedRoots computation (lineTaskDirs) reads
-// deps.line.machine.linesDir off disk, so these are the only tests that
-// exercise that enumeration rather than a hand-passed array.
-// Unlike harness()'s synthetic HOME, these use real mkdtempSync directories,
-// so lineTaskDirs' readdirSync actually runs — this is the only describe
-// block that exercises the on-disk enumeration itself, rather than a
-// hand-passed extraDeniedRoots array. Critically, stateRoot and userHome are
-// two DIFFERENT real directories in every test here, simulating a redirected
-// AGENTCALL_HOME: the acting line's own on-disk state lives under stateRoot,
-// exactly as it would with AGENTCALL_HOME set, while the lines being
-// enumerated for denial live under userHome, the real machine home. A version
-// of runGuard that enumerated deps.line.machine directly (stateRoot-rooted)
-// would find nothing here and silently ALLOW every write below — that is
-// exactly the regression this block exists to catch.
-describe("runGuard — enumerates every line's tasksDir from the real home, not a redirected state root", () => {
+describe("runGuard — protects installation tasks under the real home", () => {
   function splitHomes() {
     return {
       stateRoot: tempDir("agentcall-guard-state-"),
@@ -697,50 +674,39 @@ describe("runGuard — enumerates every line's tasksDir from the real home, not 
   }
 
   function actingDeps(stateRoot: string, userHome: string): GuardDeps {
-    const acting = getLinePaths(getMachinePaths(stateRoot, userHome), "acting");
+    const acting = getPaths(stateRoot, userHome);
     return {
-      line: acting, callId: "call-1", now: () => "2026-08-01T00:00:00.000Z",
+      paths: acting, callId: "call-1", now: () => "2026-08-01T00:00:00.000Z",
       realpath: (p) => p, appendLine: () => {},
-      // Both AgentCall roots are labelled: the acting line's shareDir sits under
-      // the redirected stateRoot, while the obsolete flat task path sits under
-      // the real userHome. The tasks directories inside them stay secret via
-      // extraSecretRoots, which is the distinction these tests exist to pin.
-      map: mapFor(userHome, [join(stateRoot, "AgentCall"), join(userHome, "AgentCall")]),
-      clearance: "internal",
+      // The authored tree remains under the real home when runtime state is redirected.
+      scope: scopeFor(userHome, [join(stateRoot, "AgentCall"), join(userHome, "AgentCall")]),
     };
   }
 
-  it("denies another line's tasks directory under the real home, including a line with no config.json", () => {
+  it("denies the installation tasks directory without requiring config.json", () => {
     const { stateRoot, userHome } = splitHomes();
-    // The REAL machine — rooted at userHome for both fields — is what
-    // lineTaskDirs must enumerate from, not deps.line.machine (which sits
-    // under the redirected stateRoot below and has no lines under it at all).
-    const realMachine = getMachinePaths(userHome, userHome);
-    const other = getLinePaths(realMachine, "other-line");
-    // Never finished setup — no config.json — and per lineTaskDirs' contract
-    // that must not exempt its tasksDir from being denied.
-    mkdirSync(other.dir, { recursive: true });
+    const realMachine = getPaths(userHome, userHome);
+    mkdirSync(realMachine.dir, { recursive: true });
 
     const out = runGuard(
-      payload("Write", { file_path: join(other.tasksDir, "ask", "SKILL.md") }),
+      payload("Write", { file_path: join(realMachine.tasksDir, "ask", "SKILL.md") }),
       actingDeps(stateRoot, userHome),
     );
     const decision = JSON.parse(out.stdout);
     expect(decision.hookSpecificOutput.permissionDecision).toBe("deny");
   });
 
-  it("does not treat the obsolete flat task path as a policy directory", () => {
+  it("denies the single installation task path", () => {
     const { stateRoot, userHome } = splitHomes();
     const legacyTask = join(userHome, "AgentCall", "tasks", "ask", "SKILL.md");
-    const out = runGuard(payload("Write", { file_path: legacyTask }), actingDeps(stateRoot, userHome));
-    expect(out.stdout).toBe("");
-    expect(out.exitCode).toBe(0);
+    const out = runGuard(payload("Read", { file_path: legacyTask }), actingDeps(stateRoot, userHome));
+    expect(JSON.parse(out.stdout).hookSpecificOutput.permissionDecision).toBe("deny");
   });
 
-  it("still allows writing to the acting line's own share directory", () => {
+  it("still allows reading from the installation's own share directory", () => {
     const { stateRoot, userHome } = splitHomes();
     const deps = actingDeps(stateRoot, userHome);
-    const out = runGuard(payload("Write", { file_path: join(deps.line.shareDir, "notes.md") }), deps);
+    const out = runGuard(payload("Read", { file_path: join(deps.paths.shareDir, "notes.md") }), deps);
     expect(out.stdout).toBe("");
     expect(out.exitCode).toBe(0);
   });

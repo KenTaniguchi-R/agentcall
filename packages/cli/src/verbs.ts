@@ -1,16 +1,21 @@
-import { HANDLE_RE, TASK_ID_RE } from "@benree/agentcall-shared";
-import { callerEntry, offeredFor, stripPlus, type Policy } from "./policy.js";
-import type { Task } from "./tasks.js";
+import { HANDLE_RE } from "@benree/agentcall-shared";
+import { AccessSchema, accessFor, type Access } from "./access.js";
+import { callerEntry, type Policy } from "./policy.js";
 
-export type Verb = "allow" | "revoke" | "block" | "unblock" | "offer" | "unoffer";
+// #379 collapsed four task-menu verbs (`allow`/`revoke`/`offer`/`unoffer`) into
+// a single clearance setting. 2026-08-07 collapsed that in turn: with one
+// grantable level there is no amount to set, only whether the line answers at
+// all, so `clearance`/`clearance-reset`/`clearance-default` are gone and
+// `block`/`unblock` are the whole per-caller surface. `access-default` remains
+// because closing a line by default — answer only named callers — is a real
+// posture the binary model can still express.
+export type Verb = "block" | "unblock" | "access-default" | "offline-delivery";
 
 // Pure policy mutations behind the flat CLI verbs. Each returns a NEW
 // Policy plus the lines the CLI prints. Validation throws Error with a
-// user-facing message. Grant-adding verbs (allow/offer) hard-error on a
-// task id with no manifest on disk — publishing a dangling grant is never
-// what the owner wants; removals are idempotent and never error.
+// user-facing message. Removals are idempotent and never error.
 export function execVerb(
-  policy: Policy, tasks: Task[], verb: Verb, a: string, b?: string,
+  policy: Policy, verb: Verb, a: string, b?: string,
 ): { policy: Policy; lines: string[] } {
   const requireHandle = (h: string) => {
     if (!HANDLE_RE.test(h)) {
@@ -18,97 +23,76 @@ export function execVerb(
     }
     return h;
   };
-  const requireTaskId = (id: string | undefined, forVerb: string) => {
-    if (!id || !TASK_ID_RE.test(id)) throw new Error(`${forVerb} needs a valid task id.`);
-    return id;
-  };
-  const requireTaskExists = (id: string) => {
-    if (!tasks.some((t) => t.id === id)) {
-      throw new Error(`No task "${id}" exists on disk. Create it first: agentcall task new ${id}`);
+  const requireAccess = (value: string | undefined, forVerb: string): Access => {
+    const parsed = AccessSchema.safeParse(value);
+    if (!parsed.success) {
+      throw new Error(`${forVerb} needs one of: ${AccessSchema.options.join(" or ")}.`);
     }
-    return id;
+    return parsed.data;
   };
   const clone = (): Policy => ({
     description: policy.description,
-    default_offer: [...policy.default_offer],
+    default_access: policy.default_access,
     callers: Object.fromEntries(
-      Object.entries(policy.callers).map(([k, v]) => [k, { offer: [...v.offer], block: v.block }]),
+      Object.entries(policy.callers).map(([k, v]) => [
+        k, v.access === undefined ? {} : { access: v.access },
+      ]),
     ),
-    groups: Object.fromEntries(
-      Object.entries(policy.groups).map(([k, v]) => [k, { roster_id: v.roster_id, offer: [...v.offer] }]),
-    ),
+    offline_delivery: { enabled: policy.offline_delivery.enabled },
     ...(policy.tests === undefined ? {} : {
       tests: policy.tests.map((test) => ({
         caller: test.caller,
-        groups: [...test.groups],
-        accept: [...test.accept],
-        deny: [...test.deny],
+        expect_access: test.expect_access,
       })),
     }),
   });
-  // Enforcement (resolveTask) only ever offers ids that exist on disk; the
-  // printed menu must match, or an owner reading `allow`'s output would
-  // believe a dangling grant is live when a caller would never see it.
-  const menuLine = (next: Policy, handle: string): string => {
-    const offered = offeredFor(next, handle);
-    if (offered === "blocked") {
-      return `${handle} is blocked; grants are kept but inactive until: agentcall unblock ${handle}`;
-    }
-    const menu = offered.filter((id) => tasks.some((t) => t.id === id));
-    return `${handle} can now: ${menu.join(", ")}`;
-  };
-  const defaultOfferLine = (next: Policy): string => {
-    const menu = next.default_offer.map(stripPlus).filter((id) => tasks.some((t) => t.id === id));
-    return `Offered to anyone: ${menu.join(", ") || "(nothing — invite-only)"}`;
+
+  // Report what the caller actually RESOLVES to, not what was just written: the
+  // the line default takes part. An owner reading this otherwise believes an
+  // edit took effect that the default is overriding.
+  const resolvedLine = (next: Policy, handle: string): string => {
+    const resolved = accessFor(next, handle);
+    return resolved === "blocked"
+      ? `${handle} is blocked; no call from them is answered.`
+      : `${handle} is answered, and can be told anything not marked secret.`;
   };
 
   const next = clone();
   switch (verb) {
-    case "allow": {
-      const handle = requireHandle(a);
-      const id = requireTaskExists(requireTaskId(b, "allow"));
-      // callerEntry, not next.callers[handle]: see policy.ts — a bare lookup
-      // returns Object.prototype's own members for handles like "constructor".
-      const entry = callerEntry(next, handle) ?? { offer: [], block: false };
-      if (!entry.offer.includes(id)) entry.offer.push(id);
-      next.callers[handle] = entry;
-      return { policy: next, lines: [menuLine(next, handle)] };
-    }
-    case "revoke": {
-      const handle = requireHandle(a);
-      const id = requireTaskId(b, "revoke");
-      const entry = callerEntry(next, handle);
-      if (entry) {
-        entry.offer = entry.offer.filter((x) => stripPlus(x) !== id);
-        if (entry.offer.length === 0 && !entry.block) delete next.callers[handle];
-      }
-      return { policy: next, lines: [callerEntry(next, handle) ? menuLine(next, handle) : `${handle} has no grants.`] };
-    }
     case "block": {
       const handle = requireHandle(a);
-      const entry = callerEntry(next, handle) ?? { offer: [], block: false };
-      entry.block = true;
-      next.callers[handle] = entry;
+      next.callers[handle] = { access: "blocked" };
       return { policy: next, lines: [`${handle} is blocked.`] };
     }
     case "unblock": {
       const handle = requireHandle(a);
-      const entry = callerEntry(next, handle);
-      if (entry) {
-        entry.block = false;
-        if (entry.offer.length === 0) delete next.callers[handle];
+      // Delete rather than write `allowed`: an entry that matches the default
+      // is noise, and leaving one behind would pin this caller against a later
+      // change of `default_access`.
+      if (callerEntry(next, handle)) delete next.callers[handle];
+      return { policy: next, lines: [resolvedLine(next, handle)] };
+    }
+    case "access-default": {
+      next.default_access = requireAccess(a, "access --default");
+      return {
+        policy: next,
+        lines: next.default_access === "blocked"
+          ? ["Only named callers are answered."]
+          : ["Anyone registered is answered."],
+      };
+    }
+    case "offline-delivery": {
+      if (a !== "enabled" && a !== "disabled") {
+        throw new Error("access --offline needs enabled or disabled.");
       }
-      return { policy: next, lines: [callerEntry(next, handle) ? menuLine(next, handle) : `${handle} is not blocked.`] };
-    }
-    case "offer": {
-      const id = requireTaskExists(requireTaskId(a, "offer"));
-      if (!next.default_offer.includes(id)) next.default_offer.push(id);
-      return { policy: next, lines: [defaultOfferLine(next)] };
-    }
-    case "unoffer": {
-      const id = requireTaskId(a, "unoffer");
-      next.default_offer = next.default_offer.filter((x) => stripPlus(x) !== id);
-      return { policy: next, lines: [defaultOfferLine(next)] };
+      next.offline_delivery = { enabled: a === "enabled" };
+      return {
+        policy: next,
+        lines: [`Durable offline delivery ${a}.`],
+      };
     }
   }
+  // `b` is part of the signature for verbs that take a second argument; none
+  // currently do. Referenced so the parameter is not silently dead.
+  void b;
 }

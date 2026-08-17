@@ -2,7 +2,7 @@ import { execFileSync } from "node:child_process";
 import { chmodSync, existsSync, mkdirSync, rmSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
-import type { MachinePaths } from "./paths.js";
+import type { Paths } from "./paths.js";
 
 export const SYSTEMD_UNIT = "agentcall-listener.service";
 export type ServiceExec = (command: string[]) => void;
@@ -37,14 +37,14 @@ function outputPath(value: string): string {
     .replaceAll("\t", "\\x09");
 }
 
-export function systemdServiceFile(machine: MachinePaths): string {
+export function systemdServiceFile(machine: Paths): string {
   return join(machine.userHome, ".config", "systemd", "user", SYSTEMD_UNIT);
 }
 
 function systemdUnitContent(
   nodeBin: string,
   cliScript: string,
-  machine: MachinePaths,
+  machine: Paths,
   extraPathDirs: string[] = [],
 ): string {
   const pathDirs = [...new Set([...extraPathDirs, dirname(nodeBin), ...BASE_PATH_DIRS])];
@@ -68,12 +68,12 @@ WantedBy=default.target
 `;
 }
 
-export function isSystemdServiceInstalled(machine: MachinePaths): boolean {
+export function isSystemdServiceInstalled(machine: Paths): boolean {
   return existsSync(systemdServiceFile(machine));
 }
 
 export function installSystemdService(
-  machine: MachinePaths,
+  machine: Paths,
   exec: ServiceExec = defaultExec,
   extraPathDirs: string[] = [],
 ): void {
@@ -90,7 +90,7 @@ export function installSystemdService(
 }
 
 export function uninstallSystemdService(
-  machine: MachinePaths,
+  machine: Paths,
   exec: ServiceExec = defaultExec,
 ): void {
   try {

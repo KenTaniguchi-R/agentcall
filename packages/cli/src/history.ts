@@ -125,12 +125,24 @@ function toCallEntry(row: Record<string, unknown>): LocalHistoryEntry | undefine
   };
 }
 
+// The guard's verdict field was renamed `allowed` -> `allowed_by_guard` (#415).
+// tools.log is an append-only file on the owner's disk that nothing migrates, so
+// every line written before that rename is still there and still has to read
+// back. Both spellings are accepted here and nowhere else; the writer emits only
+// the new one.
+function guardVerdict(row: Record<string, unknown>): unknown {
+  return row.allowed_by_guard !== undefined ? row.allowed_by_guard : row.allowed;
+}
+
 function validToolEvent(row: Record<string, unknown>): boolean {
+  const verdict = guardVerdict(row);
   return row.type === "tool_call" && typeof row.ts === "string" &&
     typeof row.call_id === "string" && typeof row.tool === "string" &&
     (
-      (typeof row.allowed === "boolean" && row.mode === undefined) ||
-      (row.allowed === undefined && row.mode === "observe")
+      (typeof verdict === "boolean" && row.mode === undefined) ||
+      // Legacy observe-mode rows recorded no verdict at all. Observe mode is
+      // gone; these lines are not.
+      (verdict === undefined && row.mode === "observe")
     );
 }
 
@@ -140,8 +152,7 @@ interface LocalHistory {
   truncatedFiles: string[];
 }
 
-// Structural, not `LinePaths`: this only ever reads the two logs, and both are
-// per-line. Kept narrow so a caller cannot hand it a mismatched pair.
+// Structural, not `Paths`: this only ever reads the two installation logs.
 export function loadLocalHistory(
   paths: { callsLog: string; toolsLog: string },
   limit: number,
@@ -171,7 +182,7 @@ export function loadLocalHistory(
     const entry = selected.get(row.call_id as string);
     if (!entry) continue;
     entry.tool_attempts++;
-    if (row.allowed === false) {
+    if (guardVerdict(row) === false) {
       entry.tools_denied++;
       entry.flags = [...new Set([...(entry.flags ?? []), "tool_policy_denial" as const])];
       entry.severity = maxAbuseSeverity(entry.severity, "high");

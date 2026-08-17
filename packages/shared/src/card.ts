@@ -2,7 +2,8 @@ import { z } from "zod";
 import { AgentKindSchema, HANDLE_RE, TASK_ID_RE } from "./protocol.js";
 
 export const MAX_CARD_TASKS = 50;
-export const MAX_CARD_GROUPS = 50;
+// MAX_CARD_GROUPS went with #379: it bounded `group_grants`, and there are no
+// per-group grants on a card any more.
 export const MAX_CARD_BLOCKED_CALLERS = 200;
 export const MAX_TASK_KEYWORDS = 20;
 export const MAX_KEYWORD_LENGTH = 40;
@@ -13,27 +14,30 @@ export const CardTask = z.object({
   description: z.string().min(1).max(1000),
   examples: z.array(z.string().max(500)).max(10),
   // Bounded per-string like every neighbouring field. Unbounded keyword
-  // strings amplify: 20 per task x 50 tasks x 200 roster members, re-sent on
-  // every bundle refresh. These are the highest-weighted field in
-  // `agentcall search`, so they are the callee's precision lever.
+  // strings amplify across the published task catalogue and every card read.
   keywords: z.array(z.string().min(1).max(MAX_KEYWORD_LENGTH)).max(MAX_TASK_KEYWORDS),
 }).strict();
 
-// What a callee pushes to the relay: full task list + visibility policy.
+// What a callee pushes to the relay: the full task list, plus the callers who
+// get none of it.
+//
+// #379 removed `default_offer`, `grants`, and `group_grants`. Together they
+// encoded a per-caller task menu, and a task is no longer individually
+// granted: the callee decides at reply time whether an answer may reach a
+// caller, from that caller's clearance and the sensitivity of whatever the
+// task read. That decision is made locally and is deliberately never
+// published — a clearance table is the owner's assessment of their own
+// callers, which is the last thing that should be readable by them.
+//
+// `blocked` stays, for the same reason it stays in the CLI's policy: it is the
+// one rule clearance cannot express as a level, and it is now the only
+// per-caller distinction a card makes.
 export const CardUpload = z.object({
   description: z.string().max(500),
   agent_kind: AgentKindSchema,
   tasks: z.array(CardTask).max(MAX_CARD_TASKS),
-  default_offer: z.array(z.string().regex(TASK_ID_RE)).max(MAX_CARD_TASKS),
-  grants: z.record(z.string().regex(HANDLE_RE), z.array(z.string().regex(TASK_ID_RE)).max(MAX_CARD_TASKS)),
-  group_grants: z.record(
-    // Same opaque relay-issued id shape as ROSTER_ID_RE. Kept inline to avoid
-    // a card -> roster -> card runtime import cycle.
-    z.string().regex(/^[A-Za-z0-9_-]{16,64}$/), z.array(z.string().regex(TASK_ID_RE)).max(MAX_CARD_TASKS),
-  ).refine((groups) => Object.keys(groups).length <= MAX_CARD_GROUPS, {
-    message: `at most ${MAX_CARD_GROUPS} group grants`,
-  }),
   blocked: z.array(z.string().regex(HANDLE_RE)).max(MAX_CARD_BLOCKED_CALLERS),
+  offline_delivery: z.object({ enabled: z.boolean() }).strict().default({ enabled: false }),
 }).strict();
 
 // What a caller gets back from GET /v1/card/:handle — already filtered to
@@ -43,6 +47,7 @@ export const AgentCard = z.object({
   description: z.string(),
   agent_kind: AgentKindSchema,
   tasks: z.array(CardTask),
+  offline_delivery: z.object({ enabled: z.boolean() }).strict().default({ enabled: false }),
   updated_at: z.number(),
 });
 
@@ -50,23 +55,17 @@ export type CardTaskType = z.infer<typeof CardTask>;
 export type CardUploadType = z.infer<typeof CardUpload>;
 export type AgentCardType = z.infer<typeof AgentCard>;
 
-// The single visibility rule: a viewer sees default_offer plus their own
-// grants, never the full ACL. Lives here rather than in the relay route
-// because two endpoints now apply it — GET /v1/card/:handle and the roster
-// bundle — and they must not drift.
+// The single visibility rule, all that is left of it after #379: a blocked
+// viewer sees nothing, everyone else sees the whole task list. Lives here
+// rather than in the relay route because two endpoints apply it — GET
+// /v1/card/:handle.
 //
-// Own-property check, not a bare lookup: `grants` is a zod z.record object
-// that inherits Object.prototype, and HANDLE_RE accepts "constructor" — so
-// `grants[viewer]` would hand back the Object constructor (not iterable,
-// 500s the endpoint) for a viewer with that handle, against every callee.
-export function visibleTasks(
-  upload: CardUploadType, viewer: string, attestedGroups: readonly string[] = [],
-): CardTaskType[] {
-  if (upload.blocked.includes(viewer)) return [];
-  const granted = viewer && Object.hasOwn(upload.grants, viewer) ? upload.grants[viewer]! : [];
-  const groupGranted = attestedGroups.flatMap(
-    (group) => Object.hasOwn(upload.group_grants, group) ? upload.group_grants[group]! : [],
-  );
-  const visible = new Set([...upload.default_offer, ...granted, ...groupGranted]);
-  return upload.tasks.filter((t) => visible.has(t.id));
+// This is a deliberate reduction, not an oversight. The old menu doubled as
+// information-hiding: a caller with no grant could not see that a task
+// existed. Clearance has no equivalent, so task names and descriptions — all
+// of them owner-authored advertisement copy, none of it derived from a
+// labelled source — are now visible org-wide. Hiding a task's existence again
+// would need its own mechanism.
+export function visibleTasks(upload: CardUploadType, viewer: string): CardTaskType[] {
+  return upload.blocked.includes(viewer) ? [] : upload.tasks;
 }

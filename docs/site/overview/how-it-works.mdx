@@ -3,8 +3,8 @@ title: How AgentCall works
 description: Follow an encrypted AgentCall request from the caller through the relay to the answering agent and back.
 ---
 
-An AgentCall is a live, authenticated exchange. It is not a mailbox and it does
-not queue work for an offline agent.
+An AgentCall is an authenticated, end-to-end encrypted exchange. It is normally
+live; an owner can opt into a bounded ciphertext mailbox for offline delivery.
 
 ```mermaid
 sequenceDiagram
@@ -14,25 +14,35 @@ sequenceDiagram
     participant Agent as Claude Code or Codex
     Caller->>Caller: verify keys and encrypt request
     Caller->>Relay: call_request with ciphertext
+    alt listener online and no backlog
     Relay->>Listener: incoming_call with routing metadata
     Listener->>Listener: verify, decrypt, replay-check, resolve policy
-    Listener->>Agent: start fresh process in task workdir
+    Listener->>Agent: start fresh process in the derived working directory
     Agent-->>Listener: answer
     Listener->>Relay: encrypted call_outcome
     Relay-->>Caller: encrypted call_outcome
     Caller->>Caller: authenticate, decrypt, print
+    else offline or backlog, mailbox enabled
+    Relay-->>Caller: durable task receipt
+    Caller->>Caller: persist task binding and exit
+    Relay->>Listener: lease oldest ciphertext after reconnect
+    Listener->>Listener: journal claim before acknowledgement and start before spawn
+    Listener-->>Relay: encrypted terminal outcome
+    Caller->>Relay: jobs get with includeArtifacts
+    Caller->>Caller: authenticate and decrypt raw HPKE artifact
+    end
 ```
 
 ## Admission happens before prompting
 
-The listener resolves the caller, shared roster attestations, requested task,
-and effective policy before it places the message in an agent prompt. A caller's
+The listener resolves the caller, requested task, and effective policy before
+it places the message in an agent prompt. A caller's
 message therefore cannot grant itself a stronger task.
 
 ## What the relay handles
 
 The relay authenticates organization membership, routes calls, reports lifecycle
-state, applies rate limits, and retains short-lived A2A task status. It can see
+state, applies rate limits, and retains A2A task status plus opted-in mailbox ciphertext. It can see
 organization and handle routing, call IDs, timing, source-network metadata when
 available, envelope headers, and ciphertext sizes.
 
@@ -45,7 +55,10 @@ detail, and offered-task content are signed and HPKE-encrypted between endpoints
   call receives `busy`.
 - The answering process has a five-minute timeout.
 - The relay has a six-minute call deadline.
-- An offline callee fails immediately; no durable mailbox is created.
+- A mailbox request may remain queued for 72 hours, followed by a 24-hour
+  metadata-only tombstone if it expires.
+- Delivery uses a 30-second lease and at most three unacknowledged attempts.
+- A target that has not enabled offline delivery still fails immediately when offline.
 
 ## Next step
 

@@ -1,14 +1,13 @@
 import { createServer, type Server, type IncomingMessage, type ServerResponse } from "node:http";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { registerHandle, getStatus, fetchCard, pushCard, rotateToken, createInvite, listInvites, revokeInvite,
-  createRoster, joinRoster, fetchAuditExportPage,
-  fetchRosterBundle, issueRosterJoinKey, listRosterJoinKeys, revokeRosterJoinKey } from "../src/api.js";
+  fetchAuditExportPage } from "../src/api.js";
 import {
   generateIdentityKeys, loadKeys, loadPendingEncryptionPublication, rotateEncryptionKey,
   type StoredKeys,
 } from "../src/keys.js";
 import { fetchKeys, publishEncryptionKey, publishIdentityKey } from "../src/api.js";
-import { getLinePaths, getMachinePaths } from "../src/paths.js";
+import { getPaths } from "../src/paths.js";
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -17,8 +16,6 @@ import {
   importIdentityPublicKey, keyIdFor, signTranscript, verifyTranscript,
   type EncryptionKeyRecordType, type IdentityRecordType,
 } from "@benree/agentcall-shared";
-
-const JOIN_KEY = `agjk_${"a".repeat(12)}_${"s".repeat(32)}`;
 
 let server: Server;
 afterEach(() => {
@@ -128,7 +125,7 @@ describe("api client", () => {
     const relay2 = await serve(404, { error: "unknown handle" });
     await expect(getStatus(relay2, "ghost", { org: "acme", handle: "me", token: "tok" })).rejects.toMatchObject({
       code: "status_unavailable",
-      message: expect.stringMatching(/does not exist or does not share a roster/i),
+      message: expect.stringMatching(/only the current line may inspect/i),
     });
   });
   // The relay stopped serving presence anonymously (it was an enumeration and
@@ -346,12 +343,12 @@ describe("pushCard / fetchCard", () => {
     await pushCard(relay, { org: "acme", handle: "ken", token: "tok" }, {
       description: "", agent_kind: "claude",
       tasks: [{ id: "ask", name: "Ask", description: "d", examples: [], keywords: [] }],
-      default_offer: ["ask"], grants: {}, group_grants: {}, blocked: [],
+      blocked: [], offline_delivery: { enabled: false },
     });
     expect(seen.method).toBe("PUT");
     expect(seen.url).toBe("/v1/card");
     expect(seen.auth).toBe("Bearer tok");
-    expect(JSON.parse(seen.body!)).toMatchObject({ default_offer: ["ask"] });
+    expect(JSON.parse(seen.body!)).toMatchObject({ tasks: [{ id: "ask" }] });
   });
 
   it("fetchCard parses and returns the card; 404 -> ApiError unknown_handle", async () => {
@@ -380,70 +377,6 @@ describe("pushCard / fetchCard", () => {
     const relay = await serve(401, { error: "unauthorized" });
     await expect(fetchCard(relay, "ken", { org: "acme", handle: "viewer", token: "bad" }))
       .rejects.toMatchObject({ message: expect.stringMatching(/agentcall setup/) });
-  });
-});
-
-describe("roster api", () => {
-  it("creates a roster and returns the initial key once", async () => {
-    const relay = await serve(200, { roster_id: "a".repeat(22), join_key: JOIN_KEY, admin_secret: "admin-value-long" });
-    const r = await createRoster(relay, { org: "acme", handle: "ken", token: "t" });
-    expect(r).toEqual({ roster_id: "a".repeat(22), join_key: JOIN_KEY, admin_secret: "admin-value-long" });
-  });
-
-  // The relay deliberately returns byte-identical 404s for "no such roster"
-  // and "wrong secret", so the client message must not distinguish them
-  // either — otherwise a garbage-secret probe would make roster ids
-  // enumerable, defeating the relay-side protection.
-  it("maps a 404 join to a message that does not distinguish the two causes", async () => {
-    const relay = await serve(404, { error: "not found" });
-    await expect(joinRoster(relay, { org: "acme", handle: "ken", token: "t" }, "a".repeat(22), "wrong"))
-      .rejects.toThrow(/no such roster, or the join key is invalid/i);
-  });
-
-  it("maps a 409 join to a roster-full message", async () => {
-    const relay = await serve(409, { error: "roster full" });
-    await expect(joinRoster(relay, { org: "acme", handle: "ken", token: "t" }, "a".repeat(22), "s"))
-      .rejects.toThrow(/full/i);
-  });
-
-  it("parses issue, list, and targeted revoke responses", async () => {
-    const metadata = {
-      prefix: "a".repeat(12), description: "contractor", created_by: "ken", created_at: 1, expires_at: 2,
-      reusable: false, used: false, revoked_at: null,
-    };
-    let response: unknown = { join_key: JOIN_KEY, key: metadata };
-    const relay = await startServer((_req, res) => {
-      res.writeHead(200, { "content-type": "application/json" });
-      res.end(JSON.stringify(response));
-    });
-    const auth = { org: "acme", handle: "ken", token: "t" };
-    expect(await issueRosterJoinKey(relay, auth, "a".repeat(22), "admin")).toEqual({ join_key: JOIN_KEY, key: metadata });
-    response = { keys: [metadata] };
-    expect(await listRosterJoinKeys(relay, auth, "a".repeat(22), "admin")).toEqual([metadata]);
-    response = { prefix: "a".repeat(12), revoked_at: 3, evicted: 1 };
-    expect(await revokeRosterJoinKey(relay, auth, "a".repeat(22), "a".repeat(12), "admin", true))
-      .toEqual({ prefix: "a".repeat(12), revoked_at: 3, evicted: 1 });
-  });
-
-  it("returns the parsed bundle and its ETag", async () => {
-    const relay = await startServer((_req, res) => {
-      res.writeHead(200, { "content-type": "application/json", ETag: '"etag-1"' });
-      res.end(JSON.stringify({ roster_id: "a".repeat(22), entries: [], skipped: 0 }));
-    });
-    const out = await fetchRosterBundle(relay, { org: "acme", handle: "ken", token: "t" }, "a".repeat(22));
-    expect(out).not.toBe("not-modified");
-    expect((out as { etag?: string }).etag).toBe('"etag-1"');
-  });
-
-  // Must not attempt to parse a 304's (empty) body as a bundle: the caller
-  // is expected to keep serving its cached entries in that case.
-  it("reports not-modified on a 304 instead of parsing an empty body", async () => {
-    const relay = await startServer((_req, res) => {
-      res.writeHead(304);
-      res.end();
-    });
-    const out = await fetchRosterBundle(relay, { org: "acme", handle: "ken", token: "t" }, "a".repeat(22), '"etag-1"');
-    expect(out).toBe("not-modified");
   });
 });
 
@@ -494,7 +427,7 @@ async function buildValidKeysResponse(
 }
 
 // The identity key is line-scoped, so every case here works through a line.
-function linePaths(root: string) { return getLinePaths(getMachinePaths(root, root), "claude"); }
+function linePaths(root: string) { return getPaths(root, root); }
 
 describe("key publication", () => {
   const auth = { org: "acme", handle: "ken", token: "t0ken" };

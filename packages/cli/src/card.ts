@@ -4,19 +4,27 @@ import { authOf, pushCard } from "./api.js";
 import { relayUrl } from "./config.js";
 import { loadPolicy } from "./policy.js";
 import { loadTasks } from "./tasks.js";
-import type { LineConfig } from "./config.js";
-import type { LinePaths } from "./paths.js";
+import type { Config } from "./config.js";
+import type { Paths } from "./paths.js";
 import type { Policy } from "./policy.js";
 import type { Task } from "./tasks.js";
 
-const stripPlus = (id: string) => id.replace(/^\+/, "");
-
 // The upload contains only advertisement fields (id/name/description/
-// examples/keywords) — never envelopes or SKILL.md content. Envelopes are
-// enforcement detail that stays on the callee's machine; the card and the
-// enforcement both derive from the same SKILL.md frontmatter, so they cannot
-// disagree.
-export function buildCardUpload(cfg: LineConfig, policy: Policy, tasks: Task[]): CardUploadType {
+// examples/keywords) — never SKILL.md content, which is enforcement detail
+// that stays on the callee's machine. Card and enforcement both derive from
+// the same SKILL.md frontmatter, so they cannot disagree.
+//
+// Since #379 there is no per-caller menu to publish. A task is not
+// individually granted, so every task on disk is advertised to every caller
+// the owner has not blocked. What an answer may CONTAIN is decided later and
+// locally, by clearance against the sensitivity of what the task read — and
+// the clearance table is deliberately NOT published: it is the owner's
+// assessment of their callers, which is exactly the kind of thing that should
+// not be readable by the callers it assesses.
+//
+// `blocked` survives for the same reason it survives in policy.ts: it is the
+// one rule clearance cannot express as a level.
+export function buildCardUpload(cfg: Config, policy: Policy, tasks: Task[]): CardUploadType {
   // A card only exists for a callee. Caller-only handles (no agent_kind, a
   // config shape added by caller-only setup) have nothing to advertise —
   // every call site already guards on agent_kind, so reaching here without
@@ -25,52 +33,25 @@ export function buildCardUpload(cfg: LineConfig, policy: Policy, tasks: Task[]):
   if (!cfg.agent_kind) {
     throw new Error("Cannot build an agent card for a caller-only handle (no agent configured).");
   }
-  const exists = (id: string) => tasks.some((t) => t.id === id);
-  const defaultOffer = policy.default_offer.map(stripPlus).filter(exists);
-
-  const grants: Record<string, string[]> = {};
-  const blocked: string[] = [];
-  for (const [caller, entry] of Object.entries(policy.callers)) {
-    if (entry.block) {
-      blocked.push(caller);
-      continue;
-    }
-    const ids = entry.offer.map(stripPlus).filter(exists);
-    if (ids.length > 0) grants[caller] = ids;
-  }
-
-  const groupGrants: Record<string, string[]> = {};
-  for (const entry of Object.values(policy.groups)) {
-    const ids = entry.offer.map(stripPlus).filter(exists);
-    if (ids.length === 0) continue;
-    const existing = groupGrants[entry.roster_id] ?? [];
-    groupGrants[entry.roster_id] = [...new Set([...existing, ...ids])];
-  }
-
-  const referenced = new Set([...defaultOffer, ...Object.values(grants).flat(), ...Object.values(groupGrants).flat()]);
   return {
     description: policy.description,
     agent_kind: cfg.agent_kind,
-    tasks: tasks
-      .filter((t) => referenced.has(t.id))
-      .map(({ id, name, description, examples, keywords }) => ({ id, name, description, examples, keywords })),
-    default_offer: defaultOffer,
-    grants,
-    group_grants: groupGrants,
-    blocked,
+    tasks: tasks.map(({ id, name, description, examples, keywords }) =>
+      ({ id, name, description, examples, keywords })),
+    blocked: Object.entries(policy.callers).filter(([, e]) => e.access === "blocked").map(([caller]) => caller),
+    offline_delivery: policy.offline_delivery,
   };
 }
 
-// Single path for every card publish (setup, `card push`, policy verbs, and
-// multi-line `agentcall line add`): build from local policy+tasks, push,
-// then record what was pushed so `agentcall card` can detect staleness
+// Single path for every card publish (setup, `admin card publish`, and policy verbs):
+// build from local policy+tasks, push,
+// then record what was pushed so `agentcall doctor` can detect staleness
 // without any relay round-trip. The snapshot is written only after a
 // successful push — a failed push must keep the old snapshot so staleness
 // detection stays truthful. `cfg` and `p` must come from the same
-// `LineContext` — pairing one line's config with another's paths would
-// publish a card built from the wrong policy/tasks under the wrong handle.
+// The config and paths belong to the same installation identity.
 export async function publishCard(
-  cfg: LineConfig, p: LinePaths, push: typeof pushCard = pushCard,
+  cfg: Config, p: Paths, push: typeof pushCard = pushCard,
 ): Promise<CardUploadType> {
   const upload = buildCardUpload(cfg, loadPolicy(p), loadTasks(p));
   await push(relayUrl(cfg), authOf(cfg), upload);

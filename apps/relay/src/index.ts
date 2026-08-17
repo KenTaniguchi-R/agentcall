@@ -6,26 +6,23 @@ import { orgAuditStatement, orgAuditTrimStatement } from "./events.js";
 import { expiredInviteCleanupStatement, mountInvites } from "./invites.js";
 import { mountKeys } from "./keys.js";
 import { mountPresence } from "./presence.js";
-import { mountRoster } from "./roster.js";
 import { generateToken, sha256Hex } from "./auth.js";
 import { generateAgentId, resolveAgentId } from "./identity.js";
 import { deploymentOrgAllows, identityObjectName,
   type DeploymentMode } from "./tenant.js";
-import { sharedRosterIds } from "./groups.js";
 import { checkLimit, NATIVE_CARD, NATIVE_READ, REGISTER, type RateLimitEnv } from "./ratelimit/index.js";
 import { parseStoredCard } from "./stored-card.js";
 import { drainRecoveryEvictions, mountRecovery } from "./recovery.js";
-import { mountRooms } from "./room/routes.js";
 import { jsonBody, rateLimit, requireIdentity, type RelayAppEnv } from "./middleware.js";
 
 export { HandleDO } from "./do.js";
 export { RateLimiterDO } from "./ratelimit/do.js";
-export { RoomDO } from "./room/do.js";
 
 export type Env = RateLimitEnv & {
+  /** Hosted-only product-site assets; customer-owned relays intentionally omit them. */
+  ASSETS?: Fetcher;
   DB: D1Database;
   HANDLE_DO: DurableObjectNamespace;
-  ROOM_DO: DurableObjectNamespace;
   STATUS_READS: AnalyticsEngineDataset;
   BOOTSTRAP_TOKEN?: string;
   /** Required: missing or unknown deployment mode fails every tenant boundary closed. */
@@ -33,16 +30,17 @@ export type Env = RateLimitEnv & {
   /** Pins a customer-operated relay to one tenant and makes the tenant hostname-independent. */
   SELF_HOSTED_ORG?: string;
 };
+
 const app = new Hono<RelayAppEnv>();
+app.get("/", (c) => c.env.ASSETS ? c.env.ASSETS.fetch(c.req.raw) : c.notFound());
+app.get("/assets/*", (c) => c.env.ASSETS ? c.env.ASSETS.fetch(c.req.raw) : c.notFound());
 app.use("/v1/*", requireIdentity);
 mountA2A(app);
 mountAudit(app);
 mountInvites(app);
 mountKeys(app);
 mountPresence(app);
-mountRoster(app);
 mountRecovery(app);
-mountRooms(app);
 
 async function handleExists(db: D1Database, org: string, handle: string): Promise<boolean> {
   return !!(await db.prepare("SELECT 1 FROM handles WHERE org = ? AND handle = ?").bind(org, handle).first());
@@ -191,7 +189,8 @@ app.get("/v1/card/:handle", rateLimit(NATIVE_READ, "ip"), async (c) => {
     handle,
     description: upload.description,
     agent_kind: upload.agent_kind,
-    tasks: visibleTasks(upload, viewer, await sharedRosterIds(c.env.DB, org, viewer, handle)),
+    tasks: visibleTasks(upload, viewer),
+    offline_delivery: upload.offline_delivery,
     updated_at: row.updated_at,
   });
 });
@@ -207,7 +206,8 @@ app.get("/v1/ws", async (c) => {
   // here down so neither is used for the other's job.
   let target: string;
   let targetAgentId: string;
-  let groups: string[] = [];
+  let mailboxEnabled = false;
+  let callerBlocked = false;
   if (role === "listen") {
     target = handle;
     targetAgentId = identity.agentId;
@@ -226,10 +226,12 @@ app.get("/v1/ws", async (c) => {
     if (!resolved) return c.json({ error: "unknown handle" }, 404);
     target = to;
     targetAgentId = resolved;
-    // The caller cannot supply a policy selector. Group attestation is the
-    // relay's observation that both identities are currently live members of
-    // the same roster, taken before the DO accepts the caller socket.
-    groups = await sharedRosterIds(c.env.DB, org, handle, target);
+    const cardRow = await c.env.DB.prepare(
+      "SELECT card_json FROM cards WHERE org = ? AND agent_id = ?",
+    ).bind(org, targetAgentId).first<{ card_json: string }>();
+    const targetCard = cardRow ? parseStoredCard(cardRow.card_json, org, target) : null;
+    mailboxEnabled = targetCard?.offline_delivery.enabled === true;
+    callerBlocked = targetCard?.blocked.includes(handle) === true;
   } else {
     return c.json({ error: "bad role" }, 400);
   }
@@ -237,17 +239,29 @@ app.get("/v1/ws", async (c) => {
   const stub = c.env.HANDLE_DO.get(
     c.env.HANDLE_DO.idFromName(identityObjectName({ org, agentId: targetAgentId })),
   );
-  const fwd = new Request(`https://do/ws?role=${role}&test_timeout_ms=${c.req.query("test_timeout_ms") ?? ""}`, c.req.raw);
+  const doUrl = new URL("https://do/ws");
+  doUrl.searchParams.set("role", role);
+  doUrl.searchParams.set("test_timeout_ms", c.req.query("test_timeout_ms") ?? "");
+  doUrl.searchParams.set("test_execution_timeout_ms", c.req.query("test_execution_timeout_ms") ?? "");
+  if (role === "listen") {
+    const capability = c.req.query("capability");
+    const listenerSessionId = c.req.query("listener_session_id");
+    if (capability) doUrl.searchParams.set("capability", capability);
+    if (listenerSessionId) doUrl.searchParams.set("listener_session_id", listenerSessionId);
+  }
+  const fwd = new Request(doUrl, c.req.raw);
   fwd.headers.set("X-Verified-From", handle);
   // The connecting party's stable identity. X-Verified-From stays the address
   // because the object echoes it into call records and audit, where the name
   // shown at the time is the point; this is what keys durable state.
   fwd.headers.set("X-Verified-Agent-Id", identity.agentId);
+  fwd.headers.set("X-Verified-Target-Agent-Id", targetAgentId);
+  fwd.headers.set("X-Verified-Mailbox-Enabled", mailboxEnabled ? "true" : "false");
+  fwd.headers.set("X-Verified-Caller-Blocked", callerBlocked ? "true" : "false");
   fwd.headers.set("X-Verified-Org", org);
   fwd.headers.set("X-Verified-Target", target);
   fwd.headers.set("X-Verified-Credential-Generation", String(identity.recoveryGeneration));
   fwd.headers.set("X-Verified-Relay-Origin", new URL(c.req.url).hostname);
-  fwd.headers.set("X-Verified-Groups", JSON.stringify(groups));
   fwd.headers.set("X-Verified-Actor-IP", c.req.header("cf-connecting-ip") ?? "");
   const country = c.req.raw.cf?.country;
   fwd.headers.set("X-Verified-Actor-Country", typeof country === "string" ? country : "");

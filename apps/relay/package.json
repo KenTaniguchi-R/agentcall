@@ -1,9 +1,10 @@
 {
   "name": "@benree/agentcall-relay",
   "private": true,
+  "license": "SEE LICENSE IN LICENSE.md",
   "type": "module",
   "scripts": {
-    "dev": "wrangler dev",
+    "dev": "node ../../scripts/relay-dev.mjs",
     "deploy": "wrangler deploy",
     "test": "vitest run",
     "typecheck": "tsc -p tsconfig.json --noEmit"

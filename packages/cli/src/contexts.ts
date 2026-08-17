@@ -1,7 +1,7 @@
 import { randomBytes } from "node:crypto";
 import { z } from "zod";
 import { CONTEXT_ID_RE, CONTEXT_TTL_MS, MAX_CONTEXTS, MAX_CONTEXT_TURNS } from "@benree/agentcall-shared";
-import type { LinePaths } from "./paths.js";
+import type { Paths } from "./paths.js";
 import { readJsonStore, writeJsonAtomic } from "./json-store.js";
 
 // The binding is the whole security design in one shape. `context_id` is the
@@ -70,7 +70,7 @@ export function upsertContext(list: ContextBinding[], binding: ContextBinding): 
 // resume is refused and every call still works as a fresh one. This is the
 // opposite of loadPolicy's deliberate throw — there, a silent default would
 // GRANT what the owner withheld; here, a silent empty only DENIES.
-export function loadContexts(p: LinePaths): ContextBinding[] {
+export function loadContexts(p: Paths): ContextBinding[] {
   return readJsonStore(p.contextsFile, z.array(ContextBindingSchema), {
     missing: () => [],
     corrupt: () => [],
@@ -79,6 +79,6 @@ export function loadContexts(p: LinePaths): ContextBinding[] {
 
 // 0600, same posture as config.json: this file holds real agent session ids and
 // the handle of everyone who has held a conversation with this agent.
-export function saveContexts(p: LinePaths, list: ContextBinding[]): void {
+export function saveContexts(p: Paths, list: ContextBinding[]): void {
   writeJsonAtomic(p.contextsFile, list);
 }

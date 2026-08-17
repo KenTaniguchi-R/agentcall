@@ -51,12 +51,6 @@ describe("redactOutbound — third-party credential shapes", () => {
 });
 
 describe("redactOutbound — AgentCall's own credentials", () => {
-  it("redacts a roster join key by its prefix", () => {
-    // ROSTER_JOIN_KEY_RE in packages/shared/src/roster.ts.
-    const key = `agjk_0123456789ab_${"A".repeat(43)}`;
-    expect(redactOutbound(`join with ${key}`)).not.toContain(key);
-  });
-
   // generateToken() is 32 random bytes as base64url — 43 characters with no
   // prefix. There is no shape to match that would not also match ordinary
   // base64, so the machine's own secrets are redacted by exact value instead.

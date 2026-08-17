@@ -1,10 +1,9 @@
 import { execFileSync, spawn } from "node:child_process";
-import { createHash } from "node:crypto";
+import { readFileSync } from "node:fs";
+import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { AGENT_TIMEOUT_MS, MAX_REPLY_BYTES, type AgentKind } from "@benree/agentcall-shared";
 import { resolveAgentBin } from "./bin.js";
-import type { Sensitivity } from "./sensitivity.js";
-import { agentChildEnv } from "./telemetry-env.js";
 
 export type { AgentKind };
 
@@ -13,7 +12,6 @@ export type { AgentKind };
 // the security boundary and must be re-probed before resumed sessions are
 // trusted again.
 export const CODEX_THREADING_VERIFIED_VERSION = "0.146.0";
-export const CODEX_GUARD_TRUST_VERIFIED_VERSION = "0.146.0";
 
 // Kept separate from the threading and guard-trust pins: evidence for either
 // must not silently bless incomplete default-path lifecycle coverage.
@@ -98,9 +96,10 @@ const KILL_GRACE_MS = 10_000;
 // Timeout for the PreToolUse guard hook. Biased long on purpose: timeout expiry
 // fails OPEN (the tool runs), so all risk is on the too-short side. A hung guard
 // stalls one call (safe and visible); an abandoned one is neither. Measured cost
-// is ~33ms.
+// is ~48ms (#377, re-measured 2026-08-06; ~33ms before #372 put zod in
+// guard-entry's graph), so the bias is roughly 600x, not 900x. Still no reason
+// to touch this number.
 export const GUARD_TIMEOUT_S = 30;
-const TOOL_TELEMETRY_TIMEOUT_S = 5;
 
 // Inline settings, not a plugin and not a file: scoped to this spawn, gone when
 // the process exits, and the owner's own ~/.claude is untouched.
@@ -117,32 +116,20 @@ const shellQuote = (s: string) => `'${s.replaceAll("'", `'\\''`)}'`;
 // Exported so doctor's direct probe invokes the exact file the spawn wires up,
 // rather than a second path expression that could drift from this one.
 export const guardEntryPath = () => fileURLToPath(new URL("./guard-entry.js", import.meta.url));
-const toolTelemetryEntryPath = () => fileURLToPath(new URL("./tool-telemetry-entry.js", import.meta.url));
 
 const guardCommand = () =>
   `${shellQuote(process.execPath)} ${shellQuote(guardEntryPath())}`;
-const toolTelemetryCommand = () =>
-  `${shellQuote(process.execPath)} ${shellQuote(toolTelemetryEntryPath())}`;
 
-export function guardSettingsJson(includeToolTelemetry = false): string {
-  const hooks: Record<string, unknown> = {
-    PreToolUse: [{
-      hooks: [{ type: "command", command: guardCommand(), timeout: GUARD_TIMEOUT_S }],
-    }],
-  };
-  if (includeToolTelemetry) {
-    const post = [{ hooks: [{
-      type: "command", command: toolTelemetryCommand(), timeout: TOOL_TELEMETRY_TIMEOUT_S, async: false,
-    }] }];
-    hooks.PostToolUse = post;
-    hooks.PostToolUseFailure = post;
-  }
-  return JSON.stringify({ hooks });
+export function guardSettingsJson(): string {
+  return JSON.stringify({
+    hooks: {
+      PreToolUse: [{
+        hooks: [{ type: "command", command: guardCommand(), timeout: GUARD_TIMEOUT_S }],
+      }],
+    },
+  });
 }
 
-// TOML basic string. Only `"` and `\` need escaping for a path; the control
-// characters that would also require it cannot appear in one.
-const tomlQuote = (s: string) => `"${s.replaceAll("\\", "\\\\").replaceAll(`"`, `\\"`)}"`;
 
 // Codex takes hooks as configuration rather than as a settings blob, and `-c`
 // is the only form scoped to a single spawn — the alternatives
@@ -151,21 +138,7 @@ const tomlQuote = (s: string) => `"${s.replaceAll("\\", "\\\\").replaceAll(`"`, 
 //
 // This registers the SAME entry point as claude, but Codex runs it in observe
 // mode. Its command-shaped filesystem surface cannot be safely bounded here.
-export function codexHookConfigArg(
-  command: string,
-  event: "PreToolUse" | "PostToolUse" = "PreToolUse",
-  timeout = GUARD_TIMEOUT_S,
-): string {
-  return `hooks.${event}=[{hooks=[{type="command",command=${tomlQuote(command)},timeout=${timeout}}]}]`;
-}
-
-export function guardCodexConfigArg(): string {
-  return codexHookConfigArg(guardCommand());
-}
-
-export function toolTelemetryCodexConfigArg(): string {
-  return codexHookConfigArg(toolTelemetryCommand(), "PostToolUse", TOOL_TELEMETRY_TIMEOUT_S);
-}
+export 
 
 // Codex executes a hook only when its normalized identity matches a trusted
 // hash. Trusting every hook would also execute hooks from the owner's config,
@@ -173,8 +146,6 @@ export function toolTelemetryCodexConfigArg(): string {
 // reproduce codex-cli 0.146.0's canonical identity for this one session hook
 // and supply trust for its exact synthetic key. A CLI-side normalization
 // change makes the hash mismatch and fails closed (the hook is skipped).
-export const CODEX_SESSION_GUARD_KEY = "/<session-flags>/config.toml:pre_tool_use:0:0";
-export const CODEX_SESSION_TOOL_TELEMETRY_KEY = "/<session-flags>/config.toml:post_tool_use:0:0";
 
 function canonicalize(value: unknown): unknown {
   if (Array.isArray(value)) return value.map(canonicalize);
@@ -188,33 +159,8 @@ function canonicalize(value: unknown): unknown {
   return value;
 }
 
-export function codexHookTrustedHash(command: string, eventName = "pre_tool_use", timeout = GUARD_TIMEOUT_S): string {
-  const identity = canonicalize({
-    event_name: eventName,
-    hooks: [{ type: "command", command, timeout, async: false }],
-  });
-  return `sha256:${createHash("sha256").update(JSON.stringify(identity)).digest("hex")}`;
-}
 
-export function codexHookTrustArg(command: string): string {
-  const hash = codexHookTrustedHash(command);
-  // Set the whole map. A dotted `hooks.state.<key>` override is not equivalent:
-  // the CLI path parser splits the literal dot in `config.toml`, leaving this
-  // hook untrusted while appearing superficially correct in argv tests.
-  return `hooks.state={${tomlQuote(CODEX_SESSION_GUARD_KEY)}={trusted_hash=${tomlQuote(hash)}}}`;
-}
 
-export function guardCodexTrustArg(includeToolTelemetry = false): string {
-  if (!includeToolTelemetry) return codexHookTrustArg(guardCommand());
-  const guardHash = codexHookTrustedHash(guardCommand());
-  const toolHash = codexHookTrustedHash(
-    toolTelemetryCommand(), "post_tool_use", TOOL_TELEMETRY_TIMEOUT_S,
-  );
-  return `hooks.state={` +
-    `${tomlQuote(CODEX_SESSION_GUARD_KEY)}={trusted_hash=${tomlQuote(guardHash)}},` +
-    `${tomlQuote(CODEX_SESSION_TOOL_TELEMETRY_KEY)}={trusted_hash=${tomlQuote(toolHash)}}` +
-    `}`;
-}
 
 // Used with --allowedTools + --permission-mode dontAsk: listed tools are
 // pre-approved, everything else is denied instead of prompting (headless -p
@@ -222,12 +168,159 @@ export function guardCodexTrustArg(includeToolTelemetry = false): string {
 //
 // Fixed and read-only (#372). A call answers a question and the reply is the
 // only sink, so there is nothing for Write, Edit or Bash to be granted FOR.
-// WebFetch/WebSearch are out for a different reason: they are a second exit
-// from the machine, and the clearance check only governs the reply.
-export const CLAUDE_READ_ONLY_TOOLS = ["Read", "Grep", "Glob", "LS"] as const;
+// WebSearch and http(s)-only WebFetch are included because an answering agent
+// is expected to use the owner's real research tools; guard.ts rejects other
+// WebFetch schemes. Local mutation tools remain outside this list.
+export const CLAUDE_READ_ONLY_TOOLS = [
+  "Read", "Grep", "Glob", "LS", "Skill", "ToolSearch", "WebSearch", "WebFetch",
+] as const;
 
-export function claudeAllowedTools(): string {
-  return CLAUDE_READ_ONLY_TOOLS.join(",");
+// A server name is pasted into an allowlist entry, so it has to be a single
+// safe segment. A name carrying a comma would split into a SECOND entry and
+// grant a tool nobody enumerated; one carrying `*` would widen the server
+// segment, which the permission syntax requires to be glob-free. Anything not
+// matching is dropped rather than escaped — a server we cannot name safely is
+// one the caller does without.
+const MCP_SERVER_NAME_RE = /^[A-Za-z0-9_-]+$/;
+
+/**
+ * The tools a call may use.
+ *
+ * Fixed and read-only for the built-ins (#372): a call answers a question and
+ * the reply is the only sink, so there is nothing for Write, Edit or Bash to be
+ * granted FOR. Opening reads on 2026-08-07 deliberately did NOT open those — a
+ * caller's message must not be able to change the owner's machine.
+ * WebFetch/WebSearch are included as explicit remote research capabilities;
+ * the guard still restricts WebFetch to http(s).
+ *
+ * `mcpServers` is enumerated from the owner's own configuration at spawn time,
+ * not typed by anyone. It has to be enumerated because **`mcp__*` is not
+ * expressible**: allow rules accept a glob only after a literal
+ * `mcp__<server>__` prefix, and the server segment must be glob-free.
+ *
+ * `Skill` is listed for completeness rather than for effect — measured
+ * 2026-08-06, `--allowedTools` does not gate Skill at all. What actually decides
+ * a skill is guard.ts's Skill branch.
+ */
+/**
+ * The MCP servers the owner has already configured, from `~/.claude.json`.
+ *
+ * Split from the file read so the parsing is testable and so a broken or
+ * half-written config cannot take a line offline: every failure returns the
+ * empty list, which grants nothing. A caller-facing spawn must not fail because
+ * the owner has no MCP set up.
+ *
+ * Note the asymmetry with the sensitivity map: servers are granted here, by
+ * enumeration into the allowlist, rather than labelled. A label on an opaque
+ * server would be a promise the guard cannot keep — it never sees that server's
+ * I/O — so there is deliberately no `classifyMcp`.
+ */
+export function mcpServerNamesFrom(raw: string): string[] {
+  try {
+    const parsed = JSON.parse(raw) as {
+      mcpServers?: unknown;
+      claudeAiMcpEverConnected?: unknown;
+    };
+    const servers = parsed.mcpServers;
+    const configured = servers !== null && typeof servers === "object" && !Array.isArray(servers)
+      ? Object.keys(servers)
+      : [];
+    const hosted = Array.isArray(parsed.claudeAiMcpEverConnected)
+      ? parsed.claudeAiMcpEverConnected
+        .filter((name): name is string => typeof name === "string" && name.startsWith("claude.ai "))
+        .map((name) => name.replace(/[^A-Za-z0-9_-]/g, "_"))
+      : [];
+    return [...new Set([...configured, ...hosted])];
+  } catch {
+    return [];
+  }
+}
+
+type ReadText = (path: string) => string;
+
+function mcpConfigServerNames(raw: string): string[] {
+  try {
+    const parsed = JSON.parse(raw) as { mcpServers?: unknown } & Record<string, unknown>;
+    const servers = parsed.mcpServers ?? parsed;
+    if (servers === null || typeof servers !== "object" || Array.isArray(servers)) return [];
+    return Object.keys(servers).filter((name) => MCP_SERVER_NAME_RE.test(name));
+  } catch {
+    return [];
+  }
+}
+
+/** MCP server allowlist segments contributed by installed Claude plugins. */
+export function pluginMcpServerNamesFrom(raw: string, read: ReadText): string[] {
+  try {
+    const parsed = JSON.parse(raw) as { plugins?: unknown };
+    if (parsed.plugins === null || typeof parsed.plugins !== "object" || Array.isArray(parsed.plugins)) return [];
+    const names = new Set<string>();
+
+    for (const [pluginId, value] of Object.entries(parsed.plugins as Record<string, unknown>)) {
+      const pluginName = pluginId.split("@", 1)[0]!;
+      if (!MCP_SERVER_NAME_RE.test(pluginName)) continue;
+      const installs = Array.isArray(value) ? value : [value];
+      for (const install of installs) {
+        if (install === null || typeof install !== "object") continue;
+        const installPath = (install as { installPath?: unknown }).installPath;
+        if (typeof installPath !== "string" || installPath === "") continue;
+
+        const add = (serverNames: readonly string[]) => {
+          for (const serverName of serverNames) names.add(`plugin_${pluginName}_${serverName}`);
+        };
+        for (const manifestPath of [
+          join(installPath, ".claude-plugin", "plugin.json"),
+          join(installPath, "plugin.json"),
+        ]) {
+          try {
+            const manifest = JSON.parse(read(manifestPath)) as { mcpServers?: unknown };
+            if (typeof manifest.mcpServers === "string") {
+              add(mcpConfigServerNames(read(join(installPath, manifest.mcpServers))));
+            } else if (manifest.mcpServers !== null && typeof manifest.mcpServers === "object" &&
+              !Array.isArray(manifest.mcpServers)) {
+              add(Object.keys(manifest.mcpServers).filter((name) => MCP_SERVER_NAME_RE.test(name)));
+            }
+          } catch {
+            // A plugin without this optional manifest shape contributes no MCP.
+          }
+        }
+        try {
+          add(mcpConfigServerNames(read(join(installPath, ".mcp.json"))));
+        } catch {
+          // Most plugins do not bundle an MCP config.
+        }
+      }
+    }
+    return [...names];
+  } catch {
+    return [];
+  }
+}
+
+export function discoverMcpServers(
+  userHome: string,
+  read: ReadText = (path) => readFileSync(path, "utf8"),
+): string[] {
+  const names: string[] = [];
+  try {
+    names.push(...mcpServerNamesFrom(read(join(userHome, ".claude.json"))));
+  } catch {
+    // The owner may have no user-level or hosted MCP configuration.
+  }
+  try {
+    const installed = read(join(userHome, ".claude", "plugins", "installed_plugins.json"));
+    names.push(...pluginMcpServerNamesFrom(installed, read));
+  } catch {
+    // The owner may have no installed Claude plugins.
+  }
+  return [...new Set(names)];
+}
+
+export function claudeAllowedTools(mcpServers: readonly string[] = []): string {
+  const servers = mcpServers
+    .filter((s) => MCP_SERVER_NAME_RE.test(s))
+    .map((s) => `mcp__${s}__*`);
+  return [...CLAUDE_READ_ONLY_TOOLS, ...servers].join(",");
 }
 
 // resolveBin is injectable for tests (the default resolves the real binary
@@ -248,14 +341,6 @@ export interface SpawnOptions {
   kind: AgentKind;
   prompt: string;
   workdir: string;
-  /** The line this call came in on. The PreToolUse guard fails closed without it. */
-  lineName: string;
-  /**
-   * What the caller of this run may receive. Resolved from the relay-verified
-   * identity before the message reaches any prompt (the CaMeL invariant), and
-   * handed to the guard hook, which fails closed without it.
-   */
-  clearance: Sensitivity;
   resolveBin?: (kind: AgentKind) => string;
   callId?: string;
   /**
@@ -264,7 +349,12 @@ export interface SpawnOptions {
    */
   resume?: string;
   correlationId?: string;
-  toolTelemetryFile?: string;
+  /**
+   * MCP servers this call may use, enumerated from the owner's own config by
+   * the listener (see discoverMcpServers). Empty grants none — `mcp__*` is not
+   * expressible, so an unlisted server is simply unreachable.
+   */
+  mcpServers?: readonly string[];
 }
 
 // An options object, not positionals. This used to take ten in a fixed order,
@@ -276,10 +366,11 @@ export interface SpawnOptions {
 // compile error instead of a runtime surprise.
 export function buildSpawnSpec(options: SpawnOptions): SpawnSpec {
   const {
-    kind, prompt, workdir, lineName, clearance,
-    resolveBin = resolveAgentBin, callId = "unknown", resume, correlationId, toolTelemetryFile,
+    kind, prompt, workdir,
+    resolveBin = resolveAgentBin, callId = "unknown", resume, correlationId,
+    mcpServers = [],
   } = options;
-  const childEnv = agentChildEnv(process.env);
+  const childEnv = process.env;
   const correlationEnv = correlationId ? { AGENTCALL_CORRELATION_ID: correlationId } : {};
   if (kind === "claude") {
     return {
@@ -287,17 +378,15 @@ export function buildSpawnSpec(options: SpawnOptions): SpawnSpec {
       args: [
         ...(resume ? ["--resume", resume] : []),
         "-p", prompt, "--output-format", "json",
-        "--permission-mode", "dontAsk", "--allowedTools", claudeAllowedTools(),
-        "--settings", guardSettingsJson(toolTelemetryFile !== undefined),
+        "--permission-mode", "dontAsk", "--allowedTools", claudeAllowedTools(mcpServers),
+        "--settings", guardSettingsJson(),
       ],
       cwd: workdir,
       env: {
-        ...childEnv, ...correlationEnv, AGENTCALL_CALL_ID: callId, AGENTCALL_LINE: lineName,
+        ...childEnv, ...correlationEnv, AGENTCALL_CALL_ID: callId,
         // Replaces AGENTCALL_ALLOWED_ROOT. The guard no longer confines the run
         // to one directory; it asks whether each path's sensitivity is within
         // this clearance, which the sensitivity map on disk answers.
-        AGENTCALL_CLEARANCE: clearance,
-        ...(toolTelemetryFile ? { AGENTCALL_TOOL_TELEMETRY_FILE: toolTelemetryFile } : {}),
       },
     };
   }
@@ -305,18 +394,9 @@ export function buildSpawnSpec(options: SpawnOptions): SpawnSpec {
   // the codex-side analogue of claude's --allowedTools, and the only thing
   // confining its writes. Always read-only now. Note it does
   // NOT confine reads: `codex exec --sandbox read-only` still reads ~/.ssh.
+  // Both spawn branches apply it as `-c sandbox_mode`, never as `--sandbox`;
+  // the difference matters and is explained on the fresh-spawn branch below.
   const sandbox = "read-only";
-  // --ignore-user-config does not remove Codex's bundled authenticated apps,
-  // web search, or image generation. Disable every bundled remote surface on
-  // fresh and resumed spawns: no AgentCall task cap grants account mutation or
-  // undeclared egress. --strict-config turns a renamed/removed setting into a
-  // startup failure instead of silently restoring a surface.
-  const codexRemoteBoundary = [
-    "--disable", "apps",
-    "--disable", "image_generation",
-    "-c", `web_search="disabled"`,
-    "--strict-config",
-  ];
   if (resume) {
     // `codex exec resume` accepts neither --sandbox nor --cd (verified against
     // the installed CLI, 2026-08-01). --sandbox is the ONLY thing confining
@@ -327,50 +407,35 @@ export function buildSpawnSpec(options: SpawnOptions): SpawnSpec {
     // refuses a resume when it changed.
     return {
       cmd: resolveBin(kind),
-      args: ["exec", "resume", resume, "--ignore-user-config", "--skip-git-repo-check",
-        "--json", ...codexRemoteBoundary, "-c", guardCodexConfigArg(),
-        ...(toolTelemetryFile ? ["-c", toolTelemetryCodexConfigArg()] : []),
-        "-c", guardCodexTrustArg(toolTelemetryFile !== undefined),
+      args: ["exec", "resume", resume, "--skip-git-repo-check", "--json",
         "-c", `sandbox_mode="${sandbox}"`, prompt],
       cwd: workdir,
-      // AGENTCALL_LINE is as required here as on the non-resume branch: the
-      // guard resolves the line's tasksDir from it and fails closed without
-      // it, so omitting it would deny every tool call on a resumed session.
       env: {
         ...childEnv, ...correlationEnv, AGENTCALL_CALL_ID: callId,
-        AGENTCALL_GUARD_MODE: "observe", AGENTCALL_LINE: lineName,
-        // Set even though codex runs the guard in observe mode: guard-entry fails
-        // closed on a missing clearance BEFORE mode is consulted, since an
-        // unwired env var is a deploy bug, not a decide() failure.
-        AGENTCALL_CLEARANCE: clearance,
-        ...(toolTelemetryFile ? { AGENTCALL_TOOL_TELEMETRY_FILE: toolTelemetryFile } : {}),
       },
     };
   }
   return {
     cmd: resolveBin(kind),
-    // --ignore-user-config drops the owner's ~/.codex: their configured MCP
-    // servers and plugins. Those are separate processes that reach the
-    // filesystem outside codex's sandbox entirely, so a remote caller could
-    // otherwise route around every control here — on a typical dev machine
-    // that means a filesystem MCP server, and often `claude mcp serve`, which
-    // re-exposes Read and Bash. Claude fences these off with --allowedTools,
-    // an allowlist that `mcp__*` names never match. Codex's bundled apps remain
-    // loaded even with this flag, so codexRemoteBoundary removes them explicitly.
+    // Load the owner's normal Codex configuration so an answered call can use
+    // their MCP servers, skills, apps, web, and image tools. MCP processes may
+    // hold authority beyond Codex's own sandbox; that delegated authority is an
+    // explicit part of AgentCall's default tool-access model.
     // The prompt stays last: codex takes the final positional as the prompt.
-    args: ["exec", "--ignore-user-config", "--sandbox", sandbox, "--cd", workdir,
-      "--skip-git-repo-check", "--json", "-c", guardCodexConfigArg(),
-      ...(toolTelemetryFile ? ["-c", toolTelemetryCodexConfigArg()] : []),
-      "-c", guardCodexTrustArg(toolTelemetryFile !== undefined), ...codexRemoteBoundary, prompt],
+    //
+    // The sandbox rides `-c sandbox_mode` here rather than `--sandbox`, matching
+    // the resume branch above. The two are not interchangeable: probed against
+    // codex-cli 0.146.0, `--sandbox read-only` makes a named permissions profile
+    // inert — a read the profile denies comes back at exit 0 — while the config
+    // form leaves it enforced. Nothing today supplies such a profile, so this
+    // changes no behaviour; it means a future one is not silently discarded by
+    // the branch that serves every cold call. See #398.
+    args: ["exec", "--cd", workdir,
+      "--skip-git-repo-check", "--json",
+      "-c", `sandbox_mode="${sandbox}"`, prompt],
     cwd: workdir,
     env: {
       ...childEnv, ...correlationEnv, AGENTCALL_CALL_ID: callId,
-      AGENTCALL_GUARD_MODE: "observe", AGENTCALL_LINE: lineName,
-      // Set even though codex runs the guard in observe mode: guard-entry fails
-      // closed on a missing clearance BEFORE mode is consulted, since an
-      // unwired env var is a deploy bug, not a decide() failure.
-      AGENTCALL_CLEARANCE: clearance,
-      ...(toolTelemetryFile ? { AGENTCALL_TOOL_TELEMETRY_FILE: toolTelemetryFile } : {}),
     },
   };
 }
@@ -415,14 +480,6 @@ export function truncateUtf8(text: string, maxBytes: number): string {
   return buf.subarray(0, maxBytes).toString("utf8").replace(/�+$/, "");
 }
 
-// specOverride and signal are given explicit `= undefined` defaults, not `?`,
-// so lineName below can be a trailing REQUIRED parameter: TS forbids a
-// required parameter from following a `?`-marked one, but not one that
-// follows a defaulted one. lineName has no default on purpose — it used to
-// (silently defaulting to "", which makes the PreToolUse guard fail closed on
-// every tool call, see runner.ts history) — so the only production caller
-// (the listener) is forced to pass the real line name or fail to compile,
-// instead of a caller forgetting it and getting a silently-broken guard.
 export interface RunOptions extends SpawnOptions {
   timeoutMs?: number;
   specOverride?: SpawnSpec;

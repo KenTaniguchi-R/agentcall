@@ -1,20 +1,29 @@
+import { existsSync, mkdirSync, rmSync } from "node:fs";
 import { homedir } from "node:os";
 import { dirname, join } from "node:path";
-import type { AgentKind } from "@benree/agentcall-shared";
-import { addLine, listLinesReport } from "./commands/line.js";
-import { listLines } from "./lines.js";
-import { resolveLine } from "./line-context.js";
-import { getMachinePaths } from "./paths.js";
+import { formatAddress, type AgentKind } from "@benree/agentcall-shared";
+import {
+  publishEncryptionKey, publishIdentityKey, registerHandle,
+} from "./api.js";
+import { publishCard } from "./card.js";
+import {
+  loadConfig, loadInstallation, normalizeRelay, relayUrl, saveConfig, type Config,
+} from "./config.js";
+import { withFileLock } from "./file-lock.js";
+import { generateIdentityKeys, type StoredKeys } from "./keys.js";
+import { writeJsonAtomic } from "./json-store.js";
+import { getPaths, type Paths } from "./paths.js";
+import { DEFAULT_POLICY } from "./policy.js";
+import { defaultScope, loadScope, workdirFor } from "./scope.js";
 import { canPrompt, ask as ttyAsk } from "./tty.js";
-import { relayUrl, resolveLineWorkdir, type LineConfig } from "./config.js";
 import { defaultResolveBin, listenerPathDirs } from "./listener-path.js";
 import { isEphemeralDir } from "./bin.js";
-import { host } from "./outbound.js";
 import { appendSnippet } from "./snippet.js";
 import { installListenerService } from "./listener-service.js";
 import { formatCheck, verifyAgent, type VerifyCheck, type VerifyFns } from "./verify.js";
 
 export interface SetupOpts {
+  paths?: Paths;
   invite?: string;
   handle?: string;
   agent?: AgentKind;
@@ -23,50 +32,28 @@ export interface SetupOpts {
   relay?: string;
   skipService?: boolean;
   callerOnly?: boolean;
-  // false skips post-setup agent verification (commander's --no-verify).
   verify?: boolean;
   io?: { ask(question: string): Promise<string> };
-  // Test seams — production callers should leave these as the defaults.
   hasBin?: (name: string) => boolean;
   resolveBin?: (name: string) => string | null;
   installListenerServiceFn?: typeof installListenerService;
   verifyFns?: VerifyFns;
-  addLineFn?: typeof addLine;
-  log?: (s: string) => void;
+  registerFn?: typeof registerHandle;
+  publishKeysFn?: (config: Config, keys: StoredKeys, paths: Paths) => Promise<void>;
+  publishCardFn?: (config: Config, paths: Paths) => Promise<unknown>;
+  log?: (line: string) => void;
 }
 
-// A value pasted out of a chat message, or copied from a quoted command,
-// arrives with stray whitespace or wrapping quotes. Unnormalized it reaches
-// the relay, misses on `token_hash = ?`, and comes back as "This invite is
-// invalid, expired, or already used." — sending the owner to their
-// administrator for a replacement they did not need.
 function normalizeInvite(raw: string | undefined): string {
   const trimmed = (raw ?? "").trim();
   const quoted = /^(["'])([\s\S]*)\1$/.exec(trimmed);
   return (quoted?.[2] ?? trimmed).trim();
 }
 
-// Precedence: explicit flag > environment > prompt.
-//
-// The prompt is the point (#303). The invite was the only required input with
-// no interactive path, so `agentcall setup` — the natural command after
-// `npm install -g` — died on a flag the owner was never asked for. The env var
-// covers containers and CI, which have no terminal to paste into and would
-// otherwise have to put a bearer credential on argv, where it lands in shell
-// history and is visible in `ps`.
-//
-// Two cases keep the original hard failure instead of asking: `--yes`, which
-// means "ask me nothing", and an environment with no terminal to answer with.
-// The second matters more than it looks — an unanswerable readline does not
-// fail, it hangs (see canPrompt), so a container build that used to exit with
-// a clear error would otherwise sit there forever. An injected `io` is itself
-// proof that asking works, which is what the tests rely on.
 async function resolveInvite(opts: SetupOpts, ask: (q: string) => Promise<string>): Promise<string> {
   const supplied = opts.invite ?? process.env.AGENTCALL_INVITE;
   const answerable = !opts.yes && (opts.io !== undefined || canPrompt());
-  const invite = normalizeInvite(
-    supplied !== undefined ? supplied : answerable ? await ask("Paste your invite: ") : "",
-  );
+  const invite = normalizeInvite(supplied !== undefined ? supplied : answerable ? await ask("Paste your invite: ") : "");
   if (!invite) throw new Error("An organization invite is required. Run `agentcall setup --invite <token>`.");
   return invite;
 }
@@ -74,243 +61,141 @@ async function resolveInvite(opts: SetupOpts, ask: (q: string) => Promise<string
 async function detectAgentKind(
   opts: SetupOpts, hasBin: (name: string) => boolean, ask: (q: string) => Promise<string>,
 ): Promise<AgentKind> {
-  if (opts.agent) {
-    if (opts.agent !== "claude" && opts.agent !== "codex") {
-      throw new Error(`--agent must be "claude" or "codex", got "${opts.agent}"`);
-    }
-    return opts.agent;
-  }
+  if (opts.agent) return opts.agent;
   const hasClaude = hasBin("claude");
   const hasCodex = hasBin("codex");
   if (hasClaude && !hasCodex) return "claude";
   if (hasCodex && !hasClaude) return "codex";
   if (hasClaude && hasCodex) {
     if (opts.yes) return "claude";
-    const answer = (await ask("Both claude and codex found on PATH. Which should agentcall use? [claude/codex]: "))
-      .trim()
-      .toLowerCase();
-    return answer === "codex" ? "codex" : "claude";
+    return (await ask("Both claude and codex found on PATH. Which should agentcall use? [claude/codex]: ")).trim().toLowerCase() === "codex"
+      ? "codex" : "claude";
   }
-  throw new Error(
-    "Neither `claude` nor `codex` was found on PATH. Install one of them, or pass --agent to override detection.",
-  );
+  throw new Error("Neither `claude` nor `codex` was found on PATH. Install one, or use --caller-only.");
 }
 
-export function warnIfEphemeralServiceBin(name: string, resolveBin: (n: string) => string | null): void {
-  const path = resolveBin(name);
-  if (!path) return; // already surfaced via detectAgentKind's error, or not required (e.g. npx)
-  if (isEphemeralDir(dirname(path))) {
-    console.error(
-      `Warning: ${name} resolves from an ephemeral directory (${path}); ` +
-        `install ${name} in a durable location before starting the background listener.`,
-    );
-  }
-}
-
-// Whether this install should answer calls (run the listener) or stay
-// caller-only. Precedence: explicit --caller-only > a reused config that is
-// already callable > explicit --agent > no agent binary on PATH (fall back
-// to caller-only instead of failing setup) > --yes > ask.
 async function decideCallable(
-  opts: SetupOpts,
-  hasBin: (name: string) => boolean,
-  ask: (q: string) => Promise<string>,
-  reusedCfg: LineConfig | undefined,
+  opts: SetupOpts, hasBin: (name: string) => boolean, ask: (q: string) => Promise<string>, existing?: Config,
 ): Promise<boolean> {
   if (opts.callerOnly) return false;
-  if (reusedCfg?.agent_kind) return true;
-  if (opts.agent) return true;
-  if (!hasBin("claude") && !hasBin("codex")) {
-    console.log(
-      "No claude or codex found on PATH — setting up as caller-only.\n" +
-        "Install one and re-run `agentcall setup` to make your agent callable.",
-    );
-    return false;
-  }
+  if (existing?.agent_kind || opts.agent) return true;
+  if (!hasBin("claude") && !hasBin("codex")) return false;
   if (opts.yes) return true;
-  const answer = (await ask(
-    "Make your agent callable by others? Offered tasks run automatically without per-call approval. [Y/n]: ",
-  )).trim().toLowerCase();
+  const answer = (await ask("Make your agent callable by others? Offered tasks run automatically. [Y/n]: ")).trim().toLowerCase();
   return answer === "" || answer === "y" || answer === "yes";
 }
 
+export function warnIfEphemeralServiceBin(name: string, resolveBin: (name: string) => string | null): void {
+  const path = resolveBin(name);
+  if (path && isEphemeralDir(dirname(path))) {
+    console.error(`Warning: ${name} resolves from an ephemeral directory (${path}); install it in a durable location before starting the background listener.`);
+  }
+}
+
+async function publishStoredKeys(config: Config, keys: StoredKeys, paths: Paths): Promise<void> {
+  const auth = { org: config.org, handle: config.handle, token: config.token };
+  await publishIdentityKey(config.relay, auth, keys);
+  await publishEncryptionKey(config.relay, auth, paths);
+}
+
+async function createInstallation(
+  paths: Paths, configInput: { handle: string; relay: string; invite: string; agentKind?: AgentKind }, opts: SetupOpts,
+): Promise<Config> {
+  mkdirSync(paths.dir, { recursive: true, mode: 0o700 });
+  return withFileLock(paths.configFile, "installation credential", async () => {
+    if (existsSync(paths.configFile)) return loadConfig(paths);
+    const keys = await generateIdentityKeys(paths);
+    let registration: Awaited<ReturnType<typeof registerHandle>>;
+    try {
+      registration = await (opts.registerFn ?? registerHandle)(
+        configInput.relay, configInput.invite, configInput.handle, configInput.agentKind,
+      );
+    } catch (error) {
+      rmSync(paths.identityKeyFile, { force: true });
+      throw error;
+    }
+    const config: Config = configInput.agentKind
+      ? { org: registration.org, handle: configInput.handle, token: registration.token, relay: configInput.relay, agent_kind: configInput.agentKind }
+      : { org: registration.org, handle: configInput.handle, token: registration.token, relay: configInput.relay };
+    saveConfig(paths, config);
+    writeJsonAtomic(paths.scopeFile, defaultScope(paths.userHome));
+    try { await (opts.publishKeysFn ?? publishStoredKeys)(config, keys, paths); }
+    catch (error) { console.error(`Warning: keys are stored but could not be published (${String(error)}). Run \`agentcall admin keys publish\` later.`); }
+    return config;
+  });
+}
+
+async function prepareCallable(config: Config, paths: Paths, opts: SetupOpts, resolveBin: (name: string) => string | null): Promise<void> {
+  if (!config.agent_kind) return;
+  mkdirSync(paths.shareDir, { recursive: true });
+  mkdirSync(paths.tasksDir, { recursive: true });
+  if (!existsSync(paths.policyFile)) writeJsonAtomic(paths.policyFile, DEFAULT_POLICY);
+  try { await (opts.publishCardFn ?? publishCard)(config, paths); }
+  catch (error) { console.error(`Warning: could not publish the card (${String(error)}). Run \`agentcall admin card publish\` later.`); }
+  if (!opts.skipService) {
+    (opts.installListenerServiceFn ?? installListenerService)(paths, {
+      extraPathDirs: listenerPathDirs(config.agent_kind, resolveBin),
+    });
+  }
+}
+
 export async function runSetup(opts: SetupOpts): Promise<{ ready: boolean }> {
-  const hasBinFn = opts.hasBin ?? ((name) => (opts.resolveBin ?? defaultResolveBin)(name) !== null);
-  const resolveBinFn = opts.resolveBin ?? defaultResolveBin;
+  const paths = opts.paths ?? getPaths();
+  const resolveBin = opts.resolveBin ?? defaultResolveBin;
+  const hasBin = opts.hasBin ?? ((name) => resolveBin(name) !== null);
   const ask = opts.io?.ask ?? ttyAsk;
   const log = opts.log ?? console.log;
 
-  // Idempotency (main's #43/#79 concern, re-homed onto lines): a re-run must
-  // not POST /v1/register for a handle this machine already holds — the relay
-  // correctly 409s it, aborting setup even though a valid token already sits
-  // on disk. Under the per-line model the check is "does this machine have any
-  // line at all", handled by the `existing.length > 0` branch below, which
-  // registers nothing and only re-does the idempotent local steps.
-  const machine = getMachinePaths();
-  const existing = listLines(machine);
-  const requestedRelay = opts.relay?.replace(/\/+$/, "");
+  let existing: Config | undefined;
+  if (existsSync(paths.configFile)) existing = loadConfig(paths);
+  else if (existsSync(join(paths.dir, "lines"))) loadInstallation(paths); // fail with explicit migration guidance
 
-  // Setup is first-run only. Adding an address to a machine that already has
-  // one is `line add` — which is also why the old clobber path (#43) is gone:
-  // there is no single config.json left to overwrite.
-  if (existing.length > 0) {
-    // #79, re-homed. There, a `--relay` that disagreed with the saved
-    // registration was silently ignored on a reuse run; the fix was to refuse
-    // rather than pretend. The same silent-ignore exists here — this branch
-    // registers nothing, so `--relay`/`--handle` would have no effect at all —
-    // but the remedy differs, because several relays on one machine are now
-    // LEGAL (that is what lines are for). So this refuses only when the flag
-    // asks for something no existing line provides, and points at `line add`
-    // rather than at `uninstall`.
-    const ready = existing.filter((l) => l.config);
-    if (requestedRelay !== undefined && !ready.some((l) => host(l.config!.relay) === host(requestedRelay))) {
-      throw new Error(
-        `This machine has no line on ${requestedRelay} (it has: ` +
-          `${[...new Set(ready.map((l) => host(l.config!.relay)))].join(", ") || "none"}). ` +
-          "`agentcall setup` only ever creates the first line — add another with " +
-          `\`agentcall line add <name> --relay ${requestedRelay} --handle <handle> --invite <token>\`.`,
-      );
+  if (existing) {
+    if (opts.handle && opts.handle !== existing.handle) throw new Error(`This installation already owns ${existing.handle}; setup cannot replace it with ${opts.handle}.`);
+    if (opts.relay && normalizeRelay(existing.relay) !== normalizeRelay(opts.relay)) throw new Error(`This installation is registered with ${existing.relay}; setup cannot move it to ${opts.relay}.`);
+    const callable = await decideCallable(opts, hasBin, ask, existing);
+    if (callable && !existing.agent_kind) {
+      const agentKind = await detectAgentKind(opts, hasBin, ask);
+      existing = { ...existing, agent_kind: agentKind };
+      saveConfig(paths, existing);
     }
-    if (opts.handle !== undefined && !ready.some((l) => l.config!.handle === opts.handle)) {
-      throw new Error(
-        `This machine holds no line for the handle "${opts.handle}" (it holds: ` +
-          `${ready.map((l) => l.config!.handle).join(", ") || "none"}). ` +
-          "`agentcall setup` only ever creates the first line — add another with " +
-          `\`agentcall line add <name> --handle ${opts.handle} --invite <token>\`.`,
-      );
-    }
-    log("agentcall is already set up on this machine.\n");
-    for (const row of listLinesReport(machine)) {
-      log(`  ${row.name.padEnd(10)} ${row.address}${row.primary ? "   primary" : ""}`);
-    }
-    log(`\nTo add another address:  agentcall line add <name> --handle <handle>`);
-    if (!opts.skipService && ready.some((line) => line.config!.agent_kind)) {
-      (opts.installListenerServiceFn ?? installListenerService)(machine, {
-        extraPathDirs: listenerPathDirs(machine, resolveBinFn),
-      });
-    }
-    if (opts.snippet !== false) {
-      appendSnippet(join(homedir(), ".claude", "CLAUDE.md"));
-      appendSnippet(join(homedir(), ".codex", "AGENTS.md"));
-    }
+    await prepareCallable(existing, paths, opts, resolveBin);
+    log(`agentcall is already set up as ${formatAddress(existing.org, existing.handle)}.`);
     return { ready: true };
   }
 
-  // Resolved before any other question (#302). This used to sit below
-  // decideCallable and detectAgentKind despite a comment claiming otherwise,
-  // so a run that could never register still walked the owner through a
-  // consent decision about unapproved task execution, and possibly an agent
-  // choice, before admitting it needed an invite. It depends on neither.
   const invite = await resolveInvite(opts, ask);
-
-  const callable = await decideCallable(opts, hasBinFn, ask, undefined);
-  if (callable) {
-    log(
-      "Callable mode: offered tasks run automatically without per-call approval. " +
-        "Review activity later with `agentcall history`.",
-    );
-  }
-  // No `reusedCfg` branch any more: setup is first-run only, so there is never
-  // a saved agent_kind to prefer over detection. A second run stops earlier
-  // and points at `line add`.
-  const agentKind = callable ? await detectAgentKind(opts, hasBinFn, ask) : undefined;
+  const callable = await decideCallable(opts, hasBin, ask);
+  const agentKind = callable ? await detectAgentKind(opts, hasBin, ask) : undefined;
   if (agentKind) {
-    warnIfEphemeralServiceBin(agentKind, resolveBinFn);
-    warnIfEphemeralServiceBin("npx", resolveBinFn);
+    warnIfEphemeralServiceBin(agentKind, resolveBin);
+    warnIfEphemeralServiceBin("npx", resolveBin);
   }
-
   const handle = opts.handle ?? (await ask("Choose a handle (e.g. ken): ")).trim();
   if (!handle) throw new Error("A handle is required.");
-  const relay = requestedRelay ?? relayUrl();
-  // The line name is local; default it to the agent kind, which is what the
-  // owner will call it anyway.
-  const name = agentKind ?? "caller";
-
+  const relay = opts.relay?.replace(/\/+$/, "") ?? relayUrl();
   log(`Registering ${handle} with ${relay} ...`);
-  // extraPathDirs (widening the listener service's PATH past its fixed base dirs
-  // for an agent/npx binary resolved outside them, e.g. an nvm/fnm-managed
-  // install) is NOT computed here: addLine derives it itself from every
-  // ready line on the machine (listenerPathDirs), not just the one being
-  // created — one process serves every line, so a single-line computation
-  // would drop coverage the moment a second line runs a different agent.
-  // resolveBin is threaded through so a test override still reaches that
-  // derivation.
-  const { address } = await (opts.addLineFn ?? addLine)(machine, {
-    name,
-    handle,
-    relay,
-    invite,
-    agent: agentKind,
-    callerOnly: !callable,
-    installListenerServiceFn: opts.skipService ? () => {} : opts.installListenerServiceFn,
-    resolveBin: resolveBinFn,
-    // addLine has its own post-registration verify step (AddLineOpts.verify,
-    // default on) — always false here because runSetup below does its own,
-    // richer verify pass (formatted checks plus the ready/not-ready summary)
-    // over the exact same line. Without this, `agentcall setup` would spawn
-    // the agent twice for one verification.
-    verify: false,
-  });
-
-  const ctx = resolveLine(machine, { line: name });
-  const cfg = ctx.config;
+  const config = await createInstallation(paths, { handle, relay, invite, agentKind }, opts);
+  await prepareCallable(config, paths, opts, resolveBin);
 
   let verifyFailure: VerifyCheck | undefined;
-  if (cfg.agent_kind && opts.verify !== false) {
-    log(`\nVerifying ${cfg.agent_kind} can answer a test call (takes ~10-30s)...`);
-    const checks = await verifyAgent(cfg.agent_kind, resolveLineWorkdir(cfg, ctx.paths).dir, opts.verifyFns);
-    for (const c of checks) log(formatCheck(c));
-    verifyFailure = checks.find((c) => !c.ok);
+  if (config.agent_kind && opts.verify !== false) {
+    log(`\nVerifying ${config.agent_kind} can answer a test call (takes ~10-30s)...`);
+    const checks = await verifyAgent(config.agent_kind, workdirFor(loadScope(paths), paths.shareDir, paths.userHome), opts.verifyFns);
+    for (const check of checks) log(formatCheck(check));
+    verifyFailure = checks.find((check) => !check.ok);
   }
-
   if (opts.snippet !== false) {
     appendSnippet(join(homedir(), ".claude", "CLAUDE.md"));
     appendSnippet(join(homedir(), ".codex", "AGENTS.md"));
   }
-
-  if (cfg.agent_kind && verifyFailure) {
-    console.error(
-      `\nagentcall is set up, but your agent is NOT ready to answer calls.\n` +
-        `  Failed check: ${verifyFailure.name}${verifyFailure.detail ? ` — ${verifyFailure.detail}` : ""}\n` +
-        (verifyFailure.hint ? `  Fix: ${verifyFailure.hint}\n` : "") +
-        `\nOnce fixed, run \`agentcall doctor\` to confirm — calls start working immediately, no setup re-run needed.\n\n` +
-        `  Handle:  ${cfg.handle}\n` +
-        `  Agent:   ${cfg.agent_kind}\n` +
-        `  Relay:   ${cfg.relay}\n` +
-        `  Address: ${address}\n`,
-    );
+  const address = formatAddress(config.org, config.handle);
+  if (verifyFailure) {
+    console.error(`\nagentcall is set up, but the agent is NOT ready. ${verifyFailure.name}${verifyFailure.detail ? ` — ${verifyFailure.detail}` : ""}`);
     return { ready: false };
   }
-  if (cfg.agent_kind) {
-    log(
-      `\nagentcall is set up.\n` +
-        (opts.verify !== false ? `  ✓ agent verified (${cfg.agent_kind} answered a test call)\n` : "") +
-        `  Handle:  ${cfg.handle}\n` +
-        `  Agent:   ${cfg.agent_kind}\n` +
-        `  Relay:   ${cfg.relay}\n` +
-        `  Address: ${address}\n\n` +
-        `Share your address so others can call your agent:\n` +
-        `  agentcall call ${address} "hello"\n`,
-    );
-  } else {
-    log(
-      `\nagentcall is set up (caller-only).\n` +
-        `  Handle:  ${cfg.handle}\n` +
-        `  Relay:   ${cfg.relay}\n` +
-        `  Address: ${address}\n\n` +
-        `You can call other agents:\n` +
-        `  agentcall call ken "hello"\n\n` +
-        // NOT "re-run `agentcall setup`" any more: setup is first-run only, so
-        // a re-run prints the line list and changes nothing. Before lines, a
-        // re-run genuinely upgraded a caller-only install in place, keeping the
-        // handle; there is no in-place upgrade now, and saying otherwise would
-        // send the owner round a loop that silently does nothing. `line add`
-        // is the honest instruction — note it yields a NEW address, so this is
-        // a real capability gap, not just different wording.
-        `To answer calls later, install claude or codex and add a callable line:\n` +
-        `  agentcall line add <name> --agent <claude|codex> --invite <token>\n` +
-        `That registers a NEW address — "${cfg.handle}" itself stays caller-only.\n`,
-    );
-  }
+  log(config.agent_kind
+    ? `\nagentcall is set up.\n  Address: ${address}\n  Agent:   ${config.agent_kind}\n\nShare your address:\n  agentcall call ${address} "hello"\n`
+    : `\nagentcall is set up (caller-only).\n  Address: ${address}\n\nInstall claude or codex and re-run \`agentcall setup\` to answer calls.\n`);
   return { ready: true };
 }

@@ -1,13 +1,33 @@
 {
+  // The configuration the hosted relay at agent-call.app actually deploys with.
+  // It is public and complete on purpose: a self-hoster can read exactly what we
+  // run, and there is only ever one copy of the bindings to keep in step.
+  //
+  // What is deliberately absent is `account_id` — `wrangler deploy` takes it
+  // from CLOUDFLARE_ACCOUNT_ID in the deploy environment. The Cloudflare API
+  // token that grants any actual authority has never been in this repository
+  // and never will be. To deploy your own relay instead, start from
+  // wrangler.self-host.example.jsonc.
   "name": "agentcall-relay",
-  "account_id": "3dcd1e12b47fa566e1420769be5c10f8",
   "main": "src/index.ts",
   "compatibility_date": "2026-06-01",
+  // Keep the public product site and relay API on one stable origin. Matching
+  // landing files are served as static assets. Relay protocol paths always
+  // reach the Worker first, even if a future landing asset has the same name.
+  "assets": {
+    "directory": "../landing",
+    "binding": "ASSETS",
+    "run_worker_first": ["/v1/*", "/.well-known/*"]
+  },
   // Prevents a future `wrangler deploy` from silently re-enabling the
   // workers.dev bypass URL, which would let anyone reach the relay directly,
   // skipping the custom-domain route below.
   "workers_dev": false,
   "vars": { "DEPLOYMENT_MODE": "hosted" },
+  // The database id is an opaque account-scoped identifier, not a credential:
+  // it grants nothing without an API token for the same account, and it cannot
+  // be reached from another account. It stays here so this file remains the one
+  // description of the hosted deployment rather than half of one.
   "d1_databases": [{
     "binding": "DB",
     "database_name": "agentcall",
@@ -20,12 +40,10 @@
   }],
   "durable_objects": { "bindings": [
     { "name": "HANDLE_DO", "class_name": "HandleDO" },
-    { "name": "ROOM_DO", "class_name": "RoomDO" },
     { "name": "RATE_LIMITER_DO", "class_name": "RateLimiterDO" }
   ] },
   "exports": {
     "HandleDO": { "type": "durable-object", "storage": "sqlite" },
-    "RoomDO": { "type": "durable-object", "storage": "sqlite" },
     "RateLimiterDO": { "type": "durable-object", "storage": "sqlite" }
   },
   // Must stay in step with HOSTED_RELAY_HOST (packages/shared/src/protocol.ts),
@@ -45,9 +63,6 @@
     // source IP. 60/min is far above any human or agent's real read rate
     // while still putting a ceiling on namespace scraping and on the
     // Durable Object wakeups a status probe causes.
-    { "name": "READ_RL", "namespace_id": "1003", "simple": { "limit": 60, "period": 60 } },
-    // Roster bundle reads remain native. Credential-checked roster writes use
-    // RATE_LIMITER_DO so their window is exact and shared across source IPs.
-    { "name": "ROSTER_READ_RL", "namespace_id": "1004", "simple": { "limit": 10, "period": 60 } }
+    { "name": "READ_RL", "namespace_id": "1003", "simple": { "limit": 60, "period": 60 } }
   ]
 }

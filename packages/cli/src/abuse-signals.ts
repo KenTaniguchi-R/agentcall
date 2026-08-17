@@ -1,9 +1,13 @@
 const ABUSE_SEVERITIES = ["low", "medium", "high"] as const;
 export type AbuseSeverity = typeof ABUSE_SEVERITIES[number];
 
+// `unoffered_task_request` went with #379's task menu: `task_not_offered` is no
+// longer a reachable admission outcome, so nothing can raise the flag. A local
+// history row still carrying it from before the change fails history.ts's flag
+// validation and is skipped — that is call history on the owner's own machine,
+// and the alternative is keeping a flag nothing can ever set again.
 const ABUSE_FLAGS = [
   "blocked_caller_attempt",
-  "unoffered_task_request",
   "unknown_task_request",
   "tool_policy_denial",
 ] as const;
@@ -30,8 +34,6 @@ export function signalForInboundStatus(status: unknown): AbuseSignal {
   switch (status) {
     case "blocked":
       return { flags: ["blocked_caller_attempt"], severity: "high" };
-    case "task_not_offered":
-      return { flags: ["unoffered_task_request"], severity: "medium" };
     case "task_unknown":
       return { flags: ["unknown_task_request"], severity: "low" };
     default:

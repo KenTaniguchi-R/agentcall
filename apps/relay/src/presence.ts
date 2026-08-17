@@ -1,6 +1,5 @@
 import type { Context, Hono } from "hono";
 import { HANDLE_RE } from "@benree/agentcall-shared";
-import { sharedRosterIds } from "./groups.js";
 import { NATIVE_READ } from "./ratelimit/index.js";
 import { identityObjectName } from "./tenant.js";
 import { resolveAgentId } from "./identity.js";
@@ -49,31 +48,18 @@ async function recordStatusRead(c: Context<RelayAppEnv>, outcome: PresenceOutcom
 }
 
 export function mountPresence(app: Hono<RelayAppEnv>): void {
-  // Presence is relationship-scoped metadata, not public card content. Auth
-  // runs before any lookup so anonymous probes cannot enumerate handles; the
-  // shared-roster check then prevents one freely registered peer from polling
-  // every other handle's working pattern.
+  // Presence is private operational metadata. With relationship groups gone,
+  // only the authenticated identity may inspect its own listener status.
   app.get("/v1/status/:handle", rateLimit(NATIVE_READ, "ip"), async (c) => {
     const identity = c.var.identity as import("./tenant.js").Identity;
     const { org, handle: viewer } = identity;
 
     const target = c.req.param("handle");
-    // Authentication proves a self-target exists. For peers, the relay-owned
-    // shared-membership query proves both existence and authorization in one
-    // step. An unrelated existing target and an unknown target therefore take
-    // the same branch and return the same response shape.
     const validTarget = HANDLE_RE.test(target);
-    const allowed = validTarget && (
-      viewer === target || (await sharedRosterIds(c.env.DB, org, viewer, target)).length > 0
-    );
+    const allowed = validTarget && viewer === target;
+    const targetAgentId = allowed ? await resolveAgentId(c.env.DB, org, target) : null;
     await recordStatusRead(c, allowed ? "allowed" : "denied");
-    if (!allowed) return c.json({ error: "not found" }, 404);
-
-    // Resolved after the policy check above, so a missing identity returns
-    // the same 404 as a denied one and this stays closed as an enumeration
-    // oracle.
-    const targetAgentId = await resolveAgentId(c.env.DB, org, target);
-    if (!targetAgentId) return c.json({ error: "not found" }, 404);
+    if (!allowed || !targetAgentId) return c.json({ error: "not found" }, 404);
     const stub = c.env.HANDLE_DO.get(
       c.env.HANDLE_DO.idFromName(identityObjectName({ org, agentId: targetAgentId })),
     );

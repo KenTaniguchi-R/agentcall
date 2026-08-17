@@ -1,41 +1,12 @@
 ---
-title: Managed and self-hosted deployment
-description: Apply an administrator policy ceiling and understand the limits of AgentCall's experimental customer-owned relay.
+title: Self-hosted relay (experimental)
+description: Understand the limits of AgentCall's experimental customer-owned Cloudflare relay.
 ---
 
-AgentCall has a managed-policy layer and an experimental Cloudflare relay
-runbook. Neither is a complete enterprise deployment product by itself.
+The repository includes an experimental Cloudflare relay runbook for internal
+evaluation. It is not a managed-policy or enterprise deployment product.
 
-## Managed policy
-
-Deploy a root-owned policy file at:
-
-- macOS: `/Library/Application Support/agentcall/policy.json`
-- Linux: `/etc/agentcall/policy.json`
-
-```json
-{
-  "version": 1,
-  "allowed_tasks": ["ask", "architecture-history"],
-  "blocked_callers": ["contractor-bot"],
-  "tests": [{ "caller": "contractor-bot", "deny": ["*"] }]
-}
-```
-
-`allowed_tasks` is a ceiling over user grants. Managed blocks are added to user
-blocks and cannot be undone in the user policy. Tests run after both layers are
-composed.
-
-If the managed file exists but cannot be read or validated, policy loading fails
-closed and the listener does not spawn an agent. Deploy replacements atomically.
-
-<Warning>
-  Managed policy is not a tamper boundary when AgentCall itself is installed in
-  a user-writable location. Fleet management must own the binary, policy, and
-  release verification.
-</Warning>
-
-## Experimental customer-owned relay
+## Customer-owned relay
 
 The repository includes a binding-complete Cloudflare configuration and
 self-hosting runbook for internal evaluation. Each deployment is pinned to one
@@ -54,8 +25,7 @@ gates before any deployment.
 
 ## Success check
 
-`agentcall lint` and `agentcall policy` show the effective administrator ceiling,
-the policy file is administrator-owned, and any customer-owned relay remains
-explicitly labeled pre-production.
+Keep the deployment pinned to one organization, label it pre-production, and
+review the current local security guidance before inviting users.
 
-Source of truth: [README managed policy and deployment boundaries](https://github.com/KenTaniguchi-R/agentcall#how-the-callee-side-works).
+Source of truth: [self-hosting guide](https://github.com/KenTaniguchi-R/agentcall/blob/main/docs/self-hosting.md).

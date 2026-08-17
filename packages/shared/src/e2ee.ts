@@ -2,10 +2,11 @@ import { z } from "zod";
 import { canonicalEncode } from "./canonical.js";
 import { ADDRESS_RE, RELAY_ORIGIN_RE } from "./keys.js";
 import { BASE64URL_RE } from "./signing.js";
+import { AgentCallTerminalReason } from "./a2a/task.js";
 import {
-  CallAccepted, CallCancelled, CallNotCancelled, CallRejected, CallStarted, CallStatus,
+  CallAccepted, CallCancelled, CallNotCancelled, CallQueued, CallRejected, CallStarted, CallStatus,
   CancelCall, CorrelationId, CONTEXT_ID_RE, MAX_DETAIL_LENGTH, MAX_MESSAGE_BYTES,
-  HANDLE_RE, MAX_CALLER_GROUPS, MAX_OFFERED_TASKS, MAX_REPLY_BYTES,
+  HANDLE_RE, LeaseId, MAILBOX_TTL_MS, MAX_OFFERED_TASKS, MAX_REPLY_BYTES, MessageId,
   normalizeTraceContext, PeerFailureCode, RELAY_CALL_TIMEOUT_MS, RelayCallError, TASK_ID_RE,
 } from "./protocol.js";
 
@@ -68,6 +69,8 @@ const InnerBase = z.object({
   relay_origin: z.string().regex(RELAY_ORIGIN_RE),
   from: z.string().regex(ADDRESS_RE),
   to: z.string().regex(ADDRESS_RE),
+  message_id: MessageId.optional(),
+  delivery_mode: z.enum(["sync", "durable"]).optional(),
   request_id: z.string().regex(REQUEST_ID_RE),
   sender_identity_key_id: z.string().regex(KEY_ID_RE),
   recipient_encryption_key_id: z.string().regex(KEY_ID_RE),
@@ -81,8 +84,12 @@ export const E2EERequestPayload = InnerBase.extend({
   task: z.string().regex(TASK_ID_RE).optional(),
   context_id: z.string().regex(CONTEXT_ID_RE).optional(),
   message: utf8(MAX_MESSAGE_BYTES).and(z.string().min(1)),
-}).strict().refine((value) => value.expires_at > value.issued_at && value.expires_at - value.issued_at <= RELAY_CALL_TIMEOUT_MS, {
-  message: `request validity must be positive and at most ${RELAY_CALL_TIMEOUT_MS}ms`,
+}).strict().refine((value) => {
+  if (value.delivery_mode === "durable" && value.message_id === undefined) return false;
+  const maximum = value.delivery_mode === "durable" ? MAILBOX_TTL_MS : RELAY_CALL_TIMEOUT_MS;
+  return value.expires_at > value.issued_at && value.expires_at - value.issued_at <= maximum;
+}, {
+  message: "request validity exceeds its delivery mode",
 });
 export type E2EERequestPayloadType = z.infer<typeof E2EERequestPayload>;
 
@@ -105,8 +112,12 @@ export const E2EEResponsePayload = InnerBase.extend({
   direction: z.literal("response"),
   request_transcript_hash: z.string().regex(HASH_RE),
   outcome: E2EEOutcome,
-}).strict().refine((value) => value.expires_at > value.issued_at && value.expires_at - value.issued_at <= RELAY_CALL_TIMEOUT_MS, {
-  message: `response validity must be positive and at most ${RELAY_CALL_TIMEOUT_MS}ms`,
+}).strict().refine((value) => {
+  if (value.delivery_mode === "durable" && value.message_id === undefined) return false;
+  const maximum = value.delivery_mode === "durable" ? MAILBOX_TTL_MS : RELAY_CALL_TIMEOUT_MS;
+  return value.expires_at > value.issued_at && value.expires_at - value.issued_at <= maximum;
+}, {
+  message: "response validity exceeds its delivery mode",
 });
 export type E2EEResponsePayloadType = z.infer<typeof E2EEResponsePayload>;
 
@@ -120,25 +131,40 @@ const ResponseEnvelope = HpkeEnvelope.refine((value) => value.direction === "res
 export const EncryptedCallRequest = z.preprocess(normalizeTraceContext, z.object({
   type: z.literal("call_request"),
   envelope: RequestEnvelope,
+  message_id: MessageId.optional(),
+  delivery_mode: z.enum(["sync", "durable"]).optional(),
   correlation_id: CorrelationId,
   traceparent: z.string().optional(),
-}).strict());
+}).strict().refine((value) => value.delivery_mode !== "durable" || value.message_id !== undefined, {
+  message: "message_id is required for durable delivery",
+  path: ["message_id"],
+}));
 
 export const EncryptedIncomingCall = z.preprocess(normalizeTraceContext, z.object({
   type: z.literal("incoming_call"),
   call_id: z.string(),
   from: z.string().regex(HANDLE_RE),
   envelope: RequestEnvelope,
+  message_id: MessageId.optional(),
+  delivery_mode: z.enum(["sync", "durable"]).optional(),
+  lease_id: LeaseId.optional(),
+  execute_by: z.number().int().positive().optional(),
   correlation_id: CorrelationId,
   traceparent: z.string().optional(),
-  groups: z.array(z.string().regex(/^[A-Za-z0-9_-]{16,64}$/)).max(MAX_CALLER_GROUPS).default([]),
-}).strict());
+}).strict().superRefine((value, ctx) => {
+  if (value.delivery_mode !== "durable") return;
+  for (const field of ["message_id", "lease_id", "execute_by"] as const) {
+    if (value[field] === undefined) ctx.addIssue({ code: "custom", path: [field], message: `${field} is required for durable delivery` });
+  }
+}));
 
 export const EncryptedCallOutcome = z.object({
   type: z.literal("call_outcome"),
   call_id: z.string(),
   terminal: z.enum(["completed", "failed"]),
+  terminal_reason: AgentCallTerminalReason.optional(),
   envelope: ResponseEnvelope,
+  lease_id: LeaseId.optional(),
 }).strict();
 
 export const E2EECallerFrame = EncryptedCallRequest;
@@ -146,7 +172,7 @@ export const E2EEListenerToRelayFrame = z.discriminatedUnion("type", [
   EncryptedCallOutcome, CallAccepted, CallStarted, CallCancelled, CallNotCancelled, CallRejected,
 ]);
 export const E2EERelayToCallerFrame = z.discriminatedUnion("type", [
-  CallStatus, RelayCallError, EncryptedCallOutcome,
+  CallStatus, CallQueued, RelayCallError, EncryptedCallOutcome,
 ]);
 export const E2EERelayToListenerFrame = z.union([EncryptedIncomingCall, CancelCall]);
 
@@ -166,10 +192,12 @@ export function hpkeEnvelopeAad(header: HpkeEnvelopeHeaderType): Uint8Array {
 export function requestTranscript(value: E2EERequestPayloadType): Uint8Array {
   const p = E2EERequestPayload.parse(value);
   return canonicalEncode([
-    "agentcall/request/v1", p.v, p.direction, p.relay_origin, p.from, p.to,
+    p.delivery_mode === "durable" ? "agentcall/request/v2" : "agentcall/request/v1",
+    p.v, p.direction, p.relay_origin, p.from, p.to,
+    ...(p.delivery_mode === "durable" ? [p.message_id!] : []),
     p.request_id, p.sender_identity_key_id, p.recipient_encryption_key_id,
     p.recipient_epoch, p.issued_at, p.expires_at, p.task ?? null,
-    p.context_id ?? null, p.message,
+    p.context_id ?? null, p.message, ...(p.delivery_mode === "durable" ? ["durable"] : []),
   ]);
 }
 
@@ -179,10 +207,12 @@ export function responseTranscript(value: E2EEResponsePayloadType): Uint8Array {
     ? ["reply", p.outcome.text, p.outcome.context_id ?? null, p.outcome.task ?? null]
     : ["failure", p.outcome.code, p.outcome.detail ?? null, p.outcome.offered?.length ?? 0, ...(p.outcome.offered ?? [])];
   return canonicalEncode([
-    "agentcall/response/v1", p.v, p.direction, p.relay_origin, p.from, p.to,
+    p.delivery_mode === "durable" ? "agentcall/response/v2" : "agentcall/response/v1",
+    p.v, p.direction, p.relay_origin, p.from, p.to,
+    ...(p.delivery_mode === "durable" ? [p.message_id!] : []),
     p.request_id, p.sender_identity_key_id, p.recipient_encryption_key_id,
     p.recipient_epoch, p.issued_at, p.expires_at, p.request_transcript_hash,
-    ...outcome,
+    ...outcome, ...(p.delivery_mode === "durable" ? ["durable"] : []),
   ]);
 }
 

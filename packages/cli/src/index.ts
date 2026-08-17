@@ -1,66 +1,48 @@
 import { Command, CommanderError } from "commander";
-import { getMachinePaths } from "./paths.js";
-import { resolveLine } from "./line-context.js";
-import type { LineContext } from "./line-context.js";
+import { getPaths } from "./paths.js";
+import { loadInstallation, type Installation } from "./config.js";
 import { register as registerCall } from "./commands/call.js";
 import { register as registerRotate } from "./commands/rotate.js";
-import { register as registerLineCore } from "./commands/line-core.js";
-import { register as registerLineAdmin } from "./commands/line-admin.js";
-import { register as registerRosterCore } from "./commands/roster-core.js";
-import { register as registerRosterAdmin } from "./commands/roster-admin.js";
 import { register as registerAudit } from "./commands/audit.js";
 import { register as registerUninstall } from "./commands/uninstall.js";
 import { register as registerContacts } from "./commands/contacts.js";
 import { register as registerSetup } from "./commands/setup.js";
-import { register as registerRoom } from "./commands/room.js";
 import { register as registerRecovery } from "./commands/recovery-register.js";
 import { register as registerInvite } from "./commands/invite.js";
-import { register as registerStatus } from "./commands/status.js";
-import { register as registerKeys } from "./commands/keys.js";
+import { register as registerInspect } from "./commands/inspect.js";
+import { register as registerAdmin } from "./commands/admin.js";
 import { register as registerPeer } from "./commands/peer.js";
 import { register as registerDoctor } from "./commands/doctor.js";
 import { register as registerHistory } from "./commands/history.js";
-import { register as registerPolicy } from "./commands/policy.js";
 import { register as registerListen } from "./commands/listen.js";
 import { register as registerTask } from "./commands/task.js";
 import { register as registerGrants } from "./commands/grants.js";
-import { registerCard, registerLint } from "./commands/card.js";
-import { register as registerSearch } from "./commands/search.js";
+import { register as registerJobs } from "./commands/jobs.js";
 export function createProgram(): Command {
 const program = new Command();
-program.name("agentcall").description("Call other people's coding agents").version("0.4.0");
+program.name("agentcall").description("Call other people's coding agents").version("0.5.0");
 registerSetup(program);
-registerRoom(program);
-registerInvite(program, lineFor);
-registerAudit(program, lineFor);
+registerInvite(program, installationFor);
+registerAudit(program, installationFor);
 registerCall(program);
-registerStatus(program);
+registerJobs(program);
+registerInspect(program);
 registerPeer(program);
-registerKeys(program);
+registerAdmin(program);
 registerDoctor(program);
-registerHistory(program, lineFor);
-registerLint(program);
-registerPolicy(program);
-registerCard(program);
+registerHistory(program, installationFor);
 registerContacts(program);
-const roster = program.command("roster").description("join and manage discovery rosters for `agentcall search`");
-function lineFor(line: string | undefined): LineContext | undefined {
+function installationFor(): Installation | undefined {
   try {
-    return resolveLine(getMachinePaths(), { line });
+    return loadInstallation(getPaths());
   } catch (e) {
     console.error(String(e instanceof Error ? e.message : e));
     process.exitCode = 1;
     return undefined;
   }
 }
-registerRosterCore(roster, lineFor);
-registerRosterAdmin(roster, lineFor);
-registerSearch(program, lineFor);
 registerTask(program);
 registerGrants(program);
-const line = program.command("line").description("manage the addresses (lines) this machine answers on and calls from");
-registerLineCore(line);
-registerLineAdmin(line);
 registerListen(program);
 registerRotate(program);
 registerRecovery(program);
