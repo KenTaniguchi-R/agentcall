@@ -3,7 +3,9 @@ title: Protocol frames
 description: Generated WebSocket frame shapes exchanged by callers, the relay, and listeners.
 ---
 
-This page is generated from the built Zod schemas in `packages/shared/src/protocol.ts` and `packages/shared/src/e2ee.ts`. The [repository README](https://github.com/KenTaniguchi-R/agentcall#how-a-call-works) remains the authority on current runtime behavior.
+This page is generated from the built Zod schemas in `packages/shared/src/protocol.ts` and `packages/shared/src/e2ee.ts`, and describes frame *shape* only.
+
+For what an implementation is required to do — lifecycle, ordering, error obligations, idempotency, and which behaviors are a deployment's choice rather than the protocol's — see the [normative protocol specification](https://github.com/KenTaniguchi-R/agentcall/blob/main/docs/spec/v1.md). Where the two disagree about shape, the schemas win.
 
 ## Caller to relay
 
@@ -32,6 +34,19 @@ Report unauthenticated lifecycle metadata.
 | `state` | `ringing` / `answered` / `working` | yes |
 | `call_id` | string | no |
 | `correlation_id` | string | no |
+
+### `call_queued`
+
+Acknowledge a durable submission. A receipt, not a reply.
+
+| Field | Type | Required |
+| --- | --- | --- |
+| `type` | `call_queued` | yes |
+| `call_id` | string | yes |
+| `message_id` | string | yes |
+| `correlation_id` | string | yes |
+| `submitted_at` | integer | yes |
+| `expires_at` | integer | yes |
 
 ### `call_error`
 
