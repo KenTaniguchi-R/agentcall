@@ -4,6 +4,58 @@ All notable changes to agentcall are recorded here. Versions apply to both
 `@benree/agentcall` (the CLI) and `@benree/agentcall-shared` (protocol schemas),
 which are released together.
 
+## 0.5.1 — 2026-08-17
+
+### The installed background listener never listened (#442)
+
+**Upgrade if you installed the listener as a service.** On 0.5.0 the launchd
+plist and the systemd unit both ran `node <dist/index.js> listen`, and
+`dist/index.js` only *exports* `runCli` — importing it registers commands and
+exits 0 without ever parsing an argument. Only `dist/cli-entry.js` calls it.
+
+So the service started node, exited cleanly, and was restarted forever by
+KeepAlive / `Restart=always` without opening a socket. It printed nothing. The
+installation looked healthy and every inbound call got `offline`.
+
+`agentcall doctor` did detect the dead process, but its suggested remedy —
+re-run `agentcall setup` — rewrote the same broken plist, so following the
+advice looped. After upgrading, re-run `agentcall setup` to rewrite the service
+file with the correct entry point.
+
+### `agentcall --version` no longer reports a version it isn't (#354)
+
+The version was a literal in `packages/cli/src/index.ts`. It had already gone
+stale once — reporting 0.4.0 while the published package had moved on — so the
+CLI named a release whose command surface it no longer had. It now reads the
+manifest npm publishes, and tests assert both that the two agree and that the
+CLI and shared packages carry the same version.
+
+### A relay that was up could be reported unreachable (#442)
+
+undici can return a pooled keep-alive connection the relay has already closed.
+It surfaces as a `TypeError` with `cause.code === "UND_ERR_SOCKET"` rather than
+a timeout, so the CLI reported `Cannot reach relay ...`. One idempotent GET is
+now retried, gated to requests with no body — a mutation that fails this way may
+still have been received.
+
+### A successful call could be rejected as a dropped connection (#442)
+
+The relay closes the socket immediately after the terminal frame. The message
+handler awaits HPKE verification and decryption while `close` fires
+synchronously, so `close` could reject the call with `Connection closed before a
+reply arrived` while a valid outcome was still decrypting. The outcome now
+settles the call on its own authentication result.
+
+### Also in this release
+
+- A normative protocol specification at `docs/spec/v1.md`, with `apps/relay`
+  explicitly non-normative, plus gate checks that fail when a protocol constant,
+  limit, or frame drifts from what the document claims (#445).
+- `llms.txt`, `SKILL.md`, and a Claude Code plugin, so an agent can discover and
+  invoke AgentCall without a human reading the README first (#446).
+- `call_queued` is now documented in the generated protocol reference. It had
+  been on the wire since the durable mailbox landed and missing from the docs.
+
 ## 0.5.0 — 2026-08-10
 
 ### Answering agents inherit the owner's connected tools (#392)

@@ -1,3 +1,5 @@
+import { readFileSync } from "node:fs";
+import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
 import { createProgram } from "../src/index.js";
 
@@ -38,5 +40,26 @@ describe("CLI command tree", () => {
   it("groups durable task retrieval under one jobs noun", () => {
     const jobs = createProgram().commands.find((command) => command.name() === "jobs")!;
     expect(jobs.commands.map((command) => command.name())).toEqual(["list", "get", "cancel"]);
+  });
+});
+
+describe("--version", () => {
+  // It reported 0.4.0 from a source literal while the published package had
+  // moved on, so `agentcall --version` named a release whose command surface it
+  // no longer had (#354). The value now comes from the manifest npm publishes;
+  // this asserts the two cannot separate again.
+  it("reports the version npm actually publishes", () => {
+    const manifest = fileURLToPath(new URL("../package.json", import.meta.url));
+    const published = JSON.parse(readFileSync(manifest, "utf8")).version;
+
+    expect(createProgram().version()).toBe(published);
+    expect(published).toMatch(/^\d+\.\d+\.\d+(-[0-9A-Za-z.-]+)?$/);
+  });
+
+  it("ships the same version from every public package, because they release together", () => {
+    const read = (relative: string) =>
+      JSON.parse(readFileSync(fileURLToPath(new URL(relative, import.meta.url)), "utf8")).version;
+
+    expect(read("../../shared/package.json")).toBe(read("../package.json"));
   });
 });
