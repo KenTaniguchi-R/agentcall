@@ -12,6 +12,7 @@ const groups = [
   ["Caller to relay", [[e2ee.EncryptedCallRequest, "Send an encrypted call payload."]]],
   ["Relay to caller", [
     [protocol.CallStatus, "Report unauthenticated lifecycle metadata."],
+    [protocol.CallQueued, "Acknowledge a durable submission. A receipt, not a reply."],
     [protocol.RelayCallError, "Return an unauthenticated relay-operational error."],
     [e2ee.EncryptedCallOutcome, "Return an encrypted, authenticated peer outcome."],
   ]],
@@ -44,7 +45,9 @@ const lines = [
   "description: Generated WebSocket frame shapes exchanged by callers, the relay, and listeners.",
   "---",
   "",
-  "This page is generated from the built Zod schemas in `packages/shared/src/protocol.ts` and `packages/shared/src/e2ee.ts`. The [repository README](https://github.com/KenTaniguchi-R/agentcall#how-a-call-works) remains the authority on current runtime behavior.",
+  "This page is generated from the built Zod schemas in `packages/shared/src/protocol.ts` and `packages/shared/src/e2ee.ts`, and describes frame *shape* only.",
+  "",
+  "For what an implementation is required to do — lifecycle, ordering, error obligations, idempotency, and which behaviors are a deployment's choice rather than the protocol's — see the [normative protocol specification](https://github.com/KenTaniguchi-R/agentcall/blob/main/docs/spec/v1.md). Where the two disagree about shape, the schemas win.",
 ];
 
 for (const [heading, schemas] of groups) {

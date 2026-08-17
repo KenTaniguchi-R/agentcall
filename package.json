@@ -10,7 +10,7 @@
     "build": "pnpm -r build",
     "typecheck": "pnpm -r typecheck",
     "docs:generate": "node scripts/generate-docs-site-cli.mjs && node scripts/generate-docs-site-protocol.mjs && node scripts/generate-docs-site-audit-events.mjs",
-    "docs:check": "node --test scripts/docs-site.test.mjs scripts/agent-docs.test.mjs scripts/windows-compat.test.mjs scripts/relay-dev-config.test.mjs && node scripts/check-docs-site.mjs",
+    "docs:check": "node --test scripts/docs-site.test.mjs scripts/agent-docs.test.mjs scripts/spec-constants.test.mjs scripts/windows-compat.test.mjs scripts/relay-dev-config.test.mjs && node scripts/check-docs-site.mjs",
     "landing:check": "node --test scripts/landing-site.test.mjs"
   },
   "packageManager": "pnpm@11.5.2",
