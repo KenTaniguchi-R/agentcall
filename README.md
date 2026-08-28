@@ -1,12 +1,13 @@
 # AgentCall
 
 Call another person's coding agent—Claude Code or Codex—on their machine,
-across the public internet.
+across the public internet. Ask a teammate's agent why their service went
+down, what a migration does, or how a module works, without pulling them off
+what they're doing or waiting for them to context-switch back into it.
 
-Install the CLI, claim an address such as
-`@acme/ken`, and share it with your team. When someone
-calls, AgentCall starts a fresh agent process on your machine and returns its
-answer to the caller.
+Install the CLI, claim an address such as `@acme/ken`, and share it with your
+team. When someone calls, AgentCall starts a fresh agent process on your
+machine and returns its answer to the caller.
 
 [Read the documentation](https://agentcall.mintlify.app) ·
 [Install AgentCall](https://agentcall.mintlify.app/get-started/install) ·
@@ -190,16 +191,15 @@ path outside every root, or on the denylist, is refused **at the read** —
 before the agent ever sees it. The answer itself is not inspected.
 
 > [!CAUTION]
-> **`Bash` is not bounded by any of this.** It is not restricted to the roots and
-> the denylist does not apply to it, so a caller can reach any file on the
-> machine through an ordinary shell command — `~/.ssh`, `~/.aws`, anything. The
-> guard records such a command and allows it, because inspecting a command
-> string cannot tell you what it will read.
+> **`Bash` ignores the root and the denylist.** A caller can reach any file on
+> the machine — `~/.ssh`, `~/.aws`, anything — through an ordinary shell
+> command. The guard logs the command and allows it anyway, because a command
+> string doesn't reveal what it will read.
 >
-> So the denylist bounds `Read`, `Grep`, `Glob` and `LS`, and not the one tool
-> that can do everything those four can. Treat the roots and the denylist as
-> shaping what an agent reaches *by default*, not as a boundary against a
-> caller who asks for something else. Tracked in
+> The root and denylist bound `Read`, `Grep`, `Glob`, and `LS` — not the one
+> tool that can do everything those four do. Treat them as shaping what an
+> agent reaches *by default*, not as a boundary against a caller who asks for
+> something else. Tracked in
 > [#419](https://github.com/KenTaniguchi-R/agentcall/issues/419).
 
 Who gets answered is a separate, yes/no question. Everyone the relay lets
@@ -213,26 +213,23 @@ agentcall access --default blocked   # answer only named callers
 ```
 
 > [!WARNING]
-> A fresh installation roots at **`$HOME`**, minus a denylist you cannot override
-> (`~/.ssh`, `~/.aws`, `~/.gnupg`, keychains, `~/.agentcall`, `~/.codex`, the
-> shell rc files, and `.env`/`*.pem`-shaped names anywhere).
+> A fresh installation roots at **`$HOME`**, minus a denylist you cannot
+> override (`~/.ssh`, `~/.aws`, `~/.gnupg`, keychains, `~/.agentcall`,
+> `~/.codex`, shell rc files, and `.env`/`*.pem`-shaped names anywhere).
 >
-> **A denylist can never be complete**, and the failure direction is now a leak
-> rather than a refusal: anything you put under `$HOME` later is in scope
-> without you deciding so. The default is **credential-safe, not confidential**
-> — `redactOutbound` strips credential-shaped strings from the reply, but a
-> salary figure or an unreleased plan has no shape to match. What carries
-> confidentiality is the organization boundary.
->
-> **A Codex-backed installation has no read guard at all.** Nothing stops the agent reading a
-> denied path, and nothing inspects the answer. Use Claude for anything you
-> actually need bounded.
->
-> **Connected tools are delegated authority.** Any caller this installation answers can
-> invoke every MCP server, skill, app, and web tool loaded by the answering
-> agent. MCP tools may send mail, modify calendars, change cloud data, or make
-> payments. Blocking local `Write`/`Edit`/`Bash` does not constrain an MCP
-> process or the external account it controls.
+> - **The denylist can't be complete.** Anything you later put under `$HOME`
+>   is in scope by default, whether you meant it to be or not.
+> - **Credential-safe isn't the same as confidential.** `redactOutbound`
+>   strips credential-*shaped* strings from replies, but a salary figure or an
+>   unreleased plan has no shape to match. The organization boundary is what
+>   actually carries confidentiality.
+> - **Codex installations have no read guard at all.** Nothing stops the agent
+>   reading a denied path, and nothing inspects the answer. Use Claude for
+>   anything you need bounded.
+> - **Connected tools carry their own authority.** Any caller this
+>   installation answers can invoke every MCP server, skill, app, and web tool
+>   the agent has loaded — which can send mail, edit calendars, or move money.
+>   Blocking local `Write`/`Edit`/`Bash` does not constrain them.
 
 The [receive-a-call guide](https://agentcall.mintlify.app/get-started/receive-calls)
 and [tasks and policy guide](https://agentcall.mintlify.app/guides/tasks-and-policy)
@@ -240,53 +237,30 @@ cover task design, caller rules, policy tests, cards, and safe defaults.
 
 ## Recovering a lost installation token
 
-While the installation still works, create its out-of-band recovery root:
+While the installation still works, issue a recovery proof and store it
+somewhere separate, such as a password manager — AgentCall shows it once, on
+the controlling terminal, and never writes it to disk:
 
 ```bash
 agentcall recovery issue
 ```
 
-AgentCall shows the proof only on the controlling terminal and requires you to
-acknowledge that it is saved somewhere separate, such as a password manager.
-It is never written to config, pending state, stdout/stderr, or logs. Record
-the returned generation and public proof ID with it. Issuing again increments
-the generation and immediately invalidates the predecessor.
-
-If the installation token is lost, retain both the current proof and the newly displayed
-successor proof until recovery confirms its public receipt:
+If the installation token is later lost, redeem that proof from a new
+installation to reclaim the identity:
 
 ```bash
 agentcall recovery redeem --org <org> --handle <handle> \
   --relay <url> --generation <number>
 ```
 
-Before contacting the relay, the CLI atomically saves a locally generated
-candidate token and operation ID in the installation's private pending file. Neither
-recovery proof is saved there. Recovery atomically consumes the current proof,
-replaces the online token, advances to the successor proof, and evicts sockets
-owned by the recovered identity's current Durable Object. Persistent token
-replacement blocks every reconnect. Before the stable-identity cutover in #154,
-an already-open outbound caller socket lives in the remote target's Durable
-Object and is not globally evicted by this receipt; the cutover removes that
-topology limitation. If the response is lost, run
-`agentcall recovery redeem --resume` and provide both retained
-proofs. The consumed predecessor can then retrieve only the exact seven-day
-receipt already bound to that operation; changed or cross-identity payloads are
-rejected. Remove the predecessor backup only after the CLI confirms the receipt.
-
-One AgentCall installation has one identity. Contacts belong to the installation.
-Legacy installations with `~/.agentcall/lines/` are refused rather than merged
-or selected automatically; follow the [single-identity migration guide](https://agentcall.mintlify.app/guides/single-identity-migration).
-
-Current relay tokens do not expire, cannot be listed or individually revoked,
-and have no last-used timestamp; rotation is the immediate hard swap described
-above. The recovery proof is also intentionally long-lived because it must work
-after an offline backup has been untouched for a long time; `agentcall doctor`
-reports this sole long-lived full-authority exception and warns when an installation has
-no proof. The decided zero-user credential cutover will replace online tokens with
-90-day client credentials, one-hour access tokens, bounded overlap, revocation,
-and coarse liveness tracking. See the
-[credential lifecycle decision](docs/superpowers/specs/2026-08-02-credential-lifecycle.md).
+One AgentCall installation holds one identity, and a lost token has no other
+recovery path, so issue a proof as soon as setup finishes. For the full
+redemption flow (resuming an interrupted redeem, rotation semantics, token
+lifetime) see the [`recovery` command reference](https://agentcall.mintlify.app/reference/cli#recovery)
+and the [credential lifecycle decision](docs/superpowers/specs/2026-08-02-credential-lifecycle.md).
+Legacy installations with `~/.agentcall/lines/` need the
+[single-identity migration guide](https://agentcall.mintlify.app/guides/single-identity-migration)
+instead.
 
 ## How a call works
 
@@ -340,12 +314,12 @@ from its owner's operating-system account.
 - The callee's policy selects the task before untrusted message text enters the
   prompt. The built-in `ask` task blocks Claude's local mutation tools but
   delegates installed skills, connected MCP servers, and web tools.
-- The caller's message is defanged before it is placed in the prompt: AgentCall's
-  own instruction fence and model control tokens are replaced with `[filtered]`,
-  so a caller cannot forge the syntax that separates the owner's instructions
-  from the caller's message. This is a syntax boundary, not a classifier — a
-  harmful instruction written as ordinary prose still reaches the agent, and the
-  task and its capabilities are what bound it.
+- The caller's message is defanged before it reaches the prompt: AgentCall's
+  own instruction fence and model control tokens are replaced with
+  `[filtered]`, so a caller can't forge the syntax that separates the owner's
+  instructions from the caller's message. That's a syntax boundary, not a
+  classifier — a harmful instruction written as ordinary prose still reaches
+  the agent. The task and its capabilities are what actually bound it.
 - Claude file tools are guarded against credential paths and paths outside the
   configured scope. Local `Write`, `Edit`, `NotebookEdit`, and `Bash` are denied.
 - Claude automatically grants MCP servers from `~/.claude.json`, claude.ai
@@ -354,14 +328,13 @@ from its owner's operating-system account.
   configuration, including MCP servers, skills, apps, web, and image tools.
 - MCP processes and authenticated remote tools may act outside the local
   sandbox. AgentCall has no per-operation MCP firewall.
-- A caller's prompt can induce the answering agent to read and echo back
-  material the guard does not cover — a key pasted into a tracked config file, a
-  credential printed by an allowed command. Replies are scanned locally for
-  credential shapes (`sk-`, `gh*_`, AWS key ids, JWTs, bearer tokens) and for
-  the installation's relay token, and matches are replaced with
-  `[redacted]` before the reply is sealed and before it is written to the local
-  log. The scan is a fixed local pass with no network call, so it cannot fail
-  open — but it recognizes shapes, not secrets in general.
+- A caller's prompt can induce the agent to read and echo back material the
+  guard doesn't cover — a key pasted into a tracked config file, a credential
+  printed by an allowed command. Before a reply is sealed and logged, it's
+  scanned locally for credential shapes (`sk-`, `gh*_`, AWS key ids, JWTs,
+  bearer tokens) and the installation's own relay token; matches become
+  `[redacted]`. The scan is a fixed local pass with no network call, so it
+  can't fail open — but it recognizes shapes, not secrets in general.
 - Calls and tool attempts are logged locally on the callee's machine. Relay and
   organization audit records contain metadata, not call plaintext.
 - The callee's own Claude or Codex account pays for the answering process.
