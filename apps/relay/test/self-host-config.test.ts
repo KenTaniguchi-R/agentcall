@@ -5,6 +5,12 @@ const readJsonc = (raw: string) => JSON.parse(
   raw.replace(/^\s*\/\/.*$/gm, ""),
 );
 
+function liveExports(exports: Record<string, any>): Record<string, any> {
+  return Object.fromEntries(
+    Object.entries(exports).filter(([, value]) => value.state !== "deleted"),
+  );
+}
+
 function normalizedRuntimeConfig(input: any): any {
   const config = structuredClone(input);
   // The official hosted relay also serves the AgentCall product site. A
@@ -21,6 +27,9 @@ function normalizedRuntimeConfig(input: any): any {
   }
   for (const dataset of config.analytics_engine_datasets ?? []) dataset.dataset = "<customer-dataset>";
   for (const rateLimit of config.ratelimits ?? []) rateLimit.namespace_id = "<customer-rate-namespace>";
+  // Hosted deletion tombstones retire namespaces provisioned by earlier
+  // releases. A fresh self-hosted account never owned those namespaces.
+  if (config.exports) config.exports = liveExports(config.exports);
   return config;
 }
 
@@ -38,9 +47,11 @@ describe("self-host Wrangler distribution", () => {
       d1_databases: [{ binding: "DB", migrations_dir: "migrations" }],
       analytics_engine_datasets: [{ binding: "STATUS_READS" }],
       durable_objects: hosted.durable_objects,
-      exports: hosted.exports,
+      exports: liveExports(hosted.exports),
       routes: [{ pattern: "relay.example.com", custom_domain: true }],
     });
+    expect(hosted.exports.RoomDO).toEqual({ type: "durable-object", state: "deleted" });
+    expect(selfHosted.exports).not.toHaveProperty("RoomDO");
     expect(hosted.assets).toEqual({
       directory: "../landing",
       binding: "ASSETS",

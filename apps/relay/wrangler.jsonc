@@ -44,6 +44,7 @@
   ] },
   "exports": {
     "HandleDO": { "type": "durable-object", "storage": "sqlite" },
+    "RoomDO": { "type": "durable-object", "state": "deleted" },
     "RateLimiterDO": { "type": "durable-object", "storage": "sqlite" }
   },
   // Must stay in step with HOSTED_RELAY_HOST (packages/shared/src/protocol.ts),
